@@ -1,3 +1,6 @@
+#VS
+.vscode
+
 node_modules
 
 # Output
