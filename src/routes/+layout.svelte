@@ -1,7 +1,7 @@
 <script lang="ts">
   import "./layout.css";
   import favicon from "$lib/assets/favicon.svg";
-  
+
   let { children } = $props();
 </script>
 
@@ -16,6 +16,18 @@
         <!-- logo here -->
         <span class="font-semibold tracking-wide">Hypermusic.ai</span>
       </a>
+
+      <div class="flex gap-4 text-sm text-white/70">
+        <a href="/explore" class="hover:text-white">Explore</a>
+      </div>
+
+      <div class="flex gap-4 text-sm text-white/70">
+        <a href="/create" class="hover:text-white">Create</a>
+      </div>
+
+      <div class="flex gap-4 text-sm text-white/70">
+        <a href="/account" class="hover:text-white">Account</a>
+      </div>
 
       <div class="flex gap-4 text-sm text-white/70">
         <a href="/docs" class="hover:text-white">Docs</a>

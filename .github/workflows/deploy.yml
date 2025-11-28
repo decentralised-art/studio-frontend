@@ -1,0 +1,75 @@
+name: Deploy to server
+
+on:
+  workflow_run:
+    workflows: ["Build"]
+    types:
+      - completed
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+
+    steps:
+      - name: Download and extract artifacts
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          ARTIFACT_NAME: hypermusic-ai-svelte
+        run: |
+          mkdir -p artifact
+          echo "Getting artifact list..."
+          curl -s -H "Authorization: token $GITHUB_TOKEN" \
+               "https://api.github.com/repos/$REPO/actions/runs/$RUN_ID/artifacts" \
+            > artifacts.json
+
+          ARTIFACT_ID=$(jq -r --arg NAME "$ARTIFACT_NAME" '.artifacts[] | select(.name == $NAME) | .id' artifacts.json)
+
+          if [ -z "$ARTIFACT_ID" ]; then
+            echo "❌ Artifact '$ARTIFACT_NAME' not found"
+            echo "Artifacts available:"
+            cat artifacts.json
+            exit 1
+          fi
+
+          echo "✅ Found artifact ID: $ARTIFACT_ID"
+          echo "Downloading artifact..."
+          curl -L -H "Authorization: token $GITHUB_TOKEN" \
+            -o artifact.zip \
+            "https://api.github.com/repos/$REPO/actions/artifacts/$ARTIFACT_ID/zip"
+
+          unzip artifact.zip -d artifact
+
+          mkdir build
+          # matches the name we created in CI: dist/hypermusic-ai-svelte.tar.gz
+          tar -xzf artifact/hypermusic-ai-svelte.tar.gz -C build
+
+      - name: Clear remote install directory
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: 34.118.118.250
+          username: hypermusic
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            echo "Clearing /home/hypermusic/hypermusic.ai-install..."
+            mkdir -p /tmp/empty-dir
+            rsync -a --delete /tmp/empty-dir/ /home/hypermusic/hypermusic.ai-install/
+
+      - name: Install tools
+        run: sudo apt update && sudo apt install -y sshpass rsync
+
+      - name: Upload to server
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+        run: |
+          KEY_FILE=$(mktemp)
+          echo "$SSH_PRIVATE_KEY" > "$KEY_FILE"
+          chmod 600 "$KEY_FILE"
+
+          rsync -az --delete -e "ssh -i $KEY_FILE -o StrictHostKeyChecking=no" \
+            build/ hypermusic@34.118.118.250:/home/hypermusic/hypermusic.ai-install
+
+          rm -f "$KEY_FILE"
+        shell: bash
