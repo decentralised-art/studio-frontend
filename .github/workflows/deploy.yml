@@ -41,10 +41,11 @@ jobs:
             "https://api.github.com/repos/$REPO/actions/artifacts/$ARTIFACT_ID/zip"
 
           unzip artifact.zip -d artifact
-
-          mkdir build
+          
+          echo "Extract archive into a 'deploy' directory..."
+          mkdir deploy
           # matches the name we created in CI: dist/hypermusic-ai-svelte.tar.gz
-          tar -xzf artifact/hypermusic-ai-svelte.tar.gz -C build
+          tar -xzf artifact/hypermusic-ai-svelte.tar.gz -C deploy
 
       - name: Clear remote install directory
         uses: appleboy/ssh-action@v1.0.3
@@ -69,7 +70,7 @@ jobs:
           chmod 600 "$KEY_FILE"
 
           rsync -az --delete -e "ssh -i $KEY_FILE -o StrictHostKeyChecking=no" \
-            build/ hypermusic@34.118.118.250:/home/hypermusic/hypermusic.ai-install
+            deploy/ hypermusic@34.118.118.250:/home/hypermusic/hypermusic.ai-install
 
           rm -f "$KEY_FILE"
         shell: bash

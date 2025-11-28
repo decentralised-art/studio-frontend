@@ -34,7 +34,7 @@ jobs:
       - name: Package build as tar.gz
         run: |
           mkdir -p dist
-          tar -czf dist/hypermusic-ai-svelte.tar.gz build
+          tar -czf dist/hypermusic-ai-svelte.tar.gz build package.json package-lock.json
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
