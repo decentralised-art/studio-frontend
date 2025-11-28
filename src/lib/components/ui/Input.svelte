@@ -1,19 +1,20 @@
 <script lang="ts">
   export let label = '';
   export let help = '';
-  export let id: string | undefined = undefined;
+  export let id: string | undefined;
   export let type = 'text';
   export let value = '';
   export let placeholder = '';
   export let className = '';
 
-  const handleInput = (event: Event) => {
-    const target = event.target as HTMLInputElement;
+  // We re-emit the DOM event by just forwarding it.
+  function handleInput(e: Event) {
+    const target = e.target as HTMLInputElement;
     value = target.value;
-    // re-emit
-    const custom = new CustomEvent('change', { detail: value });
-    dispatchEvent(custom);
-  };
+    // Re-emit the same event, but with new value
+    // Svelte 5 automatically makes this available to parent components
+    dispatchEvent(new InputEvent("input", { bubbles: true }));
+  }
 </script>
 
 <div class={className}>
@@ -27,7 +28,7 @@
     {id}
     {type}
     {placeholder}
-    on:input
+    on:input={handleInput}
   />
 
   {#if help}

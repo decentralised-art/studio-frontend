@@ -11,6 +11,12 @@ npm run dev
 npm run dev -- --open
 ```
 
+Run linter
+
+```sh
+npm run lint
+```
+
 ## Building
 
 To create a production version of your app:
