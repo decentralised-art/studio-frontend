@@ -74,3 +74,15 @@ jobs:
 
           rm -f "$KEY_FILE"
         shell: bash
+
+      - name: Restart hypermusic-ai service
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: 34.118.118.250
+          username: hypermusic
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            echo "Restarting hypermusic-ai systemd service..."
+            sudo systemctl restart hypermusic-ai
+            sudo systemctl status hypermusic-ai --no-pager
+            echo "Service restarted."
