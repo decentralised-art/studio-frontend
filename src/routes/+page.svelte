@@ -1,6 +1,7 @@
 <script lang="ts">
   import Button from "$lib/components/ui/Button.svelte";
   import Card from "$lib/components/ui/Card.svelte";
+  import Input from "$lib/components/ui/Input.svelte";
   import SectionShell from "$lib/components/ui/SectionShell.svelte";
   import Tag from "$lib/components/ui/Tag.svelte";
 </script>
@@ -9,12 +10,20 @@
   dot={true}
   title="Hypermusic.ai"
   subtitle="Build agents and tools that compose music together with the network."
+  className="mt-4"
 >
   <SectionShell>
     <Button variant="primary">Button primary</Button>
     <Button variant="ghost">Button ghost</Button>
     <Button variant="subtle">Button subtle</Button>
   </SectionShell>
+
+  <Input
+    label="Input label"
+    help="input help"
+    type="text"
+    placeholder="Input placeholder"
+  />
 
   <Tag variant="default">Tag default</Tag>
   <Tag variant="accent">Tag accent</Tag>

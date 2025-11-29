@@ -2,35 +2,80 @@
   import {
     SvelteFlow,
     Background,
-    type Node,
-    type Edge,
+    type Connection,
+    type OnConnect,
   } from "@xyflow/svelte";
-
   import "@xyflow/svelte/dist/style.css";
-
-  // Import custom feature node
-  import FlowEditorNode from "./FlowEditorNode.svelte";
 
   import FlowEditorPanel from "./FlowEditorPanel.svelte";
 
+  // Svelte components (runtime)
+  import FeatureNode from "./FlowEditorFeatureNode.svelte";
+  import TransformationNode from "./FlowEditorTransformationNode.svelte";
+  import DimensionEdge from "./FlowEditorDimensionEdge.svelte";
+
+  // Types
+  import type {
+    FeatureNodeType,
+    TransformationNodeType,
+    DimensionEdgeType,
+    FlowNode,
+    FlowEdge,
+  } from "./FlowEditorTypes";
+
+  // map to components
   const nodeTypes = {
-    selectorNode: FlowEditorNode,
+    feature: FeatureNode,
+    transformation: TransformationNode,
   };
 
-  let nodes = $state<Node[]>([]);
-  let edges = $state<Edge[]>([]);
+  const edgeTypes = {
+    dimension: DimensionEdge,
+  };
 
-  function addNode(type: string) {
-    const newNode: Node = {
-      id: crypto.randomUUID(),
-      position: { x: 120, y: 80 },
-      data: { label: type },
-      type: "selectorNode",
-    };
-    
-    // reassign a new array – don't push into the old one
-    nodes = [...nodes, newNode];
+  let nodes = $state<FlowNode[]>([]);
+  let edges = $state<FlowEdge[]>([]);
+
+  function addNode(kind: "feature" | "transformation") {
+    if (kind === "feature") {
+      const newNode: FeatureNodeType = {
+        id: crypto.randomUUID(),
+        type: "feature", // must match nodeTypes key
+        position: { x: 120, y: 80 },
+        data: { label: "Feature" },
+      };
+
+      nodes = [...nodes, newNode];
+    }
+
+    if (kind === "transformation") {
+      const newNode: TransformationNodeType = {
+        id: crypto.randomUUID(),
+        type: "transformation", // must match nodeTypes key
+        position: { x: 120, y: 80 },
+        data: { label: "Transformation" },
+      };
+
+      nodes = [...nodes, newNode];
+    }
   }
+
+  const handleConnect: OnConnect = (connection: Connection) => {
+    const edge: DimensionEdgeType = {
+      id: crypto.randomUUID(),
+      type: "dimension",
+      source: connection.source,
+      target: connection.target,
+      sourceHandle: connection.sourceHandle,
+      targetHandle: connection.targetHandle,
+      data: {
+        label: "Dim",
+        dimension: 42,
+      },
+    };
+
+    edges = [...edges, edge];
+  };
 
   function reset() {
     // restore to initial state by reassigning new arrays
@@ -42,8 +87,15 @@
 <div class="flex w-full h-[85vh]">
   <FlowEditorPanel {addNode} {reset} />
   <div class="flex-1 h-full">
-    <SvelteFlow bind:nodes bind:edges {nodeTypes} fitView>
-      <Background />
+    <SvelteFlow
+      {nodes}
+      {edges}
+      {nodeTypes}
+      {edgeTypes}
+      onconnect={handleConnect}
+      fitView
+    >
+      <Background bgColor="black" />
     </SvelteFlow>
   </div>
 </div>

@@ -113,14 +113,14 @@
   -------------------------------- */
   .card {
     @apply relative rounded-3xl border border-white/10
-      bg-white/5 backdrop-blur-xl
+      bg-white/5
       shadow-[0_18px_60px_rgba(15,23,42,0.85)]
       p-6;
   }
 
   .card-soft {
     @apply rounded-2xl border border-white/10
-      bg-white/5 backdrop-blur-md p-4;
+      bg-white/5 p-4;
   }
 
   .card-gradient-border {
@@ -134,7 +134,7 @@
 
   .card-gradient-border > .card-inner {
     @apply rounded-[1.4rem] bg-black/80 border border-white/10
-      backdrop-blur-xl p-6;
+       p-6;
   }
 
   /* -------------------------------
@@ -181,7 +181,7 @@
     @apply relative w-full max-w-6xl mx-auto
       rounded-[1.75rem] border border-white/10
       bg-linear-to-b from-white/5 to-black/60
-      backdrop-blur-xl p-6 sm:p-8;
+       p-6 sm:p-8;
   }
 
   .section-shell-header {
