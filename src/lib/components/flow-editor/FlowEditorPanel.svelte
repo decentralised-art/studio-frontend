@@ -1,5 +1,5 @@
 <script lang="ts">
-  export let addNode: (kind: "feature" | "transformation") => void;
+  export let addNode: (kind: "feature") => void;
   export let reset: () => void;
 </script>
 
@@ -13,10 +13,6 @@
 
     <button class="btn" on:click={() => addNode("feature")}>
       + Feature Node
-    </button>
-
-    <button class="btn" on:click={() => addNode("transformation")}>
-      + Transformation Node
     </button>
   </section>
 

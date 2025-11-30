@@ -2,7 +2,7 @@
   import { Handle, Position } from "@xyflow/svelte";
   import type { NodeProps } from "@xyflow/svelte";
 
-  import type { FeatureNodeType } from "./FlowEditorTypes";
+  import type { FeatureNodeType } from "./flowEditorTypes";
 
   let { data, isConnectable }: NodeProps<FeatureNodeType> = $props();
 </script>

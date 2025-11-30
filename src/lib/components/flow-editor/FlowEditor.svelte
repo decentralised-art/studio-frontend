@@ -4,61 +4,74 @@
     Background,
     type Connection,
     type OnConnect,
+    type IsValidConnection,
   } from "@xyflow/svelte";
+
   import "@xyflow/svelte/dist/style.css";
 
   import FlowEditorPanel from "./FlowEditorPanel.svelte";
 
   // Svelte components (runtime)
   import FeatureNode from "./FlowEditorFeatureNode.svelte";
-  import TransformationNode from "./FlowEditorTransformationNode.svelte";
   import DimensionEdge from "./FlowEditorDimensionEdge.svelte";
 
   // Types
   import type {
     FeatureNodeType,
-    TransformationNodeType,
     DimensionEdgeType,
     FlowNode,
     FlowEdge,
-  } from "./FlowEditorTypes";
+  } from "./flowEditorTypes";
+
+  import { addingConnectionCreatesCycle } from "./graphUtils";
 
   // map to components
   const nodeTypes = {
     feature: FeatureNode,
-    transformation: TransformationNode,
   };
 
   const edgeTypes = {
     dimension: DimensionEdge,
   };
 
-  let nodes = $state<FlowNode[]>([]);
-  let edges = $state<FlowEdge[]>([]);
+  let nodes = $state.raw<FlowNode[]>([]);
+  let edges = $state.raw<FlowEdge[]>([]);
 
-  function addNode(kind: "feature" | "transformation") {
+  function addNode(kind: "feature") {
     if (kind === "feature") {
       const newNode: FeatureNodeType = {
         id: crypto.randomUUID(),
         type: "feature", // must match nodeTypes key
-        position: { x: 120, y: 80 },
+        position: {
+          x: 120 + Math.round(Math.random() * 10),
+          y: 80 + Math.round(Math.random() * 10),
+        },
         data: { label: "Feature" },
       };
 
       nodes = [...nodes, newNode];
     }
-
-    if (kind === "transformation") {
-      const newNode: TransformationNodeType = {
-        id: crypto.randomUUID(),
-        type: "transformation", // must match nodeTypes key
-        position: { x: 120, y: 80 },
-        data: { label: "Transformation" },
-      };
-
-      nodes = [...nodes, newNode];
-    }
   }
+
+  // Reject connections that would create a cycle
+  const isValidConnection: IsValidConnection = (edgeOrConn) => {
+    // Normalize input → always return a Connection-like object
+    const connection =
+      "source" in edgeOrConn && "target" in edgeOrConn
+        ? ({
+            source: edgeOrConn.source,
+            target: edgeOrConn.target,
+            sourceHandle: edgeOrConn.sourceHandle,
+            targetHandle: edgeOrConn.targetHandle,
+          } as Connection)
+        : null;
+
+    // If we couldn't normalize, allow by default
+    if (!connection) return true;
+
+    // Reject if it creates a cycle
+    return !addingConnectionCreatesCycle(nodes, edges, connection);
+  };
 
   const handleConnect: OnConnect = (connection: Connection) => {
     const edge: DimensionEdgeType = {
@@ -69,8 +82,7 @@
       sourceHandle: connection.sourceHandle,
       targetHandle: connection.targetHandle,
       data: {
-        label: "Dim",
-        dimension: 42,
+        defs: [],
       },
     };
 
@@ -88,11 +100,12 @@
   <FlowEditorPanel {addNode} {reset} />
   <div class="flex-1 h-full">
     <SvelteFlow
-      {nodes}
-      {edges}
+      bind:nodes
+      bind:edges
       {nodeTypes}
       {edgeTypes}
       onconnect={handleConnect}
+      {isValidConnection}
       fitView
     >
       <Background bgColor="black" />
