@@ -9,11 +9,12 @@
 
   import "@xyflow/svelte/dist/style.css";
 
-  import FlowEditorPanel from "./FlowEditorPanel.svelte";
+  import FlowEditorPanel from "./EditorPanel.svelte";
+  import FlowEditorResultPanel from "./ResultPanel.svelte";
 
   // Svelte components (runtime)
-  import FeatureNode from "./FlowEditorFeatureNode.svelte";
-  import DimensionEdge from "./FlowEditorDimensionEdge.svelte";
+  import FeatureNode from "./FeatureNode.svelte";
+  import DimensionEdge from "./DimensionEdge.svelte";
 
   // Types
   import type {
@@ -46,7 +47,7 @@
           x: 120 + Math.round(Math.random() * 10),
           y: 80 + Math.round(Math.random() * 10),
         },
-        data: { label: "Feature" },
+        data: { name: "" },
       };
 
       nodes = [...nodes, newNode];
@@ -111,4 +112,5 @@
       <Background bgColor="black" />
     </SvelteFlow>
   </div>
+  <FlowEditorResultPanel {nodes} {edges} />
 </div>

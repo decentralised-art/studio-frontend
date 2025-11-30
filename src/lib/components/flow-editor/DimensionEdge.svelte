@@ -55,7 +55,7 @@
   function addDef() {
     const newDef: TransformationDef = {
       id: crypto.randomUUID(),
-      name: `Transform ${defs.length + 1}`,
+      name: "",
       args: [],
     };
 
@@ -109,22 +109,22 @@
   class="nodrag nopan pointer-events-auto 
   rounded-md bg-black! text-white border border-white/20 text-xs p-2! min-w-[140px] space-y-2 shadow-lg"
 >
-  <div class="flex items-center  gap-2 justify-between">
+  <div class="flex items-center gap-2 justify-between">
     <div class="flex items-center gap-1 justify-between">
       <span class="font-semibold">Transformations</span>
       <span class="text-[10px] text-white/60">({defs.length})</span>
     </div>
 
-      <button
-        class="w-4 h-4 flex items-center justify-center rounded border border-white/30 text-[10px] leading-none"
-        onclick={(event) => {
-          event.stopPropagation();
-          event.preventDefault();
-          toggleCollapsed();
-        }}
-      >
-        {#if collapsed}▸{:else}▾{/if}
-      </button>
+    <button
+      class="w-4 h-4 flex items-center justify-center rounded border border-white/30 text-[10px] leading-none"
+      onclick={(event) => {
+        event.stopPropagation();
+        event.preventDefault();
+        toggleCollapsed();
+      }}
+    >
+      {#if collapsed}▸{:else}▾{/if}
+    </button>
   </div>
 
   {#if !collapsed}
@@ -134,7 +134,7 @@
       <div class="space-y-1 max-h-40 overflow-y-auto">
         {#each defs as def (def.id)}
           <div class="flex items-center justify-between gap-1">
-            <TransformationDefComp {def} />
+            <TransformationDefComp {def} edgeId={id}/>
             <button
               class="px-1 py-0.5 rounded bg-red-500/80 hover:bg-red-500 text-[9px]"
               onclick={(event) => {

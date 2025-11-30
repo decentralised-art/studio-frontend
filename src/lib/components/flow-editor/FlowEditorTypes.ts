@@ -1,7 +1,7 @@
 import type { Node, Edge } from "@xyflow/svelte";
 
 // ---- Data payloads on nodes ----
-export type FeatureData = { label: string };
+export type FeatureData = { name: string };
 
 // ---- XYFlow Node types (these are *types*, not components) ----
 export type FeatureNodeType = Node<FeatureData, "feature">;
@@ -12,13 +12,13 @@ export type FlowNode = FeatureNodeType | Node;
 // ---- Data payloads on edges ----
 
 export type TransformationDef = {
-  id: string;
-  name: string;
-  args : number[];
+    id: string;
+    name: string;
+    args: number[];
 };
 
 export type DimensionData = {
-  defs: TransformationDef[];
+    defs: TransformationDef[];
 };
 
 // ---- Typed custom edge ----
