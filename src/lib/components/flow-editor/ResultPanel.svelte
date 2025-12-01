@@ -1,5 +1,9 @@
 <script lang="ts">
-  import type { FlowNode, FlowEdge } from "./flowEditorTypes";
+  import type {
+    FlowNode,
+    FlowEdge,
+    TransformationDef,
+  } from "./flowEditorTypes";
 
   // Svelte 5 runes props
   let { nodes, edges } = $props<{
@@ -10,7 +14,9 @@
   // Find ROOT feature:
   // first feature with no incoming edges
   const rootFeature = $derived(() => {
-    const features = nodes.filter((n: FlowNode) => n.type === "feature");
+    const features: FlowNode[] = nodes.filter(
+      (n: FlowNode) => n.type === "feature"
+    );
 
     if (features.length === 0) return null;
 
@@ -27,9 +33,37 @@
     return rootByEdges;
   });
 
-  const resultJson = $derived(() =>
-    JSON.stringify(rootFeature().data, null, 2)
-  );
+  const resultJson = $derived(() => {
+    const feature = rootFeature();
+    if (feature === null) return "";
+
+    let dimensions: {
+      feature_name: string;
+      transformations: { name: string; args: number[] }[];
+    }[] = [];
+    // find all dimensions
+
+    for (const edge of edges as FlowEdge[]) {
+      if (edge.type !== "dimension") continue;
+      if (edge.source !== feature.id) continue;
+
+      // find all transformations
+      const transforms_defs: { name: string; args: number[] }[] = (
+        edge.data ? edge.data.defs : []
+      ).map((def: TransformationDef) => ({ name: def.name, args: def.args }));
+
+      // find target node
+      const node: FlowNode = nodes.find((n: FlowNode) => n.id === edge.target);
+      if (node === undefined) continue;
+
+      dimensions.push({
+        feature_name: node.data.name as string,
+        transformations: transforms_defs,
+      });
+    }
+
+    return JSON.stringify({ ...feature.data, dimensions: dimensions }, null, 2);
+  });
 </script>
 
 <aside
