@@ -1,52 +1,64 @@
 <script lang="ts">
-  import {
-    BaseEdge,
-    EdgeLabel,
-    getBezierPath,
-    useEdges,
-    type EdgeProps,
-  } from "@xyflow/svelte";
+  import { BaseEdge, EdgeLabel, getBezierPath, useEdges } from "@xyflow/svelte";
 
   import type {
-    DimensionEdgeType,
+    DimensionEdgePropsType,
     DimensionData,
     TransformationDef,
   } from "./flowEditorTypes";
+
   import TransformationDefComp from "./TransformationDef.svelte";
 
   let {
     id,
+    data,
+
     sourceX,
     sourceY,
     sourcePosition,
+
     targetX,
     targetY,
     targetPosition,
+
     markerStart,
     markerEnd,
+
     interactionWidth,
+
     label,
     labelStyle,
-    data,
-  }: EdgeProps<DimensionEdgeType> = $props();
+  }: DimensionEdgePropsType = $props();
 
-  // getBezierPath returns [path, labelX, labelY]
-  let [edgePath, labelX, labelY] = $derived(
-    getBezierPath({
-      sourceX,
-      sourceY,
-      targetX,
-      targetY,
-      sourcePosition,
-      targetPosition,
-    })
-  );
-
-  const defs = $derived(data?.defs ?? []);
+  // global state
   const edges = useEdges();
 
   // local UI state – collapsed or expanded
   let collapsed = $state(false);
+
+  // local derived state
+  let [edgePath, labelX, labelY] = $derived(
+    data === undefined
+      ? getBezierPath({
+          sourceX,
+          sourceY,
+          targetX,
+          targetY,
+          sourcePosition,
+          targetPosition,
+        })
+      : data.pathFn({
+          sourceX,
+          sourceY,
+          targetX,
+          targetY,
+          sourcePosition,
+          targetPosition,
+        })
+  );
+  
+  // local derived state
+  const defs = $derived(data?.defs ?? []);
 
   function toggleCollapsed() {
     collapsed = !collapsed;
@@ -134,7 +146,7 @@
       <div class="space-y-1 max-h-40 overflow-y-auto">
         {#each defs as def (def.id)}
           <div class="flex items-center justify-between gap-1">
-            <TransformationDefComp {def} edgeId={id}/>
+            <TransformationDefComp {def} edgeId={id} />
             <button
               class="px-1 py-0.5 rounded bg-red-500/80 hover:bg-red-500 text-[9px]"
               onclick={(event) => {

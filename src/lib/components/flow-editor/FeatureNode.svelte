@@ -1,22 +1,21 @@
 <script lang="ts">
-  import { Handle, Position, useSvelteFlow, type NodeProps } from "@xyflow/svelte";
+  import { Handle, Position, useSvelteFlow } from "@xyflow/svelte";
 
-  import type { FeatureNodeType, FeatureData } from "./flowEditorTypes";
+  import type { FeatureNodePropsType } from "./flowEditorTypes";
 
   import Input from "$lib/components/ui/Input.svelte";
 
-  let { id, data, isConnectable }: NodeProps<FeatureNodeType> = $props();
+  let { id, data, isConnectable, selected }: FeatureNodePropsType = $props();
 
   const { updateNodeData } = useSvelteFlow();
 
-  // small helper to read current name safely
-  const name = () => (data as FeatureData)?.name ?? "";
-
+  // create style for selected node
+  let selectedStyle = $derived(() => selected ? "border-green-400" : "border-white/20" );
 </script>
 
 <div
-  class="relative rounded-lg border border-white/20 bg-black
-         px-3 py-2 text-white text-sm shadow-md"
+  class="relative rounded-lg border bg-black
+         px-3 py-2 text-white text-sm shadow-md {selectedStyle()}"
 >
   <!-- Top handle (target) -->
   <Handle
@@ -34,13 +33,12 @@
     label="Name"
     placeholder="Feature name"
     className="w-full"
-    value={name()}
+    value={data.name}
     oninput={(event) => {
       const target = event.target as HTMLInputElement | null;
-      const next = target?.value ?? "";
-
+      const newName = target?.value ?? "";
       // this updates node.data for this node only
-      updateNodeData(id, { name: next });
+      updateNodeData(id, { name: newName });
     }}
   />
 

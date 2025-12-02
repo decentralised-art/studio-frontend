@@ -3,15 +3,15 @@
 
   type Variant = "default" | "accent" | "outline";
 
-  const props = $props<{
+  const {
+    variant = "default",
+    className = "",
+    children,
+  }: {
     variant?: Variant;
     className?: string;
     children?: Snippet;
-  }>();
-
-  const variant: Variant = props.variant ?? "default";
-  const className: string = props.className ?? "";
-  const children: Snippet = props.children ?? (() => null);
+  } = $props();
 
   const variants: Record<Variant, string> = {
     default: "tag",
@@ -21,5 +21,5 @@
 </script>
 
 <span class={`tag ${variants[variant]} ${className}`}>
-  {@render children()}
+  {@render children?.()}
 </span>

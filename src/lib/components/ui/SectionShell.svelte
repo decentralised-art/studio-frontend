@@ -1,7 +1,15 @@
 <script lang="ts">
   import type { Snippet } from "svelte";
 
-  const props = $props<{
+  const {
+    title = "",
+    subtitle = "",
+    className = "",
+    dot = false,
+
+    children,
+    actions,
+  }: {
     title?: string;
     subtitle?: string;
     className?: string;
@@ -9,15 +17,7 @@
 
     children?: Snippet; // default slot
     actions?: Snippet; // named slot: slot="actions"
-  }>();
-
-  const title: string = props.title ?? "";
-  const subtitle: string = props.subtitle ?? "";
-  const className: string = props.className ?? "";
-  const dot: boolean = props.dot ?? false;
-
-  const children: Snippet = props.children ?? (() => null);
-  const actions: Snippet = props.actions ?? (() => null);
+  } = $props();
 </script>
 
 <section class={`section-shell ${className}`}>
@@ -36,11 +36,11 @@
     </div>
 
     <div class="flex items-center gap-2">
-      {@render actions()}
+      {@render actions?.()}
     </div>
   </header>
 
   <div class="space-y-4">
-    {@render children()}
+    {@render children?.()}
   </div>
 </section>

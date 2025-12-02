@@ -1,10 +1,11 @@
 <script lang="ts">
-  type InputHandler = (event: Event & {
-    currentTarget: HTMLInputElement;
-    target: HTMLInputElement;
-  }) => void;
+  type InputHandler = (
+    event: Event & {
+      currentTarget: HTMLInputElement;
+      target: HTMLInputElement;
+    }
+  ) => void;
 
-  // Svelte 5 runes API
   let {
     label = "",
     help = "",
@@ -17,19 +18,19 @@
     error,
     disabled = false,
     oninput, // optional handler from parent
-  } = $props<{
+  }: {
     label?: string;
     help?: string;
     id?: string;
     type?: string;
     value?: string;
     placeholder?: string;
-    className?: string;      // wrapper
+    className?: string; // wrapper
     inputClassName?: string; // input element
     error?: string;
     disabled?: boolean;
     oninput?: InputHandler;
-  }>();
+  } = $props();
 
   function handleInput(event: Event) {
     const target = event.currentTarget as HTMLInputElement | null;
@@ -50,10 +51,7 @@
 
 <div class={`flex flex-col gap-1 text-sm ${className}`}>
   {#if label}
-    <label
-      for={id}
-      class="text-xs font-medium text-white/70"
-    >
+    <label for={id} class="text-xs font-medium text-white/70">
       {label}
     </label>
   {/if}
@@ -63,7 +61,7 @@
     {type}
     {placeholder}
     {disabled}
-    value={value}
+    {value}
     oninput={handleInput}
     class={`w-full rounded-md border bg-white/5 px-3 py-1.5 text-sm text-white
             placeholder:text-white/30 outline-none transition

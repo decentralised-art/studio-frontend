@@ -5,47 +5,30 @@
     TransformationDef,
   } from "./flowEditorTypes";
 
-  // Svelte 5 runes props
-  let { nodes, edges } = $props<{
-    nodes: FlowNode[];
-    edges: FlowEdge[];
-  }>();
-
-  // Find ROOT feature:
-  // first feature with no incoming edges
-  const rootFeature = $derived(() => {
-    const features: FlowNode[] = nodes.filter(
-      (n: FlowNode) => n.type === "feature"
-    );
-
-    if (features.length === 0) return null;
-
-    // build incoming edge count
-    // eslint-disable-next-line svelte/prefer-svelte-reactivity
-    const incoming = new Map<string, number>();
-    for (const e of edges) {
-      if (!e.target) continue;
-      incoming.set(e.target, (incoming.get(e.target) ?? 0) + 1);
-    }
-
-    const rootByEdges =
-      features.find((f: FlowNode) => !incoming.get(f.id)) ?? null;
-    return rootByEdges;
-  });
+  let {
+    nodes,
+    edges,
+    selectedNodeId,
+  }: { nodes: FlowNode[]; edges: FlowEdge[]; selectedNodeId?: string } =
+    $props();
 
   const resultJson = $derived(() => {
-    const feature = rootFeature();
-    if (feature === null) return "";
+    if (selectedNodeId === undefined) return "";
+
+    const selected: FlowNode | undefined = nodes.find(
+      (n: FlowNode) => n.id === selectedNodeId
+    );
+    if (selected === undefined) return "";
 
     let dimensions: {
       feature_name: string;
       transformations: { name: string; args: number[] }[];
     }[] = [];
-    // find all dimensions
 
+    // find all dimensions
     for (const edge of edges as FlowEdge[]) {
       if (edge.type !== "dimension") continue;
-      if (edge.source !== feature.id) continue;
+      if (edge.source !== selected.id) continue;
 
       // find all transformations
       const transforms_defs: { name: string; args: number[] }[] = (
@@ -53,7 +36,9 @@
       ).map((def: TransformationDef) => ({ name: def.name, args: def.args }));
 
       // find target node
-      const node: FlowNode = nodes.find((n: FlowNode) => n.id === edge.target);
+      const node: FlowNode | undefined = nodes.find(
+        (n: FlowNode) => n.id === edge.target
+      );
       if (node === undefined) continue;
 
       dimensions.push({
@@ -62,7 +47,11 @@
       });
     }
 
-    return JSON.stringify({ ...feature.data, dimensions: dimensions }, null, 2);
+    return JSON.stringify(
+      { feature_name: selected.data.name, dimensions: dimensions },
+      undefined,
+      2
+    );
   });
 </script>
 
@@ -72,14 +61,12 @@
   <header class="flex items-center justify-between mb-2">
     <div class="space-y-0.5">
       <h2 class="text-sm font-semibold">Flow Result</h2>
-      {#if rootFeature() === null}
-        <p class="text-[11px] text-red-400">
-          No root feature found (no feature nodes).
-        </p>
+      {#if selectedNodeId === undefined}
+        <p class="text-[11px] text-red-400">No feature selected.</p>
       {/if}
     </div>
 
-    {#if rootFeature() !== null}
+    {#if selectedNodeId !== undefined}
       <button
         class="px-2 py-1 rounded border border-white/20 text-[11px] hover:bg-white/10"
         onclick={() => navigator.clipboard?.writeText(resultJson())}
@@ -90,14 +77,10 @@
   </header>
 
   <div class="relative flex-1 overflow-auto rounded-lg bg-black/60 p-2">
-    {#if rootFeature() !== null}
+    {#if selectedNodeId !== undefined}
       <pre class="font-mono text-[11px] leading-relaxed whitespace-pre">
 {resultJson()}
       </pre>
-    {:else}
-      <p class="text-white/60 text-[11px]">
-        Add at least one <code>feature</code> node to see results.
-      </p>
     {/if}
   </div>
 </aside>

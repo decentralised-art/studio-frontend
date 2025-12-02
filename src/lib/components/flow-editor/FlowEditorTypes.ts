@@ -1,27 +1,40 @@
-import type { Node, Edge } from "@xyflow/svelte";
+import type { Node, NodeProps, Edge, EdgeProps, getBezierPath } from "@xyflow/svelte";
 
-// ---- Data payloads on nodes ----
-export type FeatureData = { name: string };
+// ---- Nodes ----
+export type FeatureData = {
+    name: string;
+};
 
-// ---- XYFlow Node types (these are *types*, not components) ----
+// ---- Node types ----
+export type FeatureNodePropsType = NodeProps<FeatureNodeType>;
 export type FeatureNodeType = Node<FeatureData, "feature">;
 
 // Union of all node types in editor
-export type FlowNode = FeatureNodeType | Node;
+export type FlowNode = FeatureNodeType;
 
-// ---- Data payloads on edges ----
-
+// ---- Edges ----
 export type TransformationDef = {
     id: string;
     name: string;
     args: number[];
 };
 
+export type TransformationDefPropsType = {
+    edgeId: string;
+    def : TransformationDef;
+}
+
+// Type of a path factory function (same shape as getBezierPath)
+type EdgePathFn = typeof getBezierPath;
+
 export type DimensionData = {
     defs: TransformationDef[];
+    //injectable path function
+    pathFn: EdgePathFn;
 };
 
-// ---- Typed custom edge ----
+// ---- Edge types ----
+export type DimensionEdgePropsType = EdgeProps<DimensionEdgeType>;
 export type DimensionEdgeType = Edge<DimensionData, "dimension">;
 
 // Union of all possible edges in editor

@@ -5,6 +5,8 @@
     type Connection,
     type OnConnect,
     type IsValidConnection,
+    getBezierPath,
+    type OnSelectionChange,
   } from "@xyflow/svelte";
 
   import "@xyflow/svelte/dist/style.css";
@@ -38,6 +40,9 @@
   let nodes = $state.raw<FlowNode[]>([]);
   let edges = $state.raw<FlowEdge[]>([]);
 
+  // track selected node id (or undefined)
+  let selectedNodeId = $state<string | undefined>(undefined);
+
   function addNode(kind: "feature") {
     if (kind === "feature") {
       const newNode: FeatureNodeType = {
@@ -47,7 +52,7 @@
           x: 120 + Math.round(Math.random() * 10),
           y: 80 + Math.round(Math.random() * 10),
         },
-        data: { name: "" },
+        data: { name: ""},
       };
 
       nodes = [...nodes, newNode];
@@ -84,10 +89,18 @@
       targetHandle: connection.targetHandle,
       data: {
         defs: [],
+        pathFn: getBezierPath,
       },
     };
 
     edges = [...edges, edge];
+  };
+
+  // react to selection changes from SvelteFlow
+  const handleSelectionChange: OnSelectionChange<FlowNode, FlowEdge> = ({
+    nodes: selectedNodes,
+  }) => {
+    selectedNodeId = selectedNodes[0]?.id ?? null;
   };
 
   function reset() {
@@ -106,11 +119,12 @@
       {nodeTypes}
       {edgeTypes}
       onconnect={handleConnect}
+      onselectionchange={handleSelectionChange}
       {isValidConnection}
       fitView
     >
       <Background bgColor="black" />
     </SvelteFlow>
   </div>
-  <FlowEditorResultPanel {nodes} {edges} />
+  <FlowEditorResultPanel {nodes} {edges} {selectedNodeId} />
 </div>

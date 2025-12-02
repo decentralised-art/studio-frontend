@@ -1,10 +1,15 @@
 <script lang="ts">
   import { useEdges } from "@xyflow/svelte";
-  import type { TransformationDef, DimensionData } from "./flowEditorTypes";
+
+  import type {
+    DimensionData,
+    TransformationDef,
+    TransformationDefPropsType,
+  } from "./flowEditorTypes";
 
   import Input from "$lib/components/ui/Input.svelte";
 
-  let { def, edgeId }: { def: TransformationDef; edgeId: string } = $props();
+  let { edgeId, def }: TransformationDefPropsType = $props();
 
   const edges = useEdges();
 
