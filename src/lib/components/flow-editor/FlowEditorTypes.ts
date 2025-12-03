@@ -3,6 +3,7 @@ import type { Node, NodeProps, Edge, EdgeProps, getBezierPath } from "@xyflow/sv
 // ---- Nodes ----
 export type FeatureData = {
     name: string;
+    exists_on_server: boolean;
 };
 
 // ---- Node types ----
@@ -21,7 +22,7 @@ export type TransformationDef = {
 
 export type TransformationDefPropsType = {
     edgeId: string;
-    def : TransformationDef;
+    def: TransformationDef;
 }
 
 // Type of a path factory function (same shape as getBezierPath)

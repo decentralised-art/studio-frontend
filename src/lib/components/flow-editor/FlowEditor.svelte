@@ -52,7 +52,7 @@
           x: 120 + Math.round(Math.random() * 10),
           y: 80 + Math.round(Math.random() * 10),
         },
-        data: { name: ""},
+        data: { name: "", exists_on_server: false },
       };
 
       nodes = [...nodes, newNode];

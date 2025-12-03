@@ -18,6 +18,7 @@
     error,
     disabled = false,
     oninput, // optional handler from parent
+    onblur, // optional handler from parent
   }: {
     label?: string;
     help?: string;
@@ -30,6 +31,7 @@
     error?: string;
     disabled?: boolean;
     oninput?: InputHandler;
+    onblur?: InputHandler;
   } = $props();
 
   function handleInput(event: Event) {
@@ -40,7 +42,20 @@
     value = target.value;
 
     // call parent oninput if provided
-    (oninput as InputHandler | undefined)?.(
+    oninput?.(
+      event as Event & {
+        currentTarget: HTMLInputElement;
+        target: HTMLInputElement;
+      }
+    );
+  }
+
+  function handleBlur(event: Event) {
+    const target = event.currentTarget as HTMLInputElement | null;
+    if (!target) return;
+
+    value = target.value; // ensure final value sync
+    onblur?.(
       event as Event & {
         currentTarget: HTMLInputElement;
         target: HTMLInputElement;
@@ -63,6 +78,7 @@
     {disabled}
     {value}
     oninput={handleInput}
+    onblur={handleBlur}
     class={`w-full rounded-md border bg-white/5 px-3 py-1.5 text-sm text-white
             placeholder:text-white/30 outline-none transition
             focus:ring-2 focus:ring-emerald-400/70 focus:border-emerald-400/70
