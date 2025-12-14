@@ -26,16 +26,14 @@
     </nav>
   </header>
 
-  <main class="flex-1">
+  <main class="flex-1 min-h-0 overflow-hidden flex flex-col">
     {@render children()}
   </main>
 
   <footer class="border-t border-white/10 text-xs text-white/40">
     <div class="max-w-6xl mx-auto px-4 py-3 flex justify-between">
       <span>© {new Date().getFullYear()} hypermusic.ai </span>
-      <a href="https://github.com/hypermusic-ai" class="hover:text-white"
-        >GitHub</a
-      >
+      <a href="https://github.com/hypermusic-ai" class="hover:text-white">GitHub</a>
     </div>
   </footer>
 </div>

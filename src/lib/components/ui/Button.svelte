@@ -10,12 +10,14 @@
     disabled = false,
     className = "",
     children,
+    onclick,
   }: {
     variant?: Variant;
     type?: ButtonType;
     disabled?: boolean;
     className?: string;
     children?: Snippet;
+    onclick?: () => void;
   } = $props();
 
   const variants: Record<Variant, string> = {
@@ -25,6 +27,6 @@
   };
 </script>
 
-<button {type} {disabled} class={`btn ${variants[variant]} ${className}`}>
+<button {type} {disabled} class={`btn ${variants[variant]} ${className}`} {onclick}>
   {@render children?.()}
 </button>

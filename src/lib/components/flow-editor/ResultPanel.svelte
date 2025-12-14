@@ -1,23 +1,16 @@
 <script lang="ts">
-  import type {
-    FlowNode,
-    FlowEdge,
-    TransformationDef,
-  } from "./flowEditorTypes";
+  import type { FlowNode, FlowEdge, TransformationDef } from "./flowEditorTypes";
 
   let {
     nodes,
     edges,
     selectedNodeId,
-  }: { nodes: FlowNode[]; edges: FlowEdge[]; selectedNodeId?: string } =
-    $props();
+  }: { nodes: FlowNode[]; edges: FlowEdge[]; selectedNodeId?: string } = $props();
 
   const resultJson = $derived(() => {
     if (selectedNodeId === undefined) return "";
 
-    const selected: FlowNode | undefined = nodes.find(
-      (n: FlowNode) => n.id === selectedNodeId
-    );
+    const selected: FlowNode | undefined = nodes.find((n: FlowNode) => n.id === selectedNodeId);
     if (selected === undefined) return "";
 
     let dimensions: {
@@ -36,9 +29,7 @@
       ).map((def: TransformationDef) => ({ name: def.name, args: def.args }));
 
       // find target node
-      const node: FlowNode | undefined = nodes.find(
-        (n: FlowNode) => n.id === edge.target
-      );
+      const node: FlowNode | undefined = nodes.find((n: FlowNode) => n.id === edge.target);
       if (node === undefined) continue;
 
       dimensions.push({
@@ -50,14 +41,12 @@
     return JSON.stringify(
       { feature_name: selected.data.name, dimensions: dimensions },
       undefined,
-      2
+      2,
     );
   });
 </script>
 
-<aside
-  class="border border-white/10 bg-black/80 p-3 flex flex-col text-xs text-white h-full"
->
+<aside class="border border-white/10 bg-black/80 p-3 flex flex-col text-xs text-white h-full">
   <header class="flex items-center justify-between mb-2">
     <div class="space-y-0.5">
       <h2 class="text-sm font-semibold">Flow Result</h2>

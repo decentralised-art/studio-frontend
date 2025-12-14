@@ -1,0 +1,286 @@
+import * as monaco from "monaco-editor";
+
+let registered = false;
+
+export function ensureSolidityLanguage() {
+  if (registered) return;
+  registered = true;
+
+  monaco.languages.register({ id: "solidity" });
+
+  monaco.languages.setLanguageConfiguration("solidity", {
+    comments: { lineComment: "//", blockComment: ["/*", "*/"] },
+    brackets: [
+      ["{", "}"],
+      ["[", "]"],
+      ["(", ")"],
+    ],
+    autoClosingPairs: [
+      { open: "{", close: "}" },
+      { open: "[", close: "]" },
+      { open: "(", close: ")" },
+      { open: '"', close: '"' },
+      { open: "'", close: "'" },
+      { open: "/*", close: "*/" },
+    ],
+    surroundingPairs: [
+      { open: "{", close: "}" },
+      { open: "[", close: "]" },
+      { open: "(", close: ")" },
+      { open: '"', close: '"' },
+      { open: "'", close: "'" },
+    ],
+    folding: {
+      markers: {
+        start: /^\s*\/\/\s*#region\b/,
+        end: /^\s*\/\/\s*#endregion\b/,
+      },
+    },
+  });
+
+  // Solidity highlighting using Monarch tokenizer :contentReference[oaicite:1]{index=1}
+  monaco.languages.setMonarchTokensProvider("solidity", {
+    defaultToken: "",
+    tokenPostfix: ".sol",
+    keywords: [
+      "pragma",
+      "solidity",
+      "contract",
+      "interface",
+      "library",
+      "function",
+      "modifier",
+      "constructor",
+      "fallback",
+      "receive",
+      "event",
+      "error",
+      "enum",
+      "struct",
+      "mapping",
+      "public",
+      "private",
+      "internal",
+      "external",
+      "view",
+      "pure",
+      "payable",
+      "constant",
+      "memory",
+      "storage",
+      "calldata",
+      "returns",
+      "return",
+      "emit",
+      "revert",
+      "require",
+      "assert",
+      "if",
+      "else",
+      "for",
+      "while",
+      "do",
+      "break",
+      "continue",
+      "try",
+      "catch",
+      "new",
+      "delete",
+      "using",
+      "is",
+      "override",
+      "virtual",
+      "abstract",
+      "import",
+      "from",
+      "as",
+      "unchecked",
+    ],
+    typeKeywords: [
+      "bool",
+      "string",
+      "address",
+      "bytes",
+      "byte",
+      "int",
+      "uint",
+      "fixed",
+      "ufixed",
+      "bytes1",
+      "bytes2",
+      "bytes3",
+      "bytes4",
+      "bytes5",
+      "bytes6",
+      "bytes7",
+      "bytes8",
+      "bytes9",
+      "bytes10",
+      "bytes11",
+      "bytes12",
+      "bytes13",
+      "bytes14",
+      "bytes15",
+      "bytes16",
+      "bytes17",
+      "bytes18",
+      "bytes19",
+      "bytes20",
+      "bytes21",
+      "bytes22",
+      "bytes23",
+      "bytes24",
+      "bytes25",
+      "bytes26",
+      "bytes27",
+      "bytes28",
+      "bytes29",
+      "bytes30",
+      "bytes31",
+      "bytes32",
+      "uint8",
+      "uint16",
+      "uint32",
+      "uint64",
+      "uint128",
+      "uint256",
+      "int8",
+      "int16",
+      "int32",
+      "int64",
+      "int128",
+      "int256",
+    ],
+    operators: [
+      "=",
+      ">",
+      "<",
+      "!",
+      "~",
+      "?",
+      ":",
+      "==",
+      "<=",
+      ">=",
+      "!=",
+      "&&",
+      "||",
+      "++",
+      "--",
+      "+",
+      "-",
+      "*",
+      "/",
+      "&",
+      "|",
+      "^",
+      "%",
+      "<<",
+      ">>",
+      "+=",
+      "-=",
+      "*=",
+      "/=",
+      "%=",
+      "<<=",
+      ">>=",
+      "&=",
+      "|=",
+      "^=",
+    ],
+    symbols: /[=><!~?:&|+*/^%-]+/,
+    escapes: /\\(?:[nrt0\\'"`]|x[0-9A-Fa-f]{2}|u[0-9A-Fa-f]{4})/,
+    tokenizer: {
+      root: [
+        [/\/\/.*$/, "comment"],
+        [/\/\*/, "comment", "@comment"],
+
+        [/[{}()[\]]/, "@brackets"],
+        [/@symbols/, { cases: { "@operators": "operator", "@default": "" } }],
+
+        [/\b0x[0-9a-fA-F]+\b/, "number.hex"],
+        [/\b\d+(\.\d+)?\b/, "number"],
+
+        [
+          /[a-zA-Z_]\w*/,
+          {
+            cases: {
+              "@keywords": "keyword",
+              "@typeKeywords": "type",
+              "@default": "identifier",
+            },
+          },
+        ],
+
+        [/"/, "string", "@string_double"],
+        [/'/, "string", "@string_single"],
+        [/`/, "string", "@string_backtick"],
+      ],
+
+      comment: [
+        [/[^/*]+/, "comment"],
+        [/\*\//, "comment", "@pop"],
+        [/[/*]/, "comment"],
+      ],
+
+      string_double: [
+        [/[^\\"]+/, "string"],
+        [/@escapes/, "string.escape"],
+        [/\\./, "string.escape.invalid"],
+        [/"/, "string", "@pop"],
+      ],
+      string_single: [
+        [/[^\\']+/, "string"],
+        [/@escapes/, "string.escape"],
+        [/\\./, "string.escape.invalid"],
+        [/'/, "string", "@pop"],
+      ],
+      string_backtick: [
+        [/[^\\`]+/, "string"],
+        [/@escapes/, "string.escape"],
+        [/\\./, "string.escape.invalid"],
+        [/`/, "string", "@pop"],
+      ],
+    },
+  });
+
+  // Helpful completions
+  monaco.languages.registerCompletionItemProvider("solidity", {
+    triggerCharacters: [".", " "],
+    provideCompletionItems: (model, position) => {
+      // Replace the current “word” at the cursor
+      const word = model.getWordUntilPosition(position);
+      const range: monaco.IRange = {
+        startLineNumber: position.lineNumber,
+        endLineNumber: position.lineNumber,
+        startColumn: word.startColumn,
+        endColumn: word.endColumn,
+      };
+
+      return {
+        suggestions: [
+          {
+            label: "pragma solidity ^0.8.0;",
+            kind: monaco.languages.CompletionItemKind.Snippet,
+            insertText: "pragma solidity ^0.8.0;",
+            range,
+          },
+          {
+            label: "contract",
+            kind: monaco.languages.CompletionItemKind.Snippet,
+            insertText: "contract ${1:Name} {\n\t$0\n}\n",
+            insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+            range,
+          },
+          {
+            label: "function",
+            kind: monaco.languages.CompletionItemKind.Snippet,
+            insertText: "function ${1:name}(${2:args}) ${3:public} ${4:returns ()} {\n\t$0\n}\n",
+            insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+            range,
+          },
+        ],
+      };
+    },
+  });
+}

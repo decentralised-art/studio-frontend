@@ -3,7 +3,7 @@
     event: Event & {
       currentTarget: HTMLInputElement;
       target: HTMLInputElement;
-    }
+    },
   ) => void;
 
   let {
@@ -46,7 +46,7 @@
       event as Event & {
         currentTarget: HTMLInputElement;
         target: HTMLInputElement;
-      }
+      },
     );
   }
 
@@ -59,7 +59,7 @@
       event as Event & {
         currentTarget: HTMLInputElement;
         target: HTMLInputElement;
-      }
+      },
     );
   }
 </script>

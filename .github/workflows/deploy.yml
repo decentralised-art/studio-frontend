@@ -41,7 +41,7 @@ jobs:
             "https://api.github.com/repos/$REPO/actions/artifacts/$ARTIFACT_ID/zip"
 
           unzip artifact.zip -d artifact
-          
+
           echo "Extract archive into a 'deploy' directory..."
           mkdir deploy
           # matches the name we created in CI: dist/hypermusic-ai-svelte.tar.gz

@@ -1,4 +1,4 @@
-import type { FlowNode, FlowEdge, DimensionEdgeType } from "./flowEditorTypes";
+import type { DimensionEdgeType, FlowEdge, FlowNode } from "./flowEditorTypes";
 
 /**
  * Build adjacency list: nodeId -> [neighbourId, ...]
@@ -26,7 +26,7 @@ export function hasCycle(nodes: FlowNode[], edges: FlowEdge[]): boolean {
   const stack = new Set<string>();
 
   const dfs = (nodeId: string): boolean => {
-    if (stack.has(nodeId)) return true;      // back-edge → cycle
+    if (stack.has(nodeId)) return true; // back-edge → cycle
     if (visited.has(nodeId)) return false;
 
     visited.add(nodeId);
@@ -56,7 +56,7 @@ export function hasCycle(nodes: FlowNode[], edges: FlowEdge[]): boolean {
 export function addingConnectionCreatesCycle(
   nodes: FlowNode[],
   edges: FlowEdge[],
-  connection: import("@xyflow/svelte").Connection
+  connection: import("@xyflow/svelte").Connection,
 ): boolean {
   const tempEdge: DimensionEdgeType = {
     id: "__temp__",
@@ -65,10 +65,10 @@ export function addingConnectionCreatesCycle(
     target: connection.target,
     sourceHandle: connection.sourceHandle,
     targetHandle: connection.targetHandle,
-    data: { defs: [] },
+    data: { defs: [], pathFn: () => ["", 0, 0, 0, 0] },
   };
 
   const simulatedEdges: FlowEdge[] = [...edges, tempEdge];
-  
+
   return hasCycle(nodes, simulatedEdges);
 }

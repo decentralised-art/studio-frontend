@@ -1,9 +1,9 @@
-import type { Node, NodeProps, Edge, EdgeProps, getBezierPath } from "@xyflow/svelte";
+import type { Edge, EdgeProps, getBezierPath, Node, NodeProps } from "@xyflow/svelte";
 
 // ---- Nodes ----
 export type FeatureData = {
-    name: string;
-    exists_on_server: boolean;
+  name: string;
+  exists_on_server: boolean;
 };
 
 // ---- Node types ----
@@ -15,23 +15,23 @@ export type FlowNode = FeatureNodeType;
 
 // ---- Edges ----
 export type TransformationDef = {
-    id: string;
-    name: string;
-    args: number[];
+  id: string;
+  name: string;
+  args: number[];
 };
 
 export type TransformationDefPropsType = {
-    edgeId: string;
-    def: TransformationDef;
-}
+  edgeId: string;
+  def: TransformationDef;
+};
 
 // Type of a path factory function (same shape as getBezierPath)
 type EdgePathFn = typeof getBezierPath;
 
 export type DimensionData = {
-    defs: TransformationDef[];
-    //injectable path function
-    pathFn: EdgePathFn;
+  defs: TransformationDef[];
+  //injectable path function
+  pathFn: EdgePathFn;
 };
 
 // ---- Edge types ----

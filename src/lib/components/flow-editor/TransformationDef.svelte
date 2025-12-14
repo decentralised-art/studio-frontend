@@ -21,14 +21,13 @@
               ...edge,
               data: {
                 ...(edge.data ?? {}),
-                defs: ((edge.data as DimensionData)?.defs ?? []).map(
-                  (d: TransformationDef) =>
-                    d.id === def.id ? { ...d, ...patch } : d
+                defs: ((edge.data as DimensionData)?.defs ?? []).map((d: TransformationDef) =>
+                  d.id === def.id ? { ...d, ...patch } : d,
                 ),
               },
             }
-          : edge
-      )
+          : edge,
+      ),
     );
   }
 

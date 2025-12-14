@@ -1,11 +1,7 @@
 <script lang="ts">
   import { BaseEdge, EdgeLabel, getBezierPath, useEdges } from "@xyflow/svelte";
 
-  import type {
-    DimensionEdgePropsType,
-    DimensionData,
-    TransformationDef,
-  } from "./flowEditorTypes";
+  import type { DimensionEdgePropsType, DimensionData, TransformationDef } from "./flowEditorTypes";
 
   import TransformationDefComp from "./TransformationDef.svelte";
 
@@ -54,9 +50,9 @@
           targetY,
           sourcePosition,
           targetPosition,
-        })
+        }),
   );
-  
+
   // local derived state
   const defs = $derived(data?.defs ?? []);
 
@@ -81,8 +77,8 @@
                 defs: [...((edge.data as DimensionData)?.defs ?? []), newDef],
               },
             }
-          : edge
-      )
+          : edge,
+      ),
     );
   }
 
@@ -95,25 +91,17 @@
               data: {
                 ...(edge.data ?? {}),
                 defs: ((edge.data as DimensionData)?.defs ?? []).filter(
-                  (d: TransformationDef) => d.id !== defId
+                  (d: TransformationDef) => d.id !== defId,
                 ),
               },
             }
-          : edge
-      )
+          : edge,
+      ),
     );
   }
 </script>
 
-<BaseEdge
-  {id}
-  path={edgePath}
-  {markerStart}
-  {markerEnd}
-  {interactionWidth}
-  {label}
-  {labelStyle}
-/>
+<BaseEdge {id} path={edgePath} {markerStart} {markerEnd} {interactionWidth} {label} {labelStyle} />
 
 <EdgeLabel
   x={labelX}

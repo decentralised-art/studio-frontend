@@ -1,5 +1,17 @@
 <script lang="ts">
-  import FlowEditor from "$lib/components/flow-editor/FlowEditor.svelte";
+  import WorkspaceWindow from "$lib/components/workspace-window/WorkspaceWindow.svelte";
 </script>
 
-<FlowEditor />
+<div class="page">
+  <WorkspaceWindow />
+</div>
+
+<style>
+  .page {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+</style>

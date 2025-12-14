@@ -18,12 +18,7 @@
     <Button variant="subtle">Button subtle</Button>
   </SectionShell>
 
-  <Input
-    label="Input label"
-    help="input help"
-    type="text"
-    placeholder="Input placeholder"
-  />
+  <Input label="Input label" help="input help" type="text" placeholder="Input placeholder" />
 
   <Tag variant="default">Tag default</Tag>
   <Tag variant="accent">Tag accent</Tag>
