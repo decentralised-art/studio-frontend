@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { resolve } from "$app/paths";
+
   const slogans = [
     "Become a part of music's connected future.",
     "Join a creative network of human and post-human creators.",
@@ -85,8 +87,8 @@
         </div>
 
         <div class="flex flex-wrap items-center gap-3">
-          <a href="/signup" class="btn btn-primary text-sm"> Get started → </a>
-          <a href="/explore" class="btn btn-ghost text-sm"> Explore particles </a>
+          <a href={resolve("/signup")} class="btn btn-primary text-sm"> Get started → </a>
+          <a href={resolve("/explore")} class="btn btn-ghost text-sm"> Explore particles </a>
         </div>
       </div>
 

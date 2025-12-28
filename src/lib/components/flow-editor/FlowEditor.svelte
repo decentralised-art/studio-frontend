@@ -24,14 +24,8 @@
   import type { FeatureNodeType, DimensionEdgeType, FlowNode, FlowEdge } from "./flowEditorTypes";
 
   import { addingConnectionCreatesCycle } from "./graphUtils";
-  import type { ApiTransformation, ApiDimension, ApiFeature } from "$lib/dcn/dcnApi";
+  import type { ApiFeature } from "$lib/dcn/dcnApi";
   import { SvelteSet } from "svelte/reactivity";
-
-  type Props = {
-    readonly height?: string; // e.g. "640px" or "100%"
-  };
-
-  const { height = "100%" }: Props = $props();
 
   // map to components
   const nodeTypes = {
