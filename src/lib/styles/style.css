@@ -1,0 +1,63 @@
+@import "tailwindcss";
+@import "tailwindcss/utilities";
+
+/* -------------------------------
+   DESIGN TOKENS – Hypermusic
+-------------------------------- */
+:root {
+  --color-bg: #020617; /* main app background */
+  --color-bg-soft: #020617; /* slightly lifted panels */
+  --color-bg-elevated: #020617;
+  --color-fg: #f9fafb;
+
+  --color-accent: #22c55e;
+  --color-accent-soft: rgba(34, 197, 94, 0.12);
+  --color-accent-strong: #22c55e;
+
+  --color-border-subtle: rgba(148, 163, 184, 0.3);
+  --color-border-strong: rgba(148, 163, 184, 0.6);
+
+  --radius-md: 0.75rem;
+  --radius-lg: 1.5rem;
+  --radius-xl: 999px;
+
+  --shadow-soft: 0 18px 60px rgba(15, 23, 42, 0.8);
+  --shadow-glow: 0 0 40px rgba(34, 197, 94, 0.28);
+
+  --font-sans:
+    "Space Grotesk", system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter",
+    sans-serif;
+}
+
+/* -------------------------------
+   BASE
+-------------------------------- */
+@layer base {
+  html,
+  body,
+  #svelte {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    font-family: var(--font-sans);
+    background: var(--color-bg);
+    color: var(--color-fg);
+  }
+
+  /* Optional: subtle grid background for the whole app */
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    opacity: 0.18;
+    pointer-events: none;
+    background-image:
+      linear-gradient(to right, rgba(148, 163, 184, 0.18) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(148, 163, 184, 0.18) 1px, transparent 1px);
+    background-size: 32px 32px;
+    mix-blend-mode: soft-light;
+    z-index: -1;
+  }
+}

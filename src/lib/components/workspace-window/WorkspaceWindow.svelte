@@ -82,7 +82,7 @@
     {#if editorState.kind === "flow"}
       <FlowEditorShell />
     {:else if editorState.domain === "transformation"}
-      <Input label="Transformation name" bind:value={txNameRaw} className="w-50 p-4" />
+      <Input label="Transformation name" bind:value={txNameRaw} />
       <SolidityEditorShell template={txTemplate()} bind:value={txCodeRaw} />
     {:else}
       <SolidityEditorShell />

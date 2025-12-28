@@ -63,13 +63,7 @@
 
 <div class="flex flex-col gap-1 text-xs w-full">
   <!-- Name -->
-  <Input
-    label=""
-    placeholder="Transformation name"
-    className="w-full"
-    value={def.name}
-    oninput={handleNameInput}
-  />
+  <Input label="" placeholder="Transformation name" value={def.name} oninput={handleNameInput} />
 
   <!-- Args list -->
   <div class="flex items-center gap-2">

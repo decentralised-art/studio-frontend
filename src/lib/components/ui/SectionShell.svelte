@@ -1,26 +1,25 @@
 <script lang="ts">
   import type { Snippet } from "svelte";
+  type Variant = "primary" | "subtle";
 
   const {
     title = "",
     subtitle = "",
-    className = "",
+    variant = "primary",
     dot = false,
-
     children,
     actions,
   }: {
     title?: string;
     subtitle?: string;
-    className?: string;
+    variant?: Variant;
     dot?: boolean;
-
     children?: Snippet; // default slot
     actions?: Snippet; // named slot: slot="actions"
   } = $props();
 </script>
 
-<section class={`section-shell ${className}`}>
+<section class={`section-shell ${variant === "primary" ? "section-primary" : "section-subtle"}`}>
   <header class="section-shell-header">
     <div class="flex items-center gap-3">
       {#if dot}
@@ -44,3 +43,38 @@
     {@render children?.()}
   </div>
 </section>
+
+<style lang="postcss">
+  @reference "$lib/styles/style.css";
+
+  .section-shell {
+    @apply relative w-full max-w-6xl mx-auto
+      rounded-[1.75rem];
+  }
+
+  .section-shell-header {
+    @apply mb-6 flex flex-wrap items-center justify-between gap-3;
+  }
+
+  .section-shell-title {
+    @apply text-base sm:text-lg font-semibold tracking-wide text-white;
+  }
+
+  .section-shell-subtitle {
+    @apply text-xs sm:text-sm text-white/60 max-w-xl;
+  }
+
+  /* little glowing dot for section headers */
+  .section-shell-dot {
+    @apply h-2 w-2 rounded-full bg-emerald-400 shadow-[0_0_18px_rgba(34,197,94,0.8)];
+  }
+
+  .section-primary {
+    @apply border border-white/10
+      bg-linear-to-b from-white/5 to-black/60
+       p-6 sm:p-8;
+  }
+
+  .section-subtle {
+  }
+</style>

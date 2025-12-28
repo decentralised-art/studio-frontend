@@ -13,8 +13,6 @@
     type = "text",
     value = $bindable(""),
     placeholder = "",
-    className = "",
-    inputClassName = "",
     error,
     disabled = false,
     oninput, // optional handler from parent
@@ -26,8 +24,6 @@
     type?: string;
     value?: string;
     placeholder?: string;
-    className?: string; // wrapper
-    inputClassName?: string; // input element
     error?: string;
     disabled?: boolean;
     oninput?: InputHandler;
@@ -64,9 +60,9 @@
   }
 </script>
 
-<div class={`flex flex-col gap-1 text-sm ${className}`}>
+<div class="flex flex-col gap-1 text-sm">
   {#if label}
-    <label for={id} class="text-xs font-medium text-white/70">
+    <label for={id} class="input-label">
       {label}
     </label>
   {/if}
@@ -79,17 +75,38 @@
     {value}
     oninput={handleInput}
     onblur={handleBlur}
-    class={`w-full rounded-md border bg-white/5 px-3 py-1.5 text-sm text-white
-            placeholder:text-white/30 outline-none transition
-            focus:ring-2 focus:ring-emerald-400/70 focus:border-emerald-400/70
-            disabled:opacity-50 disabled:cursor-not-allowed
+    class={`input
             ${error ? "border-red-500/80 focus:ring-red-500/70" : "border-white/15"}
-            ${inputClassName}`}
+            `}
   />
 
   {#if error}
-    <p class="text-xs text-red-400 mt-0.5">{error}</p>
+    <p class="input-error">{error}</p>
   {:else if help}
-    <p class="text-xs text-white/50 mt-0.5">{help}</p>
+    <p class="input-help">{help}</p>
   {/if}
 </div>
+
+<style lang="postcss">
+  @reference "$lib/styles/style.css";
+
+  .input {
+    @apply w-full rounded-lg border border-white/15 bg-black/40
+      px-3 py-2 text-sm text-white
+      placeholder:text-white/40
+      focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400
+      focus-visible:border-emerald-400/60;
+  }
+
+  .input-label {
+    @apply text-xs font-medium uppercase tracking-[0.18em] text-white/50;
+  }
+
+  .input-help {
+    @apply text-[0.7rem] text-white/40 mt-1;
+  }
+
+  .input-error {
+    @apply text-[0.7rem] text-red-400 mt-1;
+  }
+</style>

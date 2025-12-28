@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="Nia P.">
+  <rect width="128" height="128" rx="64" fill="#0f172a" />
+  <text
+    x="50%"
+    y="54%"
+    text-anchor="middle"
+    dominant-baseline="middle"
+    font-family="Space Grotesk, Arial, sans-serif"
+    font-size="48"
+    fill="#e879f9"
+  >
+    NP
+  </text>
+</svg>
