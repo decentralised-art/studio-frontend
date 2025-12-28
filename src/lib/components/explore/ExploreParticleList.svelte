@@ -54,8 +54,8 @@
         author={getAuthor(particle.authorId)}
         viewLabel={getViewLabel(particle.viewId)}
         selected={particle.id === selectedId}
-        onSelect={onSelect}
-        onAuthorSelect={onAuthorSelect}
+        {onSelect}
+        {onAuthorSelect}
       />
     {/each}
   {/if}

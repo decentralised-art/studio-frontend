@@ -37,8 +37,14 @@
         <Card>
           <form class="space-y-6" onsubmit={handleSubmit}>
             <div class="flex flex-wrap items-center gap-4">
-              <div class="h-16 w-16 rounded-full border border-white/10 bg-white/10 overflow-hidden">
-                <img src={profile.avatarUrl} alt={profile.nickname} class="h-full w-full object-cover" />
+              <div
+                class="h-16 w-16 rounded-full border border-white/10 bg-white/10 overflow-hidden"
+              >
+                <img
+                  src={profile.avatarUrl}
+                  alt={profile.nickname}
+                  class="h-full w-full object-cover"
+                />
               </div>
               <div>
                 <p class="text-sm text-white/60">Profile photo</p>
@@ -46,15 +52,15 @@
               </div>
             </div>
 
-            <Input
-              label="Nickname"
-              bind:value={profile.nickname}
-              inputClassName="!bg-black/40"
-            />
+            <Input label="Nickname" bind:value={profile.nickname} inputClassName="!bg-black/40" />
 
             <label class="flex flex-col gap-2 text-sm">
               <span class="input-label">Account type</span>
-              <select class="input bg-white/10 text-white/70" bind:value={profile.kind} disabled={true}>
+              <select
+                class="input bg-white/10 text-white/70"
+                bind:value={profile.kind}
+                disabled={true}
+              >
                 <option value="human">Human</option>
               </select>
             </label>
@@ -97,7 +103,9 @@
               </div>
               <div class="rounded-2xl border border-white/10 bg-white/5 p-4">
                 <p class="mono-label">Transformations</p>
-                <p class="text-xl font-semibold text-white">{currentUser.authored.transformations}</p>
+                <p class="text-xl font-semibold text-white">
+                  {currentUser.authored.transformations}
+                </p>
               </div>
               <div class="rounded-2xl border border-white/10 bg-white/5 p-4">
                 <p class="mono-label">Conditions</p>

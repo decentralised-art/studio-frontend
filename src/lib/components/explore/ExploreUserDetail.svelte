@@ -30,7 +30,9 @@
         {#if user.avatarUrl}
           <img src={user.avatarUrl} alt={user.nickname} class="h-full w-full object-cover" />
         {:else}
-          <div class="h-full w-full flex items-center justify-center text-sm font-semibold text-white/70">
+          <div
+            class="h-full w-full flex items-center justify-center text-sm font-semibold text-white/70"
+          >
             {user.nickname.slice(0, 2).toUpperCase()}
           </div>
         {/if}

@@ -55,19 +55,19 @@
   const activePanel = $derived.by(() => panelStack[panelStack.length - 1] ?? null);
 
   const panelParticle = $derived.by(() =>
-    activePanel?.type === "particle" ? particlesById[activePanel.id] ?? null : null,
+    activePanel?.type === "particle" ? (particlesById[activePanel.id] ?? null) : null,
   );
 
   const panelUser = $derived.by(() =>
-    activePanel?.type === "user" ? usersById[activePanel.id] ?? null : null,
+    activePanel?.type === "user" ? (usersById[activePanel.id] ?? null) : null,
   );
 
   const panelView = $derived.by(() =>
-    panelParticle ? viewOptions.find((view) => view.id === panelParticle.viewId) ?? null : null,
+    panelParticle ? (viewOptions.find((view) => view.id === panelParticle.viewId) ?? null) : null,
   );
 
   const panelAuthor = $derived.by(() =>
-    panelParticle ? usersById[panelParticle.authorId] ?? null : null,
+    panelParticle ? (usersById[panelParticle.authorId] ?? null) : null,
   );
 
   const hasPanel = $derived.by(() => panelStack.length > 0);
@@ -174,7 +174,7 @@
           <ExploreParticleList
             particles={filteredParticles}
             views={viewOptions}
-            usersById={usersById}
+            {usersById}
             selectedId={selectedParticle?.id ?? undefined}
             onSelect={handleSelect}
             onAuthorSelect={handleAuthorSelect}
@@ -184,7 +184,7 @@
 
       {#if hasPanel}
         <div class="hidden lg:block lg:pl-6">
-          <ExploreSidePanel onClose={handleClose} onBack={handleBack} canGoBack={canGoBack} className="mt-4">
+          <ExploreSidePanel onClose={handleClose} onBack={handleBack} {canGoBack} className="mt-4">
             {#if panelParticle && panelAuthor}
               <ExploreParticleDetail
                 particle={panelParticle}
@@ -193,7 +193,7 @@
                 onAuthorSelect={handleAuthorSelect}
               />
             {:else if panelUser}
-              <ExploreUserDetail user={panelUser} particlesById={particlesById} />
+              <ExploreUserDetail user={panelUser} {particlesById} />
             {/if}
           </ExploreSidePanel>
         </div>
@@ -205,7 +205,7 @@
 {#if hasPanel}
   <div class="lg:hidden fixed inset-0 z-40 bg-black/80 backdrop-blur-sm">
     <div class="h-full overflow-y-auto px-4 py-6">
-      <ExploreSidePanel onClose={handleClose} onBack={handleBack} canGoBack={canGoBack} className="pb-8">
+      <ExploreSidePanel onClose={handleClose} onBack={handleBack} {canGoBack} className="pb-8">
         {#if panelParticle && panelAuthor}
           <ExploreParticleDetail
             particle={panelParticle}
@@ -214,7 +214,7 @@
             onAuthorSelect={handleAuthorSelect}
           />
         {:else if panelUser}
-          <ExploreUserDetail user={panelUser} particlesById={particlesById} />
+          <ExploreUserDetail user={panelUser} {particlesById} />
         {/if}
       </ExploreSidePanel>
     </div>

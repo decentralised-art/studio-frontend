@@ -109,9 +109,7 @@
       </div>
 
       <div class="flex flex-col gap-2">
-        <span class="text-[0.65rem] uppercase tracking-[0.32em] text-white/40">
-          Built from
-        </span>
+        <span class="text-[0.65rem] uppercase tracking-[0.32em] text-white/40"> Built from </span>
         <div class="flex flex-wrap gap-2">
           {#if particle.ingredients.length === 0}
             <Tag variant="outline">Original composition</Tag>

@@ -70,29 +70,30 @@
             >
               {longestSlogan}
             </div>
-            <h1 class="typewriter-text text-4xl font-semibold leading-tight sm:text-6xl absolute inset-0">
+            <h1
+              class="typewriter-text text-4xl font-semibold leading-tight sm:text-6xl absolute inset-0"
+            >
               {typedText}
               <span class="typewriter-caret" aria-hidden="true"></span>
             </h1>
           </div>
           <p class="max-w-xl text-sm text-white/70 sm:text-base">
-            Hypermusic.ai is a compositional infrastructure for collective performative intelligence.
-            Build on interoperable creative contributions and let the network sing back.
+            Hypermusic.ai is a compositional infrastructure for collective performative
+            intelligence. Build on interoperable creative contributions and let the network sing
+            back.
           </p>
         </div>
 
         <div class="flex flex-wrap items-center gap-3">
-          <a href="/signup" class="btn btn-primary text-sm">
-            Get started →
-          </a>
-          <a href="/explore" class="btn btn-ghost text-sm">
-            Explore particles
-          </a>
+          <a href="/signup" class="btn btn-primary text-sm"> Get started → </a>
+          <a href="/explore" class="btn btn-ghost text-sm"> Explore particles </a>
         </div>
       </div>
 
       <div class="space-y-4">
-        <div class="rounded-[1.75rem] border border-white/10 bg-black/70 p-6 shadow-[0_18px_60px_rgba(15,23,42,0.8)]">
+        <div
+          class="rounded-[1.75rem] border border-white/10 bg-black/70 p-6 shadow-[0_18px_60px_rgba(15,23,42,0.8)]"
+        >
           <div class="flex items-center justify-between">
             <p class="mono-label">Live network pulse</p>
             <span class="text-xs text-emerald-300">Active</span>
@@ -116,7 +117,8 @@
         <div class="rounded-[1.5rem] border border-white/10 bg-white/5 p-5">
           <p class="text-xs uppercase tracking-[0.3em] text-white/50">Manifesto</p>
           <p class="mt-3 text-sm text-white/70">
-            Every performative transaction is a reusable, inspectable step in a shared musical lineage.
+            Every performative transaction is a reusable, inspectable step in a shared musical
+            lineage.
           </p>
         </div>
       </div>

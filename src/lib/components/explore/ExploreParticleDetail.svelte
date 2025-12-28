@@ -27,10 +27,7 @@
 </script>
 
 <div class="space-y-4">
-  <Card
-    variant="soft"
-    className="border-white/15 bg-black/70 backdrop-blur"
-  >
+  <Card variant="soft" className="border-white/15 bg-black/70 backdrop-blur">
     <div class="flex flex-wrap items-start justify-between gap-4">
       <div class="space-y-2">
         <div class="flex flex-wrap items-center gap-2">
@@ -86,9 +83,7 @@
     <div class="flex items-center justify-between gap-3">
       <div>
         <p class="text-sm font-semibold text-white">Performative transaction lineage</p>
-        <p class="text-xs text-white/50">
-          Tree view and dependency previews will live here.
-        </p>
+        <p class="text-xs text-white/50">Tree view and dependency previews will live here.</p>
       </div>
       <Tag variant="outline">{particle.dependencies.length} nodes</Tag>
     </div>
