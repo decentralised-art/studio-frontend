@@ -11,7 +11,6 @@
     selectedId,
     onSelect,
     onAuthorSelect,
-    className = "",
   }: {
     particles?: ExploreParticle[];
     views?: ParticleView[];
@@ -19,7 +18,6 @@
     selectedId?: ExploreParticle["id"];
     onSelect?: (id: ExploreParticle["id"]) => void;
     onAuthorSelect?: (id: User["id"]) => void;
-    className?: string;
   } = $props();
 
   const getViewLabel = (id: ParticleView["id"]) =>
@@ -42,10 +40,10 @@
     };
 </script>
 
-<div class={`space-y-4 ${className}`}>
+<div class="list">
   {#if particles.length === 0}
-    <Card variant="soft" className="text-center">
-      <p class="text-sm text-white/60">No particles match these filters yet.</p>
+    <Card variant="soft">
+      <p class="empty">No particles match these filters yet.</p>
     </Card>
   {:else}
     {#each particles as particle (particle.id)}
@@ -60,3 +58,15 @@
     {/each}
   {/if}
 </div>
+
+<style lang="postcss">
+  @reference "$lib/styles/style.css";
+
+  .list {
+    @apply space-y-4;
+  }
+
+  .empty {
+    @apply text-sm text-white/60;
+  }
+</style>

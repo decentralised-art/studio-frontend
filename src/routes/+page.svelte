@@ -1,5 +1,7 @@
 <script lang="ts">
   import { resolve } from "$app/paths";
+  import Button from "$lib/components/ui/Button.svelte";
+  import SectionShell from "$lib/components/ui/SectionShell.svelte";
 
   const slogans = [
     "Become a part of music's connected future.",
@@ -48,7 +50,7 @@
   });
 </script>
 
-<section class="relative overflow-hidden">
+<SectionShell variant="subtle">
   <div
     class="pointer-events-none absolute -top-32 right-0 h-[30rem] w-[30rem] rounded-full
     bg-[radial-gradient(circle_at_top,_rgba(16,185,129,0.35),_transparent_60%)]
@@ -87,8 +89,21 @@
         </div>
 
         <div class="flex flex-wrap items-center gap-3">
-          <a href={resolve("/signup")} class="btn btn-primary text-sm"> Get started → </a>
-          <a href={resolve("/explore")} class="btn btn-ghost text-sm"> Explore particles </a>
+          <Button
+            variant="subtle"
+            onclick={() => {
+              window.location.href = resolve("/signup");
+            }}
+          >
+            Get started →
+          </Button>
+          <Button
+            variant="subtle"
+            onclick={() => {
+              window.location.href = resolve("/explore");
+            }}
+            >Explore particles
+          </Button>
         </div>
       </div>
 
@@ -126,9 +141,11 @@
       </div>
     </div>
   </div>
-</section>
+</SectionShell>
 
-<style>
+<style lang="postcss">
+  @reference "$lib/styles/style.css";
+
   .typewriter-text {
     text-shadow: 0 0 30px rgba(16, 185, 129, 0.25);
   }
@@ -159,5 +176,9 @@
     .typewriter-caret {
       animation: none;
     }
+  }
+
+  .mono-label {
+    @apply text-[0.7rem] font-mono tracking-[0.28em] uppercase text-white/40;
   }
 </style>

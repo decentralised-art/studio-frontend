@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Button from "$lib/components/ui/Button.svelte";
   import Card from "$lib/components/ui/Card.svelte";
   import Tag from "$lib/components/ui/Tag.svelte";
   import type { ExploreParticle } from "$lib/data/exploreParticles";
@@ -11,7 +12,6 @@
     selected = false,
     onSelect,
     onAuthorSelect,
-    className = "",
   }: {
     particle: ExploreParticle;
     author: User;
@@ -19,7 +19,6 @@
     selected?: boolean;
     onSelect?: (id: ExploreParticle["id"]) => void;
     onAuthorSelect?: (id: User["id"]) => void;
-    className?: string;
   } = $props();
 
   const getInitials = (name: string) =>
@@ -51,78 +50,130 @@
 </script>
 
 <Card
-  variant="soft"
-  className={`transition hover:border-white/25 hover:bg-white/10 ${
-    selected ? "border-emerald-400/40 bg-emerald-500/5 shadow-[0_0_24px_rgba(34,197,94,0.15)]" : ""
-  } ${className}`}
+  tabindex={0}
+  ariaPressed={selected}
+  onclick={handleSelect}
+  onkeydown={handleKeydown}
+  {selected}
 >
-  <div
-    role="button"
-    tabindex="0"
-    aria-pressed={selected}
-    onclick={handleSelect}
-    onkeydown={handleKeydown}
-    class="w-full text-left cursor-pointer focus:outline-none
-    focus-visible:ring-2 focus-visible:ring-emerald-400/50
-    focus-visible:ring-offset-2 focus-visible:ring-offset-black"
-  >
-    <div class="flex flex-col gap-4">
-      <div class="flex gap-4">
-        <div
-          class="h-10 w-10 shrink-0 rounded-full border border-white/10 bg-white/10
-          text-xs font-semibold text-white/70 flex items-center justify-center overflow-hidden"
-        >
-          {#if author.avatarUrl}
-            <img
-              src={author.avatarUrl}
-              alt={author.nickname}
-              class="h-full w-full object-cover"
-              loading="lazy"
-            />
-          {:else}
+  <div class="card-root">
+    <div class="header-row">
+      <div class="avatar">
+        {#if author.avatarUrl}
+          <img src={author.avatarUrl} alt={author.nickname} class="avatar-img" loading="lazy" />
+        {:else}
+          <span class="avatar-fallback">
             {getInitials(author.nickname)}
-          {/if}
-        </div>
-
-        <div class="space-y-2">
-          <div class="flex flex-wrap items-center gap-2">
-            <Tag variant="accent">{viewLabel}</Tag>
-            <span class="mono-label">{particle.createdLabel}</span>
-          </div>
-
-          <p class="text-sm text-white/70">
-            Author:
-            <button
-              type="button"
-              class="ml-1 text-white font-semibold hover:text-emerald-200 transition"
-              onclick={handleAuthorSelect}
-            >
-              {author.nickname}
-            </button>
-          </p>
-
-          <div>
-            <h3 class="text-base font-semibold text-white">{particle.name}</h3>
-            <p class="text-sm text-white/60">{particle.summary}</p>
-          </div>
-        </div>
+          </span>
+        {/if}
       </div>
 
-      <div class="flex flex-col gap-2">
-        <span class="text-[0.65rem] uppercase tracking-[0.32em] text-white/40"> Built from </span>
-        <div class="flex flex-wrap gap-2">
-          {#if particle.ingredients.length === 0}
-            <Tag variant="outline">Original composition</Tag>
-          {:else}
-            {#each visibleIngredients as ingredient (ingredient)}
-              <Tag variant="outline">{ingredient}</Tag>
-            {/each}
-            {#if extraCount > 0}
-              <Tag variant="outline">+{extraCount} more</Tag>
-            {/if}
-          {/if}
+      <div class="meta">
+        <div class="meta-top">
+          <Tag variant="accent">{viewLabel}</Tag>
+          <span class="mono-label">{particle.createdLabel}</span>
         </div>
+
+        <div class="author-row">
+          <span class="author-label">Author:</span>
+          <Button type="button" variant="subtle" onclick={handleAuthorSelect}>
+            {author.nickname}
+          </Button>
+        </div>
+
+        <div class="title-block">
+          <h3 class="title">{particle.name}</h3>
+          <p class="summary">{particle.summary}</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="ingredients">
+      <span class="ingredients-label">Built from</span>
+
+      <div class="ingredients-tags">
+        {#if particle.ingredients.length === 0}
+          <Tag variant="outline">Original composition</Tag>
+        {:else}
+          {#each visibleIngredients as ingredient (ingredient)}
+            <Tag variant="outline">{ingredient}</Tag>
+          {/each}
+          {#if extraCount > 0}
+            <Tag variant="outline">+{extraCount} more</Tag>
+          {/if}
+        {/if}
       </div>
     </div>
   </div>
 </Card>
+
+<style lang="postcss">
+  @reference "$lib/styles/style.css";
+
+  .card-root {
+    @apply flex flex-col gap-4;
+  }
+
+  .header-row {
+    @apply flex gap-4;
+  }
+
+  .avatar {
+    @apply h-10 w-10 shrink-0 rounded-full
+      border border-white/10 bg-white/10
+      flex items-center justify-center
+      overflow-hidden text-xs font-semibold text-white/70;
+  }
+
+  .avatar-img {
+    @apply h-full w-full object-cover;
+  }
+
+  .avatar-fallback {
+    @apply select-none;
+  }
+
+  .meta {
+    @apply space-y-2;
+  }
+
+  .meta-top {
+    @apply flex flex-wrap items-center gap-2;
+  }
+
+  .author-row {
+    @apply flex items-center gap-2;
+  }
+
+  .author-label {
+    @apply text-sm text-white/70;
+  }
+
+  .title-block {
+    @apply flex flex-col items-start text-left;
+  }
+
+  .title {
+    @apply text-base font-semibold text-white;
+  }
+
+  .summary {
+    @apply text-sm text-white/60;
+  }
+
+  .ingredients {
+    @apply flex flex-col gap-2;
+  }
+
+  .ingredients-label {
+    @apply inline-flex text-[0.65rem] uppercase tracking-[0.32em] text-white/40;
+  }
+
+  .ingredients-tags {
+    @apply flex flex-wrap gap-2;
+  }
+
+  .mono-label {
+    @apply text-[0.7rem] font-mono tracking-[0.28em] uppercase text-white/40;
+  }
+</style>

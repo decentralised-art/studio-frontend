@@ -5,11 +5,9 @@
 
   const {
     variant = "default",
-    className = "",
     children,
   }: {
     variant?: Variant;
-    className?: string;
     children?: Snippet;
   } = $props();
 
@@ -20,6 +18,25 @@
   };
 </script>
 
-<span class={`tag ${variants[variant]} ${className}`}>
+<span class={`tag ${variants[variant]}`}>
   {@render children?.()}
 </span>
+
+<style lang="postcss">
+  @reference "$lib/styles/style.css";
+
+  .tag {
+    @apply inline-flex items-center gap-1 rounded-full
+      border border-white/10 bg-white/5
+      px-2.5 py-1 text-[0.7rem] uppercase
+      tracking-[0.15em] text-white/60;
+  }
+
+  .tag-accent {
+    @apply border-emerald-500/60 bg-emerald-500/10 text-emerald-300;
+  }
+
+  .tag-outline {
+    @apply border-white/30 bg-transparent text-white/70;
+  }
+</style>

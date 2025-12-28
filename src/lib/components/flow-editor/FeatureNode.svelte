@@ -67,7 +67,6 @@
   <Input
     label="Name"
     placeholder="Feature name"
-    className="w-full"
     value={data.name}
     oninput={(event) => {
       const target = event.target as HTMLInputElement | null;

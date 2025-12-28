@@ -1,53 +1,51 @@
 <script lang="ts">
   import type { Snippet } from "svelte";
+  import Button from "$lib/components/ui/Button.svelte";
+  import SectionShell from "$lib/components/ui/SectionShell.svelte";
 
   const {
     children,
     onClose,
     onBack,
     canGoBack = false,
-    className = "",
   }: {
     children?: Snippet;
     onClose?: () => void;
     onBack?: () => void;
     canGoBack?: boolean;
-    className?: string;
   } = $props();
 </script>
 
-<section class={`section-shell relative max-w-none mx-0 ${className}`}>
+<SectionShell>
   {#if onClose}
-    <div class="flex items-center gap-2 pb-3">
+    <div class="panel-header">
       {#if canGoBack && onBack}
-        <button
-          type="button"
-          aria-label="Back"
-          onclick={onBack}
-          class="h-9 px-3 rounded-full border border-white/10 bg-black/70
-          text-xs font-semibold text-white/70 transition hover:text-white
-          hover:border-white/20 focus:outline-none focus-visible:ring-2
-          focus-visible:ring-emerald-400/60"
-        >
-          Back
-        </button>
+        <Button type="button" variant="ghost" ariaLabel="Back" onclick={onBack}>Back</Button>
       {/if}
 
-      <button
-        type="button"
-        aria-label="Close"
-        onclick={onClose}
-        class="ml-auto h-9 w-9 rounded-full border border-white/10 bg-black/70
-        text-xs font-semibold text-white/70 transition hover:text-white
-        hover:border-white/20 focus:outline-none focus-visible:ring-2
-        focus-visible:ring-emerald-400/60"
-      >
-        X
-      </button>
+      <div class="panel-spacer">
+        <Button type="button" variant="ghost" ariaLabel="Close" onclick={onClose}>X</Button>
+      </div>
     </div>
   {/if}
 
-  <div class="space-y-4">
+  <div class="panel-content">
     {@render children?.()}
   </div>
-</section>
+</SectionShell>
+
+<style lang="postcss">
+  @reference "$lib/styles/style.css";
+
+  .panel-header {
+    @apply flex items-center gap-2 pb-3;
+  }
+
+  .panel-spacer {
+    @apply ml-auto;
+  }
+
+  .panel-content {
+    @apply space-y-4;
+  }
+</style>
