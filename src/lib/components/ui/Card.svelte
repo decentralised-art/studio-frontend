@@ -2,7 +2,7 @@
   import type { Snippet } from "svelte";
   import type { MouseEventHandler, KeyboardEventHandler } from "svelte/elements";
 
-  type Variant = "default" | "soft" | "gradient-border";
+  type Variant = "default" | "soft" | "gradient-border" | "compact";
 
   type OnClick<T extends EventTarget = HTMLElement> = MouseEventHandler<T> | null | undefined;
   type OnKeyDown<T extends EventTarget = HTMLElement> = KeyboardEventHandler<T> | undefined | null;
@@ -56,6 +56,18 @@
   >
     {@render children?.()}
   </button>
+{:else if variant === "compact"}
+  <button
+    class={`card-compact ${selected ? "card-selected" : ""}
+        ${isInteractive ? " card-hoverable" : ""}`}
+    {onclick}
+    {onkeydown}
+    {tabindex}
+    aria-pressed={ariaPressed}
+    aria-label={ariaLabel}
+  >
+    {@render children?.()}
+  </button>
 {:else}
   <button
     class={`card ${selected ? "card-selected" : ""}
@@ -96,6 +108,11 @@
   .card-soft {
     @apply rounded-2xl border border-white/10
       bg-white/5 p-4;
+  }
+
+  .card-compact {
+    @apply w-full rounded-2xl border border-white/10
+      bg-white/5 p-2;
   }
 
   .card-gradient-border {
