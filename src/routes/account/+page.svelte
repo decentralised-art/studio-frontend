@@ -56,6 +56,8 @@
     const nickname = pickFirst(
       coerceString(nested.nickname),
       coerceString(nested.name),
+      coerceString(nested.display_name),
+      coerceString(nested.displayName),
       coerceString(nested.username),
       coerceString(nested.handle),
       fallbackUser.nickname,
@@ -253,3 +255,63 @@
     </SectionShell>
   {/if}
 </div>
+
+<style lang="postcss">
+  @reference "$lib/styles/style.css";
+
+  .account-page {
+    @apply py-4 grid gap-6 lg:grid-cols-[minmax(0,0.62fr)_minmax(0,0.38fr)];
+  }
+
+  .form {
+    @apply space-y-6;
+  }
+
+  .avatar-row {
+    @apply flex flex-wrap items-center gap-4;
+  }
+
+  .avatar {
+    @apply h-16 w-16 rounded-full border border-white/10 bg-white/10 overflow-hidden;
+  }
+
+  .avatar-img {
+    @apply h-full w-full object-cover;
+  }
+
+  .avatar-meta {
+    @apply min-w-0;
+  }
+
+  .avatar-title {
+    @apply text-sm text-white/60;
+  }
+
+  .avatar-subtitle {
+    @apply text-xs text-white/40;
+  }
+
+  .field {
+    @apply flex flex-col gap-2 text-sm;
+  }
+
+  .bio-textarea {
+    @apply min-h-[120px];
+  }
+
+  .actions {
+    @apply flex flex-wrap gap-2;
+  }
+
+  .status {
+    @apply space-y-2;
+  }
+
+  .status-title {
+    @apply text-base font-semibold text-white;
+  }
+
+  .status-subtitle {
+    @apply text-sm text-white/60;
+  }
+</style>

@@ -61,9 +61,11 @@ export const authFetch = async (path: string, init: RequestInit = {}) => {
     headers,
   });
 
-  if (response.status === 401) {
+  if (!response.ok) {
     clearToken();
-    redirectToLogin();
+    if (response.status === 401 || response.status === 403) {
+      redirectToLogin();
+    }
   }
 
   return response;

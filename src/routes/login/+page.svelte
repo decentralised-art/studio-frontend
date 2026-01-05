@@ -167,3 +167,63 @@
     {/if}
   </SectionShell>
 </div>
+
+<style lang="postcss">
+  @reference "$lib/styles/style.css";
+
+  .auth-page {
+    @apply flex-1 min-h-0 flex items-center justify-center px-4 py-10;
+  }
+
+  .header {
+    @apply space-y-2;
+  }
+
+  .title {
+    @apply text-xl font-semibold text-white;
+  }
+
+  .subtitle {
+    @apply text-sm text-white/60;
+  }
+
+  .form {
+    @apply mt-6 space-y-4;
+  }
+
+  .actions {
+    @apply flex items-center justify-end;
+  }
+
+  .error {
+    @apply text-sm text-red-400;
+  }
+
+  .success {
+    @apply text-sm text-emerald-300;
+  }
+
+  .toggle {
+    @apply text-xs text-white/60 underline text-left;
+  }
+
+  .toggle-emphasis {
+    @apply text-white/80;
+  }
+
+  .register {
+    @apply mt-8 border-t border-white/10 pt-6 space-y-4;
+  }
+
+  .register-header {
+    @apply space-y-1;
+  }
+
+  .register-title {
+    @apply text-lg font-semibold text-white;
+  }
+
+  .register-subtitle {
+    @apply text-sm text-white/60;
+  }
+</style>
