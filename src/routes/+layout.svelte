@@ -1,9 +1,22 @@
 <script lang="ts">
+  import { onMount } from "svelte";
   import { resolve } from "$app/paths";
   import "$lib/styles/style.css";
   import favicon from "$lib/assets/favicon.svg";
+  import { getToken } from "$lib/auth/session";
 
   let { children } = $props();
+  let isAuthenticated = $state(false);
+
+  onMount(() => {
+    const syncAuth = () => {
+      isAuthenticated = Boolean(getToken());
+    };
+
+    syncAuth();
+    window.addEventListener("auth:change", syncAuth);
+    return () => window.removeEventListener("auth:change", syncAuth);
+  });
 </script>
 
 <svelte:head>
@@ -21,7 +34,11 @@
       <div class="flex gap-4 text-sm text-white/70">
         <a href={resolve("/explore")} class="hover:text-white">Explore</a>
         <a href={resolve("/create")} class="hover:text-white">Create</a>
-        <a href={resolve("/account")} class="hover:text-white">Account</a>
+        {#if isAuthenticated}
+          <a href={resolve("/account")} class="hover:text-white">Account</a>
+        {:else}
+          <a href={resolve("/login")} class="hover:text-white">Login</a>
+        {/if}
       </div>
     </nav>
   </header>

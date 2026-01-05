@@ -92,7 +92,7 @@
           <Button
             variant="subtle"
             onclick={() => {
-              window.location.href = resolve("/signup");
+              window.location.href = `${resolve("/login")}?register=1`;
             }}
           >
             Get started →
