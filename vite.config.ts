@@ -15,6 +15,16 @@ export default defineConfig({
     include: ["monaco-editor"],
   },
 
+  server: {
+    proxy: {
+      "/api": {
+        target: "https://api.hypermusic.ai",
+        changeOrigin: true,
+        secure: true,
+      },
+    },
+  },
+
   // --- Build ---
   build: {
     sourcemap: false,
