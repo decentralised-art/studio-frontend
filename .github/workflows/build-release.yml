@@ -1,9 +1,10 @@
-name: Build
+name: Build (Release)
 
 on:
-  push:
+  workflow_run:
+    workflows: ["Build and Test (Debug)"]
+    types: [completed]
     branches: [main]
-  pull_request:
 
 jobs:
   build:
@@ -21,15 +22,6 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
-
-      - name: Run format check
-        run: npm run format:check
-
-      - name: Run lint
-        run: npm run lint
-
-      - name: Run tests
-        run: npm test
 
       - name: Build app
         run: npm run build
