@@ -1,9 +1,7 @@
-name: Build
+name: Build and Test (Debug)
 
 on:
   push:
-    branches: [main]
-  pull_request:
 
 jobs:
   build:
@@ -33,15 +31,3 @@ jobs:
 
       - name: Build app
         run: npm run build
-
-      - name: Package build as tar.gz
-        run: |
-          mkdir -p dist
-          tar -czf dist/hypermusic-ai-svelte.tar.gz build package.json package-lock.json
-
-      - name: Upload build artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: hypermusic-ai-svelte
-          path: dist/hypermusic-ai-svelte.tar.gz
-          if-no-files-found: error

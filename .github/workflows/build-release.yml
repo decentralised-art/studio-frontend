@@ -1,0 +1,39 @@
+name: Build (Release)
+
+on:
+  workflow_run:
+    workflows: ["Build and Test (Debug)"]
+    types: [completed]
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build app
+        run: npm run build
+
+      - name: Package build as tar.gz
+        run: |
+          mkdir -p dist
+          tar -czf dist/hypermusic-ai-svelte.tar.gz build package.json package-lock.json
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hypermusic-ai-svelte
+          path: dist/hypermusic-ai-svelte.tar.gz
+          if-no-files-found: error
