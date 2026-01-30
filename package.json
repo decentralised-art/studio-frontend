@@ -48,6 +48,7 @@
   },
   "dependencies": {
     "@xyflow/svelte": "^1.4.2",
-    "monaco-editor": "^0.55.1"
+    "monaco-editor": "^0.55.1",
+    "tone": "^14.8.49"
   }
 }

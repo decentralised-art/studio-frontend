@@ -34,6 +34,7 @@
       <div class="flex gap-4 text-sm text-white/70">
         <a href={resolve("/explore")} class="hover:text-white">Explore</a>
         <a href={resolve("/create")} class="hover:text-white">Create</a>
+        <a href={resolve("/studio")} class="hover:text-white">Studio</a>
         {#if isAuthenticated}
           <a href={resolve("/account")} class="hover:text-white">Account</a>
         {:else}

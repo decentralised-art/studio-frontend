@@ -1,11 +1,12 @@
 <script lang="ts">
   import type { Snippet } from "svelte";
-  import type { MouseEventHandler, KeyboardEventHandler } from "svelte/elements";
+  import type { DragEventHandler, MouseEventHandler, KeyboardEventHandler } from "svelte/elements";
 
   type Variant = "default" | "soft" | "gradient-border" | "compact";
 
   type OnClick<T extends EventTarget = HTMLElement> = MouseEventHandler<T> | null | undefined;
   type OnKeyDown<T extends EventTarget = HTMLElement> = KeyboardEventHandler<T> | undefined | null;
+  type OnDragStart<T extends EventTarget = HTMLElement> = DragEventHandler<T> | undefined | null;
 
   const {
     variant = "default",
@@ -13,21 +14,27 @@
     ariaPressed,
     ariaLabel,
     selected = false,
+    draggable,
     children,
     onclick,
     onkeydown,
+    ondragstart,
   }: {
     variant?: Variant;
     tabindex?: number;
     ariaPressed?: boolean;
     ariaLabel?: string;
     selected?: boolean;
+    draggable?: boolean;
     children?: Snippet;
     onclick?: OnClick;
     onkeydown?: OnKeyDown;
+    ondragstart?: OnDragStart;
   } = $props();
 
-  const isInteractive = typeof onclick === "function" || typeof onkeydown === "function";
+  const isInteractive = $derived.by(
+    () => typeof onclick === "function" || typeof onkeydown === "function",
+  );
 </script>
 
 {#if variant === "gradient-border"}
@@ -39,6 +46,8 @@
     {tabindex}
     aria-pressed={ariaPressed}
     aria-label={ariaLabel}
+    {draggable}
+    {ondragstart}
   >
     <div class="card-inner">
       {@render children?.()}
@@ -53,6 +62,8 @@
     {tabindex}
     aria-pressed={ariaPressed}
     aria-label={ariaLabel}
+    {draggable}
+    {ondragstart}
   >
     {@render children?.()}
   </button>
@@ -65,6 +76,8 @@
     {tabindex}
     aria-pressed={ariaPressed}
     aria-label={ariaLabel}
+    {draggable}
+    {ondragstart}
   >
     {@render children?.()}
   </button>
@@ -77,6 +90,8 @@
     {tabindex}
     aria-pressed={ariaPressed}
     aria-label={ariaLabel}
+    {draggable}
+    {ondragstart}
   >
     {@render children?.()}
   </button>
