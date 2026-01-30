@@ -2,28 +2,60 @@
   import SectionShell from "$lib/components/ui/SectionShell.svelte";
   import Button from "$lib/components/ui/Button.svelte";
   import Tag from "$lib/components/ui/Tag.svelte";
+  import Input from "$lib/components/ui/Input.svelte";
   import type { ExploreParticle, ParticleView } from "$lib/data/exploreParticles";
+  import MidiTonePreview from "$lib/components/visualisers/MidiTonePreview.svelte";
+  import MusicScorePreview from "$lib/components/visualisers/MusicScorePreview.svelte";
+  import ExploreLineageMiniFlow from "$lib/components/explore/ExploreLineageMiniFlow.svelte";
+  import type { MidiParticle } from "$lib/particles/ptMidiAdapter";
+  import type {
+    LineageEdge,
+    LineageNode,
+    MockRunDescriptor,
+    RunInstanceInput,
+  } from "$lib/particles/mockPtNetwork";
   import type { User } from "$lib/data/users";
 
-  const {
+  let {
     particle,
     author,
     view,
+    midiPreview = null,
+    lineageNodes = [],
+    lineageEdges = [],
+    runCount = "12",
+    runDescriptors = [],
+    runInstances = [],
     onAdd,
     onRerun,
     onAuthorSelect,
+    onRunCountChange,
+    onRunInstanceChange,
   }: {
     particle: ExploreParticle;
     author: User;
     view: ParticleView | null;
+    midiPreview?: MidiParticle | null;
+    lineageNodes?: LineageNode[];
+    lineageEdges?: LineageEdge[];
+    runCount?: string;
+    runDescriptors?: MockRunDescriptor[];
+    runInstances?: RunInstanceInput[];
     onAdd?: (particle: ExploreParticle) => void;
     onRerun?: (particle: ExploreParticle) => void;
     onAuthorSelect?: (id: User["id"]) => void;
+    onRunCountChange?: (value: string) => void;
+    onRunInstanceChange?: (
+      index: number,
+      field: "startPoint" | "transformShift",
+      value: string,
+    ) => void;
   } = $props();
 
   const handleAdd = () => onAdd?.(particle);
   const handleRerun = () => onRerun?.(particle);
   const handleAuthorSelect = () => onAuthorSelect?.(author.id);
+  const isScoreView = $derived.by(() => view?.id === "music-score");
 </script>
 
 <SectionShell>
@@ -55,6 +87,26 @@
     <Button variant="subtle" onclick={handleAdd}>Add to toolbox</Button>
   </div>
 
+  <div class="run-controls">
+    <p class="run-title">Run settings</p>
+    <div class="run-grid">
+      <Input
+        label="Notes (N)"
+        type="number"
+        min="1"
+        max="128"
+        step="1"
+        inputmode="numeric"
+        value={runCount}
+        oninput={(event) =>
+          onRunCountChange?.((event.currentTarget as HTMLInputElement | null)?.value ?? "")}
+      />
+    </div>
+    <p class="run-hint">
+      Select a node in the lineage flow to adjust per-dimension start and shift values.
+    </p>
+  </div>
+
   <div class="preview-head">
     <div class="preview-text">
       <p class="preview-title">Particle view preview</p>
@@ -65,7 +117,17 @@
     <Tag variant="outline">{view?.label ?? "Unknown view"}</Tag>
   </div>
 
-  <div class="preview-box">Preview window placeholder</div>
+  <div class="preview-box">
+    {#if midiPreview}
+      {#if isScoreView}
+        <MusicScorePreview midi={midiPreview} />
+      {:else}
+        <MidiTonePreview midi={midiPreview} />
+      {/if}
+    {:else}
+      <p>Preview window placeholder</p>
+    {/if}
+  </div>
 </SectionShell>
 
 <SectionShell>
@@ -74,16 +136,26 @@
       <p class="lineage-title">Performative transaction lineage</p>
       <p class="lineage-subtitle">Tree view and dependency previews will live here.</p>
     </div>
-    <Tag variant="outline">{particle.dependencies.length} nodes</Tag>
+    <Tag variant="outline">{lineageNodes.length} nodes</Tag>
   </div>
 
   <div class="deps-box">
-    <p class="deps-title">Dependency snapshot</p>
-    <div class="deps-tags">
-      {#each particle.dependencies as dependency (dependency)}
-        <Tag variant="outline">{dependency}</Tag>
-      {/each}
-    </div>
+    {#if lineageNodes.length > 0}
+      <ExploreLineageMiniFlow
+        nodes={lineageNodes}
+        edges={lineageEdges}
+        {runDescriptors}
+        {runInstances}
+        {onRunInstanceChange}
+      />
+    {:else}
+      <p class="deps-title">Dependency snapshot</p>
+      <div class="deps-tags">
+        {#each particle.dependencies as dependency (dependency)}
+          <Tag variant="outline">{dependency}</Tag>
+        {/each}
+      </div>
+    {/if}
   </div>
 </SectionShell>
 
@@ -130,6 +202,22 @@
     @apply flex flex-wrap items-center justify-end gap-2 pb-3 border-b border-white/10;
   }
 
+  .run-controls {
+    @apply mt-4 space-y-2;
+  }
+
+  .run-title {
+    @apply text-[0.7rem] font-mono tracking-[0.24em] uppercase text-white/50;
+  }
+
+  .run-grid {
+    @apply grid gap-3 sm:grid-cols-3;
+  }
+
+  .run-hint {
+    @apply text-[0.7rem] text-white/45 leading-relaxed;
+  }
+
   .preview-head {
     @apply flex items-center justify-between gap-3 pt-3;
   }
@@ -148,8 +236,7 @@
 
   .preview-box {
     @apply mt-4 rounded-2xl border border-dashed border-white/15 bg-white/5
-      min-h-[260px] lg:min-h-[360px] p-6 text-sm text-white/50 text-center
-      flex items-center justify-center;
+      min-h-[260px] lg:min-h-[360px] p-6 text-sm text-white/50 text-left;
   }
 
   .lineage-head {
@@ -170,7 +257,7 @@
 
   .deps-box {
     @apply mt-4 rounded-2xl border border-dashed border-white/15 bg-white/5
-      p-6 text-xs text-white/50;
+      p-4 text-xs text-white/50;
   }
 
   .deps-title {

@@ -1,47 +1,40 @@
 <script lang="ts">
   import Card from "$lib/components/ui/Card.svelte";
-  import type { ExploreParticle } from "$lib/data/exploreParticles";
+  import type { LibraryItem } from "$lib/data/studioLibrary";
   import type { User } from "$lib/data/users";
 
   const {
-    particle,
+    item,
     author,
     selected = false,
     draggable = false,
     onSelect,
-    onAuthorSelect,
     onAdd,
     onToolbox,
     onDragStart,
   }: {
-    particle: ExploreParticle;
+    item: LibraryItem;
     author: User;
     selected?: boolean;
     draggable?: boolean;
-    onSelect?: (id: ExploreParticle["id"]) => void;
-    onAuthorSelect?: (id: User["id"]) => void;
-    onAdd?: (particle: ExploreParticle) => void;
-    onToolbox?: (particle: ExploreParticle) => void;
-    onDragStart?: (event: DragEvent, particle: ExploreParticle) => void;
+    onSelect?: (id: LibraryItem["id"]) => void;
+    onAdd?: (item: LibraryItem) => void;
+    onToolbox?: (item: LibraryItem) => void;
+    onDragStart?: (event: DragEvent, item: LibraryItem) => void;
   } = $props();
 
   const handleSelect = () => {
-    onSelect?.(particle.id);
-  };
-
-  const handleAuthorSelect = (event: MouseEvent) => {
-    event.stopPropagation();
-    onAuthorSelect?.(author.id);
+    onSelect?.(item.id);
   };
 
   const handleAdd = (event: MouseEvent) => {
     event.stopPropagation();
-    onAdd?.(particle);
+    onAdd?.(item);
   };
 
   const handleToolbox = (event: MouseEvent) => {
     event.stopPropagation();
-    onToolbox?.(particle);
+    onToolbox?.(item);
   };
 
   const handleKeydown = (event: KeyboardEvent) => {
@@ -52,7 +45,7 @@
   };
 
   const handleDragStart = (event: DragEvent) => {
-    onDragStart?.(event, particle);
+    onDragStart?.(event, item);
   };
 </script>
 
@@ -68,11 +61,9 @@
 >
   <div class="card-row">
     <div class="card-text">
-      <span class="particle-name">{particle.name}</span>
+      <span class="item-name">{item.name}</span>
       <span class="by-label">by</span>
-      <button class="author" type="button" onclick={handleAuthorSelect}>
-        {author.nickname}
-      </button>
+      <span class="author">{author.nickname}</span>
     </div>
 
     <div class="card-actions">
@@ -103,7 +94,7 @@
     @apply min-w-0 flex items-center gap-2 text-[0.72rem] text-white/70;
   }
 
-  .particle-name {
+  .item-name {
     @apply min-w-0 font-semibold text-white truncate;
   }
 

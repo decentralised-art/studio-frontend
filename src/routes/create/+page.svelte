@@ -12,10 +12,9 @@
     type ExploreParticle,
     type ParticleView,
   } from "$lib/data/exploreParticles";
-  import { mockUsers, mockUsersById, type User } from "$lib/data/users";
+  import { mockUsersById } from "$lib/data/users";
 
   type ViewFilter = ParticleView["id"] | "all";
-  type AuthorFilter = User["id"] | "all";
   type ResizeHandle = "left" | "right";
   type MobileView = "explorer" | "flow" | "visualiser";
 
@@ -28,13 +27,8 @@
   const usersById = mockUsersById;
 
   let selectedViewId = $state<ViewFilter>("all");
-  let selectedAuthorId = $state<AuthorFilter>("all");
   let selectedParticleId = $state<ExploreParticle["id"] | null>(null);
   let mobileView = $state<MobileView>("flow");
-
-  const authorOptions = $derived.by(() =>
-    [...mockUsers].sort((a, b) => a.nickname.localeCompare(b.nickname)),
-  );
 
   let container: HTMLDivElement | null = null;
   let leftWidth = $state(260);
@@ -52,7 +46,6 @@
     let list = [...mockExploreParticles];
 
     if (selectedViewId !== "all") list = list.filter((p) => p.viewId === selectedViewId);
-    if (selectedAuthorId !== "all") list = list.filter((p) => p.authorId === selectedAuthorId);
 
     list.sort((a, b) => b.createdAt - a.createdAt);
     return list;
@@ -64,12 +57,12 @@
     selectedParticleId = id;
   };
 
-  const handleAuthorSelect = (id: User["id"]) => {
-    selectedAuthorId = id;
-  };
-
   const handleAdd = (particle: ExploreParticle) => {
     selectedParticleId = particle.id;
+  };
+
+  const handleToolboxAdd = (_particle: ExploreParticle) => {
+    // Toolbox persistence will be wired later.
   };
 
   const clampWidths = (left: number, right: number, width: number, handle: ResizeHandle | null) => {
@@ -209,13 +202,11 @@
           particles={filteredParticles}
           views={viewOptions}
           {usersById}
-          authors={authorOptions}
           selectedId={selectedParticleId ?? undefined}
           bind:selectedViewId
-          bind:selectedAuthorId
           onSelect={handleSelect}
-          onAuthorSelect={handleAuthorSelect}
           onAdd={handleAdd}
+          onToolbox={handleToolboxAdd}
         />
       </div>
 

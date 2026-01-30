@@ -13,6 +13,10 @@
     type = "text",
     value = $bindable(""),
     placeholder = "",
+    min,
+    max,
+    step,
+    inputmode,
     error,
     disabled = false,
     oninput, // optional handler from parent
@@ -24,6 +28,10 @@
     type?: string;
     value?: string;
     placeholder?: string;
+    min?: number | string;
+    max?: number | string;
+    step?: number | string;
+    inputmode?: "none" | "text" | "tel" | "url" | "email" | "numeric" | "decimal" | "search";
     error?: string;
     disabled?: boolean;
     oninput?: InputHandler;
@@ -71,6 +79,10 @@
     {id}
     {type}
     {placeholder}
+    {min}
+    {max}
+    {step}
+    {inputmode}
     {disabled}
     {value}
     oninput={handleInput}

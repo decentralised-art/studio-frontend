@@ -14,6 +14,14 @@
     type ParticleView,
   } from "$lib/data/exploreParticles";
 
+  import { ptOutputToMidi, type MidiParticle } from "$lib/particles/ptMidiAdapter";
+  import {
+    getMockLineageGraph,
+    getMockPtOutput,
+    getMockRunDescriptors,
+    type MockRunningInstance,
+    type RunInstanceInput,
+  } from "$lib/particles/mockPtNetwork";
   import { mockUsers, mockUsersById, type User } from "$lib/data/users";
 
   type ViewFilter = ParticleView["id"] | "all";
@@ -31,6 +39,16 @@
   let selectedAuthorId = $state<string>("all");
   let selectedParticleId = $state<ExploreParticle["id"] | null>(null);
   let panelStack = $state<PanelState[]>([]);
+  let midiPreviewByParticle = $state<Record<string, MidiParticle>>({});
+  let runConfigByParticle = $state<
+    Record<
+      string,
+      {
+        count: string;
+        instances: RunInstanceInput[];
+      }
+    >
+  >({});
 
   const authorOptions = $derived.by(() =>
     [...mockUsers].sort((a, b) => a.nickname.localeCompare(b.nickname)),
@@ -72,6 +90,26 @@
     panelParticle ? (usersById[panelParticle.authorId] ?? null) : null,
   );
 
+  const panelMidiPreview = $derived.by(() =>
+    panelParticle ? (midiPreviewByParticle[panelParticle.id] ?? null) : null,
+  );
+
+  const panelLineage = $derived.by(() =>
+    panelParticle ? getMockLineageGraph(panelParticle.id) : null,
+  );
+
+  const panelRunDescriptors = $derived.by(() =>
+    panelParticle ? getMockRunDescriptors(panelParticle.id) : [],
+  );
+
+  const panelRunConfig = $derived.by(() =>
+    panelParticle ? (runConfigByParticle[panelParticle.id] ?? null) : null,
+  );
+
+  const panelRunCount = $derived.by(() => panelRunConfig?.count ?? "12");
+
+  const panelRunInstances = $derived.by(() => panelRunConfig?.instances ?? []);
+
   const hasPanel = $derived.by(() => panelStack.length > 0);
   const canGoBack = $derived.by(() => panelStack.length > 1);
 
@@ -86,6 +124,8 @@
   const handleSelect = (id: ExploreParticle["id"]) => {
     selectedParticleId = id;
     pushPanel({ type: "particle", id });
+    ensureRunConfig(id);
+    ensurePreview(id);
   };
 
   const handleAuthorSelect = (id: User["id"]) => {
@@ -95,6 +135,115 @@
   const handleViewFilter = (id: ViewFilter) => {
     selectedViewId = id;
   };
+
+  const parseOptionalInt = (value: string) => {
+    const trimmed = value.trim();
+    if (!trimmed) return undefined;
+    const parsed = Number.parseInt(trimmed, 10);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  };
+
+  const clampInt = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
+
+  const ensureRunConfig = (particleId: ExploreParticle["id"]) => {
+    const descriptors = getMockRunDescriptors(particleId);
+    const existing = runConfigByParticle[particleId];
+    if (existing && existing.instances.length === descriptors.length) return;
+
+    const instances = descriptors.map((descriptor) => ({
+      startPoint: typeof descriptor.seed === "number" ? `${descriptor.seed}` : "",
+      transformShift: "0",
+    }));
+
+    runConfigByParticle = {
+      ...runConfigByParticle,
+      [particleId]: {
+        count: existing?.count ?? "12",
+        instances,
+      },
+    };
+  };
+
+  const updateRunCount = (particleId: ExploreParticle["id"], value: string) => {
+    ensureRunConfig(particleId);
+    const existing = runConfigByParticle[particleId];
+    if (!existing) return;
+    runConfigByParticle = {
+      ...runConfigByParticle,
+      [particleId]: { ...existing, count: value },
+    };
+  };
+
+  const updateRunInstance = (
+    particleId: ExploreParticle["id"],
+    index: number,
+    field: "startPoint" | "transformShift",
+    value: string,
+  ) => {
+    ensureRunConfig(particleId);
+    const existing = runConfigByParticle[particleId];
+    if (!existing) return;
+    const nextInstances = existing.instances.map((instance, idx) =>
+      idx === index ? { ...instance, [field]: value } : instance,
+    );
+    runConfigByParticle = {
+      ...runConfigByParticle,
+      [particleId]: { ...existing, instances: nextInstances },
+    };
+  };
+
+  const buildRunningInstances = (particleId: ExploreParticle["id"]) => {
+    const config = runConfigByParticle[particleId];
+    const instances = config?.instances ?? [];
+    return instances.map((instance) => {
+      const startPoint = parseOptionalInt(instance.startPoint);
+      const transformShift = parseOptionalInt(instance.transformShift) ?? 0;
+      return startPoint === undefined
+        ? ({ transformShift } satisfies MockRunningInstance)
+        : ({ startPoint, transformShift } satisfies MockRunningInstance);
+    });
+  };
+
+  const getRunConfig = (particleId: ExploreParticle["id"]) => {
+    const config = runConfigByParticle[particleId];
+    const samplesRaw = parseOptionalInt(config?.count ?? "12");
+    const samplesCount = clampInt(samplesRaw ?? 12, 1, 128);
+    const runningInstances = buildRunningInstances(particleId);
+
+    return {
+      samplesCount,
+      runningInstances,
+    };
+  };
+
+  const ensurePreview = (id: ExploreParticle["id"]) => {
+    if (midiPreviewByParticle[id]) return;
+    const particle = particlesById[id];
+    if (!particle) return;
+    handleRerun(particle);
+  };
+
+  const handleRerun = (particle: ExploreParticle) => {
+    ensureRunConfig(particle.id);
+    const output = getMockPtOutput(particle.id, getRunConfig(particle.id));
+    const midi = ptOutputToMidi(output, {
+      basePitch: 0,
+      defaultDuration: 0.5,
+      defaultStep: 1,
+      defaultTempo: 120,
+    });
+
+    midiPreviewByParticle = {
+      ...midiPreviewByParticle,
+      [particle.id]: midi,
+    };
+  };
+
+  $effect(() => {
+    if (!panelParticle) return;
+    ensureRunConfig(panelParticle.id);
+    ensurePreview(panelParticle.id);
+  });
 
   const handleBack = () => {
     if (panelStack.length > 1) panelStack = panelStack.slice(0, -1);
@@ -110,7 +259,7 @@
 
 <div class="page">
   <div class="page-inner">
-    <div class={`layout ${hasPanel ? "layout--panel" : ""}`}>
+    <div class={`layout ${hasPanel ? "layout--panel" : "layout--single"}`}>
       <!-- MAIN -->
       <SectionShell
         dot
@@ -174,7 +323,17 @@
                 particle={panelParticle}
                 author={panelAuthor}
                 view={panelView}
+                midiPreview={panelMidiPreview}
+                lineageNodes={panelLineage?.nodes}
+                lineageEdges={panelLineage?.edges}
+                runCount={panelRunCount}
+                runDescriptors={panelRunDescriptors}
+                runInstances={panelRunInstances}
                 onAuthorSelect={handleAuthorSelect}
+                onRerun={handleRerun}
+                onRunCountChange={(value) => updateRunCount(panelParticle.id, value)}
+                onRunInstanceChange={(index, field, value) =>
+                  updateRunInstance(panelParticle.id, index, field, value)}
               />
             {:else if panelUser}
               <ExploreUserDetail user={panelUser} />
@@ -197,7 +356,17 @@
               particle={panelParticle}
               author={panelAuthor}
               view={panelView}
+              midiPreview={panelMidiPreview}
+              lineageNodes={panelLineage?.nodes}
+              lineageEdges={panelLineage?.edges}
+              runCount={panelRunCount}
+              runDescriptors={panelRunDescriptors}
+              runInstances={panelRunInstances}
               onAuthorSelect={handleAuthorSelect}
+              onRerun={handleRerun}
+              onRunCountChange={(value) => updateRunCount(panelParticle.id, value)}
+              onRunInstanceChange={(index, field, value) =>
+                updateRunInstance(panelParticle.id, index, field, value)}
             />
           {:else if panelUser}
             <ExploreUserDetail user={panelUser} />
@@ -224,8 +393,12 @@
   }
 
   .layout--panel {
-    @apply lg:grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)]
+    @apply lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]
       lg:gap-0 lg:divide-x lg:divide-white/10 lg:items-start;
+  }
+
+  .layout--single {
+    @apply lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)] lg:gap-0 lg:items-start;
   }
 
   .content {

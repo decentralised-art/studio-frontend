@@ -4,30 +4,34 @@
   import type { User } from "$lib/data/users";
 
   type ViewFilter = ParticleView["id"] | "all";
-  type AuthorFilter = User["id"] | "all";
-
   let {
     particles = [],
     views = [],
     usersById = {},
-    authors = [],
     selectedId,
     selectedViewId = $bindable("all"),
-    selectedAuthorId = $bindable("all"),
+    draggable = false,
+    showHeader = true,
+    showViewFilter = true,
     onSelect,
     onAuthorSelect,
     onAdd,
+    onToolbox,
+    onDragStart,
   }: {
     particles?: ExploreParticle[];
     views?: ParticleView[];
     usersById?: Record<User["id"], User>;
-    authors?: User[];
     selectedId?: ExploreParticle["id"];
     selectedViewId?: ViewFilter;
-    selectedAuthorId?: AuthorFilter;
+    draggable?: boolean;
+    showHeader?: boolean;
+    showViewFilter?: boolean;
     onSelect?: (id: ExploreParticle["id"]) => void;
     onAuthorSelect?: (id: User["id"]) => void;
     onAdd?: (particle: ExploreParticle) => void;
+    onToolbox?: (particle: ExploreParticle) => void;
+    onDragStart?: (event: DragEvent, particle: ExploreParticle) => void;
   } = $props();
 
   const getAuthor = (id: User["id"]) =>
@@ -48,40 +52,31 @@
 </script>
 
 <section class="explorer">
-  <div class="explorer-header">
-    <div class="header-text">
-      <span class="eyebrow">Particle explorer</span>
-      <h2 class="title">Particles</h2>
+  {#if showHeader}
+    <div class="explorer-header">
+      <div class="header-text">
+        <span class="eyebrow">Particle explorer</span>
+        <h2 class="title">Particles</h2>
+      </div>
+      <span class="count">{particles.length}</span>
     </div>
-    <span class="count">{particles.length}</span>
-  </div>
+  {/if}
 
   <div class="filters">
-    <label class="filter">
-      <span class="filter-label">View</span>
-      <div class="select-wrap">
-        <select class="select" bind:value={selectedViewId}>
-          <option value="all">All views</option>
-          {#each views as view (view.id)}
-            <option value={view.id}>{view.label}</option>
-          {/each}
-        </select>
-        <span class="select-icon" aria-hidden="true">v</span>
-      </div>
-    </label>
-
-    <label class="filter">
-      <span class="filter-label">Author</span>
-      <div class="select-wrap">
-        <select class="select" bind:value={selectedAuthorId}>
-          <option value="all">All authors</option>
-          {#each authors as author (author.id)}
-            <option value={author.id}>{author.nickname}</option>
-          {/each}
-        </select>
-        <span class="select-icon" aria-hidden="true">v</span>
-      </div>
-    </label>
+    {#if showViewFilter}
+      <label class="filter">
+        <span class="filter-label">View</span>
+        <div class="select-wrap">
+          <select class="select" bind:value={selectedViewId}>
+            <option value="all">All views</option>
+            {#each views as view (view.id)}
+              <option value={view.id}>{view.label}</option>
+            {/each}
+          </select>
+          <span class="select-icon" aria-hidden="true">v</span>
+        </div>
+      </label>
+    {/if}
   </div>
 
   <div class="list">
@@ -93,9 +88,12 @@
           {particle}
           author={getAuthor(particle.authorId)}
           selected={particle.id === selectedId}
+          {draggable}
           {onSelect}
           {onAuthorSelect}
           {onAdd}
+          {onToolbox}
+          {onDragStart}
         />
       {/each}
     {/if}

@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { Snippet } from "svelte";
-  import type { MouseEventHandler, KeyboardEventHandler } from "svelte/elements";
+  import type { DragEventHandler, MouseEventHandler, KeyboardEventHandler } from "svelte/elements";
 
   type Variant = "primary" | "ghost" | "subtle";
   type ButtonType = "button" | "submit";
@@ -8,6 +8,10 @@
   type OnClick<T extends EventTarget = HTMLButtonElement> = MouseEventHandler<T> | null | undefined;
   type OnKeyDown<T extends EventTarget = HTMLButtonElement> =
     | KeyboardEventHandler<T>
+    | undefined
+    | null;
+  type OnDragStart<T extends EventTarget = HTMLButtonElement> =
+    | DragEventHandler<T>
     | undefined
     | null;
 
@@ -19,9 +23,13 @@
     tabindex,
     ariaPressed,
     ariaLabel,
+    title,
+    className = "",
     children,
+    draggable = false,
     onclick,
     onkeydown,
+    ondragstart,
   }: {
     variant?: Variant;
     type?: ButtonType;
@@ -30,9 +38,13 @@
     tabindex?: number;
     ariaPressed?: boolean;
     ariaLabel?: string;
+    title?: string;
+    className?: string;
     children?: Snippet;
+    draggable?: boolean;
     onclick?: OnClick;
     onkeydown?: OnKeyDown;
+    ondragstart?: OnDragStart;
   } = $props();
 
   const variants: Record<Variant, string> = {
@@ -45,12 +57,15 @@
 <button
   {type}
   {disabled}
-  class={`btn ${variants[variant]} ${selected ? "btn-selected" : ""}`}
+  class={`btn ${variants[variant]} ${selected ? "btn-selected" : ""} ${className}`}
   {tabindex}
   aria-pressed={ariaPressed}
   aria-label={ariaLabel}
+  {title}
+  {draggable}
   {onclick}
   {onkeydown}
+  {ondragstart}
 >
   {@render children?.()}
 </button>
