@@ -18,6 +18,7 @@
     onAdd,
     onToolbox,
     onDragStart,
+    onOpen,
   }: {
     particles?: ExploreParticle[];
     views?: ParticleView[];
@@ -32,6 +33,7 @@
     onAdd?: (particle: ExploreParticle) => void;
     onToolbox?: (particle: ExploreParticle) => void;
     onDragStart?: (event: DragEvent, particle: ExploreParticle) => void;
+    onOpen?: (id: ExploreParticle["id"]) => void;
   } = $props();
 
   const getAuthor = (id: User["id"]) =>
@@ -94,6 +96,7 @@
           {onAdd}
           {onToolbox}
           {onDragStart}
+          {onOpen}
         />
       {/each}
     {/if}

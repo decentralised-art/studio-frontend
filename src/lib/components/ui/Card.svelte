@@ -5,6 +5,7 @@
   type Variant = "default" | "soft" | "gradient-border" | "compact";
 
   type OnClick<T extends EventTarget = HTMLElement> = MouseEventHandler<T> | null | undefined;
+  type OnDblClick<T extends EventTarget = HTMLElement> = MouseEventHandler<T> | null | undefined;
   type OnKeyDown<T extends EventTarget = HTMLElement> = KeyboardEventHandler<T> | undefined | null;
   type OnDragStart<T extends EventTarget = HTMLElement> = DragEventHandler<T> | undefined | null;
 
@@ -17,6 +18,7 @@
     draggable,
     children,
     onclick,
+    ondblclick,
     onkeydown,
     ondragstart,
   }: {
@@ -28,6 +30,7 @@
     draggable?: boolean;
     children?: Snippet;
     onclick?: OnClick;
+    ondblclick?: OnDblClick;
     onkeydown?: OnKeyDown;
     ondragstart?: OnDragStart;
   } = $props();
@@ -42,6 +45,7 @@
     class={`card-gradient-border ${selected ? "card-selected" : ""}
         ${isInteractive ? " card-hoverable" : ""}`}
     {onclick}
+    {ondblclick}
     {onkeydown}
     {tabindex}
     aria-pressed={ariaPressed}
@@ -58,6 +62,7 @@
     class={`card-soft ${selected ? "card-selected" : ""}
         ${isInteractive ? " card-hoverable" : ""}`}
     {onclick}
+    {ondblclick}
     {onkeydown}
     {tabindex}
     aria-pressed={ariaPressed}
@@ -72,6 +77,7 @@
     class={`card-compact ${selected ? "card-selected" : ""}
         ${isInteractive ? " card-hoverable" : ""}`}
     {onclick}
+    {ondblclick}
     {onkeydown}
     {tabindex}
     aria-pressed={ariaPressed}
@@ -86,6 +92,7 @@
     class={`card ${selected ? "card-selected" : ""}
         ${isInteractive ? " card-hoverable" : ""}`}
     {onclick}
+    {ondblclick}
     {onkeydown}
     {tabindex}
     aria-pressed={ariaPressed}

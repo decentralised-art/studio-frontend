@@ -13,6 +13,7 @@
     onAdd,
     onToolbox,
     onDragStart,
+    onOpen,
   }: {
     particle: ExploreParticle;
     author: User;
@@ -23,6 +24,7 @@
     onAdd?: (particle: ExploreParticle) => void;
     onToolbox?: (particle: ExploreParticle) => void;
     onDragStart?: (event: DragEvent, particle: ExploreParticle) => void;
+    onOpen?: (id: ExploreParticle["id"]) => void;
   } = $props();
 
   const handleSelect = () => {
@@ -51,6 +53,11 @@
     }
   };
 
+  const handleOpen = (event: MouseEvent) => {
+    event.stopPropagation();
+    onOpen?.(particle.id);
+  };
+
   const handleDragStart = (event: DragEvent) => {
     onDragStart?.(event, particle);
   };
@@ -61,6 +68,7 @@
   tabindex={0}
   ariaPressed={selected}
   onclick={handleSelect}
+  ondblclick={handleOpen}
   onkeydown={handleKeydown}
   ondragstart={handleDragStart}
   {draggable}

@@ -11,6 +11,7 @@ export type LibraryItem = {
   authorId: string;
   summary?: string;
   viewId?: ParticleView["id"];
+  dimensions?: number;
 };
 
 const titleize = (value: string) =>
@@ -104,6 +105,7 @@ export const mockFeatures: LibraryItem[] = mockRegistrySnapshot.features.map((fe
     kind: "feature",
     authorId: meta?.authorId ?? defaultAuthorId,
     summary: meta?.summary,
+    dimensions: feature.dimensions.length,
   };
 });
 
