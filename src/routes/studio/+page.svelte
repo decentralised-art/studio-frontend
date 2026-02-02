@@ -1,19 +1,32 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { SvelteMap } from "svelte/reactivity";
 
-  import { Background, SvelteFlow, type OnSelectionChange } from "@xyflow/svelte";
+  import {
+    Background,
+    SvelteFlow,
+    type Connection,
+    type Edge,
+    type OnConnect,
+    type OnSelectionChange,
+  } from "@xyflow/svelte";
   import "@xyflow/svelte/dist/style.css";
 
   import Button from "$lib/components/ui/Button.svelte";
   import DockPanel from "$lib/components/ui/DockPanel.svelte";
   import CreateParticleExplorer from "$lib/components/create/CreateParticleExplorer.svelte";
   import FlowInstanceBridge from "$lib/components/studio/FlowInstanceBridge.svelte";
+  import StudioDimensionNode from "$lib/components/studio/StudioDimensionNode.svelte";
+  import StudioFeatureNode from "$lib/components/studio/StudioFeatureNode.svelte";
   import StudioLibraryList from "$lib/components/studio/StudioLibraryList.svelte";
+  import StudioParticleNode from "$lib/components/studio/StudioParticleNode.svelte";
+  import StudioTransformationNode from "$lib/components/studio/StudioTransformationNode.svelte";
   import {
     mockExploreParticles,
     mockParticleViews,
     type ExploreParticle,
   } from "$lib/data/exploreParticles";
+  import { mockRegistrySnapshot } from "$lib/particles/mockPtNetwork";
   import {
     mockConditions,
     mockFeatures,
@@ -24,11 +37,11 @@
   import { mockCurrentUserId, mockUsersById } from "$lib/data/users";
 
   type PanelMode = "open" | "hidden";
-  type RightPanelMode = "assistant" | "inspector" | "hidden";
+  type RightPanelMode = "assistant" | "inspector" | "both" | "hidden";
 
   let leftMode = $state<PanelMode>("open");
-  let rightMode = $state<RightPanelMode>("assistant");
-  let lastRightMode = $state<Exclude<RightPanelMode, "hidden">>("assistant");
+  let rightMode = $state<RightPanelMode>("hidden");
+  let inspectorAuto = $state(true);
   let topMode = $state<PanelMode>("open");
   let bottomMode = $state<PanelMode>("open");
   let savedModes = $state<{
@@ -38,22 +51,38 @@
     bottom: PanelMode;
   } | null>(null);
 
+  type StudioNodeKind =
+    | "particle"
+    | "feature"
+    | "dimension"
+    | "transformation"
+    | "condition"
+    | "plugin"
+    | "agent";
+
   type StudioNodeData = {
     label: string;
-    kind: string;
+    kind: StudioNodeKind;
     particleId?: string;
     sourceId?: string;
     viewId?: string;
+    dimensions?: number;
+    parentFeatureId?: string;
+    dimensionIndex?: number;
+    transformations?: string[];
+    networkId?: string;
+    fromNetwork?: boolean;
   };
   type StudioNode = {
     id: string;
     position: { x: number; y: number };
     data: StudioNodeData;
     selected?: boolean;
+    type?: string;
   };
 
   let nodes = $state.raw<StudioNode[]>([]);
-  let edges = $state.raw([]);
+  let edges = $state.raw<Edge[]>([]);
   let selectedParticleId = $state<ExploreParticle["id"] | undefined>(undefined);
   let selectedNodeId = $state<string | null>(null);
   let selectedViewId = $state<"all" | string>("all");
@@ -68,6 +97,17 @@
   let screenToFlowPosition:
     | ((client: { x: number; y: number }) => { x: number; y: number })
     | null = null;
+  let getZoom: (() => number) | null = null;
+  let fitView: ((options?: { padding?: number; duration?: number }) => void) | null = null;
+  let clearConfirmOpen = $state(false);
+
+  type StudioTab = {
+    id: string;
+    label: string;
+    particleId?: string;
+  };
+
+  const tabGraphs = new SvelteMap<string, { nodes: StudioNode[]; edges: Edge[] }>();
 
   type ToolboxLibrary = {
     particles: string[];
@@ -77,29 +117,89 @@
     plugin: string[];
   };
 
-  type QuickNodeKind = "feature" | "transformation" | "condition" | "plugin" | "agent";
+  type QuickNodeKind =
+    | "feature"
+    | "transformation"
+    | "condition"
+    | "plugin"
+    | "agent"
+    | "dimension";
+
+  const titleize = (value: string) =>
+    value
+      .split("-")
+      .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
+      .join(" ");
+
+  const createStudioTab = (label: string, particleId?: string): StudioTab => {
+    const id = `tab-${crypto.randomUUID()}`;
+    tabGraphs.set(id, { nodes: [], edges: [] });
+    return { id, label, particleId };
+  };
+
+  const initialTab = createStudioTab("Untitled Particle");
+  let tabs = $state<StudioTab[]>([initialTab]);
+  let activeTabId = $state<string>(initialTab.id);
+  const activeTab = $derived.by(() => tabs.find((tab) => tab.id === activeTabId) ?? null);
 
   const panelSize = (mode: PanelMode, open: string) => (mode === "hidden" ? "0px" : open);
 
   const leftSize = $derived.by(() => panelSize(leftMode, "280px"));
-  const rightSize = $derived.by(() => (rightMode === "hidden" ? "0px" : "300px"));
-  const topSize = $derived.by(() => panelSize(topMode, "max-content"));
+  const hasSelection = $derived.by(() => selectedNodeId !== null || activeTab !== null);
+  const assistantVisible = $derived.by(() => rightMode === "assistant" || rightMode === "both");
+  const inspectorVisible = $derived.by(
+    () => hasSelection && (rightMode === "inspector" || rightMode === "both"),
+  );
+  const rightSize = $derived.by(() => (assistantVisible || inspectorVisible ? "300px" : "0px"));
+  const topSize = $derived.by(() => "auto");
   const bottomSize = $derived.by(() => panelSize(bottomMode, "max-content"));
+
+  const nodeTypes = {
+    feature: StudioFeatureNode,
+    dimension: StudioDimensionNode,
+    particle: StudioParticleNode,
+    transformation: StudioTransformationNode,
+  };
 
   const hidePanel = (setter: (mode: PanelMode) => void) => setter("hidden");
   const showPanel = (setter: (mode: PanelMode) => void) => setter("open");
   const togglePanel = (mode: PanelMode, setter: (mode: PanelMode) => void) =>
     setter(mode === "hidden" ? "open" : "hidden");
-  const openRightPanel = (mode: Exclude<RightPanelMode, "hidden">) => {
-    rightMode = mode;
-    lastRightMode = mode;
-  };
   const hideRightPanel = () => {
+    inspectorAuto = false;
     rightMode = "hidden";
   };
+
+  const toggleAssistant = () => {
+    if (assistantVisible) {
+      rightMode = inspectorVisible ? "inspector" : "hidden";
+      return;
+    }
+    rightMode = inspectorVisible ? "both" : "assistant";
+  };
+
+  const toggleInspector = () => {
+    if (inspectorVisible) {
+      inspectorAuto = false;
+      rightMode = assistantVisible ? "assistant" : "hidden";
+      return;
+    }
+    inspectorAuto = true;
+    if (!hasSelection) return;
+    rightMode = assistantVisible ? "both" : "inspector";
+  };
+
   const toggleRightPanel = () => {
-    if (rightMode === "hidden") openRightPanel(lastRightMode);
-    else hideRightPanel();
+    if (assistantVisible || inspectorVisible) {
+      inspectorAuto = false;
+      rightMode = "hidden";
+      return;
+    }
+    if (hasSelection && inspectorAuto) {
+      rightMode = "inspector";
+      return;
+    }
+    rightMode = "assistant";
   };
 
   const hideAll = () => {
@@ -111,6 +211,7 @@
         bottom: bottomMode,
       };
     }
+    inspectorAuto = false;
     leftMode = "hidden";
     rightMode = "hidden";
     topMode = "hidden";
@@ -120,15 +221,14 @@
   const restoreAll = () => {
     if (!savedModes) {
       leftMode = "open";
-      rightMode = "assistant";
-      lastRightMode = "assistant";
+      rightMode = "hidden";
+      inspectorAuto = true;
       topMode = "open";
       bottomMode = "open";
       return;
     }
     leftMode = savedModes.left;
     rightMode = savedModes.right;
-    if (savedModes.right !== "hidden") lastRightMode = savedModes.right;
     topMode = savedModes.top;
     bottomMode = savedModes.bottom;
     savedModes = null;
@@ -190,12 +290,32 @@
       canvasEl.addEventListener("drop", handleDropCapture, { capture: true });
     }
 
+    const resizeObserver = new ResizeObserver(() => {
+      scheduleLayout();
+    });
+    const observeFlowNodes = () => {
+      if (!canvasEl) return;
+      resizeObserver.disconnect();
+      canvasEl
+        .querySelectorAll<HTMLElement>(".svelte-flow__node")
+        .forEach((node) => resizeObserver.observe(node));
+    };
+    observeFlowNodes();
+    const mutationObserver = new MutationObserver(() => {
+      observeFlowNodes();
+    });
+    if (canvasEl) {
+      mutationObserver.observe(canvasEl, { childList: true, subtree: true });
+    }
+
     return () => {
       window.removeEventListener("keydown", handleKey);
       if (canvasEl) {
         canvasEl.removeEventListener("dragover", handleDragOverCapture, { capture: true });
         canvasEl.removeEventListener("drop", handleDropCapture, { capture: true });
       }
+      resizeObserver.disconnect();
+      mutationObserver.disconnect();
     };
   });
 
@@ -223,9 +343,498 @@
 
   const filteredParticles = $derived.by(() => availableParticles);
   const selectedNode = $derived.by(() => nodes.find((node) => node.id === selectedNodeId) ?? null);
+  const inspectorNode = $derived.by(() => {
+    if (selectedNode) return selectedNode;
+    if (!activeTab) return null;
+    return {
+      id: `tab-${activeTab.id}`,
+      position: { x: 0, y: 0 },
+      data: {
+        label: activeTab.label,
+        kind: "particle",
+        particleId: activeTab.particleId,
+        networkId: activeTab.particleId,
+        fromNetwork: Boolean(activeTab.particleId),
+      },
+    } as StudioNode;
+  });
+  const nodesById = $derived.by(() =>
+    Object.fromEntries(nodes.map((node) => [node.id, node] as const)),
+  );
+
+  let nameDraft = $state("");
+  let dimensionDraft = $state<number | null>(null);
+
+  type PendingNameCollision = {
+    nodeId: string;
+    kind: StudioNodeKind;
+    desiredName: string;
+    existingId: string;
+    existingName: string;
+  };
+
+  type PendingDimensionChange = {
+    nodeId: string;
+    newCount: number;
+    removedDimensions: StudioNode[];
+  };
+
+  let pendingNameCollision = $state<PendingNameCollision | null>(null);
+  let pendingDimensionChange = $state<PendingDimensionChange | null>(null);
+
+  $effect(() => {
+    if (!selectedNode) {
+      nameDraft = "";
+      dimensionDraft = null;
+      return;
+    }
+    nameDraft = selectedNode.data.label;
+    dimensionDraft =
+      selectedNode.data.kind === "feature" ? (selectedNode.data.dimensions ?? 1) : null;
+  });
+
+  $effect(() => {
+    if (!hasSelection) {
+      if (rightMode === "inspector") rightMode = "hidden";
+      if (rightMode === "both") rightMode = "assistant";
+      return;
+    }
+    if (!inspectorAuto) return;
+    if (rightMode === "hidden") rightMode = "inspector";
+    if (rightMode === "assistant") rightMode = "both";
+  });
 
   const handleParticleSelect = (id: ExploreParticle["id"]) => {
     selectedParticleId = id;
+  };
+
+  const handleParticleOpen = (id: ExploreParticle["id"]) => {
+    openParticleTab(id);
+  };
+
+  const updateNodeData = (nodeId: string, patch: Partial<StudioNodeData>) => {
+    nodes = nodes.map((node) =>
+      node.id === nodeId ? { ...node, data: { ...node.data, ...patch } } : node,
+    );
+    scheduleLayout();
+  };
+
+  let layoutFrame: number | null = null;
+
+  const scheduleLayout = () => {
+    if (!canvasEl) return;
+    if (layoutFrame !== null) cancelAnimationFrame(layoutFrame);
+    layoutFrame = requestAnimationFrame(() => {
+      layoutFrame = null;
+      layoutFeatureClusters();
+    });
+  };
+
+  const measureNodeSize = (nodeId: string, fallback: { width: number; height: number }) => {
+    if (!canvasEl) return fallback;
+    const el = canvasEl.querySelector<HTMLElement>(`.svelte-flow__node[data-id="${nodeId}"]`);
+    if (!el) return fallback;
+    const rect = el.getBoundingClientRect();
+    const zoom = Math.max(0.1, getZoom?.() ?? 1);
+    return {
+      width: rect.width / zoom,
+      height: rect.height / zoom,
+    };
+  };
+
+  const getCompositeForDimension = (dimensionId: string) => {
+    const edge = edges.find((item) => item.source === dimensionId && item.sourceHandle === "out");
+    if (!edge) return null;
+    const target = edge.target ? nodesById[edge.target] : null;
+    if (!target || target.data.kind !== "particle") return null;
+    return target;
+  };
+
+  const layoutFeatureClusters = () => {
+    if (!canvasEl) return;
+    const updates = new SvelteMap<string, { x: number; y: number }>();
+    const gapX = 24;
+    const gapY = 48;
+    const defaultSize = { width: 160, height: 60 };
+    const defaultDimensionSize = { width: 180, height: 80 };
+
+    nodes
+      .filter((node) => node.data.kind === "feature")
+      .forEach((feature) => {
+        const dimensions = getDimensionNodesForFeature(feature.id).sort(
+          (a, b) => (a.data.dimensionIndex ?? 0) - (b.data.dimensionIndex ?? 0),
+        );
+        if (!dimensions.length) return;
+
+        const featureSize = measureNodeSize(feature.id, defaultSize);
+        const dimensionSizes = dimensions.map((dimension) =>
+          measureNodeSize(dimension.id, defaultDimensionSize),
+        );
+        const maxDimensionHeight = Math.max(...dimensionSizes.map((size) => size.height));
+
+        const totalWidth =
+          dimensionSizes.reduce((sum, size) => sum + size.width, 0) +
+          gapX * Math.max(0, dimensions.length - 1);
+        const featureCenter = feature.position.x + featureSize.width / 2;
+        let cursorX = featureCenter - totalWidth / 2;
+
+        const dimensionRowY = feature.position.y + featureSize.height + gapY;
+        const compositeRowY = dimensionRowY + maxDimensionHeight + gapY;
+
+        dimensions.forEach((dimension, index) => {
+          const size = dimensionSizes[index];
+          const nextX = cursorX;
+          const nextY = dimensionRowY;
+          if (
+            Math.abs(dimension.position.x - nextX) > 0.5 ||
+            Math.abs(dimension.position.y - nextY) > 0.5
+          ) {
+            updates.set(dimension.id, { x: nextX, y: nextY });
+          }
+
+          const composite = getCompositeForDimension(dimension.id);
+          if (composite) {
+            const compositeSize = measureNodeSize(composite.id, defaultSize);
+            const compositeX = nextX + (size.width - compositeSize.width) / 2;
+            if (
+              Math.abs(composite.position.x - compositeX) > 0.5 ||
+              Math.abs(composite.position.y - compositeRowY) > 0.5
+            ) {
+              updates.set(composite.id, { x: compositeX, y: compositeRowY });
+            }
+          }
+
+          cursorX += size.width + gapX;
+        });
+      });
+
+    if (!updates.size) return;
+    nodes = nodes.map((node) => {
+      const update = updates.get(node.id);
+      return update ? { ...node, position: update } : node;
+    });
+  };
+
+  const updateDimensionTransformations = (
+    dimensionId: string,
+    updater: (current: string[]) => string[],
+  ) => {
+    nodes = nodes.map((node) => {
+      if (node.id !== dimensionId) return node;
+      const current = node.data.transformations ?? [];
+      return {
+        ...node,
+        data: {
+          ...node.data,
+          transformations: updater([...current]),
+        },
+      };
+    });
+    scheduleLayout();
+  };
+
+  const addTransformationToDimension = (
+    dimensionId: string,
+    label: string,
+    insertIndex?: number,
+  ) => {
+    updateDimensionTransformations(dimensionId, (current) => {
+      const next = [...current];
+      if (insertIndex === undefined || insertIndex < 0 || insertIndex > next.length) {
+        next.push(label);
+      } else {
+        next.splice(insertIndex, 0, label);
+      }
+      return next;
+    });
+  };
+
+  const addTransformationToSelectedDimension = (label: string) => {
+    const selected = nodes.find((node) => node.id === selectedNodeId);
+    if (!selected || selected.data.kind !== "dimension") return;
+    addTransformationToDimension(selected.id, label);
+  };
+
+  const requestClearCanvas = () => {
+    clearConfirmOpen = true;
+  };
+
+  const confirmClearCanvas = () => {
+    nodes = [];
+    edges = [];
+    selectedNodeId = null;
+    tabGraphs.set(activeTabId, { nodes: [], edges: [] });
+    clearConfirmOpen = false;
+  };
+
+  const cancelClearCanvas = () => {
+    clearConfirmOpen = false;
+  };
+
+  const handleAutoLayout = () => {
+    scheduleLayout();
+  };
+
+  const handleZoomToFit = () => {
+    fitView?.({ padding: 0.2, duration: 300 });
+  };
+
+  const updateTransformationLabel = (dimensionId: string, index: number, value: string) => {
+    updateDimensionTransformations(dimensionId, (current) => {
+      if (index < 0 || index >= current.length) return current;
+      const next = [...current];
+      next[index] = value;
+      return next;
+    });
+  };
+
+  const appendTransformation = (dimensionId: string) => {
+    addTransformationToDimension(dimensionId, "New Transformation");
+  };
+
+  const removeTransformationAt = (dimensionId: string, index: number) => {
+    updateDimensionTransformations(dimensionId, (current) => {
+      if (index < 0 || index >= current.length) return current;
+      const next = [...current];
+      next.splice(index, 1);
+      return next;
+    });
+  };
+
+  const saveActiveGraph = () => {
+    tabGraphs.set(activeTabId, { nodes, edges });
+  };
+
+  const loadTabGraph = (tabId: string) => {
+    const graph = tabGraphs.get(tabId);
+    nodes = graph?.nodes ?? [];
+    edges = graph?.edges ?? [];
+    selectedNodeId = null;
+    scheduleLayout();
+  };
+
+  const switchTab = (tabId: string) => {
+    if (tabId === activeTabId) return;
+    saveActiveGraph();
+    activeTabId = tabId;
+    loadTabGraph(tabId);
+  };
+
+  const createEmptyTab = () => {
+    saveActiveGraph();
+    const nextTab = createStudioTab(`Untitled Particle ${tabs.length + 1}`);
+    tabs = [...tabs, nextTab];
+    activeTabId = nextTab.id;
+    loadTabGraph(nextTab.id);
+  };
+
+  const closeTab = (tabId: string) => {
+    if (tabs.length <= 1) {
+      const fallback = createStudioTab("Untitled Particle");
+      tabs = [fallback];
+      activeTabId = fallback.id;
+      loadTabGraph(fallback.id);
+      return;
+    }
+    const remaining = tabs.filter((tab) => tab.id !== tabId);
+    tabs = remaining;
+    tabGraphs.delete(tabId);
+    if (activeTabId === tabId) {
+      const nextActive = remaining[remaining.length - 1];
+      activeTabId = nextActive.id;
+      loadTabGraph(nextActive.id);
+    }
+  };
+
+  const formatTransformationLabel = (name: string, args: number[]) => {
+    if (!args.length) return name;
+    return `${name}(${args.join(", ")})`;
+  };
+
+  const buildParticleGraph = (particleName: string) => {
+    const particle = mockRegistrySnapshot.particles.find((item) => item.name === particleName);
+    if (!particle) return { nodes: [], edges: [] };
+
+    const feature = mockRegistrySnapshot.features.find(
+      (item) => item.name === particle.featureName,
+    );
+    if (!feature) return { nodes: [], edges: [] };
+
+    const graphNodes: StudioNode[] = [];
+    const graphEdges: Edge[] = [];
+
+    const featureId = `feature-${feature.name}-${crypto.randomUUID()}`;
+    const featureX = 360;
+    const featureY = 80;
+    graphNodes.push({
+      id: featureId,
+      type: "feature",
+      position: { x: featureX, y: featureY },
+      data: {
+        label: titleize(feature.name),
+        kind: "feature",
+        dimensions: feature.dimensions.length,
+        sourceId: feature.name,
+        networkId: feature.name,
+        fromNetwork: true,
+      },
+    });
+
+    const dimensionSpacingX = 200;
+    const dimensionRowY = featureY + 160;
+    const dimensionStartX = featureX - ((feature.dimensions.length - 1) * dimensionSpacingX) / 2;
+    const compositeRowY = dimensionRowY + 160;
+
+    feature.dimensions.forEach((dimension, dimIndex) => {
+      const dimensionId = `dimension-${feature.name}-${dimIndex}-${crypto.randomUUID()}`;
+      const columnX = dimensionStartX + dimIndex * dimensionSpacingX;
+      graphNodes.push({
+        id: dimensionId,
+        type: "dimension",
+        position: { x: columnX, y: dimensionRowY },
+        data: {
+          label: `#${dimIndex + 1}`,
+          kind: "dimension",
+          parentFeatureId: featureId,
+          dimensionIndex: dimIndex,
+          transformations: dimension.transformations.map((transformation) =>
+            formatTransformationLabel(transformation.name, transformation.args),
+          ),
+        },
+      });
+
+      graphEdges.push({
+        id: `edge-${featureId}-${dimensionId}`,
+        source: featureId,
+        sourceHandle: `dim-${dimIndex}`,
+        target: dimensionId,
+        targetHandle: "in",
+      });
+
+      const compositeName = particle.composites[dimIndex];
+      if (compositeName) {
+        const compositeId = `particle-${compositeName}-${crypto.randomUUID()}`;
+        graphNodes.push({
+          id: compositeId,
+          type: "particle",
+          position: { x: columnX, y: compositeRowY },
+          data: {
+            label: titleize(compositeName),
+            kind: "particle",
+            particleId: compositeName,
+            networkId: compositeName,
+            fromNetwork: true,
+          },
+        });
+        graphEdges.push({
+          id: `edge-${dimensionId}-${compositeId}`,
+          source: dimensionId,
+          target: compositeId,
+          sourceHandle: "out",
+          targetHandle: "in",
+        });
+      }
+    });
+
+    return { nodes: graphNodes, edges: graphEdges };
+  };
+
+  const openParticleTab = (particleId: string) => {
+    const existing = tabs.find((tab) => tab.particleId === particleId);
+    if (existing) {
+      switchTab(existing.id);
+      return;
+    }
+    saveActiveGraph();
+    const particleMeta = mockExploreParticles.find((item) => item.id === particleId);
+    const label = particleMeta?.name ?? titleize(particleId);
+    const nextTab = createStudioTab(label, particleId);
+    const graph = buildParticleGraph(particleId);
+    tabGraphs.set(nextTab.id, graph);
+    tabs = [...tabs, nextTab];
+    activeTabId = nextTab.id;
+    loadTabGraph(nextTab.id);
+  };
+
+  const registryByKind = $derived.by(() => ({
+    particle: mockExploreParticles.map((item) => ({ id: item.id, name: item.name })),
+    feature: mockFeatures.map((item) => ({
+      id: item.id,
+      name: item.name,
+      dimensions: item.dimensions,
+    })),
+    transformation: mockTransformations.map((item) => ({ id: item.id, name: item.name })),
+    condition: mockConditions.map((item) => ({ id: item.id, name: item.name })),
+    plugin: mockPlugins.map((item) => ({ id: item.id, name: item.name })),
+    agent: [],
+    dimension: [],
+  }));
+
+  const findRegistryMatch = (kind: StudioNodeKind, name: string) => {
+    const pool = registryByKind[kind] ?? [];
+    return pool.find((item) => item.name === name) ?? null;
+  };
+
+  const createUniqueName = (kind: StudioNodeKind, baseName: string) => {
+    const registryNames = new Set((registryByKind[kind] ?? []).map((item) => item.name));
+    const localNames = new Set(
+      nodes.filter((node) => node.data.kind === kind).map((node) => node.data.label),
+    );
+    let suffix = 1;
+    let candidate = baseName;
+    while (registryNames.has(candidate) || localNames.has(candidate)) {
+      candidate = `${baseName}-${suffix}`;
+      suffix += 1;
+    }
+    return candidate;
+  };
+
+  const commitNameChange = (node: StudioNode) => {
+    const trimmed = nameDraft.trim();
+    if (!trimmed) return;
+    if (trimmed === node.data.label) return;
+
+    const match = findRegistryMatch(node.data.kind, trimmed);
+    if (match && node.data.networkId !== match.id) {
+      pendingNameCollision = {
+        nodeId: node.id,
+        kind: node.data.kind,
+        desiredName: trimmed,
+        existingId: match.id,
+        existingName: match.name,
+      };
+      return;
+    }
+
+    updateNodeData(node.id, {
+      label: trimmed,
+      networkId: node.data.networkId === match?.id ? node.data.networkId : undefined,
+      fromNetwork: false,
+    });
+  };
+
+  const applyNameCollisionUseExisting = () => {
+    if (!pendingNameCollision) return;
+    const { nodeId, existingId, existingName, kind } = pendingNameCollision;
+    const match = findRegistryMatch(kind, existingName);
+    updateNodeData(nodeId, {
+      label: existingName,
+      networkId: existingId,
+      fromNetwork: true,
+      dimensions: match && "dimensions" in match ? (match.dimensions ?? 1) : undefined,
+    });
+    if (kind === "feature" && match && "dimensions" in match) {
+      applyDimensionChange(nodeId, match.dimensions ?? 1);
+    }
+    pendingNameCollision = null;
+  };
+
+  const applyNameCollisionCreateNew = () => {
+    if (!pendingNameCollision) return;
+    const { nodeId, desiredName, kind } = pendingNameCollision;
+    const unique = createUniqueName(kind, desiredName);
+    updateNodeData(nodeId, { label: unique, networkId: undefined, fromNetwork: false });
+    pendingNameCollision = null;
   };
 
   const addParticleToToolbox = (particle: ExploreParticle) => {
@@ -238,6 +847,132 @@
     const kind = item.kind;
     if (toolboxLibrary[kind].includes(item.id)) return;
     toolboxLibrary = { ...toolboxLibrary, [kind]: [...toolboxLibrary[kind], item.id] };
+  };
+
+  const getDimensionNodesForFeature = (featureId: string) =>
+    nodes.filter(
+      (node) => node.data.kind === "dimension" && node.data.parentFeatureId === featureId,
+    );
+
+  const getFeatureNode = (featureId: string) => nodes.find((node) => node.id === featureId) ?? null;
+
+  const createDimensionNode = (
+    feature: StudioNode,
+    dimensionIndex: number,
+    totalDimensions: number,
+  ): StudioNode => {
+    const spacing = 200;
+    const rowY = feature.position.y + 160;
+    const startX = feature.position.x - ((Math.max(1, totalDimensions) - 1) * spacing) / 2;
+    return {
+      id: `dimension-${feature.id}-${dimensionIndex}-${crypto.randomUUID()}`,
+      type: "dimension",
+      position: {
+        x: startX + dimensionIndex * spacing,
+        y: rowY,
+      },
+      data: {
+        label: `#${dimensionIndex + 1}`,
+        kind: "dimension",
+        parentFeatureId: feature.id,
+        dimensionIndex,
+        transformations: [],
+      },
+    };
+  };
+
+  const ensureDimensionEdges = (featureId: string, dimensionNodes: StudioNode[]) => {
+    const existingEdges = new Set(
+      edges.map((edge) => `${edge.source}-${edge.sourceHandle}-${edge.target}`),
+    );
+    const newEdges: Edge[] = [];
+
+    dimensionNodes.forEach((dimension) => {
+      const key = `${featureId}-dim-${dimension.data.dimensionIndex}-${dimension.id}`;
+      if (existingEdges.has(key)) return;
+      newEdges.push({
+        id: `edge-${featureId}-${dimension.id}`,
+        source: featureId,
+        sourceHandle: `dim-${dimension.data.dimensionIndex}`,
+        target: dimension.id,
+        targetHandle: "in",
+      });
+    });
+
+    if (newEdges.length) edges = [...edges, ...newEdges];
+  };
+
+  const dimensionHasTransformations = (dimension: StudioNode) =>
+    (dimension.data.transformations ?? []).length > 0;
+
+  const applyDimensionChange = (featureId: string, newCount: number) => {
+    const feature = getFeatureNode(featureId);
+    if (!feature) return;
+
+    const currentDimensions = getDimensionNodesForFeature(featureId);
+    const retained = currentDimensions.filter((node) => (node.data.dimensionIndex ?? 0) < newCount);
+    const removed = currentDimensions.filter((node) => (node.data.dimensionIndex ?? 0) >= newCount);
+
+    const removedIds = removed.map((node) => node.id);
+    const removeSet = new Set([...removedIds]);
+    if (removeSet.size) {
+      nodes = nodes.filter((node) => !removeSet.has(node.id));
+      edges = edges.filter((edge) => !removeSet.has(edge.source) && !removeSet.has(edge.target));
+    }
+
+    updateNodeData(featureId, { dimensions: newCount });
+
+    const nextDimensions: StudioNode[] = [...retained];
+    for (let index = 0; index < newCount; index += 1) {
+      if (retained.some((node) => node.data.dimensionIndex === index)) continue;
+      nextDimensions.push(createDimensionNode(feature, index, newCount));
+    }
+
+    if (nextDimensions.length !== retained.length) {
+      nodes = [...nodes, ...nextDimensions.filter((node) => !retained.includes(node))];
+    }
+
+    ensureDimensionEdges(featureId, nextDimensions);
+    scheduleLayout();
+  };
+
+  const requestDimensionChange = (featureId: string, nextCount: number) => {
+    const feature = getFeatureNode(featureId);
+    if (!feature) return;
+    const currentCount = Math.max(1, Math.round(feature.data.dimensions ?? 1));
+    const sanitized = Math.max(1, Math.round(nextCount));
+    if (sanitized === currentCount) return;
+
+    if (sanitized < currentCount) {
+      const removed = getDimensionNodesForFeature(featureId).filter(
+        (node) => (node.data.dimensionIndex ?? 0) >= sanitized,
+      );
+      const hasTransformations = removed.some((node) => dimensionHasTransformations(node));
+      if (hasTransformations) {
+        pendingDimensionChange = {
+          nodeId: featureId,
+          newCount: sanitized,
+          removedDimensions: removed,
+        };
+        return;
+      }
+    }
+
+    applyDimensionChange(featureId, sanitized);
+  };
+
+  const confirmDimensionRemoval = () => {
+    if (!pendingDimensionChange) return;
+    applyDimensionChange(pendingDimensionChange.nodeId, pendingDimensionChange.newCount);
+    dimensionDraft = pendingDimensionChange.newCount;
+    pendingDimensionChange = null;
+  };
+
+  const cancelDimensionRemoval = () => {
+    if (selectedNode?.data.kind === "feature") {
+      dimensionDraft = selectedNode.data.dimensions ?? 1;
+    }
+    pendingDimensionChange = null;
   };
 
   const libraryKindForTab = (tab: typeof libraryTab): LibraryItem["kind"] | null => {
@@ -330,34 +1065,51 @@
       {
         id: `particle-${particle.id}-${crypto.randomUUID()}`,
         position: nodePosition,
+        type: "particle",
         data: {
           label: particle.name,
           kind: "particle",
           particleId: particle.id,
           viewId: particle.viewId,
+          networkId: particle.id,
+          fromNetwork: true,
         },
       },
     ];
   };
 
   const addLibraryNode = (item: LibraryItem, position: { x: number; y: number } | null = null) => {
+    if (item.kind === "transformation") {
+      addTransformationToSelectedDimension(item.name);
+      return;
+    }
     const nodePosition = position ?? {
       x: 160 + Math.round(Math.random() * 200),
       y: 160 + Math.round(Math.random() * 200),
     };
-    nodes = [
-      ...nodes,
-      {
-        id: `${item.kind}-${item.id}-${crypto.randomUUID()}`,
-        position: nodePosition,
-        data: {
-          label: item.name,
-          kind: item.kind,
-          sourceId: item.id,
-          viewId: item.viewId,
-        },
+    const node: StudioNode = {
+      id: `${item.kind}-${item.id}-${crypto.randomUUID()}`,
+      position: nodePosition,
+      type:
+        item.kind === "feature"
+          ? "feature"
+          : item.kind === "transformation"
+            ? "transformation"
+            : undefined,
+      data: {
+        label: item.name,
+        kind: item.kind,
+        sourceId: item.id,
+        viewId: item.viewId,
+        networkId: item.id,
+        fromNetwork: true,
+        dimensions: item.dimensions ?? (item.kind === "feature" ? 1 : undefined),
       },
-    ];
+    };
+    nodes = [...nodes, node];
+    if (item.kind === "feature") {
+      applyDimensionChange(node.id, node.data.dimensions ?? 1);
+    }
   };
 
   const getCanvasCenter = () => {
@@ -372,24 +1124,35 @@
     label: string,
     position: { x: number; y: number } | null = null,
   ) => {
+    if (kind === "transformation") {
+      addTransformationToSelectedDimension(label);
+      return;
+    }
     const nodePosition = position ?? getCanvasCenter();
-    const node = {
+    const node: StudioNode = {
       id: `${kind}-quick-${crypto.randomUUID()}`,
       position: nodePosition,
       selected: true,
+      type: kind === "feature" ? "feature" : kind === "dimension" ? "dimension" : kind,
       data: {
-        label,
+        label: kind === "dimension" ? "#" : label,
         kind,
+        dimensions: kind === "feature" ? 1 : undefined,
+        transformations: kind === "dimension" ? [] : undefined,
+        fromNetwork: false,
       },
     };
     nodes = nodes.map((existing) => ({ ...existing, selected: false }));
     nodes = [...nodes, node];
+    if (kind === "feature") {
+      applyDimensionChange(node.id, 1);
+    }
   };
 
   const handleDragStart = (event: DragEvent, particle: ExploreParticle) => {
     event.dataTransfer?.setData("application/x-hypermusic-particle", JSON.stringify(particle));
     event.dataTransfer?.setData("text/plain", particle.name);
-    if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+    if (event.dataTransfer) event.dataTransfer.effectAllowed = "copyMove";
   };
 
   const handleLibraryDragStart = (event: DragEvent, item: LibraryItem) => {
@@ -413,6 +1176,7 @@
           kind: QuickNodeKind;
           label: string;
         };
+        if (payload.kind === "transformation") return;
         const position = screenToFlowPosition
           ? screenToFlowPosition({ x: event.clientX, y: event.clientY })
           : { x: event.clientX, y: event.clientY };
@@ -426,6 +1190,7 @@
     if (libraryPayload) {
       try {
         const item = JSON.parse(libraryPayload) as LibraryItem;
+        if (item.kind === "transformation") return;
         const position = screenToFlowPosition
           ? screenToFlowPosition({ x: event.clientX, y: event.clientY })
           : { x: event.clientX, y: event.clientY };
@@ -458,10 +1223,113 @@
     }
   };
 
+  const handleTabDragOver = (event: DragEvent) => {
+    event.preventDefault();
+    if (event.dataTransfer) {
+      const types = Array.from(event.dataTransfer.types);
+      event.dataTransfer.dropEffect = types.includes("application/x-hypermusic-particle")
+        ? "copy"
+        : "none";
+    }
+  };
+
+  const handleTabDrop = (event: DragEvent) => {
+    event.preventDefault();
+    const payload = event.dataTransfer?.getData("application/x-hypermusic-particle");
+    if (!payload) return;
+    try {
+      const particle = JSON.parse(payload) as ExploreParticle;
+      openParticleTab(particle.id);
+    } catch (error) {
+      console.warn("Failed to parse dropped particle payload", error);
+    }
+  };
+
   const handleSelectionChange: OnSelectionChange<StudioNode, unknown> = ({
     nodes: selectedNodes,
   }) => {
     selectedNodeId = selectedNodes[0]?.id ?? null;
+  };
+
+  const parseDimensionHandle = (handle?: string | null) => {
+    if (!handle) return null;
+    if (!handle.startsWith("dim-")) return null;
+    const value = Number(handle.replace("dim-", ""));
+    return Number.isFinite(value) ? value : null;
+  };
+
+  const isValidConnection = (connection: Connection) => {
+    if (!connection.source || !connection.target) return false;
+    const sourceNode = nodesById[connection.source];
+    const targetNode = nodesById[connection.target];
+    if (!sourceNode || !targetNode) return false;
+
+    if (sourceNode.data.kind === "feature" && targetNode.data.kind === "dimension") {
+      const dimensionIndex = parseDimensionHandle(connection.sourceHandle);
+      if (dimensionIndex === null) return false;
+      if (connection.targetHandle !== "in") return false;
+      if (targetNode.data.parentFeatureId && targetNode.data.parentFeatureId !== sourceNode.id) {
+        return false;
+      }
+      return true;
+    }
+
+    if (sourceNode.data.kind === "dimension" && targetNode.data.kind === "particle") {
+      return connection.sourceHandle === "out" && connection.targetHandle === "in";
+    }
+
+    return false;
+  };
+
+  const handleConnect: OnConnect = (connection) => {
+    if (!isValidConnection(connection)) return;
+    if (!connection.source || !connection.target) return;
+    if (
+      edges.some(
+        (edge) =>
+          edge.source === connection.source &&
+          edge.target === connection.target &&
+          edge.sourceHandle === connection.sourceHandle &&
+          edge.targetHandle === connection.targetHandle,
+      )
+    ) {
+      return;
+    }
+
+    edges = [
+      ...edges,
+      {
+        id: `edge-${connection.source}-${connection.target}-${crypto.randomUUID()}`,
+        source: connection.source,
+        target: connection.target,
+        sourceHandle: connection.sourceHandle,
+        targetHandle: connection.targetHandle,
+      },
+    ];
+
+    const sourceNode = nodesById[connection.source];
+    const targetNode = nodesById[connection.target];
+    if (sourceNode?.data.kind === "feature" && targetNode?.data.kind === "dimension") {
+      const dimensionIndex = parseDimensionHandle(connection.sourceHandle);
+      updateNodeData(targetNode.id, {
+        parentFeatureId: sourceNode.id,
+        dimensionIndex: dimensionIndex ?? targetNode.data.dimensionIndex,
+      });
+    }
+  };
+
+  const handleNodeClick = ({
+    node,
+    event,
+  }: {
+    node: StudioNode;
+    event: MouseEvent | TouchEvent;
+  }) => {
+    if (!(event instanceof MouseEvent)) return;
+    if (event.detail < 2) return;
+    if (node.data.kind === "particle" && node.data.particleId) {
+      openParticleTab(node.data.particleId);
+    }
   };
 </script>
 
@@ -469,105 +1337,167 @@
   class="studio"
   style={`--left-size:${leftSize}; --right-size:${rightSize}; --top-size:${topSize}; --bottom-size:${bottomSize};`}
 >
-  {#if topMode !== "hidden"}
-    <DockPanel
-      title="Create element"
-      position="top"
-      inline
-      onHide={() => hidePanel((mode) => (topMode = mode))}
+  <div class="top-stack">
+    <div
+      class="tab-bar"
+      role="tablist"
+      aria-label="Particle tabs"
+      tabindex="0"
+      ondragover={handleTabDragOver}
+      ondrop={handleTabDrop}
     >
-      <Button
-        variant="ghost"
-        ariaLabel="New Feature"
-        title="New Feature — A feature defines dimensions (connection points) and the transformations that live on those dimensions."
-        className="icon-btn"
-        draggable
-        onclick={(event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          addQuickNode("feature", "New Feature");
-        }}
-        ondragstart={(event) => handleQuickDragStart(event, "feature", "New Feature")}
+      {#each tabs as tab (tab.id)}
+        <div class={`tab ${tab.id === activeTabId ? "is-active" : ""}`}>
+          <button
+            type="button"
+            role="tab"
+            class="tab-button"
+            aria-selected={tab.id === activeTabId}
+            onclick={() => switchTab(tab.id)}
+          >
+            {tab.label}
+          </button>
+          <button
+            type="button"
+            class="tab-close"
+            aria-label={`Close ${tab.label} tab`}
+            onclick={() => closeTab(tab.id)}
+          >
+            <svg class="tab-close-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M6 6l12 12M18 6l-12 12"></path>
+            </svg>
+          </button>
+        </div>
+      {/each}
+      <button
+        type="button"
+        class="tab tab-add"
+        aria-label="Create new particle tab"
+        onclick={createEmptyTab}
       >
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <rect x="4" y="4" width="16" height="16" rx="2"></rect>
-          <path d="M12 8v8M8 12h8"></path>
-        </svg>
-      </Button>
-      <Button
-        variant="ghost"
-        ariaLabel="New Transformation"
-        title="New Transformation — Transformations live on dimensions of a feature and specify how values are selected from the attached particle."
-        className="icon-btn"
-        draggable
-        onclick={(event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          addQuickNode("transformation", "New Transformation");
-        }}
-        ondragstart={(event) => handleQuickDragStart(event, "transformation", "New Transformation")}
+        +
+      </button>
+    </div>
+    {#if topMode !== "hidden"}
+      <DockPanel
+        title="Create element"
+        position="top"
+        inline
+        onHide={() => hidePanel((mode) => (topMode = mode))}
       >
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M6 8h10l-3-3"></path>
-          <path d="M18 16H8l3 3"></path>
-        </svg>
-      </Button>
-      <Button
-        variant="ghost"
-        ariaLabel="New Condition"
-        title="New Condition — A particle only outputs values if its condition is met."
-        className="icon-btn"
-        draggable
-        onclick={(event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          addQuickNode("condition", "New Condition");
-        }}
-        ondragstart={(event) => handleQuickDragStart(event, "condition", "New Condition")}
-      >
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M4 6h16l-6 7v6l-4-2v-4z"></path>
-        </svg>
-      </Button>
-      <Button
-        variant="ghost"
-        ariaLabel="New Agent"
-        title="New Agent"
-        className="icon-btn"
-        draggable
-        onclick={(event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          addQuickNode("agent", "New Agent");
-        }}
-        ondragstart={(event) => handleQuickDragStart(event, "agent", "New Agent")}
-      >
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <circle cx="12" cy="8" r="3"></circle>
-          <path d="M5 20a7 7 0 0 1 14 0"></path>
-        </svg>
-      </Button>
-      <Button
-        variant="ghost"
-        ariaLabel="New Plugin"
-        title="New Plugin — A plugin consumes the runner’s output streams and renders or sonifies them."
-        className="icon-btn"
-        draggable
-        onclick={(event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          addQuickNode("plugin", "New Plugin");
-        }}
-        ondragstart={(event) => handleQuickDragStart(event, "plugin", "New Plugin")}
-      >
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M8 6v6M16 6v6"></path>
-          <path d="M6 12h12v3a6 6 0 0 1-12 0v-3z"></path>
-          <path d="M12 18v3"></path>
-        </svg>
-      </Button>
-    </DockPanel>
-  {/if}
+        <Button
+          variant="ghost"
+          ariaLabel="New Feature"
+          title="New Feature — A feature defines dimensions (connection points) and the transformations that live on those dimensions."
+          className="icon-btn"
+          draggable
+          onclick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            addQuickNode("feature", "New Feature");
+          }}
+          ondragstart={(event) => handleQuickDragStart(event, "feature", "New Feature")}
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <rect x="4" y="4" width="16" height="16" rx="2"></rect>
+            <path d="M12 8v8M8 12h8"></path>
+          </svg>
+        </Button>
+        <Button
+          variant="ghost"
+          ariaLabel="New Dimension"
+          title="New Dimension — A dimension hosts a chain of transformations for a feature output."
+          className="icon-btn"
+          draggable
+          onclick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            addQuickNode("dimension", "Dimension");
+          }}
+          ondragstart={(event) => handleQuickDragStart(event, "dimension", "Dimension")}
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M5 7h14"></path>
+            <path d="M5 12h14"></path>
+            <path d="M5 17h14"></path>
+          </svg>
+        </Button>
+        <Button
+          variant="ghost"
+          ariaLabel="New Transformation"
+          title="New Transformation — Transformations live on dimensions of a feature and specify how values are selected from the attached particle."
+          className="icon-btn"
+          draggable
+          onclick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            addQuickNode("transformation", "New Transformation");
+          }}
+          ondragstart={(event) =>
+            handleQuickDragStart(event, "transformation", "New Transformation")}
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M6 8h10l-3-3"></path>
+            <path d="M18 16H8l3 3"></path>
+          </svg>
+        </Button>
+        <Button
+          variant="ghost"
+          ariaLabel="New Condition"
+          title="New Condition — A particle only outputs values if its condition is met."
+          className="icon-btn"
+          draggable
+          onclick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            addQuickNode("condition", "New Condition");
+          }}
+          ondragstart={(event) => handleQuickDragStart(event, "condition", "New Condition")}
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M4 6h16l-6 7v6l-4-2v-4z"></path>
+          </svg>
+        </Button>
+        <Button
+          variant="ghost"
+          ariaLabel="New Agent"
+          title="New Agent"
+          className="icon-btn"
+          draggable
+          onclick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            addQuickNode("agent", "New Agent");
+          }}
+          ondragstart={(event) => handleQuickDragStart(event, "agent", "New Agent")}
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="12" cy="8" r="3"></circle>
+            <path d="M5 20a7 7 0 0 1 14 0"></path>
+          </svg>
+        </Button>
+        <Button
+          variant="ghost"
+          ariaLabel="New Plugin"
+          title="New Plugin — A plugin consumes the runner’s output streams and renders or sonifies them."
+          className="icon-btn"
+          draggable
+          onclick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            addQuickNode("plugin", "New Plugin");
+          }}
+          ondragstart={(event) => handleQuickDragStart(event, "plugin", "New Plugin")}
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M8 6v6M16 6v6"></path>
+            <path d="M6 12h12v3a6 6 0 0 1-12 0v-3z"></path>
+            <path d="M12 18v3"></path>
+          </svg>
+        </Button>
+      </DockPanel>
+    {/if}
+  </div>
 
   {#if leftMode !== "hidden"}
     <DockPanel
@@ -671,6 +1601,7 @@
             selectedId={selectedParticleId}
             bind:selectedViewId
             onSelect={handleParticleSelect}
+            onOpen={handleParticleOpen}
             onAdd={(particle) => addParticleNode(particle, null)}
             onToolbox={addParticleToToolbox}
             onDragStart={handleDragStart}
@@ -728,61 +1659,461 @@
   {/if}
 
   <div class="canvas" role="application" aria-label="Flow canvas" bind:this={canvasEl}>
-    <SvelteFlow
-      bind:nodes
-      bind:edges
-      onselectionchange={handleSelectionChange}
-      fitView
-      zoomOnScroll
-      zoomOnPinch
-      panOnDrag
-      proOptions={{ hideAttribution: true }}
-    >
-      <Background bgColor="black" />
-      <FlowInstanceBridge onReady={(fn) => (screenToFlowPosition = fn)} />
-    </SvelteFlow>
+    {#if topMode === "hidden"}
+      <button
+        class="panel-tab panel-tab--top"
+        type="button"
+        title="Create element panel (T)"
+        aria-label="Create element panel"
+        onclick={() => showPanel((m) => (topMode = m))}
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 4v16M4 12h16"></path>
+        </svg>
+      </button>
+    {/if}
+    <div class="flow-area">
+      <SvelteFlow
+        bind:nodes
+        bind:edges
+        {nodeTypes}
+        onconnect={handleConnect}
+        onselectionchange={handleSelectionChange}
+        {isValidConnection}
+        onnodeclick={handleNodeClick}
+        fitView
+        zoomOnScroll
+        zoomOnDoubleClick={false}
+        zoomOnPinch
+        panOnDrag
+        proOptions={{ hideAttribution: true }}
+      >
+        <Background bgColor="black" />
+        <FlowInstanceBridge
+          onReady={({ screenToFlowPosition: toFlow, getZoom: zoomFn, fitView: fitViewFn }) => {
+            screenToFlowPosition = toFlow;
+            getZoom = zoomFn;
+            fitView = fitViewFn;
+          }}
+        />
+      </SvelteFlow>
+    </div>
   </div>
 
   {#if rightMode === "assistant"}
     <DockPanel title="Assistant" position="right" onHide={hideRightPanel}>
-      <div class="assistant-placeholder">Agent assistant chat goes here.</div>
+      <div class="right-panel-content">
+        <div class="right-panel-controls">
+          <button
+            type="button"
+            class={`right-panel-icon ${assistantVisible ? "is-active" : ""}`}
+            aria-label="Toggle assistant panel"
+            onclick={toggleAssistant}
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M4 6h16v10H8l-4 4z"></path>
+              <path d="M8 10h8M8 13h6"></path>
+            </svg>
+          </button>
+          <button
+            type="button"
+            class={`right-panel-icon ${inspectorVisible ? "is-active" : ""}`}
+            aria-label="Toggle inspector panel"
+            onclick={toggleInspector}
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="12" cy="12" r="7"></circle>
+              <path d="M12 11v5"></path>
+              <path d="M12 8h.01"></path>
+            </svg>
+          </button>
+        </div>
+        <div class="assistant-placeholder">Agent assistant chat goes here.</div>
+      </div>
     </DockPanel>
   {/if}
 
   {#if rightMode === "inspector"}
     <DockPanel title="Inspector" position="right" onHide={hideRightPanel}>
-      <div class="inspector">
-        <div class="inspector-title">Node inspector</div>
-        {#if selectedNode}
-          <div class="inspector-row">
-            <span>Type</span>
-            <span>{selectedNode.data.kind}</span>
+      <div class="right-panel-content">
+        <div class="right-panel-controls">
+          <button
+            type="button"
+            class={`right-panel-icon ${assistantVisible ? "is-active" : ""}`}
+            aria-label="Toggle assistant panel"
+            onclick={toggleAssistant}
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M4 6h16v10H8l-4 4z"></path>
+              <path d="M8 10h8M8 13h6"></path>
+            </svg>
+          </button>
+          <button
+            type="button"
+            class={`right-panel-icon ${inspectorVisible ? "is-active" : ""}`}
+            aria-label="Toggle inspector panel"
+            onclick={toggleInspector}
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="12" cy="12" r="7"></circle>
+              <path d="M12 11v5"></path>
+              <path d="M12 8h.01"></path>
+            </svg>
+          </button>
+        </div>
+        <div class="inspector">
+          <div class="inspector-title">Node inspector</div>
+          {#if inspectorNode}
+            {#if selectedNode}
+              <label class="inspector-label" for="node-name">Name</label>
+              <input
+                id="node-name"
+                class="inspector-input"
+                value={nameDraft}
+                oninput={(event) => {
+                  const target = event.target as HTMLInputElement | null;
+                  nameDraft = target?.value ?? "";
+                }}
+                onblur={() => commitNameChange(selectedNode)}
+                onkeydown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    commitNameChange(selectedNode);
+                  }
+                }}
+              />
+              {#if pendingNameCollision && pendingNameCollision.nodeId === selectedNode.id}
+                <div class="inspector-alert">
+                  <div class="inspector-alert-text">
+                    “{pendingNameCollision.desiredName}” already exists in the network.
+                  </div>
+                  <div class="inspector-alert-actions">
+                    <button type="button" onclick={applyNameCollisionUseExisting}>
+                      Use existing
+                    </button>
+                    <button type="button" onclick={applyNameCollisionCreateNew}>
+                      Create new
+                    </button>
+                  </div>
+                </div>
+              {/if}
+              {#if selectedNode.data.kind === "feature"}
+                <label class="inspector-label" for="node-dimensions">Dimensions</label>
+                <input
+                  id="node-dimensions"
+                  class="inspector-input"
+                  type="number"
+                  min="1"
+                  value={dimensionDraft ?? 1}
+                  oninput={(event) => {
+                    const target = event.target as HTMLInputElement | null;
+                    dimensionDraft = target ? Number(target.value) : 1;
+                  }}
+                  onchange={() => {
+                    if (dimensionDraft !== null) {
+                      requestDimensionChange(selectedNode.id, dimensionDraft);
+                    }
+                  }}
+                />
+                {#if pendingDimensionChange && pendingDimensionChange.nodeId === selectedNode.id}
+                  <div class="inspector-alert">
+                    <div class="inspector-alert-text">
+                      Removing dimensions will delete {pendingDimensionChange.removedDimensions
+                        .length}
+                      dimension(s) with transformations. Continue?
+                    </div>
+                    <div class="inspector-alert-actions">
+                      <button type="button" onclick={confirmDimensionRemoval}> Remove </button>
+                      <button type="button" onclick={cancelDimensionRemoval}> Cancel </button>
+                    </div>
+                  </div>
+                {/if}
+              {/if}
+              {#if selectedNode.data.kind === "dimension"}
+                <div class="inspector-section">
+                  <div class="inspector-section-title">Transformations</div>
+                  <div class="inspector-transform-list">
+                    {#each selectedNode.data.transformations ?? [] as transformation, index (index)}
+                      <div class="inspector-transform-row">
+                        <input
+                          class="inspector-input inspector-input--compact"
+                          value={transformation}
+                          oninput={(event) => {
+                            const target = event.target as HTMLInputElement | null;
+                            updateTransformationLabel(selectedNode.id, index, target?.value ?? "");
+                          }}
+                        />
+                        <button
+                          type="button"
+                          class="inspector-remove"
+                          onclick={() => removeTransformationAt(selectedNode.id, index)}
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    {/each}
+                    <button
+                      type="button"
+                      class="inspector-action"
+                      onclick={() => appendTransformation(selectedNode.id)}
+                    >
+                      Add transformation
+                    </button>
+                  </div>
+                </div>
+              {/if}
+              {#if selectedNode.data.kind === "particle" && selectedNode.data.particleId}
+                <button
+                  type="button"
+                  class="inspector-action"
+                  onclick={() => openParticleTab(selectedNode.data.particleId!)}
+                >
+                  Open particle tab
+                </button>
+              {/if}
+            {:else}
+              <div class="inspector-row">
+                <span>Context</span>
+                <span>Current tab</span>
+              </div>
+              {#if !inspectorNode.data.particleId}
+                <div class="inspector-row">
+                  <span>Status</span>
+                  <span>New particle</span>
+                </div>
+              {/if}
+            {/if}
+            <div class="inspector-row">
+              <span>Type</span>
+              <span>{inspectorNode.data.kind}</span>
+            </div>
+            <div class="inspector-row">
+              <span>Name</span>
+              <span>{inspectorNode.data.label}</span>
+            </div>
+            {#if inspectorNode.data.particleId}
+              <div class="inspector-row">
+                <span>Particle</span>
+                <span>{inspectorNode.data.particleId}</span>
+              </div>
+            {/if}
+            {#if inspectorNode.data.sourceId}
+              <div class="inspector-row">
+                <span>Source</span>
+                <span>{inspectorNode.data.sourceId}</span>
+              </div>
+            {/if}
+            {#if inspectorNode.data.viewId}
+              <div class="inspector-row">
+                <span>View</span>
+                <span>{inspectorNode.data.viewId}</span>
+              </div>
+            {/if}
+          {:else}
+            <div class="inspector-empty">Select a node to view details.</div>
+          {/if}
+        </div>
+      </div>
+    </DockPanel>
+  {/if}
+
+  {#if rightMode === "both"}
+    <DockPanel title="Inspector + Assistant" position="right" onHide={hideRightPanel}>
+      <div class="right-panel-content">
+        <div class="right-panel-controls">
+          <button
+            type="button"
+            class={`right-panel-icon ${assistantVisible ? "is-active" : ""}`}
+            aria-label="Toggle assistant panel"
+            onclick={toggleAssistant}
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M4 6h16v10H8l-4 4z"></path>
+              <path d="M8 10h8M8 13h6"></path>
+            </svg>
+          </button>
+          <button
+            type="button"
+            class={`right-panel-icon ${inspectorVisible ? "is-active" : ""}`}
+            aria-label="Toggle inspector panel"
+            onclick={toggleInspector}
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="12" cy="12" r="7"></circle>
+              <path d="M12 11v5"></path>
+              <path d="M12 8h.01"></path>
+            </svg>
+          </button>
+        </div>
+        <div class="right-split">
+          <div class="right-section">
+            <div class="right-section-body">
+              <div class="inspector">
+                <div class="inspector-title">Node inspector</div>
+                {#if inspectorNode}
+                  {#if selectedNode}
+                    <label class="inspector-label" for="node-name-split">Name</label>
+                    <input
+                      id="node-name-split"
+                      class="inspector-input"
+                      value={nameDraft}
+                      oninput={(event) => {
+                        const target = event.target as HTMLInputElement | null;
+                        nameDraft = target?.value ?? "";
+                      }}
+                      onblur={() => commitNameChange(selectedNode)}
+                      onkeydown={(event) => {
+                        if (event.key === "Enter") {
+                          event.preventDefault();
+                          commitNameChange(selectedNode);
+                        }
+                      }}
+                    />
+                    {#if pendingNameCollision && pendingNameCollision.nodeId === selectedNode.id}
+                      <div class="inspector-alert">
+                        <div class="inspector-alert-text">
+                          “{pendingNameCollision.desiredName}” already exists in the network.
+                        </div>
+                        <div class="inspector-alert-actions">
+                          <button type="button" onclick={applyNameCollisionUseExisting}>
+                            Use existing
+                          </button>
+                          <button type="button" onclick={applyNameCollisionCreateNew}>
+                            Create new
+                          </button>
+                        </div>
+                      </div>
+                    {/if}
+                    {#if selectedNode.data.kind === "feature"}
+                      <label class="inspector-label" for="node-dimensions-split">Dimensions</label>
+                      <input
+                        id="node-dimensions-split"
+                        class="inspector-input"
+                        type="number"
+                        min="1"
+                        value={dimensionDraft ?? 1}
+                        oninput={(event) => {
+                          const target = event.target as HTMLInputElement | null;
+                          dimensionDraft = target ? Number(target.value) : 1;
+                        }}
+                        onchange={() => {
+                          if (dimensionDraft !== null) {
+                            requestDimensionChange(selectedNode.id, dimensionDraft);
+                          }
+                        }}
+                      />
+                      {#if pendingDimensionChange && pendingDimensionChange.nodeId === selectedNode.id}
+                        <div class="inspector-alert">
+                          <div class="inspector-alert-text">
+                            Removing dimensions will delete {pendingDimensionChange
+                              .removedDimensions.length}
+                            dimension(s) with transformations. Continue?
+                          </div>
+                          <div class="inspector-alert-actions">
+                            <button type="button" onclick={confirmDimensionRemoval}>
+                              Remove
+                            </button>
+                            <button type="button" onclick={cancelDimensionRemoval}> Cancel </button>
+                          </div>
+                        </div>
+                      {/if}
+                    {/if}
+                    {#if selectedNode.data.kind === "dimension"}
+                      <div class="inspector-section">
+                        <div class="inspector-section-title">Transformations</div>
+                        <div class="inspector-transform-list">
+                          {#each selectedNode.data.transformations ?? [] as transformation, index (index)}
+                            <div class="inspector-transform-row">
+                              <input
+                                class="inspector-input inspector-input--compact"
+                                value={transformation}
+                                oninput={(event) => {
+                                  const target = event.target as HTMLInputElement | null;
+                                  updateTransformationLabel(
+                                    selectedNode.id,
+                                    index,
+                                    target?.value ?? "",
+                                  );
+                                }}
+                              />
+                              <button
+                                type="button"
+                                class="inspector-remove"
+                                onclick={() => removeTransformationAt(selectedNode.id, index)}
+                              >
+                                Remove
+                              </button>
+                            </div>
+                          {/each}
+                          <button
+                            type="button"
+                            class="inspector-action"
+                            onclick={() => appendTransformation(selectedNode.id)}
+                          >
+                            Add transformation
+                          </button>
+                        </div>
+                      </div>
+                    {/if}
+                    {#if selectedNode.data.kind === "particle" && selectedNode.data.particleId}
+                      <button
+                        type="button"
+                        class="inspector-action"
+                        onclick={() => openParticleTab(selectedNode.data.particleId!)}
+                      >
+                        Open particle tab
+                      </button>
+                    {/if}
+                  {:else}
+                    <div class="inspector-row">
+                      <span>Context</span>
+                      <span>Current tab</span>
+                    </div>
+                    {#if !inspectorNode.data.particleId}
+                      <div class="inspector-row">
+                        <span>Status</span>
+                        <span>New particle</span>
+                      </div>
+                    {/if}
+                  {/if}
+                  <div class="inspector-row">
+                    <span>Type</span>
+                    <span>{inspectorNode.data.kind}</span>
+                  </div>
+                  <div class="inspector-row">
+                    <span>Name</span>
+                    <span>{inspectorNode.data.label}</span>
+                  </div>
+                  {#if inspectorNode.data.particleId}
+                    <div class="inspector-row">
+                      <span>Particle</span>
+                      <span>{inspectorNode.data.particleId}</span>
+                    </div>
+                  {/if}
+                  {#if inspectorNode.data.sourceId}
+                    <div class="inspector-row">
+                      <span>Source</span>
+                      <span>{inspectorNode.data.sourceId}</span>
+                    </div>
+                  {/if}
+                  {#if inspectorNode.data.viewId}
+                    <div class="inspector-row">
+                      <span>View</span>
+                      <span>{inspectorNode.data.viewId}</span>
+                    </div>
+                  {/if}
+                {:else}
+                  <div class="inspector-empty">Select a node to view details.</div>
+                {/if}
+              </div>
+            </div>
           </div>
-          <div class="inspector-row">
-            <span>Name</span>
-            <span>{selectedNode.data.label}</span>
+          <div class="right-section">
+            <div class="right-section-body">
+              <div class="assistant-placeholder">Agent assistant chat goes here.</div>
+            </div>
           </div>
-          {#if selectedNode.data.particleId}
-            <div class="inspector-row">
-              <span>Particle</span>
-              <span>{selectedNode.data.particleId}</span>
-            </div>
-          {/if}
-          {#if selectedNode.data.sourceId}
-            <div class="inspector-row">
-              <span>Source</span>
-              <span>{selectedNode.data.sourceId}</span>
-            </div>
-          {/if}
-          {#if selectedNode.data.viewId}
-            <div class="inspector-row">
-              <span>View</span>
-              <span>{selectedNode.data.viewId}</span>
-            </div>
-          {/if}
-        {:else}
-          <div class="inspector-empty">Select a node to view details.</div>
-        {/if}
+        </div>
       </div>
     </DockPanel>
   {/if}
@@ -794,14 +2125,26 @@
       inline
       onHide={() => hidePanel((mode) => (bottomMode = mode))}
     >
-      <Button variant="subtle" ariaLabel="Clear canvas" title="Clear canvas" className="icon-btn">
+      <Button
+        variant="subtle"
+        ariaLabel="Clear canvas"
+        title="Clear canvas"
+        className="icon-btn"
+        onclick={requestClearCanvas}
+      >
         <svg viewBox="0 0 24 24" aria-hidden="true">
           <path d="M4 7h16"></path>
           <path d="M9 7V5h6v2"></path>
           <path d="M7 7l1 12h8l1-12"></path>
         </svg>
       </Button>
-      <Button variant="subtle" ariaLabel="Auto layout" title="Auto layout" className="icon-btn">
+      <Button
+        variant="subtle"
+        ariaLabel="Auto layout"
+        title="Auto layout"
+        className="icon-btn"
+        onclick={handleAutoLayout}
+      >
         <svg viewBox="0 0 24 24" aria-hidden="true">
           <rect x="4" y="4" width="6" height="6"></rect>
           <rect x="14" y="4" width="6" height="6"></rect>
@@ -809,7 +2152,13 @@
           <rect x="14" y="14" width="6" height="6"></rect>
         </svg>
       </Button>
-      <Button variant="subtle" ariaLabel="Zoom to fit" title="Zoom to fit" className="icon-btn">
+      <Button
+        variant="subtle"
+        ariaLabel="Zoom to fit"
+        title="Zoom to fit"
+        className="icon-btn"
+        onclick={handleZoomToFit}
+      >
         <svg viewBox="0 0 24 24" aria-hidden="true">
           <rect x="4" y="4" width="16" height="16" rx="2"></rect>
           <path d="M9 9h6v6H9z"></path>
@@ -828,20 +2177,6 @@
         </svg>
       </Button>
     </DockPanel>
-  {/if}
-
-  {#if topMode === "hidden"}
-    <button
-      class="panel-tab panel-tab--top"
-      type="button"
-      title="Create element panel (T)"
-      aria-label="Create element panel"
-      onclick={() => showPanel((m) => (topMode = m))}
-    >
-      <svg viewBox="0 0 24 24" aria-hidden="true">
-        <path d="M12 4v16M4 12h16"></path>
-      </svg>
-    </button>
   {/if}
 
   {#if bottomMode === "hidden"}
@@ -881,7 +2216,7 @@
         type="button"
         title="Assistant panel (])"
         aria-label="Assistant panel"
-        onclick={() => openRightPanel("assistant")}
+        onclick={toggleAssistant}
       >
         <svg viewBox="0 0 24 24" aria-hidden="true">
           <path d="M4 6h16v10H8l-4 4z"></path>
@@ -893,7 +2228,7 @@
         type="button"
         title="Inspector panel"
         aria-label="Inspector panel"
-        onclick={() => openRightPanel("inspector")}
+        onclick={toggleInspector}
       >
         <svg viewBox="0 0 24 24" aria-hidden="true">
           <circle cx="12" cy="12" r="7"></circle>
@@ -901,6 +2236,21 @@
           <path d="M12 8h.01"></path>
         </svg>
       </button>
+    </div>
+  {/if}
+
+  {#if clearConfirmOpen}
+    <div class="confirm-overlay" role="dialog" aria-modal="true">
+      <div class="confirm-modal">
+        <div class="confirm-title">Clear canvas?</div>
+        <div class="confirm-text">
+          This will remove all nodes and connections from the current particle tab.
+        </div>
+        <div class="confirm-actions">
+          <button type="button" onclick={cancelClearCanvas}>Cancel</button>
+          <button type="button" class="danger" onclick={confirmClearCanvas}>Clear</button>
+        </div>
+      </div>
     </div>
   {/if}
 </div>
@@ -918,17 +2268,58 @@
       "bottom bottom bottom";
   }
 
+  .top-stack {
+    grid-area: top;
+    @apply flex flex-col border-b border-white/10 bg-black/80;
+  }
+
   .canvas {
     grid-area: canvas;
-    @apply min-h-0 bg-black;
+    @apply relative min-h-0 bg-black flex flex-col;
+  }
+
+  .tab-bar {
+    @apply flex items-center gap-2 px-3 py-2;
+  }
+
+  .tab {
+    @apply rounded-md border border-white/10 bg-white/5 px-3 py-1 text-[0.6rem]
+      uppercase tracking-[0.2em] text-white/60 hover:border-white/30 hover:text-white;
+    @apply inline-flex items-center gap-2;
+  }
+
+  .tab.is-active {
+    @apply border-emerald-400/40 bg-emerald-500/10 text-emerald-200;
+  }
+
+  .tab-button {
+    @apply text-left;
+  }
+
+  .tab-add {
+    @apply ml-auto w-8 justify-center px-0 text-white/70;
+  }
+
+  .tab-close {
+    @apply inline-flex h-4 w-4 items-center justify-center rounded-full
+      border border-white/10 text-white/60
+      hover:border-white/30 hover:text-white;
+  }
+
+  .tab-close-icon {
+    @apply h-3 w-3;
+    stroke: currentColor;
+    stroke-width: 2;
+    fill: none;
+    stroke-linecap: round;
+  }
+
+  .flow-area {
+    @apply min-h-0 flex-1;
   }
 
   .studio :global(.svelte-flow) {
     @apply h-full w-full;
-  }
-
-  .studio > :global(.dock--top) {
-    grid-area: top;
   }
 
   .studio > :global(.dock--left) {
@@ -1083,6 +2474,41 @@
     @apply text-[0.55rem] uppercase tracking-[0.24em] text-white/60;
   }
 
+  .inspector-label {
+    @apply mt-2 text-[0.6rem] uppercase tracking-[0.24em] text-white/50;
+  }
+
+  .inspector-input {
+    @apply mt-1 w-full rounded-md border border-white/10 bg-black/60 px-2 py-1
+      text-sm text-white/80 outline-none focus:border-emerald-400/60;
+  }
+
+  .inspector-input--compact {
+    @apply mt-0 text-[0.7rem];
+  }
+
+  .inspector-section {
+    @apply mt-3 flex flex-col gap-2 rounded-md border border-white/10 bg-black/70 p-2;
+  }
+
+  .inspector-section-title {
+    @apply text-[0.55rem] uppercase tracking-[0.22em] text-white/50;
+  }
+
+  .inspector-transform-list {
+    @apply flex flex-col gap-2;
+  }
+
+  .inspector-transform-row {
+    @apply flex items-center gap-2;
+  }
+
+  .inspector-remove {
+    @apply rounded-md border border-white/10 bg-white/5 px-2 py-1 text-[0.55rem]
+      uppercase tracking-[0.18em] text-white/60 hover:border-white/30 hover:text-white;
+    flex: 0 0 auto;
+  }
+
   .inspector-row {
     @apply mt-2 flex items-center justify-between text-[0.7rem] text-white/80;
   }
@@ -1091,12 +2517,72 @@
     @apply text-white/90;
   }
 
+  .inspector-action {
+    @apply mt-2 w-full rounded-md border border-white/10 bg-white/5 px-2 py-1 text-[0.6rem]
+      uppercase tracking-[0.18em] text-white/70 hover:border-white/30 hover:text-white;
+  }
+
+  .inspector-alert {
+    @apply mt-2 rounded-md border border-white/10 bg-black/80 p-2 text-[0.65rem] text-white/70;
+  }
+
+  .inspector-alert-text {
+    @apply text-white/70;
+  }
+
+  .inspector-alert-actions {
+    @apply mt-2 flex items-center gap-2;
+  }
+
+  .inspector-alert-actions button {
+    @apply rounded-md border border-white/10 bg-white/5 px-2 py-1 text-[0.6rem] uppercase tracking-[0.18em]
+      text-white/70 hover:border-white/30 hover:text-white;
+  }
+
   .inspector-empty {
     @apply mt-2 text-[0.65rem] text-white/50;
   }
 
   .assistant-placeholder {
     @apply mt-4 text-[0.8rem] text-white/60;
+  }
+
+  .right-split {
+    @apply flex h-full flex-col gap-3;
+  }
+
+  .right-section {
+    @apply flex min-h-0 flex-1 flex-col rounded-md border border-white/10 bg-black/70 p-2;
+  }
+
+  .right-section-body {
+    @apply mt-2 min-h-0 flex-1 overflow-auto;
+  }
+
+  .right-panel-content {
+    @apply h-full flex flex-col;
+  }
+
+  .right-panel-controls {
+    @apply flex items-center justify-end gap-2 border-b border-white/10 pb-3;
+  }
+
+  .right-panel-icon {
+    @apply inline-flex h-8 w-8 items-center justify-center rounded-md border border-white/10
+      text-white/60 hover:border-white/40 hover:text-white;
+  }
+
+  .right-panel-icon.is-active {
+    @apply border-emerald-400/60 text-emerald-200;
+  }
+
+  .right-panel-icon svg {
+    @apply h-4 w-4;
+    stroke: currentColor;
+    stroke-width: 1.6;
+    fill: none;
+    stroke-linecap: round;
+    stroke-linejoin: round;
   }
 
   .panel-tab {
@@ -1114,7 +2600,9 @@
   }
 
   .panel-tab--top {
-    @apply absolute z-20 top-2 left-1/2 -translate-x-1/2;
+    @apply absolute z-20 top-2;
+    left: 50%;
+    transform: translateX(-50%);
   }
 
   .panel-tab--bottom {
@@ -1131,5 +2619,34 @@
 
   .panel-tab-stack--right {
     @apply top-1/2 right-2 -translate-y-1/2;
+  }
+
+  .confirm-overlay {
+    @apply absolute inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm;
+  }
+
+  .confirm-modal {
+    @apply w-[min(320px,90vw)] rounded-md border border-white/10 bg-black/90 p-4 text-white/80;
+  }
+
+  .confirm-title {
+    @apply text-[0.7rem] uppercase tracking-[0.24em] text-white/70;
+  }
+
+  .confirm-text {
+    @apply mt-2 text-[0.8rem] text-white/70;
+  }
+
+  .confirm-actions {
+    @apply mt-4 flex items-center justify-end gap-2;
+  }
+
+  .confirm-actions button {
+    @apply rounded-md border border-white/10 bg-white/5 px-3 py-1 text-[0.6rem]
+      uppercase tracking-[0.18em] text-white/70 hover:border-white/30 hover:text-white;
+  }
+
+  .confirm-actions .danger {
+    @apply border-rose-500/40 text-rose-200 hover:border-rose-400/70;
   }
 </style>

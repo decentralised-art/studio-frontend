@@ -6,12 +6,16 @@
   let {
     onReady,
   }: {
-    onReady?: (fn: (client: { x: number; y: number }) => { x: number; y: number }) => void;
+    onReady?: (payload: {
+      screenToFlowPosition: (client: { x: number; y: number }) => { x: number; y: number };
+      getZoom: () => number;
+      fitView: (options?: { padding?: number; duration?: number }) => void;
+    }) => void;
   } = $props();
 
-  const { screenToFlowPosition } = useSvelteFlow();
+  const { screenToFlowPosition, getZoom, fitView } = useSvelteFlow();
 
   onMount(() => {
-    onReady?.(screenToFlowPosition);
+    onReady?.({ screenToFlowPosition, getZoom, fitView });
   });
 </script>
