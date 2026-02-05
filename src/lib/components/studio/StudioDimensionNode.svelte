@@ -4,7 +4,18 @@
   type DimensionNodeData = {
     label?: string;
     dimensionIndex?: number;
-    transformations?: string[];
+    transformations?: TransformationInstance[];
+    riStart?: number;
+    riShift?: number;
+    riLocked?: boolean;
+    fromNetwork?: boolean;
+  };
+
+  type TransformationInstance = {
+    id: string;
+    name: string;
+    args: number[];
+    status: "draft" | "network";
   };
 
   const { id, data, selected }: NodeProps<DimensionNodeData> = $props();
@@ -15,21 +26,40 @@
   );
   const selectedClass = $derived(selected ? "is-selected" : "");
   const transformations = $derived(data.transformations ?? []);
+  const riLocked = $derived(data.riLocked ?? false);
+  const riStart = $derived(data.riStart ?? 0);
+  const riShift = $derived(data.riShift ?? 0);
+  const readOnly = $derived(data.fromNetwork ?? false);
 
-  const updateTransformations = (targetId: string, updater: (current: string[]) => string[]) => {
+  const updateTransformations = (
+    targetId: string,
+    updater: (current: TransformationInstance[]) => TransformationInstance[],
+  ) => {
+    if (readOnly) return;
     updateNodeData(targetId, (node) => {
       const current = node.data.transformations ?? [];
       return { transformations: updater([...current]) };
     });
   };
 
-  const insertTransformation = (label: string, insertIndex?: number) => {
+  const createInstance = (
+    name: string,
+    args: number[],
+    status: TransformationInstance["status"],
+  ) => ({
+    id: `tx-${crypto.randomUUID()}`,
+    name,
+    args,
+    status,
+  });
+
+  const insertTransformation = (transformation: TransformationInstance, insertIndex?: number) => {
     updateTransformations(id, (current) => {
       const next = [...current];
       if (insertIndex === undefined || insertIndex < 0 || insertIndex > next.length) {
-        next.push(label);
+        next.push(transformation);
       } else {
-        next.splice(insertIndex, 0, label);
+        next.splice(insertIndex, 0, transformation);
       }
       return next;
     });
@@ -56,6 +86,19 @@
     });
   };
 
+  const updateRunningInstance = (
+    patch: Partial<Pick<DimensionNodeData, "riStart" | "riShift" | "riLocked">>,
+  ) => {
+    if (readOnly && riLocked) return;
+    updateNodeData(id, () => ({ ...patch }));
+  };
+
+  const parseNumberInput = (value: string) => {
+    const next = Number(value);
+    if (!Number.isFinite(next)) return 0;
+    return Math.max(0, Math.trunc(next));
+  };
+
   const parseTransformationPayload = (event: DragEvent) => {
     const transfer = event.dataTransfer;
     if (!transfer) return null;
@@ -66,10 +109,10 @@
         const payload = JSON.parse(dimensionPayload) as {
           sourceDimensionId: string;
           index: number;
-          label: string;
+          transformation: TransformationInstance;
         };
         return {
-          label: payload.label,
+          transformation: payload.transformation,
           sourceDimensionId: payload.sourceDimensionId,
           index: payload.index,
         };
@@ -83,7 +126,9 @@
       try {
         const item = JSON.parse(libraryPayload) as { kind?: string; name?: string };
         if (item?.kind === "transformation" && item.name) {
-          return { label: item.name };
+          return {
+            transformation: createInstance(item.name, [], "network"),
+          };
         }
       } catch (error) {
         console.warn("Failed to parse library transformation payload", error);
@@ -95,7 +140,9 @@
       try {
         const payload = JSON.parse(quickPayload) as { kind?: string; label?: string };
         if (payload?.kind === "transformation" && payload.label) {
-          return { label: payload.label };
+          return {
+            transformation: createInstance(payload.label, [], "draft"),
+          };
         }
       } catch (error) {
         console.warn("Failed to parse quick transformation payload", error);
@@ -117,6 +164,7 @@
   const handleDrop = (event: DragEvent, insertIndex?: number) => {
     event.preventDefault();
     event.stopPropagation();
+    if (readOnly) return;
     const payload = parseTransformationPayload(event);
     if (!payload) return;
 
@@ -136,10 +184,11 @@
       });
     }
 
-    insertTransformation(payload.label, insertIndex);
+    insertTransformation(payload.transformation, insertIndex);
   };
 
   const handleDragOver = (event: DragEvent) => {
+    if (readOnly) return;
     if (!hasTransformationPayload(event)) return;
     event.preventDefault();
     event.stopPropagation();
@@ -147,19 +196,77 @@
   };
 
   const handlePillDragStart = (event: DragEvent, index: number) => {
-    const label = transformations[index];
-    if (!label || !event.dataTransfer) return;
+    if (readOnly) return;
+    const transformation = transformations[index];
+    if (!transformation || !event.dataTransfer) return;
     event.dataTransfer.setData(
       "application/x-hypermusic-dimension-transform",
-      JSON.stringify({ sourceDimensionId: id, index, label }),
+      JSON.stringify({ sourceDimensionId: id, index, transformation }),
     );
-    event.dataTransfer.setData("text/plain", label);
+    event.dataTransfer.setData("text/plain", transformation.name);
     event.dataTransfer.effectAllowed = "move";
   };
 </script>
 
 <div class="dimension-node {selectedClass}">
   <div class="dimension-title">{title}</div>
+  <div class="dimension-ri">
+    <span class="dimension-ri-label">RI</span>
+    <input
+      class="dimension-ri-input"
+      type="number"
+      inputmode="numeric"
+      min="0"
+      step="1"
+      placeholder="start"
+      value={riStart}
+      disabled={readOnly && riLocked}
+      onwheel={(event) => {
+        event.preventDefault();
+        (event.currentTarget as HTMLInputElement).blur();
+      }}
+      onkeydown={(event) => {
+        if (["-", "+", "e", "E", "."].includes(event.key)) {
+          event.preventDefault();
+        }
+      }}
+      oninput={(event) => {
+        const target = event.target as HTMLInputElement | null;
+        updateRunningInstance({ riStart: parseNumberInput(target?.value ?? "0") });
+      }}
+    />
+    <input
+      class="dimension-ri-input"
+      type="number"
+      inputmode="numeric"
+      min="0"
+      step="1"
+      placeholder="shift"
+      value={riShift}
+      disabled={readOnly && riLocked}
+      onwheel={(event) => {
+        event.preventDefault();
+        (event.currentTarget as HTMLInputElement).blur();
+      }}
+      onkeydown={(event) => {
+        if (["-", "+", "e", "E", "."].includes(event.key)) {
+          event.preventDefault();
+        }
+      }}
+      oninput={(event) => {
+        const target = event.target as HTMLInputElement | null;
+        updateRunningInstance({ riShift: parseNumberInput(target?.value ?? "0") });
+      }}
+    />
+    <button
+      type="button"
+      class={`dimension-ri-toggle ${riLocked ? "is-locked" : ""}`}
+      disabled={readOnly}
+      onclick={() => updateRunningInstance({ riLocked: !riLocked })}
+    >
+      {riLocked ? "fixed" : "open"}
+    </button>
+  </div>
   <div
     class="dimension-chain"
     role="list"
@@ -170,11 +277,11 @@
     {#if transformations.length === 0}
       <span class="dimension-slot">empty</span>
     {:else}
-      {#each transformations as transformation, index (index)}
+      {#each transformations as transformation, index (transformation.id)}
         <span
-          class="dimension-pill"
+          class={`dimension-pill ${readOnly ? "is-locked" : ""}`}
           role="listitem"
-          draggable="true"
+          draggable={!readOnly}
           ondragstart={(event) => handlePillDragStart(event, index)}
           ondragover={handleDragOver}
           ondrop={(event) => {
@@ -182,11 +289,15 @@
             handleDrop(event, index);
           }}
         >
-          {transformation}
+          {transformation.name}
+          {#if transformation.args.length}
+            <span class="dimension-args">({transformation.args.join(", ")})</span>
+          {/if}
           <button
             type="button"
             class="pill-remove"
-            aria-label={`Remove ${transformation}`}
+            aria-label={`Remove ${transformation.name}`}
+            disabled={readOnly}
             onclick={(event) => {
               event.stopPropagation();
               removeTransformation(index);
@@ -223,6 +334,35 @@
     @apply text-[0.65rem] uppercase tracking-[0.2em];
   }
 
+  .dimension-ri {
+    @apply mt-2 flex items-center gap-1 text-[0.5rem] uppercase tracking-[0.2em] text-white/50;
+  }
+
+  .dimension-ri-label {
+    @apply text-white/30;
+  }
+
+  .dimension-ri-input {
+    @apply w-12 rounded-sm border border-white/10 bg-black/60 px-1 py-[0.1rem]
+      text-[0.55rem] text-white/70 outline-none;
+  }
+
+  .dimension-ri-input:disabled {
+    @apply border-white/5 text-white/30;
+  }
+
+  .dimension-ri-toggle {
+    @apply rounded-sm border border-white/10 px-2 py-[0.1rem] text-[0.5rem] text-white/50;
+  }
+
+  .dimension-ri-toggle.is-locked {
+    @apply border-emerald-400/40 text-emerald-200;
+  }
+
+  .dimension-ri-toggle:disabled {
+    @apply border-white/5 text-white/30 cursor-not-allowed;
+  }
+
   .dimension-chain {
     @apply mt-2 flex flex-wrap items-center gap-1 text-[0.55rem] uppercase tracking-[0.18em];
   }
@@ -230,6 +370,18 @@
   .dimension-pill {
     @apply inline-flex items-center gap-1 rounded-md border border-white/10
       bg-white/5 px-2 py-[0.1rem] text-white/70;
+  }
+
+  .dimension-pill.is-locked {
+    @apply opacity-60;
+  }
+
+  .dimension-args {
+    @apply text-white/50;
+  }
+
+  .pill-remove:disabled {
+    @apply opacity-40 cursor-not-allowed;
   }
 
   .pill-remove {

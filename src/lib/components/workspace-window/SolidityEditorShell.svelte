@@ -4,9 +4,10 @@
   type Props = {
     readonly template?: string;
     value?: string;
+    readOnly?: boolean;
   };
 
-  let { template, value = $bindable("") }: Props = $props();
+  let { template, value = $bindable(""), readOnly = false }: Props = $props();
 
   /* =========================
    * Local UI state
@@ -18,7 +19,7 @@
     <div class="canvas">
       <SolidityEditor readOnly={true} value={template} lintMode="light" />
       <div class="divider"></div>
-      <SolidityEditor bind:value lintMode="light" />
+      <SolidityEditor bind:value lintMode="light" {readOnly} />
     </div>
   </div>
 </div>

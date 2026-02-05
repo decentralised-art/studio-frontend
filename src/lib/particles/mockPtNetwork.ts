@@ -73,6 +73,13 @@ const mockTransformations = {
     argc: 1,
     run: (x: number, args: number[]) => x + (args[0] ?? 0),
   },
+  subtract: {
+    argc: 1,
+    run: (x: number, args: number[]) => {
+      const delta = args[0] ?? 0;
+      return x > delta ? x - delta : 0;
+    },
+  },
   addWrap: {
     argc: 2,
     run: (x: number, args: number[]) => {
@@ -121,7 +128,7 @@ const buildSetSequence = (values: number[]): MockTransformationDef[] =>
   values.map((value) => ({ name: "set", args: [value] }));
 
 const rhythmPattern = buildAddSequence([1, 1, 2, 1, 1, 2, 2, 1]);
-const durationPattern = buildSetSequence([1, 0.5, 0.5, 1, 1.5, 0.75, 1]);
+const durationPattern = buildSetSequence([1, 1, 2, 1, 2, 1, 1, 2]);
 const velocityPattern = buildSetSequence([92, 86, 95, 88, 90, 84, 96, 87]);
 
 const melodyPitchIndexes = buildAddSequence([1, 2, 1, 3, 1, 2, 2]);
@@ -650,3 +657,6 @@ export const getMockRegistrySnapshot = (): MockRegistrySnapshot => {
 };
 
 export const mockRegistrySnapshot = getMockRegistrySnapshot();
+
+export const mockTransformationRegistry = mockTransformations;
+export const mockConditionRegistry = mockConditions;

@@ -62,6 +62,11 @@ const transformationMeta: Record<string, { name?: string; summary?: string; auth
     summary: "Adds a constant to each value.",
     authorId: "user-milo",
   },
+  subtract: {
+    name: "Subtract",
+    summary: "Subtracts a constant from each value.",
+    authorId: "user-rae",
+  },
   addWrap: {
     name: "Add Wrap",
     summary: "Adds with modular wraparound.",
@@ -134,6 +139,14 @@ export const mockConditions: LibraryItem[] = mockRegistrySnapshot.conditions.map
 });
 
 export const mockPlugins: LibraryItem[] = [
+  {
+    id: "plugin-table",
+    name: "Table Visualiser",
+    kind: "plugin",
+    authorId: "agent-aurora",
+    viewId: "table",
+    summary: "Preview particle outputs in a data table.",
+  },
   {
     id: "plugin-midi",
     name: "MIDI Visualiser",
