@@ -1,6 +1,8 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { goto } from "$app/navigation";
   import { resolve } from "$app/paths";
+  import { page } from "$app/stores";
   import "$lib/styles/style.css";
   import favicon from "$lib/assets/favicon.svg";
   import { getToken } from "$lib/auth/session";
@@ -9,13 +11,30 @@
   let isAuthenticated = $state(false);
 
   onMount(() => {
+    const allowedPaths = new Set(["/", "/login"]);
+
+    const guardRoute = (path: string) => {
+      if (getToken()) return;
+      if (allowedPaths.has(path)) return;
+      goto(resolve("/login"));
+    };
+
     const syncAuth = () => {
       isAuthenticated = Boolean(getToken());
+      guardRoute(window.location.pathname);
     };
 
     syncAuth();
     window.addEventListener("auth:change", syncAuth);
-    return () => window.removeEventListener("auth:change", syncAuth);
+
+    const unsubscribe = page.subscribe(($page) => {
+      guardRoute($page.url.pathname);
+    });
+
+    return () => {
+      window.removeEventListener("auth:change", syncAuth);
+      unsubscribe();
+    };
   });
 </script>
 
@@ -32,10 +51,10 @@
       </a>
 
       <div class="flex gap-4 text-sm text-white/70">
-        <a href={resolve("/explore")} class="hover:text-white">Explore</a>
-        <a href={resolve("/create")} class="hover:text-white">Create</a>
-        <a href={resolve("/studio")} class="hover:text-white">Studio</a>
         {#if isAuthenticated}
+          <a href={resolve("/explore")} class="hover:text-white">Explore</a>
+          <a href={resolve("/create")} class="hover:text-white">Create</a>
+          <a href={resolve("/studio")} class="hover:text-white">Studio</a>
           <a href={resolve("/account")} class="hover:text-white">Account</a>
         {:else}
           <a href={resolve("/login")} class="hover:text-white">Login</a>

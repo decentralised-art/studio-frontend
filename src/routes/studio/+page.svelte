@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { SvelteMap } from "svelte/reactivity";
+  import { SvelteMap, SvelteSet } from "svelte/reactivity";
 
   import {
     Background,
@@ -20,13 +20,30 @@
   import StudioFeatureNode from "$lib/components/studio/StudioFeatureNode.svelte";
   import StudioLibraryList from "$lib/components/studio/StudioLibraryList.svelte";
   import StudioParticleNode from "$lib/components/studio/StudioParticleNode.svelte";
+  import StudioPluginNode from "$lib/components/studio/StudioPluginNode.svelte";
   import StudioTransformationNode from "$lib/components/studio/StudioTransformationNode.svelte";
+  import SolidityEditorShell from "$lib/components/workspace-window/SolidityEditorShell.svelte";
+  import {
+    parseContractName,
+    parseSoliditySnippet,
+  } from "$lib/components/solidity-editor/templates/parse";
+  import { renderTransformationSolidity } from "$lib/components/solidity-editor/templates/transformationTemplate";
+  import { inferArgsCountFromSnippet } from "$lib/components/solidity-editor/templates/inferArgsCount";
   import {
     mockExploreParticles,
     mockParticleViews,
     type ExploreParticle,
   } from "$lib/data/exploreParticles";
-  import { mockRegistrySnapshot } from "$lib/particles/mockPtNetwork";
+  import type { PtOutputFeature } from "$lib/particles/ptMidiAdapter";
+  import {
+    mockRegistrySnapshot,
+    mockTransformationRegistry,
+    type MockFeatureDef,
+    type MockParticleDef,
+    type MockRunConfig,
+    type MockRunningInstance,
+  } from "$lib/particles/mockPtNetwork";
+  import { buildStudioRuntime, runStudioParticle } from "$lib/studio/studioRuntime";
   import {
     mockConditions,
     mockFeatures,
@@ -60,6 +77,13 @@
     | "plugin"
     | "agent";
 
+  type TransformationInstance = {
+    id: string;
+    name: string;
+    args: number[];
+    status: "draft" | "network";
+  };
+
   type StudioNodeData = {
     label: string;
     kind: StudioNodeKind;
@@ -69,9 +93,14 @@
     dimensions?: number;
     parentFeatureId?: string;
     dimensionIndex?: number;
-    transformations?: string[];
+    transformations?: TransformationInstance[];
     networkId?: string;
     fromNetwork?: boolean;
+    pluginOutput?: PtOutputFeature[];
+    pluginTargets?: string[];
+    riStart?: number;
+    riShift?: number;
+    riLocked?: boolean;
   };
   type StudioNode = {
     id: string;
@@ -79,6 +108,24 @@
     data: StudioNodeData;
     selected?: boolean;
     type?: string;
+    draggable?: boolean;
+  };
+
+  type RuntimeTransformationDef = {
+    argc: number;
+    run: (x: number, args: number[]) => number;
+  };
+
+  type RuntimeConditionDef = {
+    argc: number;
+    check: (args: number[]) => boolean;
+  };
+
+  type DeployedRegistry = {
+    features: Record<string, MockFeatureDef>;
+    particles: Record<string, MockParticleDef>;
+    transformations: Record<string, RuntimeTransformationDef>;
+    conditions: Record<string, RuntimeConditionDef>;
   };
 
   let nodes = $state.raw<StudioNode[]>([]);
@@ -100,6 +147,55 @@
   let getZoom: (() => number) | null = null;
   let fitView: ((options?: { padding?: number; duration?: number }) => void) | null = null;
   let clearConfirmOpen = $state(false);
+  let runOutputByTab = $state<Record<string, PtOutputFeature[]>>({});
+  let runWarningsByTab = $state<Record<string, string[]>>({});
+  let runTimestampByTab = $state<Record<string, number>>({});
+  let compileWarningsByTab = $state<Record<string, string[]>>({});
+  let compileTimestampByTab = $state<Record<string, number>>({});
+  let deployTimestampByTab = $state<Record<string, number>>({});
+  let compiledTransformationsByTab = $state<
+    Record<string, Record<string, RuntimeTransformationDef>>
+  >({});
+  let runSamplesCount = $state(12);
+  let transformationEditorOpen = $state(false);
+  let transformationEditorDimensionId = $state<string | null>(null);
+  let transformationEditorIndex = $state<number | null>(null);
+  let transformationEditorId = $state<string | null>(null);
+  let transformationEditorStatus = $state<TransformationInstance["status"]>("draft");
+  let transformationEditorLocked = $state(false);
+  let transformationDraftName = $state("");
+  let transformationDraftArgs = $state("");
+  let transformationDraftCode = $state("return x + (args[0] ?? 0);");
+  let transformationDraftError = $state<string | null>(null);
+  const transformationCodeById = new SvelteMap<string, string>();
+
+  const transformationEditorReadOnly = $derived.by(
+    () => transformationEditorStatus === "network" || transformationEditorLocked,
+  );
+
+  let deployedRegistry = $state<DeployedRegistry>({
+    features: {},
+    particles: {},
+    transformations: {},
+    conditions: {},
+  });
+  let deployedParticleRIs = $state<
+    Record<string, { start: number; shift: number; locked: boolean }[]>
+  >({});
+
+  let deployedLibrary = $state<{
+    features: LibraryItem[];
+    transformations: LibraryItem[];
+    conditions: LibraryItem[];
+    plugins: LibraryItem[];
+  }>({
+    features: [],
+    transformations: [],
+    conditions: [],
+    plugins: [],
+  });
+
+  let deployedParticles = $state<ExploreParticle[]>([]);
 
   type StudioTab = {
     id: string;
@@ -131,6 +227,91 @@
       .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
       .join(" ");
 
+  const normalizeKey = (value: string) => value.toLowerCase().replace(/[\s-_]+/g, "");
+
+  const slugify = (value: string) =>
+    value
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "");
+
+  const toInt = (value: number | string | null | undefined) => {
+    if (value === null || value === undefined) return undefined;
+    const num = Number(value);
+    if (!Number.isFinite(num)) return undefined;
+    return Math.max(0, Math.trunc(num));
+  };
+
+  const toContractName = (label: string) => {
+    const cleaned = label.replace(/[^A-Za-z0-9]+/g, " ").trim();
+    const parts = cleaned.length ? cleaned.split(/\s+/) : [];
+    let name = parts.map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join("");
+    if (!name) name = "Transformation";
+    if (/^[0-9]/.test(name)) name = `Tx${name}`;
+    return name;
+  };
+
+  const parseArgsInput = (value: string) =>
+    value
+      .split(",")
+      .map((segment) => Number(segment.trim()))
+      .filter((num) => Number.isFinite(num))
+      .map((num) => Math.trunc(num));
+
+  const transformationArgsArray = $derived.by(() => parseArgsInput(transformationDraftArgs));
+
+  const transformationTemplate = $derived.by(() => {
+    const contractName = toContractName(transformationDraftName);
+    const nameRes = parseContractName(contractName);
+    if (!nameRes.ok) return `// error: ${nameRes.error}`;
+
+    const codeRes = parseSoliditySnippet(transformationDraftCode);
+    if (!codeRes.ok) return `// error: ${codeRes.error}`;
+
+    const inferred = inferArgsCountFromSnippet(codeRes.value);
+    const argsCount = Math.max(transformationArgsArray.length, inferred.minArgsCount);
+
+    return renderTransformationSolidity({
+      name: nameRes.value,
+      argsCount,
+      code: codeRes.value,
+      baseImportPath: "../TransformationBase.sol",
+    });
+  });
+
+  const transformationArgsWarning = $derived.by(() => {
+    const codeRes = parseSoliditySnippet(transformationDraftCode);
+    if (!codeRes.ok) return null;
+    const inferred = inferArgsCountFromSnippet(codeRes.value);
+    if (inferred.minArgsCount <= transformationArgsArray.length) return null;
+    return `Snippet references args[${inferred.maxIndex}]. Provide at least ${inferred.minArgsCount} argument(s).`;
+  });
+
+  const defaultDraftCode = "return x + (args[0] ?? 0);";
+
+  const getTransformationCode = (id: string) => transformationCodeById.get(id) ?? defaultDraftCode;
+
+  const compileTransformationCode = (code: string) => {
+    const trimmed = code.trim();
+    if (!trimmed) return { ok: false as const, error: "Transformation code is empty." };
+    if (!/\breturn\b/.test(trimmed)) {
+      return {
+        ok: false as const,
+        error: "Mock compiler expects a return statement.",
+      };
+    }
+    try {
+      const fn = new Function("x", "args", `"use strict"; ${trimmed}`) as (
+        x: number,
+        args: number[],
+      ) => number;
+      return { ok: true as const, value: fn };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Invalid transformation code.";
+      return { ok: false as const, error: message };
+    }
+  };
+
   const createStudioTab = (label: string, particleId?: string): StudioTab => {
     const id = `tab-${crypto.randomUUID()}`;
     tabGraphs.set(id, { nodes: [], edges: [] });
@@ -141,8 +322,17 @@
   let tabs = $state<StudioTab[]>([initialTab]);
   let activeTabId = $state<string>(initialTab.id);
   const activeTab = $derived.by(() => tabs.find((tab) => tab.id === activeTabId) ?? null);
+  const activeTabReadOnly = $derived.by(() => Boolean(activeTab?.particleId));
+  const activeRunOutput = $derived.by(() => runOutputByTab[activeTabId]);
+  const activeRunWarnings = $derived.by(() => runWarningsByTab[activeTabId] ?? []);
+  const activeRunTimestamp = $derived.by(() => runTimestampByTab[activeTabId] ?? null);
+  const activeCompileWarnings = $derived.by(() => compileWarningsByTab[activeTabId] ?? []);
+  const activeCompileTimestamp = $derived.by(() => compileTimestampByTab[activeTabId] ?? null);
+  const activeDeployTimestamp = $derived.by(() => deployTimestampByTab[activeTabId] ?? null);
 
   const panelSize = (mode: PanelMode, open: string) => (mode === "hidden" ? "0px" : open);
+
+  const getNodeStatusLabel = (node: StudioNode) => (node.data.fromNetwork ? "Network" : "Draft");
 
   const leftSize = $derived.by(() => panelSize(leftMode, "280px"));
   const hasSelection = $derived.by(() => selectedNodeId !== null || activeTab !== null);
@@ -159,6 +349,7 @@
     dimension: StudioDimensionNode,
     particle: StudioParticleNode,
     transformation: StudioTransformationNode,
+    plugin: StudioPluginNode,
   };
 
   const hidePanel = (setter: (mode: PanelMode) => void) => setter("hidden");
@@ -259,6 +450,7 @@
     };
 
     const handleKey = (event: KeyboardEvent) => {
+      if (transformationEditorOpen) return;
       if (isEditableTarget(event.target)) return;
       const key = event.key.toLowerCase();
 
@@ -333,8 +525,19 @@
     plugin: [],
   });
 
+  const networkParticles = $derived.by(() =>
+    [...mockExploreParticles, ...deployedParticles].sort((a, b) => b.createdAt - a.createdAt),
+  );
+
+  const networkLibrary = $derived.by(() => ({
+    feature: [...mockFeatures, ...deployedLibrary.features],
+    transformation: [...mockTransformations, ...deployedLibrary.transformations],
+    condition: [...mockConditions, ...deployedLibrary.conditions],
+    plugin: [...mockPlugins, ...deployedLibrary.plugins],
+  }));
+
   const availableParticles = $derived.by(() => {
-    const base = [...mockExploreParticles].sort((a, b) => b.createdAt - a.createdAt);
+    const base = networkParticles;
     if (explorerSource === "toolbox") {
       return base.filter((particle) => toolboxLibrary.particles.includes(particle.id));
     }
@@ -364,6 +567,8 @@
 
   let nameDraft = $state("");
   let dimensionDraft = $state<number | null>(null);
+  let tabRenameId = $state<string | null>(null);
+  let tabRenameValue = $state("");
 
   type PendingNameCollision = {
     nodeId: string;
@@ -410,6 +615,25 @@
 
   const handleParticleOpen = (id: ExploreParticle["id"]) => {
     openParticleTab(id);
+  };
+
+  const startTabRename = (tab: StudioTab) => {
+    if (tab.particleId) return;
+    tabRenameId = tab.id;
+    tabRenameValue = tab.label;
+  };
+
+  const commitTabRename = (tab: StudioTab) => {
+    if (tabRenameId !== tab.id) return;
+    const next = tabRenameValue.trim();
+    if (next) {
+      tabs = tabs.map((item) => (item.id === tab.id ? { ...item, label: next } : item));
+    }
+    tabRenameId = null;
+  };
+
+  const cancelTabRename = () => {
+    tabRenameId = null;
   };
 
   const updateNodeData = (nodeId: string, patch: Partial<StudioNodeData>) => {
@@ -517,10 +741,11 @@
 
   const updateDimensionTransformations = (
     dimensionId: string,
-    updater: (current: string[]) => string[],
+    updater: (current: TransformationInstance[]) => TransformationInstance[],
   ) => {
     nodes = nodes.map((node) => {
       if (node.id !== dimensionId) return node;
+      if (node.data.fromNetwork) return node;
       const current = node.data.transformations ?? [];
       return {
         ...node,
@@ -533,26 +758,43 @@
     scheduleLayout();
   };
 
+  const createTransformationInstance = (
+    name: string,
+    args: number[] = [],
+    status: TransformationInstance["status"] = "draft",
+  ): TransformationInstance => ({
+    id: `tx-${crypto.randomUUID()}`,
+    name,
+    args,
+    status,
+  });
+
   const addTransformationToDimension = (
     dimensionId: string,
-    label: string,
+    name: string,
+    args: number[] = [],
+    status: TransformationInstance["status"] = "draft",
     insertIndex?: number,
   ) => {
     updateDimensionTransformations(dimensionId, (current) => {
       const next = [...current];
       if (insertIndex === undefined || insertIndex < 0 || insertIndex > next.length) {
-        next.push(label);
+        next.push(createTransformationInstance(name, args, status));
       } else {
-        next.splice(insertIndex, 0, label);
+        next.splice(insertIndex, 0, createTransformationInstance(name, args, status));
       }
       return next;
     });
   };
 
-  const addTransformationToSelectedDimension = (label: string) => {
+  const addTransformationToSelectedDimension = (
+    label: string,
+    status: TransformationInstance["status"] = "draft",
+  ) => {
     const selected = nodes.find((node) => node.id === selectedNodeId);
     if (!selected || selected.data.kind !== "dimension") return;
-    addTransformationToDimension(selected.id, label);
+    if (selected.data.fromNetwork) return;
+    addTransformationToDimension(selected.id, label, [], status);
   };
 
   const requestClearCanvas = () => {
@@ -579,17 +821,394 @@
     fitView?.({ padding: 0.2, duration: 300 });
   };
 
-  const updateTransformationLabel = (dimensionId: string, index: number, value: string) => {
+  const getPluginTargetNames = (
+    pluginId: string,
+    nodeLookup: Record<string, StudioNode>,
+    graphEdges: Edge[],
+  ) => {
+    const targets = graphEdges
+      .filter((item) => item.target === pluginId && item.source)
+      .map((item) => nodeLookup[item.source!])
+      .filter((node): node is StudioNode => Boolean(node))
+      .filter((node) => node.data.kind === "particle")
+      .map((node) => resolveNodeName(node));
+    return Array.from(new SvelteSet(targets));
+  };
+
+  const refreshPluginOutputs = (
+    output: PtOutputFeature[],
+    graphNodes: StudioNode[] = nodes,
+    graphEdges: Edge[] = edges,
+  ) => {
+    const nodeLookup: Record<string, StudioNode> = Object.fromEntries(
+      graphNodes.map((node) => [node.id, node] as const),
+    );
+    const hasPlugins = graphNodes.some((node) => node.data.kind === "plugin");
+    if (!hasPlugins) return;
+    const updatedNodes = graphNodes.map((node) => {
+      if (node.data.kind !== "plugin") return node;
+      const targetNames = getPluginTargetNames(node.id, nodeLookup, graphEdges);
+      if (!targetNames.length) {
+        return {
+          ...node,
+          data: { ...node.data, pluginOutput: [], pluginTargets: undefined },
+        };
+      }
+      const needles = targetNames.map((target) => `/${target}`);
+      const filtered = output.filter((stream) =>
+        needles.some((needle) => stream.feature_path.includes(needle)),
+      );
+      return {
+        ...node,
+        data: { ...node.data, pluginOutput: filtered, pluginTargets: targetNames },
+      };
+    });
+    nodes = updatedNodes;
+  };
+
+  const buildRuntimeOverrides = (
+    compiledTransformations: Record<string, RuntimeTransformationDef> = {},
+  ) => ({
+    features: deployedRegistry.features,
+    particles: deployedRegistry.particles,
+    transformations: { ...deployedRegistry.transformations, ...compiledTransformations },
+    conditions: deployedRegistry.conditions,
+  });
+
+  const collectDraftTransformations = (graphNodes: StudioNode[]) => {
+    const draft: TransformationInstance[] = [];
+    graphNodes.forEach((node) => {
+      if (node.data.kind !== "dimension") return;
+      (node.data.transformations ?? []).forEach((transformation) => {
+        if (transformation.status === "draft") draft.push(transformation);
+      });
+    });
+    return draft;
+  };
+
+  const compileDraftTransformations = (graphNodes: StudioNode[]) => {
+    const warnings: string[] = [];
+    const registry: Record<string, RuntimeTransformationDef> = {};
+    const seen = new SvelteMap<string, { name: string; argc: number; code: string }>();
+
+    const networkNames = new SvelteSet(
+      [
+        ...Object.keys(mockTransformationRegistry),
+        ...Object.keys(deployedRegistry.transformations),
+      ].map(normalizeKey),
+    );
+
+    collectDraftTransformations(graphNodes).forEach((transformation) => {
+      const name = transformation.name.trim();
+      if (!name) {
+        warnings.push("Draft transformation has an empty name.");
+        return;
+      }
+      const key = normalizeKey(name);
+      if (networkNames.has(key)) {
+        warnings.push(`Transformation already exists in network: ${name}.`);
+        return;
+      }
+
+      const argc = transformation.args.length;
+      const code = getTransformationCode(transformation.id);
+
+      if (seen.has(key)) {
+        const existing = seen.get(key);
+        if (existing && existing.argc !== argc) {
+          warnings.push(`Transformation ${name} uses inconsistent args count.`);
+        }
+        if (existing && existing.code !== code) {
+          warnings.push(`Transformation ${name} has multiple code variants.`);
+        }
+        return;
+      }
+
+      const compiled = compileTransformationCode(code);
+      if (!compiled.ok) {
+        warnings.push(`Transformation ${name} failed to compile: ${compiled.error}`);
+        return;
+      }
+
+      registry[name] = { argc, run: compiled.value };
+      seen.set(key, { name, argc, code });
+    });
+
+    return { registry, warnings };
+  };
+
+  const buildRunningInstances = (
+    runtime: ReturnType<typeof buildStudioRuntime>,
+    graphNodes: StudioNode[] = nodes,
+  ): MockRunningInstance[] => {
+    const featureNodesById: Record<string, StudioNode> = Object.fromEntries(
+      graphNodes
+        .filter((node) => node.data.kind === "feature")
+        .map((node) => [node.id, node] as const),
+    );
+    const dimensionByFeature = new SvelteMap<string, SvelteMap<number, StudioNode>>();
+    graphNodes
+      .filter((node) => node.data.kind === "dimension")
+      .forEach((dimension) => {
+        const parentId = dimension.data.parentFeatureId;
+        if (!parentId) return;
+        const featureNode = featureNodesById[parentId];
+        if (!featureNode) return;
+        const featureName = resolveNodeName(featureNode);
+        const index = dimension.data.dimensionIndex;
+        if (typeof index !== "number") return;
+        if (!dimensionByFeature.has(featureName)) {
+          dimensionByFeature.set(featureName, new SvelteMap());
+        }
+        dimensionByFeature.get(featureName)!.set(index, dimension);
+      });
+
+    const instances: MockRunningInstance[] = [{ startPoint: 0, transformShift: 0 }];
+    const stack = new SvelteSet<string>();
+
+    const visit = (particleName: string) => {
+      if (stack.has(particleName)) return;
+      stack.add(particleName);
+      const particle = runtime.registry.particles[particleName];
+      if (!particle) {
+        stack.delete(particleName);
+        return;
+      }
+      const feature = runtime.registry.features[particle.featureName];
+      if (!feature) {
+        stack.delete(particleName);
+        return;
+      }
+      for (let dimIndex = 0; dimIndex < feature.dimensions.length; dimIndex += 1) {
+        const dimension = dimensionByFeature.get(particle.featureName)?.get(dimIndex);
+        const startPoint = toInt(dimension?.data.riStart);
+        const transformShift = toInt(dimension?.data.riShift);
+        instances.push({ startPoint, transformShift });
+
+        const composite = particle.composites[dimIndex];
+        if (composite) visit(composite);
+      }
+      stack.delete(particleName);
+    };
+
+    visit(runtime.rootParticle);
+    return instances;
+  };
+
+  const executeActiveGraph = () => {
+    if (!activeTab) return;
+    saveActiveGraph();
+    let output: PtOutputFeature[] = [];
+    let warnings: string[] = [];
+
+    try {
+      const compiled = compileDraftTransformations(nodes);
+      const runtime = buildStudioRuntime(
+        { nodes, edges },
+        { rootLabel: activeTab.label, rootParticleId: activeTab.particleId },
+        buildRuntimeOverrides(compiled.registry),
+      );
+      const config: MockRunConfig = {
+        samplesCount: Math.max(1, Math.trunc(runSamplesCount)),
+        runningInstances: buildRunningInstances(runtime),
+      };
+      warnings = [...compiled.warnings, ...runtime.warnings];
+      output = runStudioParticle(runtime.registry, runtime.rootParticle, config);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Run failed.";
+      warnings = [message];
+      output = [];
+    }
+
+    runOutputByTab = { ...runOutputByTab, [activeTabId]: output };
+    runWarningsByTab = { ...runWarningsByTab, [activeTabId]: warnings };
+    runTimestampByTab = { ...runTimestampByTab, [activeTabId]: Date.now() };
+    refreshPluginOutputs(output);
+  };
+
+  const compileActiveGraph = () => {
+    if (!activeTab) return;
+    saveActiveGraph();
+    const warnings: string[] = [];
+    const compiled = compileDraftTransformations(nodes);
+    warnings.push(...compiled.warnings);
+
+    const particleName = activeTab.particleId ?? (slugify(activeTab.label) || activeTab.label);
+    const particleKey = normalizeKey(particleName);
+    const networkParticleKeys = new SvelteSet(
+      networkParticles.map((item) => normalizeKey(item.id)),
+    );
+    if (!activeTab.particleId && networkParticleKeys.has(particleKey)) {
+      warnings.push(`Particle already exists in network: ${particleName}.`);
+    }
+
+    nodes.forEach((node) => {
+      if (node.data.fromNetwork) return;
+      const existing = findRegistryMatch(node.data.kind, node.data.label);
+      if (existing && normalizeKey(existing.name) === normalizeKey(node.data.label)) {
+        warnings.push(`${titleize(node.data.kind)} already exists: ${node.data.label}.`);
+      }
+    });
+
+    compiledTransformationsByTab = {
+      ...compiledTransformationsByTab,
+      [activeTabId]: compiled.registry,
+    };
+    compileWarningsByTab = { ...compileWarningsByTab, [activeTabId]: warnings };
+    compileTimestampByTab = { ...compileTimestampByTab, [activeTabId]: Date.now() };
+    return warnings;
+  };
+
+  const deployActiveGraph = () => {
+    if (!activeTab) return;
+    const warnings = compileActiveGraph();
+    if (warnings && warnings.length) return;
+
+    const compiled = compiledTransformationsByTab[activeTabId] ?? {};
+    const runtime = buildStudioRuntime(
+      { nodes, edges },
+      { rootLabel: activeTab.label, rootParticleId: activeTab.particleId },
+      buildRuntimeOverrides(compiled),
+    );
+
+    nodes = nodes.map((node) => {
+      if (node.data.kind !== "dimension") return node;
+      const next = (node.data.transformations ?? []).map((tx) =>
+        tx.status === "draft" ? { ...tx, status: "network" } : tx,
+      );
+      return { ...node, data: { ...node.data, transformations: next } };
+    });
+
+    if (Object.keys(compiled).length) {
+      deployedRegistry = {
+        ...deployedRegistry,
+        transformations: {
+          ...deployedRegistry.transformations,
+          ...compiled,
+        },
+      };
+
+      deployedLibrary = {
+        ...deployedLibrary,
+        transformations: Object.keys(compiled).reduce((items, name) => {
+          const item: LibraryItem = {
+            id: `transform-${slugify(name)}`,
+            name,
+            kind: "transformation",
+            authorId: mockCurrentUserId,
+            summary: "Deployed from Studio.",
+          };
+          return upsertLibraryItem(items, item);
+        }, deployedLibrary.transformations),
+      };
+    }
+
+    const existingFeatureKeys = new SvelteSet([
+      ...mockRegistrySnapshot.features.map((feature) => normalizeKey(feature.name)),
+      ...Object.keys(deployedRegistry.features).map(normalizeKey),
+    ]);
+
+    const localFeatures = nodes.filter(
+      (node) => node.data.kind === "feature" && !node.data.fromNetwork,
+    );
+
+    localFeatures.forEach((node) => {
+      const featureName = resolveNodeName(node);
+      const key = normalizeKey(featureName);
+      if (existingFeatureKeys.has(key)) return;
+      const def = runtime.registry.features[featureName];
+      if (!def) return;
+      deployedRegistry = {
+        ...deployedRegistry,
+        features: { ...deployedRegistry.features, [featureName]: def },
+      };
+      existingFeatureKeys.add(key);
+      deployedLibrary = {
+        ...deployedLibrary,
+        features: upsertLibraryItem(deployedLibrary.features, {
+          id: `feature-${featureName}`,
+          name: node.data.label,
+          kind: "feature",
+          authorId: mockCurrentUserId,
+          summary: "Deployed from Studio.",
+          dimensions: node.data.dimensions ?? def.dimensions.length,
+        }),
+      };
+    });
+
+    nodes = nodes.map((node) => {
+      if (node.data.kind !== "feature") return node;
+      if (node.data.fromNetwork) return node;
+      const featureName = resolveNodeName(node);
+      return {
+        ...node,
+        data: {
+          ...node.data,
+          networkId: featureName,
+          fromNetwork: true,
+        },
+      };
+    });
+
+    const existingParticleKeys = new SvelteSet([
+      ...mockRegistrySnapshot.particles.map((particle) => normalizeKey(particle.name)),
+      ...Object.keys(deployedRegistry.particles).map(normalizeKey),
+    ]);
+
+    const rootName = runtime.rootParticle;
+    const rootKey = normalizeKey(rootName);
+    if (!existingParticleKeys.has(rootKey)) {
+      const rootDef = runtime.registry.particles[rootName];
+      if (rootDef) {
+        deployedRegistry = {
+          ...deployedRegistry,
+          particles: { ...deployedRegistry.particles, [rootName]: rootDef },
+        };
+        storeParticleRIs(rootName);
+        const createdAt = Date.now();
+        deployedParticles = deployedParticles.some((item) => item.id === rootName)
+          ? deployedParticles
+          : [
+              ...deployedParticles,
+              {
+                id: rootName,
+                name: activeTab.label,
+                summary: "Deployed from Studio.",
+                authorId: mockCurrentUserId,
+                viewId: mockParticleViews[0]?.id ?? "midi",
+                createdAt,
+                createdLabel: "just now",
+                ingredients: [],
+                complexity: 1,
+                transactionName: `${activeTab.label} PT`,
+                dependencies: rootDef.composites.filter(Boolean) as string[],
+              },
+            ];
+      }
+    }
+
+    if (!activeTab.particleId) {
+      tabs = tabs.map((tab) => (tab.id === activeTabId ? { ...tab, particleId: rootName } : tab));
+    }
+
+    deployTimestampByTab = { ...deployTimestampByTab, [activeTabId]: Date.now() };
+  };
+
+  const updateTransformationAt = (
+    dimensionId: string,
+    index: number,
+    patch: Partial<Pick<TransformationInstance, "name" | "args" | "status">>,
+  ) => {
     updateDimensionTransformations(dimensionId, (current) => {
       if (index < 0 || index >= current.length) return current;
       const next = [...current];
-      next[index] = value;
+      next[index] = { ...next[index], ...patch };
       return next;
     });
   };
 
   const appendTransformation = (dimensionId: string) => {
-    addTransformationToDimension(dimensionId, "New Transformation");
+    addTransformationToDimension(dimensionId, "New Transformation", [], "draft");
   };
 
   const removeTransformationAt = (dimensionId: string, index: number) => {
@@ -599,6 +1218,73 @@
       next.splice(index, 1);
       return next;
     });
+  };
+
+  const openTransformationEditor = (
+    dimensionId: string,
+    index: number,
+    transformation: TransformationInstance,
+  ) => {
+    const name = transformation.name || "New Transformation";
+    const args = transformation.args ?? [];
+    const key = transformation.id;
+    const dimensionNode = nodes.find((node) => node.id === dimensionId);
+    transformationEditorOpen = true;
+    transformationEditorDimensionId = dimensionId;
+    transformationEditorIndex = index;
+    transformationEditorId = transformation.id;
+    transformationEditorStatus = transformation.status;
+    transformationEditorLocked = Boolean(dimensionNode?.data.fromNetwork);
+    transformationDraftName = name;
+    transformationDraftArgs = args.join(", ");
+    transformationDraftCode = transformationCodeById.get(key) ?? "return x + (args[0] ?? 0);";
+    transformationDraftError = null;
+  };
+
+  const closeTransformationEditor = () => {
+    transformationEditorOpen = false;
+    transformationEditorDimensionId = null;
+    transformationEditorIndex = null;
+    transformationEditorId = null;
+    transformationEditorStatus = "draft";
+    transformationEditorLocked = false;
+    transformationDraftError = null;
+  };
+
+  const forkTransformationEditor = () => {
+    if (transformationEditorStatus !== "network") return;
+    const baseName = transformationDraftName.trim() || "Transformation";
+    transformationDraftName = `${baseName} Draft`;
+    transformationEditorStatus = "draft";
+    transformationDraftError = null;
+  };
+
+  const saveTransformationEditor = () => {
+    if (!transformationEditorOpen) return;
+    if (transformationEditorReadOnly) {
+      closeTransformationEditor();
+      return;
+    }
+    const dimensionId = transformationEditorDimensionId;
+    const index = transformationEditorIndex;
+    if (!dimensionId || index === null) return;
+
+    const trimmedName = transformationDraftName.trim();
+    if (!trimmedName) {
+      transformationDraftError = "Transformation name is required.";
+      return;
+    }
+
+    const args = transformationArgsArray;
+    updateTransformationAt(dimensionId, index, {
+      name: trimmedName,
+      args,
+      status: transformationEditorStatus,
+    });
+    if (transformationEditorId && transformationEditorStatus === "draft") {
+      transformationCodeById.set(transformationEditorId, transformationDraftCode);
+    }
+    closeTransformationEditor();
   };
 
   const saveActiveGraph = () => {
@@ -611,6 +1297,10 @@
     edges = graph?.edges ?? [];
     selectedNodeId = null;
     scheduleLayout();
+    const output = runOutputByTab[tabId];
+    if (output) {
+      refreshPluginOutputs(output, nodes, edges);
+    }
   };
 
   const switchTab = (tabId: string) => {
@@ -646,32 +1336,34 @@
     }
   };
 
-  const formatTransformationLabel = (name: string, args: number[]) => {
-    if (!args.length) return name;
-    return `${name}(${args.join(", ")})`;
-  };
-
   const buildParticleGraph = (particleName: string) => {
-    const particle = mockRegistrySnapshot.particles.find((item) => item.name === particleName);
+    const particle =
+      deployedRegistry.particles[particleName] ??
+      mockRegistrySnapshot.particles.find((item) => item.name === particleName);
     if (!particle) return { nodes: [], edges: [] };
 
-    const feature = mockRegistrySnapshot.features.find(
-      (item) => item.name === particle.featureName,
-    );
+    const feature =
+      deployedRegistry.features[particle.featureName] ??
+      mockRegistrySnapshot.features.find((item) => item.name === particle.featureName);
     if (!feature) return { nodes: [], edges: [] };
 
     const graphNodes: StudioNode[] = [];
     const graphEdges: Edge[] = [];
 
+    const featureItem = networkLibrary.feature.find(
+      (item) => getLibraryRegistryName(item) === feature.name,
+    );
+    const featureLabel = featureItem?.name ?? titleize(feature.name);
     const featureId = `feature-${feature.name}-${crypto.randomUUID()}`;
     const featureX = 360;
     const featureY = 80;
     graphNodes.push({
       id: featureId,
       type: "feature",
+      draggable: false,
       position: { x: featureX, y: featureY },
       data: {
-        label: titleize(feature.name),
+        label: featureLabel,
         kind: "feature",
         dimensions: feature.dimensions.length,
         sourceId: feature.name,
@@ -688,9 +1380,11 @@
     feature.dimensions.forEach((dimension, dimIndex) => {
       const dimensionId = `dimension-${feature.name}-${dimIndex}-${crypto.randomUUID()}`;
       const columnX = dimensionStartX + dimIndex * dimensionSpacingX;
+      const riConfig = deployedParticleRIs[particleName]?.[dimIndex];
       graphNodes.push({
         id: dimensionId,
         type: "dimension",
+        draggable: false,
         position: { x: columnX, y: dimensionRowY },
         data: {
           label: `#${dimIndex + 1}`,
@@ -698,8 +1392,16 @@
           parentFeatureId: featureId,
           dimensionIndex: dimIndex,
           transformations: dimension.transformations.map((transformation) =>
-            formatTransformationLabel(transformation.name, transformation.args),
+            createTransformationInstance(
+              titleize(transformation.name),
+              transformation.args,
+              "network",
+            ),
           ),
+          fromNetwork: true,
+          riStart: riConfig?.start ?? 0,
+          riShift: riConfig?.shift ?? 0,
+          riLocked: riConfig?.locked ?? false,
         },
       });
 
@@ -714,12 +1416,14 @@
       const compositeName = particle.composites[dimIndex];
       if (compositeName) {
         const compositeId = `particle-${compositeName}-${crypto.randomUUID()}`;
+        const compositeItem = networkParticles.find((item) => item.id === compositeName);
         graphNodes.push({
           id: compositeId,
           type: "particle",
+          draggable: false,
           position: { x: columnX, y: compositeRowY },
           data: {
-            label: titleize(compositeName),
+            label: compositeItem?.name ?? titleize(compositeName),
             kind: "particle",
             particleId: compositeName,
             networkId: compositeName,
@@ -746,7 +1450,7 @@
       return;
     }
     saveActiveGraph();
-    const particleMeta = mockExploreParticles.find((item) => item.id === particleId);
+    const particleMeta = networkParticles.find((item) => item.id === particleId);
     const label = particleMeta?.name ?? titleize(particleId);
     const nextTab = createStudioTab(label, particleId);
     const graph = buildParticleGraph(particleId);
@@ -757,45 +1461,57 @@
   };
 
   const registryByKind = $derived.by(() => ({
-    particle: mockExploreParticles.map((item) => ({ id: item.id, name: item.name })),
-    feature: mockFeatures.map((item) => ({
+    particle: networkParticles.map((item) => ({ id: item.id, name: item.name })),
+    feature: networkLibrary.feature.map((item) => ({
       id: item.id,
       name: item.name,
       dimensions: item.dimensions,
     })),
-    transformation: mockTransformations.map((item) => ({ id: item.id, name: item.name })),
-    condition: mockConditions.map((item) => ({ id: item.id, name: item.name })),
-    plugin: mockPlugins.map((item) => ({ id: item.id, name: item.name })),
+    transformation: networkLibrary.transformation.map((item) => ({ id: item.id, name: item.name })),
+    condition: networkLibrary.condition.map((item) => ({ id: item.id, name: item.name })),
+    plugin: networkLibrary.plugin.map((item) => ({ id: item.id, name: item.name })),
     agent: [],
     dimension: [],
   }));
 
   const findRegistryMatch = (kind: StudioNodeKind, name: string) => {
     const pool = registryByKind[kind] ?? [];
-    return pool.find((item) => item.name === name) ?? null;
+    const targetKey = normalizeKey(name);
+    return pool.find((item) => normalizeKey(item.name) === targetKey) ?? null;
   };
 
   const createUniqueName = (kind: StudioNodeKind, baseName: string) => {
-    const registryNames = new Set((registryByKind[kind] ?? []).map((item) => item.name));
-    const localNames = new Set(
-      nodes.filter((node) => node.data.kind === kind).map((node) => node.data.label),
+    const registryNames = new SvelteSet(
+      (registryByKind[kind] ?? []).map((item) => normalizeKey(item.name)),
+    );
+    const localNames = new SvelteSet(
+      nodes.filter((node) => node.data.kind === kind).map((node) => normalizeKey(node.data.label)),
     );
     let suffix = 1;
     let candidate = baseName;
-    while (registryNames.has(candidate) || localNames.has(candidate)) {
+    while (registryNames.has(normalizeKey(candidate)) || localNames.has(normalizeKey(candidate))) {
       candidate = `${baseName}-${suffix}`;
       suffix += 1;
     }
     return candidate;
   };
 
+  const resolveNodeName = (node: StudioNode) => {
+    if (node.data.networkId) return node.data.networkId;
+    if (node.data.particleId) return node.data.particleId;
+    const slugged = slugify(node.data.label);
+    return slugged || node.data.label;
+  };
+
   const commitNameChange = (node: StudioNode) => {
+    if (node.data.fromNetwork) return;
     const trimmed = nameDraft.trim();
     if (!trimmed) return;
     if (trimmed === node.data.label) return;
 
     const match = findRegistryMatch(node.data.kind, trimmed);
-    if (match && node.data.networkId !== match.id) {
+    const matchId = match ? resolveRegistryId(node.data.kind, match.id) : undefined;
+    if (match && node.data.networkId !== matchId) {
       pendingNameCollision = {
         nodeId: node.id,
         kind: node.data.kind,
@@ -808,7 +1524,7 @@
 
     updateNodeData(node.id, {
       label: trimmed,
-      networkId: node.data.networkId === match?.id ? node.data.networkId : undefined,
+      networkId: node.data.networkId === matchId ? node.data.networkId : undefined,
       fromNetwork: false,
     });
   };
@@ -817,9 +1533,12 @@
     if (!pendingNameCollision) return;
     const { nodeId, existingId, existingName, kind } = pendingNameCollision;
     const match = findRegistryMatch(kind, existingName);
+    const resolvedId = match
+      ? resolveRegistryId(kind, match.id)
+      : resolveRegistryId(kind, existingId);
     updateNodeData(nodeId, {
       label: existingName,
-      networkId: existingId,
+      networkId: resolvedId,
       fromNetwork: true,
       dimensions: match && "dimensions" in match ? (match.dimensions ?? 1) : undefined,
     });
@@ -856,6 +1575,22 @@
 
   const getFeatureNode = (featureId: string) => nodes.find((node) => node.id === featureId) ?? null;
 
+  const storeParticleRIs = (particleName: string) => {
+    const rootFeatureNode = nodes.find((node) => node.data.kind === "feature");
+    if (!rootFeatureNode) return;
+    const dims = getDimensionNodesForFeature(rootFeatureNode.id).sort(
+      (a, b) => (a.data.dimensionIndex ?? 0) - (b.data.dimensionIndex ?? 0),
+    );
+    deployedParticleRIs = {
+      ...deployedParticleRIs,
+      [particleName]: dims.map((dimension) => ({
+        start: toInt(dimension.data.riStart),
+        shift: toInt(dimension.data.riShift),
+        locked: Boolean(dimension.data.riLocked),
+      })),
+    };
+  };
+
   const createDimensionNode = (
     feature: StudioNode,
     dimensionIndex: number,
@@ -877,12 +1612,16 @@
         parentFeatureId: feature.id,
         dimensionIndex,
         transformations: [],
+        fromNetwork: feature.data.fromNetwork ?? false,
+        riStart: 0,
+        riShift: 0,
+        riLocked: false,
       },
     };
   };
 
   const ensureDimensionEdges = (featureId: string, dimensionNodes: StudioNode[]) => {
-    const existingEdges = new Set(
+    const existingEdges = new SvelteSet(
       edges.map((edge) => `${edge.source}-${edge.sourceHandle}-${edge.target}`),
     );
     const newEdges: Edge[] = [];
@@ -914,7 +1653,7 @@
     const removed = currentDimensions.filter((node) => (node.data.dimensionIndex ?? 0) >= newCount);
 
     const removedIds = removed.map((node) => node.id);
-    const removeSet = new Set([...removedIds]);
+    const removeSet = new SvelteSet([...removedIds]);
     if (removeSet.size) {
       nodes = nodes.filter((node) => !removeSet.has(node.id));
       edges = edges.filter((edge) => !removeSet.has(edge.source) && !removeSet.has(edge.target));
@@ -939,6 +1678,7 @@
   const requestDimensionChange = (featureId: string, nextCount: number) => {
     const feature = getFeatureNode(featureId);
     if (!feature) return;
+    if (feature.data.fromNetwork) return;
     const currentCount = Math.max(1, Math.round(feature.data.dimensions ?? 1));
     const sanitized = Math.max(1, Math.round(nextCount));
     if (sanitized === currentCount) return;
@@ -994,21 +1734,7 @@
     const kind = libraryKindForTab(libraryTab);
     if (!kind) return [];
 
-    let source: LibraryItem[] = [];
-    switch (kind) {
-      case "feature":
-        source = mockFeatures;
-        break;
-      case "transformation":
-        source = mockTransformations;
-        break;
-      case "condition":
-        source = mockConditions;
-        break;
-      case "plugin":
-        source = mockPlugins;
-        break;
-    }
+    const source = networkLibrary[kind] ?? [];
 
     if (explorerSource === "toolbox") {
       const saved = toolboxLibrary[kind];
@@ -1052,10 +1778,46 @@
     }
   });
 
+  const getLibraryRegistryName = (item: LibraryItem) => {
+    switch (item.kind) {
+      case "feature":
+        return item.id.replace(/^feature-/, "");
+      case "transformation":
+        return item.id.replace(/^transform-/, "");
+      case "condition":
+        return item.id.replace(/^condition-/, "");
+      case "plugin":
+        return item.id;
+      default:
+        return item.id;
+    }
+  };
+
+  const resolveRegistryId = (kind: StudioNodeKind, id: string) => {
+    switch (kind) {
+      case "feature":
+        return id.replace(/^feature-/, "");
+      case "transformation":
+        return id.replace(/^transform-/, "");
+      case "condition":
+        return id.replace(/^condition-/, "");
+      case "plugin":
+        return id.replace(/^plugin-/, "");
+      default:
+        return id;
+    }
+  };
+
+  const upsertLibraryItem = (items: LibraryItem[], next: LibraryItem) => {
+    if (items.some((item) => item.id === next.id)) return items;
+    return [...items, next];
+  };
+
   const addParticleNode = (
     particle: ExploreParticle,
     position: { x: number; y: number } | null = null,
   ) => {
+    if (activeTabReadOnly) return;
     const nodePosition = position ?? {
       x: 120 + Math.round(Math.random() * 200),
       y: 120 + Math.round(Math.random() * 200),
@@ -1079,10 +1841,12 @@
   };
 
   const addLibraryNode = (item: LibraryItem, position: { x: number; y: number } | null = null) => {
+    if (activeTabReadOnly && item.kind !== "plugin") return;
     if (item.kind === "transformation") {
-      addTransformationToSelectedDimension(item.name);
+      addTransformationToSelectedDimension(item.name, "network");
       return;
     }
+    const registryName = getLibraryRegistryName(item);
     const nodePosition = position ?? {
       x: 160 + Math.round(Math.random() * 200),
       y: 160 + Math.round(Math.random() * 200),
@@ -1095,13 +1859,16 @@
           ? "feature"
           : item.kind === "transformation"
             ? "transformation"
-            : undefined,
+            : item.kind === "plugin"
+              ? "plugin"
+              : undefined,
+      draggable: item.kind === "plugin" ? true : undefined,
       data: {
         label: item.name,
         kind: item.kind,
         sourceId: item.id,
         viewId: item.viewId,
-        networkId: item.id,
+        networkId: registryName,
         fromNetwork: true,
         dimensions: item.dimensions ?? (item.kind === "feature" ? 1 : undefined),
       },
@@ -1124,6 +1891,7 @@
     label: string,
     position: { x: number; y: number } | null = null,
   ) => {
+    if (activeTabReadOnly && kind !== "plugin") return;
     if (kind === "transformation") {
       addTransformationToSelectedDimension(label);
       return;
@@ -1134,12 +1902,16 @@
       position: nodePosition,
       selected: true,
       type: kind === "feature" ? "feature" : kind === "dimension" ? "dimension" : kind,
+      draggable: kind === "plugin" ? true : undefined,
       data: {
         label: kind === "dimension" ? "#" : label,
         kind,
         dimensions: kind === "feature" ? 1 : undefined,
         transformations: kind === "dimension" ? [] : undefined,
         fromNetwork: false,
+        riStart: kind === "dimension" ? 0 : undefined,
+        riShift: kind === "dimension" ? 0 : undefined,
+        riLocked: kind === "dimension" ? false : undefined,
       },
     };
     nodes = nodes.map((existing) => ({ ...existing, selected: false }));
@@ -1176,6 +1948,7 @@
           kind: QuickNodeKind;
           label: string;
         };
+        if (activeTabReadOnly && payload.kind !== "plugin") return;
         if (payload.kind === "transformation") return;
         const position = screenToFlowPosition
           ? screenToFlowPosition({ x: event.clientX, y: event.clientY })
@@ -1190,6 +1963,7 @@
     if (libraryPayload) {
       try {
         const item = JSON.parse(libraryPayload) as LibraryItem;
+        if (activeTabReadOnly && item.kind !== "plugin") return;
         if (item.kind === "transformation") return;
         const position = screenToFlowPosition
           ? screenToFlowPosition({ x: event.clientX, y: event.clientY })
@@ -1251,6 +2025,27 @@
     selectedNodeId = selectedNodes[0]?.id ?? null;
   };
 
+  const handleBeforeDelete = async ({
+    nodes: toDelete,
+    edges: toDeleteEdges,
+  }: {
+    nodes: StudioNode[];
+    edges: Edge[];
+  }) => {
+    if (!activeTabReadOnly) return { nodes: toDelete, edges: toDeleteEdges };
+    const pluginIds = new SvelteSet(
+      toDelete.filter((node) => node.data.kind === "plugin").map((node) => node.id),
+    );
+    const allowedEdges = toDeleteEdges.filter(
+      (edge) => pluginIds.has(edge.source) || pluginIds.has(edge.target),
+    );
+    if (pluginIds.size === 0 && allowedEdges.length === 0) return false;
+    return {
+      nodes: toDelete.filter((node) => pluginIds.has(node.id)),
+      edges: allowedEdges,
+    };
+  };
+
   const parseDimensionHandle = (handle?: string | null) => {
     if (!handle) return null;
     if (!handle.startsWith("dim-")) return null;
@@ -1278,12 +2073,26 @@
       return connection.sourceHandle === "out" && connection.targetHandle === "in";
     }
 
+    if (sourceNode.data.kind === "particle" && targetNode.data.kind === "plugin") {
+      return connection.sourceHandle === "out" && connection.targetHandle === "in";
+    }
+
     return false;
   };
 
   const handleConnect: OnConnect = (connection) => {
     if (!isValidConnection(connection)) return;
     if (!connection.source || !connection.target) return;
+    if (activeTabReadOnly) {
+      const sourceNode = nodesById[connection.source];
+      const targetNode = nodesById[connection.target];
+      const isPluginConnection =
+        sourceNode?.data.kind === "particle" &&
+        targetNode?.data.kind === "plugin" &&
+        connection.sourceHandle === "out" &&
+        connection.targetHandle === "in";
+      if (!isPluginConnection) return;
+    }
     if (
       edges.some(
         (edge) =>
@@ -1315,6 +2124,12 @@
         parentFeatureId: sourceNode.id,
         dimensionIndex: dimensionIndex ?? targetNode.data.dimensionIndex,
       });
+    }
+
+    if (sourceNode?.data.kind === "particle" && targetNode?.data.kind === "plugin") {
+      if (activeRunOutput) {
+        refreshPluginOutputs(activeRunOutput);
+      }
     }
   };
 
@@ -1348,15 +2163,41 @@
     >
       {#each tabs as tab (tab.id)}
         <div class={`tab ${tab.id === activeTabId ? "is-active" : ""}`}>
-          <button
-            type="button"
-            role="tab"
-            class="tab-button"
-            aria-selected={tab.id === activeTabId}
-            onclick={() => switchTab(tab.id)}
-          >
-            {tab.label}
-          </button>
+          {#if tabRenameId === tab.id}
+            <input
+              class="tab-rename"
+              value={tabRenameValue}
+              oninput={(event) => {
+                const target = event.target as HTMLInputElement | null;
+                tabRenameValue = target?.value ?? "";
+              }}
+              onblur={() => commitTabRename(tab)}
+              onkeydown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  commitTabRename(tab);
+                }
+                if (event.key === "Escape") {
+                  event.preventDefault();
+                  cancelTabRename();
+                }
+              }}
+            />
+          {:else}
+            <button
+              type="button"
+              role="tab"
+              class="tab-button"
+              aria-selected={tab.id === activeTabId}
+              onclick={() => switchTab(tab.id)}
+              ondblclick={() => startTabRename(tab)}
+            >
+              <span class="tab-label">{tab.label}</span>
+              <span class={`tab-status ${tab.particleId ? "is-network" : "is-draft"}`}>
+                {tab.particleId ? "network" : "in-progress"}
+              </span>
+            </button>
+          {/if}
           <button
             type="button"
             class="tab-close"
@@ -1385,116 +2226,162 @@
         inline
         onHide={() => hidePanel((mode) => (topMode = mode))}
       >
-        <Button
-          variant="ghost"
-          ariaLabel="New Feature"
-          title="New Feature — A feature defines dimensions (connection points) and the transformations that live on those dimensions."
-          className="icon-btn"
-          draggable
-          onclick={(event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            addQuickNode("feature", "New Feature");
-          }}
-          ondragstart={(event) => handleQuickDragStart(event, "feature", "New Feature")}
-        >
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <rect x="4" y="4" width="16" height="16" rx="2"></rect>
-            <path d="M12 8v8M8 12h8"></path>
-          </svg>
-        </Button>
-        <Button
-          variant="ghost"
-          ariaLabel="New Dimension"
-          title="New Dimension — A dimension hosts a chain of transformations for a feature output."
-          className="icon-btn"
-          draggable
-          onclick={(event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            addQuickNode("dimension", "Dimension");
-          }}
-          ondragstart={(event) => handleQuickDragStart(event, "dimension", "Dimension")}
-        >
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M5 7h14"></path>
-            <path d="M5 12h14"></path>
-            <path d="M5 17h14"></path>
-          </svg>
-        </Button>
-        <Button
-          variant="ghost"
-          ariaLabel="New Transformation"
-          title="New Transformation — Transformations live on dimensions of a feature and specify how values are selected from the attached particle."
-          className="icon-btn"
-          draggable
-          onclick={(event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            addQuickNode("transformation", "New Transformation");
-          }}
-          ondragstart={(event) =>
-            handleQuickDragStart(event, "transformation", "New Transformation")}
-        >
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M6 8h10l-3-3"></path>
-            <path d="M18 16H8l3 3"></path>
-          </svg>
-        </Button>
-        <Button
-          variant="ghost"
-          ariaLabel="New Condition"
-          title="New Condition — A particle only outputs values if its condition is met."
-          className="icon-btn"
-          draggable
-          onclick={(event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            addQuickNode("condition", "New Condition");
-          }}
-          ondragstart={(event) => handleQuickDragStart(event, "condition", "New Condition")}
-        >
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M4 6h16l-6 7v6l-4-2v-4z"></path>
-          </svg>
-        </Button>
-        <Button
-          variant="ghost"
-          ariaLabel="New Agent"
-          title="New Agent"
-          className="icon-btn"
-          draggable
-          onclick={(event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            addQuickNode("agent", "New Agent");
-          }}
-          ondragstart={(event) => handleQuickDragStart(event, "agent", "New Agent")}
-        >
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <circle cx="12" cy="8" r="3"></circle>
-            <path d="M5 20a7 7 0 0 1 14 0"></path>
-          </svg>
-        </Button>
-        <Button
-          variant="ghost"
-          ariaLabel="New Plugin"
-          title="New Plugin — A plugin consumes the runner’s output streams and renders or sonifies them."
-          className="icon-btn"
-          draggable
-          onclick={(event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            addQuickNode("plugin", "New Plugin");
-          }}
-          ondragstart={(event) => handleQuickDragStart(event, "plugin", "New Plugin")}
-        >
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M8 6v6M16 6v6"></path>
-            <path d="M6 12h12v3a6 6 0 0 1-12 0v-3z"></path>
-            <path d="M12 18v3"></path>
-          </svg>
-        </Button>
+        <div class="top-action-group">
+          <Button
+            variant="ghost"
+            ariaLabel="New Feature"
+            title="New Feature — A feature defines dimensions (connection points) and the transformations that live on those dimensions."
+            className="icon-btn"
+            draggable
+            onclick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              addQuickNode("feature", "New Feature");
+            }}
+            ondragstart={(event) => handleQuickDragStart(event, "feature", "New Feature")}
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <rect x="4" y="4" width="16" height="16" rx="2"></rect>
+              <path d="M12 8v8M8 12h8"></path>
+            </svg>
+          </Button>
+          <Button
+            variant="ghost"
+            ariaLabel="New Dimension"
+            title="New Dimension — A dimension hosts a chain of transformations for a feature output."
+            className="icon-btn"
+            draggable
+            onclick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              addQuickNode("dimension", "Dimension");
+            }}
+            ondragstart={(event) => handleQuickDragStart(event, "dimension", "Dimension")}
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M5 7h14"></path>
+              <path d="M5 12h14"></path>
+              <path d="M5 17h14"></path>
+            </svg>
+          </Button>
+          <Button
+            variant="ghost"
+            ariaLabel="New Transformation"
+            title="New Transformation — Transformations live on dimensions of a feature and specify how values are selected from the attached particle."
+            className="icon-btn"
+            draggable
+            onclick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              addQuickNode("transformation", "New Transformation");
+            }}
+            ondragstart={(event) =>
+              handleQuickDragStart(event, "transformation", "New Transformation")}
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M6 8h10l-3-3"></path>
+              <path d="M18 16H8l3 3"></path>
+            </svg>
+          </Button>
+          <Button
+            variant="ghost"
+            ariaLabel="New Condition"
+            title="New Condition — A particle only outputs values if its condition is met."
+            className="icon-btn"
+            draggable
+            onclick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              addQuickNode("condition", "New Condition");
+            }}
+            ondragstart={(event) => handleQuickDragStart(event, "condition", "New Condition")}
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M4 6h16l-6 7v6l-4-2v-4z"></path>
+            </svg>
+          </Button>
+          <Button
+            variant="ghost"
+            ariaLabel="New Agent"
+            title="New Agent"
+            className="icon-btn"
+            draggable
+            onclick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              addQuickNode("agent", "New Agent");
+            }}
+            ondragstart={(event) => handleQuickDragStart(event, "agent", "New Agent")}
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="12" cy="8" r="3"></circle>
+              <path d="M5 20a7 7 0 0 1 14 0"></path>
+            </svg>
+          </Button>
+          <Button
+            variant="ghost"
+            ariaLabel="New Plugin"
+            title="New Plugin — A plugin consumes the runner’s output streams and renders or sonifies them."
+            className="icon-btn"
+            draggable
+            onclick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              addQuickNode("plugin", "New Plugin");
+            }}
+            ondragstart={(event) => handleQuickDragStart(event, "plugin", "New Plugin")}
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M8 6v6M16 6v6"></path>
+              <path d="M6 12h12v3a6 6 0 0 1-12 0v-3z"></path>
+              <path d="M12 18v3"></path>
+            </svg>
+          </Button>
+        </div>
+        <div class="top-action-divider" aria-hidden="true"></div>
+        <div class="top-run-group">
+          <label class="run-label" for="run-samples">N</label>
+          <input
+            id="run-samples"
+            class="run-input"
+            type="number"
+            min="1"
+            inputmode="numeric"
+            value={runSamplesCount}
+            oninput={(event) => {
+              const target = event.target as HTMLInputElement | null;
+              const next = Number(target?.value ?? 1);
+              runSamplesCount = Number.isFinite(next) ? Math.max(1, Math.trunc(next)) : 1;
+            }}
+          />
+          <Button
+            variant="ghost"
+            ariaLabel="Run flow"
+            title="Run flow (mock runner)"
+            className="icon-btn"
+            onclick={executeActiveGraph}
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M7 5l12 7-12 7z"></path>
+            </svg>
+          </Button>
+        </div>
+        <div class="top-action-divider" aria-hidden="true"></div>
+        <div class="top-deploy-group">
+          <Button
+            variant="ghost"
+            ariaLabel="Deploy draft elements"
+            title="Deploy drafts (compiles first)"
+            className="icon-btn"
+            onclick={deployActiveGraph}
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 4v10"></path>
+              <path d="M8 8l4-4 4 4"></path>
+              <path d="M4 20h16"></path>
+            </svg>
+          </Button>
+        </div>
       </DockPanel>
     {/if}
   </div>
@@ -1679,9 +2566,13 @@
         {nodeTypes}
         onconnect={handleConnect}
         onselectionchange={handleSelectionChange}
+        onbeforedelete={handleBeforeDelete}
         {isValidConnection}
         onnodeclick={handleNodeClick}
         fitView
+        nodesDraggable
+        nodesConnectable
+        deleteKey={activeTabReadOnly ? null : "Backspace"}
         zoomOnScroll
         zoomOnDoubleClick={false}
         zoomOnPinch
@@ -1765,11 +2656,13 @@
           <div class="inspector-title">Node inspector</div>
           {#if inspectorNode}
             {#if selectedNode}
+              {@const isReadOnly = selectedNode.data.fromNetwork}
               <label class="inspector-label" for="node-name">Name</label>
               <input
                 id="node-name"
                 class="inspector-input"
                 value={nameDraft}
+                disabled={isReadOnly}
                 oninput={(event) => {
                   const target = event.target as HTMLInputElement | null;
                   nameDraft = target?.value ?? "";
@@ -1805,6 +2698,7 @@
                   type="number"
                   min="1"
                   value={dimensionDraft ?? 1}
+                  disabled={isReadOnly}
                   oninput={(event) => {
                     const target = event.target as HTMLInputElement | null;
                     dimensionDraft = target ? Number(target.value) : 1;
@@ -1830,31 +2724,136 @@
                 {/if}
               {/if}
               {#if selectedNode.data.kind === "dimension"}
+                {@const locked = selectedNode.data.riLocked ?? false}
+                <div class="inspector-section">
+                  <div class="inspector-section-title">Running instance</div>
+                  <div class="inspector-inline">
+                    <label class="inspector-inline-label" for="ri-start">Start</label>
+                    <input
+                      id="ri-start"
+                      class="inspector-input inspector-input--compact inspector-input--inline"
+                      type="number"
+                      inputmode="numeric"
+                      min="0"
+                      step="1"
+                      value={selectedNode.data.riStart ?? 0}
+                      disabled={isReadOnly && locked}
+                      onwheel={(event) => {
+                        event.preventDefault();
+                        (event.currentTarget as HTMLInputElement).blur();
+                      }}
+                      onkeydown={(event) => {
+                        if (["-", "+", "e", "E", "."].includes(event.key)) {
+                          event.preventDefault();
+                        }
+                      }}
+                      oninput={(event) => {
+                        const target = event.target as HTMLInputElement | null;
+                        updateNodeData(selectedNode.id, {
+                          riStart: toInt(target?.value ?? "0"),
+                        });
+                      }}
+                    />
+                    <label class="inspector-inline-label" for="ri-shift">Shift</label>
+                    <input
+                      id="ri-shift"
+                      class="inspector-input inspector-input--compact inspector-input--inline"
+                      type="number"
+                      inputmode="numeric"
+                      min="0"
+                      step="1"
+                      value={selectedNode.data.riShift ?? 0}
+                      disabled={isReadOnly && locked}
+                      onwheel={(event) => {
+                        event.preventDefault();
+                        (event.currentTarget as HTMLInputElement).blur();
+                      }}
+                      onkeydown={(event) => {
+                        if (["-", "+", "e", "E", "."].includes(event.key)) {
+                          event.preventDefault();
+                        }
+                      }}
+                      oninput={(event) => {
+                        const target = event.target as HTMLInputElement | null;
+                        updateNodeData(selectedNode.id, {
+                          riShift: toInt(target?.value ?? "0"),
+                        });
+                      }}
+                    />
+                    <button
+                      type="button"
+                      class={`inspector-toggle ${locked ? "is-locked" : ""}`}
+                      disabled={isReadOnly}
+                      onclick={() => updateNodeData(selectedNode.id, { riLocked: !locked })}
+                    >
+                      {locked ? "fixed" : "open"}
+                    </button>
+                  </div>
+                  {#if isReadOnly}
+                    <div class="inspector-hint">
+                      {locked
+                        ? "RI fixed — locked in network particle."
+                        : "RI open — editable for runs."}
+                    </div>
+                  {/if}
+                </div>
                 <div class="inspector-section">
                   <div class="inspector-section-title">Transformations</div>
                   <div class="inspector-transform-list">
-                    {#each selectedNode.data.transformations ?? [] as transformation, index (index)}
+                    {#each selectedNode.data.transformations ?? [] as transformation, index (transformation.id)}
+                      {@const isNetwork = transformation.status === "network"}
                       <div class="inspector-transform-row">
-                        <input
-                          class="inspector-input inspector-input--compact"
-                          value={transformation}
-                          oninput={(event) => {
-                            const target = event.target as HTMLInputElement | null;
-                            updateTransformationLabel(selectedNode.id, index, target?.value ?? "");
-                          }}
-                        />
-                        <button
-                          type="button"
-                          class="inspector-remove"
-                          onclick={() => removeTransformationAt(selectedNode.id, index)}
-                        >
-                          Remove
-                        </button>
+                        <div class="inspector-transform-fields">
+                          <input
+                            class="inspector-input inspector-input--compact"
+                            value={transformation.name}
+                            disabled={isNetwork || isReadOnly}
+                            oninput={(event) => {
+                              const target = event.target as HTMLInputElement | null;
+                              const name = target?.value ?? "";
+                              updateTransformationAt(selectedNode.id, index, { name });
+                            }}
+                          />
+                          <input
+                            class="inspector-input inspector-input--compact inspector-input--args"
+                            value={transformation.args.join(", ")}
+                            disabled={isReadOnly}
+                            oninput={(event) => {
+                              const target = event.target as HTMLInputElement | null;
+                              const args = parseArgsInput(target?.value ?? "");
+                              updateTransformationAt(selectedNode.id, index, { args });
+                            }}
+                          />
+                        </div>
+                        <div class="inspector-transform-meta">
+                          <span class="inspector-tag">
+                            {isNetwork ? "Network" : "Draft"}
+                          </span>
+                          <div class="inspector-transform-actions">
+                            <button
+                              type="button"
+                              class="inspector-edit"
+                              onclick={() =>
+                                openTransformationEditor(selectedNode.id, index, transformation)}
+                            >
+                              Edit
+                            </button>
+                            <button
+                              type="button"
+                              class="inspector-remove"
+                              disabled={isReadOnly}
+                              onclick={() => removeTransformationAt(selectedNode.id, index)}
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        </div>
                       </div>
                     {/each}
                     <button
                       type="button"
                       class="inspector-action"
+                      disabled={isReadOnly}
                       onclick={() => appendTransformation(selectedNode.id)}
                     >
                       Add transformation
@@ -1876,13 +2875,11 @@
                 <span>Context</span>
                 <span>Current tab</span>
               </div>
-              {#if !inspectorNode.data.particleId}
-                <div class="inspector-row">
-                  <span>Status</span>
-                  <span>New particle</span>
-                </div>
-              {/if}
             {/if}
+            <div class="inspector-row">
+              <span>Status</span>
+              <span>{getNodeStatusLabel(inspectorNode)}</span>
+            </div>
             <div class="inspector-row">
               <span>Type</span>
               <span>{inspectorNode.data.kind}</span>
@@ -1907,6 +2904,51 @@
               <div class="inspector-row">
                 <span>View</span>
                 <span>{inspectorNode.data.viewId}</span>
+              </div>
+            {/if}
+            {#if activeRunOutput}
+              <div class="inspector-section">
+                <div class="inspector-section-title">Last run</div>
+                <div class="inspector-row">
+                  <span>Streams</span>
+                  <span>{activeRunOutput.length}</span>
+                </div>
+                {#if activeRunTimestamp}
+                  <div class="inspector-row">
+                    <span>Ran</span>
+                    <span>{new Date(activeRunTimestamp).toLocaleTimeString()}</span>
+                  </div>
+                {/if}
+                {#if activeRunWarnings.length}
+                  <div class="inspector-alert">
+                    <div class="inspector-alert-text">{activeRunWarnings.join("; ")}</div>
+                  </div>
+                {/if}
+              </div>
+            {/if}
+            {#if activeCompileTimestamp}
+              <div class="inspector-section">
+                <div class="inspector-section-title">Last compile</div>
+                <div class="inspector-row">
+                  <span>Ran</span>
+                  <span>{new Date(activeCompileTimestamp).toLocaleTimeString()}</span>
+                </div>
+                {#if activeCompileWarnings.length}
+                  <div class="inspector-alert">
+                    <div class="inspector-alert-text">
+                      {activeCompileWarnings.join("; ")}
+                    </div>
+                  </div>
+                {/if}
+              </div>
+            {/if}
+            {#if activeDeployTimestamp}
+              <div class="inspector-section">
+                <div class="inspector-section-title">Last deploy</div>
+                <div class="inspector-row">
+                  <span>Ran</span>
+                  <span>{new Date(activeDeployTimestamp).toLocaleTimeString()}</span>
+                </div>
               </div>
             {/if}
           {:else}
@@ -1952,11 +2994,13 @@
                 <div class="inspector-title">Node inspector</div>
                 {#if inspectorNode}
                   {#if selectedNode}
+                    {@const isReadOnly = selectedNode.data.fromNetwork}
                     <label class="inspector-label" for="node-name-split">Name</label>
                     <input
                       id="node-name-split"
                       class="inspector-input"
                       value={nameDraft}
+                      disabled={isReadOnly}
                       oninput={(event) => {
                         const target = event.target as HTMLInputElement | null;
                         nameDraft = target?.value ?? "";
@@ -1992,6 +3036,7 @@
                         type="number"
                         min="1"
                         value={dimensionDraft ?? 1}
+                        disabled={isReadOnly}
                         oninput={(event) => {
                           const target = event.target as HTMLInputElement | null;
                           dimensionDraft = target ? Number(target.value) : 1;
@@ -2019,35 +3064,140 @@
                       {/if}
                     {/if}
                     {#if selectedNode.data.kind === "dimension"}
+                      {@const locked = selectedNode.data.riLocked ?? false}
+                      <div class="inspector-section">
+                        <div class="inspector-section-title">Running instance</div>
+                        <div class="inspector-inline">
+                          <label class="inspector-inline-label" for="ri-start-split">Start</label>
+                          <input
+                            id="ri-start-split"
+                            class="inspector-input inspector-input--compact inspector-input--inline"
+                            type="number"
+                            inputmode="numeric"
+                            min="0"
+                            step="1"
+                            value={selectedNode.data.riStart ?? 0}
+                            disabled={isReadOnly && locked}
+                            onwheel={(event) => {
+                              event.preventDefault();
+                              (event.currentTarget as HTMLInputElement).blur();
+                            }}
+                            onkeydown={(event) => {
+                              if (["-", "+", "e", "E", "."].includes(event.key)) {
+                                event.preventDefault();
+                              }
+                            }}
+                            oninput={(event) => {
+                              const target = event.target as HTMLInputElement | null;
+                              updateNodeData(selectedNode.id, {
+                                riStart: toInt(target?.value ?? "0"),
+                              });
+                            }}
+                          />
+                          <label class="inspector-inline-label" for="ri-shift-split">Shift</label>
+                          <input
+                            id="ri-shift-split"
+                            class="inspector-input inspector-input--compact inspector-input--inline"
+                            type="number"
+                            inputmode="numeric"
+                            min="0"
+                            step="1"
+                            value={selectedNode.data.riShift ?? 0}
+                            disabled={isReadOnly && locked}
+                            onwheel={(event) => {
+                              event.preventDefault();
+                              (event.currentTarget as HTMLInputElement).blur();
+                            }}
+                            onkeydown={(event) => {
+                              if (["-", "+", "e", "E", "."].includes(event.key)) {
+                                event.preventDefault();
+                              }
+                            }}
+                            oninput={(event) => {
+                              const target = event.target as HTMLInputElement | null;
+                              updateNodeData(selectedNode.id, {
+                                riShift: toInt(target?.value ?? "0"),
+                              });
+                            }}
+                          />
+                          <button
+                            type="button"
+                            class={`inspector-toggle ${locked ? "is-locked" : ""}`}
+                            disabled={isReadOnly}
+                            onclick={() => updateNodeData(selectedNode.id, { riLocked: !locked })}
+                          >
+                            {locked ? "fixed" : "open"}
+                          </button>
+                        </div>
+                        {#if isReadOnly}
+                          <div class="inspector-hint">
+                            {locked
+                              ? "RI fixed — locked in network particle."
+                              : "RI open — editable for runs."}
+                          </div>
+                        {/if}
+                      </div>
                       <div class="inspector-section">
                         <div class="inspector-section-title">Transformations</div>
                         <div class="inspector-transform-list">
-                          {#each selectedNode.data.transformations ?? [] as transformation, index (index)}
+                          {#each selectedNode.data.transformations ?? [] as transformation, index (transformation.id)}
+                            {@const isNetwork = transformation.status === "network"}
                             <div class="inspector-transform-row">
-                              <input
-                                class="inspector-input inspector-input--compact"
-                                value={transformation}
-                                oninput={(event) => {
-                                  const target = event.target as HTMLInputElement | null;
-                                  updateTransformationLabel(
-                                    selectedNode.id,
-                                    index,
-                                    target?.value ?? "",
-                                  );
-                                }}
-                              />
-                              <button
-                                type="button"
-                                class="inspector-remove"
-                                onclick={() => removeTransformationAt(selectedNode.id, index)}
-                              >
-                                Remove
-                              </button>
+                              <div class="inspector-transform-fields">
+                                <input
+                                  class="inspector-input inspector-input--compact"
+                                  value={transformation.name}
+                                  disabled={isNetwork || isReadOnly}
+                                  oninput={(event) => {
+                                    const target = event.target as HTMLInputElement | null;
+                                    const name = target?.value ?? "";
+                                    updateTransformationAt(selectedNode.id, index, { name });
+                                  }}
+                                />
+                                <input
+                                  class="inspector-input inspector-input--compact inspector-input--args"
+                                  value={transformation.args.join(", ")}
+                                  disabled={isReadOnly}
+                                  oninput={(event) => {
+                                    const target = event.target as HTMLInputElement | null;
+                                    const args = parseArgsInput(target?.value ?? "");
+                                    updateTransformationAt(selectedNode.id, index, { args });
+                                  }}
+                                />
+                              </div>
+                              <div class="inspector-transform-meta">
+                                <span class="inspector-tag">
+                                  {isNetwork ? "Network" : "Draft"}
+                                </span>
+                                <div class="inspector-transform-actions">
+                                  <button
+                                    type="button"
+                                    class="inspector-edit"
+                                    onclick={() =>
+                                      openTransformationEditor(
+                                        selectedNode.id,
+                                        index,
+                                        transformation,
+                                      )}
+                                  >
+                                    Edit
+                                  </button>
+                                  <button
+                                    type="button"
+                                    class="inspector-remove"
+                                    disabled={isReadOnly}
+                                    onclick={() => removeTransformationAt(selectedNode.id, index)}
+                                  >
+                                    Remove
+                                  </button>
+                                </div>
+                              </div>
                             </div>
                           {/each}
                           <button
                             type="button"
                             class="inspector-action"
+                            disabled={isReadOnly}
                             onclick={() => appendTransformation(selectedNode.id)}
                           >
                             Add transformation
@@ -2069,13 +3219,11 @@
                       <span>Context</span>
                       <span>Current tab</span>
                     </div>
-                    {#if !inspectorNode.data.particleId}
-                      <div class="inspector-row">
-                        <span>Status</span>
-                        <span>New particle</span>
-                      </div>
-                    {/if}
                   {/if}
+                  <div class="inspector-row">
+                    <span>Status</span>
+                    <span>{getNodeStatusLabel(inspectorNode)}</span>
+                  </div>
                   <div class="inspector-row">
                     <span>Type</span>
                     <span>{inspectorNode.data.kind}</span>
@@ -2100,6 +3248,53 @@
                     <div class="inspector-row">
                       <span>View</span>
                       <span>{inspectorNode.data.viewId}</span>
+                    </div>
+                  {/if}
+                  {#if activeRunOutput}
+                    <div class="inspector-section">
+                      <div class="inspector-section-title">Last run</div>
+                      <div class="inspector-row">
+                        <span>Streams</span>
+                        <span>{activeRunOutput.length}</span>
+                      </div>
+                      {#if activeRunTimestamp}
+                        <div class="inspector-row">
+                          <span>Ran</span>
+                          <span>{new Date(activeRunTimestamp).toLocaleTimeString()}</span>
+                        </div>
+                      {/if}
+                      {#if activeRunWarnings.length}
+                        <div class="inspector-alert">
+                          <div class="inspector-alert-text">
+                            {activeRunWarnings.join("; ")}
+                          </div>
+                        </div>
+                      {/if}
+                    </div>
+                  {/if}
+                  {#if activeCompileTimestamp}
+                    <div class="inspector-section">
+                      <div class="inspector-section-title">Last compile</div>
+                      <div class="inspector-row">
+                        <span>Ran</span>
+                        <span>{new Date(activeCompileTimestamp).toLocaleTimeString()}</span>
+                      </div>
+                      {#if activeCompileWarnings.length}
+                        <div class="inspector-alert">
+                          <div class="inspector-alert-text">
+                            {activeCompileWarnings.join("; ")}
+                          </div>
+                        </div>
+                      {/if}
+                    </div>
+                  {/if}
+                  {#if activeDeployTimestamp}
+                    <div class="inspector-section">
+                      <div class="inspector-section-title">Last deploy</div>
+                      <div class="inspector-row">
+                        <span>Ran</span>
+                        <span>{new Date(activeDeployTimestamp).toLocaleTimeString()}</span>
+                      </div>
                     </div>
                   {/if}
                 {:else}
@@ -2239,6 +3434,78 @@
     </div>
   {/if}
 
+  {#if transformationEditorOpen}
+    <div class="confirm-overlay" role="dialog" aria-modal="true">
+      <div class="editor-modal">
+        <div class="editor-header">
+          <div class="editor-title">Edit transformation</div>
+          <div class="editor-header-actions">
+            <span class="editor-status">
+              {transformationEditorStatus === "network" ? "Network" : "Draft"}
+            </span>
+            {#if transformationEditorStatus === "network" && !transformationEditorLocked}
+              <button type="button" class="editor-fork" onclick={forkTransformationEditor}>
+                Fork as draft
+              </button>
+            {/if}
+            <button type="button" class="editor-close" onclick={closeTransformationEditor}>
+              Close
+            </button>
+          </div>
+        </div>
+        <div class="editor-fields">
+          <label class="editor-label" for="tx-name">Name</label>
+          <input
+            id="tx-name"
+            class="editor-input"
+            value={transformationDraftName}
+            disabled={transformationEditorReadOnly}
+            oninput={(event) => {
+              const target = event.target as HTMLInputElement | null;
+              transformationDraftName = target?.value ?? "";
+              transformationDraftError = null;
+            }}
+          />
+          <label class="editor-label" for="tx-args">Args (comma-separated)</label>
+          <input
+            id="tx-args"
+            class="editor-input"
+            value={transformationDraftArgs}
+            disabled={transformationEditorReadOnly}
+            oninput={(event) => {
+              const target = event.target as HTMLInputElement | null;
+              transformationDraftArgs = target?.value ?? "";
+            }}
+          />
+          {#if transformationArgsWarning}
+            <div class="editor-hint">{transformationArgsWarning}</div>
+          {/if}
+          {#if transformationDraftError}
+            <div class="editor-error">{transformationDraftError}</div>
+          {/if}
+        </div>
+        <div class="editor-shell">
+          <SolidityEditorShell
+            template={transformationTemplate}
+            bind:value={transformationDraftCode}
+            readOnly={transformationEditorReadOnly}
+          />
+        </div>
+        <div class="editor-actions">
+          <button type="button" onclick={closeTransformationEditor}>Cancel</button>
+          <button
+            type="button"
+            class="primary"
+            disabled={transformationEditorReadOnly}
+            onclick={saveTransformationEditor}
+          >
+            Save
+          </button>
+        </div>
+      </div>
+    </div>
+  {/if}
+
   {#if clearConfirmOpen}
     <div class="confirm-overlay" role="dialog" aria-modal="true">
       <div class="confirm-modal">
@@ -2282,6 +3549,31 @@
     @apply flex items-center gap-2 px-3 py-2;
   }
 
+  .top-action-group {
+    @apply flex flex-wrap items-center gap-2;
+  }
+
+  .top-run-group {
+    @apply flex items-center gap-2;
+  }
+
+  .top-deploy-group {
+    @apply flex items-center gap-2;
+  }
+
+  .run-label {
+    @apply text-[0.55rem] uppercase tracking-[0.2em] text-white/50;
+  }
+
+  .run-input {
+    @apply w-14 rounded-md border border-white/10 bg-black/60 px-2 py-1
+      text-[0.7rem] text-white/80 outline-none focus:border-emerald-400/60;
+  }
+
+  .top-action-divider {
+    @apply h-5 w-px bg-white/10 mx-1 self-stretch;
+  }
+
   .tab {
     @apply rounded-md border border-white/10 bg-white/5 px-3 py-1 text-[0.6rem]
       uppercase tracking-[0.2em] text-white/60 hover:border-white/30 hover:text-white;
@@ -2293,7 +3585,29 @@
   }
 
   .tab-button {
+    @apply inline-flex items-center gap-2 text-left;
+  }
+
+  .tab-label {
     @apply text-left;
+  }
+
+  .tab-status {
+    @apply rounded-full border border-white/10 px-2 py-[0.1rem] text-[0.5rem]
+      uppercase tracking-[0.2em] text-white/50;
+  }
+
+  .tab-status.is-draft {
+    @apply border-white/10 text-white/40;
+  }
+
+  .tab-status.is-network {
+    @apply border-emerald-400/40 text-emerald-200;
+  }
+
+  .tab-rename {
+    @apply w-40 rounded-md border border-emerald-400/50 bg-black/80 px-2 py-1
+      text-[0.6rem] uppercase tracking-[0.2em] text-emerald-200 outline-none;
   }
 
   .tab-add {
@@ -2487,6 +3801,27 @@
     @apply mt-0 text-[0.7rem];
   }
 
+  .inspector-input--inline {
+    @apply mt-0 w-16;
+  }
+
+  .inspector-inline {
+    @apply flex flex-wrap items-center gap-2;
+  }
+
+  .inspector-inline-label {
+    @apply text-[0.55rem] uppercase tracking-[0.2em] text-white/40;
+  }
+
+  .inspector-toggle {
+    @apply rounded-md border border-white/10 bg-white/5 px-2 py-1 text-[0.55rem]
+      uppercase tracking-[0.18em] text-white/60 hover:border-white/30 hover:text-white;
+  }
+
+  .inspector-toggle.is-locked {
+    @apply border-emerald-400/40 text-emerald-200;
+  }
+
   .inspector-section {
     @apply mt-3 flex flex-col gap-2 rounded-md border border-white/10 bg-black/70 p-2;
   }
@@ -2495,12 +3830,48 @@
     @apply text-[0.55rem] uppercase tracking-[0.22em] text-white/50;
   }
 
+  .inspector-hint {
+    @apply text-[0.6rem] text-white/45;
+  }
+
   .inspector-transform-list {
     @apply flex flex-col gap-2;
   }
 
   .inspector-transform-row {
+    @apply flex flex-col gap-2;
+  }
+
+  .inspector-transform-fields {
     @apply flex items-center gap-2;
+  }
+
+  .inspector-transform-fields .inspector-input {
+    @apply flex-1 min-w-[6rem];
+  }
+
+  .inspector-input--args {
+    @apply w-24 flex-none text-[0.65rem];
+  }
+
+  .inspector-transform-meta {
+    @apply flex items-center justify-between gap-2;
+  }
+
+  .inspector-tag {
+    @apply rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[0.55rem]
+      uppercase tracking-[0.18em] text-white/60;
+    flex: 0 0 auto;
+  }
+
+  .inspector-transform-actions {
+    @apply flex items-center gap-1;
+  }
+
+  .inspector-edit {
+    @apply rounded-md border border-white/10 bg-white/5 px-2 py-1 text-[0.55rem]
+      uppercase tracking-[0.18em] text-white/60 hover:border-white/30 hover:text-white;
+    flex: 0 0 auto;
   }
 
   .inspector-remove {
@@ -2648,5 +4019,81 @@
 
   .confirm-actions .danger {
     @apply border-rose-500/40 text-rose-200 hover:border-rose-400/70;
+  }
+
+  .editor-modal {
+    @apply w-[min(840px,94vw)] max-h-[90vh] rounded-md border border-white/10 bg-black/90
+      p-4 text-white/80 flex flex-col gap-3;
+    min-height: 70vh;
+  }
+
+  .editor-header {
+    @apply flex items-center justify-between;
+  }
+
+  .editor-header-actions {
+    @apply flex items-center gap-2;
+  }
+
+  .editor-title {
+    @apply text-[0.7rem] uppercase tracking-[0.24em] text-white/70;
+  }
+
+  .editor-status {
+    @apply rounded-full border border-white/10 px-2 py-0.5 text-[0.5rem]
+      uppercase tracking-[0.2em] text-white/50;
+  }
+
+  .editor-fork {
+    @apply rounded-md border border-white/10 bg-white/5 px-2 py-1 text-[0.55rem]
+      uppercase tracking-[0.18em] text-white/60 hover:border-white/30 hover:text-white;
+  }
+
+  .editor-close {
+    @apply rounded-md border border-white/10 bg-white/5 px-2 py-1 text-[0.55rem]
+      uppercase tracking-[0.18em] text-white/60 hover:border-white/30 hover:text-white;
+  }
+
+  .editor-fields {
+    @apply grid gap-2;
+  }
+
+  .editor-label {
+    @apply text-[0.6rem] uppercase tracking-[0.2em] text-white/50;
+  }
+
+  .editor-input {
+    @apply w-full rounded-md border border-white/10 bg-black/60 px-2 py-1 text-[0.75rem]
+      text-white/80 outline-none focus:border-emerald-400/60;
+  }
+
+  .editor-hint {
+    @apply text-[0.65rem] text-amber-200/80;
+  }
+
+  .editor-error {
+    @apply text-[0.65rem] text-rose-200/80;
+  }
+
+  .editor-shell {
+    @apply min-h-0 flex-1 rounded-md border border-white/10 bg-black/70 overflow-hidden flex flex-col;
+    min-height: 320px;
+  }
+
+  .editor-shell :global(.shell) {
+    @apply flex-1 min-h-0;
+  }
+
+  .editor-actions {
+    @apply flex items-center justify-end gap-2;
+  }
+
+  .editor-actions button {
+    @apply rounded-md border border-white/10 bg-white/5 px-3 py-1 text-[0.6rem]
+      uppercase tracking-[0.18em] text-white/70 hover:border-white/30 hover:text-white;
+  }
+
+  .editor-actions .primary {
+    @apply border-emerald-400/40 text-emerald-200 hover:border-emerald-300/70;
   }
 </style>
