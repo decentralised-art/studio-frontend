@@ -9,12 +9,15 @@
 
   let { children } = $props();
   let isAuthenticated = $state(false);
+  let redirectInProgress = false;
   const allowedRouteIds = new Set(["/", "/login"]);
   const guardRoute = (routeId: string | null) => {
+    if (redirectInProgress) return;
     if (getToken()) return;
     if (routeId === null) return;
     if (allowedRouteIds.has(routeId)) return;
-    goto(resolve("/login"));
+    redirectInProgress = true;
+    goto(resolve("/login"), { replaceState: true });
   };
 
   onMount(() => {
