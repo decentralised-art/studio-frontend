@@ -7,6 +7,7 @@
     SvelteFlow,
     type Connection,
     type Edge,
+    type NodeTypes,
     type OnConnect,
     type OnSelectionChange,
   } from "@xyflow/svelte";
@@ -344,13 +345,13 @@
   const topSize = $derived.by(() => "auto");
   const bottomSize = $derived.by(() => panelSize(bottomMode, "max-content"));
 
-  const nodeTypes = {
+  const nodeTypes: NodeTypes = {
     feature: StudioFeatureNode,
     dimension: StudioDimensionNode,
     particle: StudioParticleNode,
     transformation: StudioTransformationNode,
     plugin: StudioPluginNode,
-  };
+  } as unknown as NodeTypes;
 
   const hidePanel = (setter: (mode: PanelMode) => void) => setter("hidden");
   const showPanel = (setter: (mode: PanelMode) => void) => setter("open");
@@ -441,6 +442,89 @@
     return tag === "input" || tag === "textarea" || tag === "select" || target.isContentEditable;
   };
 
+  const clearNetworkIntentQuery = () => {
+    const url = new URL(window.location.href);
+    url.searchParams.delete("network_kind");
+    url.searchParams.delete("network_id");
+    const nextQuery = url.searchParams.toString();
+    const nextUrl = `${url.pathname}${nextQuery ? `?${nextQuery}` : ""}${url.hash}`;
+    window.history.replaceState({}, "", nextUrl);
+  };
+
+  const resolveNetworkLibraryItem = (
+    kind: "feature" | "transformation" | "condition" | "plugin",
+    rawId: string,
+  ): LibraryItem | null => {
+    const target = rawId.trim();
+    if (!target) return null;
+    const key = normalizeKey(target);
+    const pool = networkLibrary[kind] ?? [];
+    return (
+      pool.find((item) => {
+        const registryName = getLibraryRegistryName(item);
+        return (
+          item.id === target ||
+          registryName === target ||
+          normalizeKey(registryName) === key ||
+          normalizeKey(item.name) === key
+        );
+      }) ??
+      (kind === "plugin"
+        ? (networkLibrary.plugin.find(
+            (item) => item.viewId === target || normalizeKey(item.viewId ?? "") === key,
+          ) ?? null)
+        : null)
+    );
+  };
+
+  const loadNetworkSelectionFromQuery = () => {
+    const params = new URLSearchParams(window.location.search);
+    const rawKind = (params.get("network_kind") ?? "").toLowerCase();
+    const rawId = params.get("network_id") ?? "";
+    if (!rawKind || !rawId) return;
+
+    if (rawKind === "particle") {
+      openParticleTab(rawId);
+      clearNetworkIntentQuery();
+      return;
+    }
+
+    if (rawKind === "creator") {
+      const candidate =
+        networkParticles.find((particle) => particle.authorId === rawId) ??
+        networkParticles.find(
+          (particle) =>
+            normalizeKey(mockUsersById[particle.authorId]?.nickname ?? "") === normalizeKey(rawId),
+        );
+      if (candidate) openParticleTab(candidate.id);
+      clearNetworkIntentQuery();
+      return;
+    }
+
+    const kind =
+      rawKind === "output"
+        ? "plugin"
+        : ["feature", "transformation", "condition", "plugin"].includes(rawKind)
+          ? (rawKind as "feature" | "transformation" | "condition" | "plugin")
+          : null;
+    if (!kind) {
+      clearNetworkIntentQuery();
+      return;
+    }
+
+    const item = resolveNetworkLibraryItem(kind, rawId);
+    if (!item) {
+      clearNetworkIntentQuery();
+      return;
+    }
+
+    if (item.kind !== "plugin" && activeTabReadOnly) {
+      createEmptyTab();
+    }
+    addLibraryNode(item, getCanvasCenter());
+    clearNetworkIntentQuery();
+  };
+
   onMount(() => {
     const handleDragOverCapture = (event: DragEvent) => {
       handleDragOver(event);
@@ -499,6 +583,8 @@
     if (canvasEl) {
       mutationObserver.observe(canvasEl, { childList: true, subtree: true });
     }
+
+    loadNetworkSelectionFromQuery();
 
     return () => {
       window.removeEventListener("keydown", handleKey);
@@ -1073,8 +1159,8 @@
 
     nodes = nodes.map((node) => {
       if (node.data.kind !== "dimension") return node;
-      const next = (node.data.transformations ?? []).map((tx) =>
-        tx.status === "draft" ? { ...tx, status: "network" } : tx,
+      const next: TransformationInstance[] = (node.data.transformations ?? []).map((tx) =>
+        tx.status === "draft" ? { ...tx, status: "network" as const } : tx,
       );
       return { ...node, data: { ...node.data, transformations: next } };
     });
@@ -1460,7 +1546,13 @@
     loadTabGraph(nextTab.id);
   };
 
-  const registryByKind = $derived.by(() => ({
+  type RegistryMatch = {
+    id: string;
+    name: string;
+    dimensions?: number;
+  };
+
+  const registryByKind = $derived.by<Record<StudioNodeKind, RegistryMatch[]>>(() => ({
     particle: networkParticles.map((item) => ({ id: item.id, name: item.name })),
     feature: networkLibrary.feature.map((item) => ({
       id: item.id,
@@ -1470,11 +1562,11 @@
     transformation: networkLibrary.transformation.map((item) => ({ id: item.id, name: item.name })),
     condition: networkLibrary.condition.map((item) => ({ id: item.id, name: item.name })),
     plugin: networkLibrary.plugin.map((item) => ({ id: item.id, name: item.name })),
-    agent: [],
-    dimension: [],
+    agent: [] as RegistryMatch[],
+    dimension: [] as RegistryMatch[],
   }));
 
-  const findRegistryMatch = (kind: StudioNodeKind, name: string) => {
+  const findRegistryMatch = (kind: StudioNodeKind, name: string): RegistryMatch | null => {
     const pool = registryByKind[kind] ?? [];
     const targetKey = normalizeKey(name);
     return pool.find((item) => normalizeKey(item.name) === targetKey) ?? null;
@@ -1540,10 +1632,10 @@
       label: existingName,
       networkId: resolvedId,
       fromNetwork: true,
-      dimensions: match && "dimensions" in match ? (match.dimensions ?? 1) : undefined,
+      dimensions: typeof match?.dimensions === "number" ? match.dimensions : undefined,
     });
-    if (kind === "feature" && match && "dimensions" in match) {
-      applyDimensionChange(nodeId, match.dimensions ?? 1);
+    if (kind === "feature" && typeof match?.dimensions === "number") {
+      applyDimensionChange(nodeId, match.dimensions);
     }
     pendingNameCollision = null;
   };
@@ -1584,8 +1676,8 @@
     deployedParticleRIs = {
       ...deployedParticleRIs,
       [particleName]: dims.map((dimension) => ({
-        start: toInt(dimension.data.riStart),
-        shift: toInt(dimension.data.riShift),
+        start: toInt(dimension.data.riStart) ?? 0,
+        shift: toInt(dimension.data.riShift) ?? 0,
         locked: Boolean(dimension.data.riLocked),
       })),
     };
@@ -1854,14 +1946,7 @@
     const node: StudioNode = {
       id: `${item.kind}-${item.id}-${crypto.randomUUID()}`,
       position: nodePosition,
-      type:
-        item.kind === "feature"
-          ? "feature"
-          : item.kind === "transformation"
-            ? "transformation"
-            : item.kind === "plugin"
-              ? "plugin"
-              : undefined,
+      type: item.kind === "feature" ? "feature" : item.kind === "plugin" ? "plugin" : undefined,
       draggable: item.kind === "plugin" ? true : undefined,
       data: {
         label: item.name,
@@ -2019,9 +2104,7 @@
     }
   };
 
-  const handleSelectionChange: OnSelectionChange<StudioNode, unknown> = ({
-    nodes: selectedNodes,
-  }) => {
+  const handleSelectionChange: OnSelectionChange<StudioNode, Edge> = ({ nodes: selectedNodes }) => {
     selectedNodeId = selectedNodes[0]?.id ?? null;
   };
 
@@ -2053,7 +2136,7 @@
     return Number.isFinite(value) ? value : null;
   };
 
-  const isValidConnection = (connection: Connection) => {
+  const isValidConnection: (connection: Connection | Edge) => boolean = (connection) => {
     if (!connection.source || !connection.target) return false;
     const sourceNode = nodesById[connection.source];
     const targetNode = nodesById[connection.target];

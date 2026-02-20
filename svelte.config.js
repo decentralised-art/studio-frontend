@@ -3,9 +3,7 @@ import { vitePreprocess } from "@sveltejs/vite-plugin-svelte";
 
 const rawBase = process.env.PUBLIC_BASE_PATH ?? process.env.BASE_PATH ?? "";
 const normalizedBase =
-  rawBase && rawBase !== "/"
-    ? `/${rawBase}`.replace(/\/+/g, "/").replace(/\/$/, "")
-    : "";
+  rawBase && rawBase !== "/" ? `/${rawBase}`.replace(/\/+/g, "/").replace(/\/$/, "") : "";
 
 /** @type {import('@sveltejs/kit').Config} */
 const config = {
