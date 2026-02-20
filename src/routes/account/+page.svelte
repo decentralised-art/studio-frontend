@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { resolve } from "$app/paths";
+  import { base, resolve } from "$app/paths";
 
   import Button from "$lib/components/ui/Button.svelte";
   import Input from "$lib/components/ui/Input.svelte";
@@ -19,7 +19,7 @@
     kind: "human",
     address: "",
     nickname: "Unknown",
-    avatarUrl: "/avatars/lyra.svg",
+    avatarUrl: `${base}/avatars/lyra.svg`,
     bio: "",
     authored: {
       performativeTransactions: 0,
