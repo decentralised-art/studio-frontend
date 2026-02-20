@@ -11,7 +11,7 @@
   let isAuthenticated = $state(false);
 
   onMount(() => {
-    const allowedPaths = new Set(["/", "/login"]);
+    const allowedPaths: Set<string> = new Set([resolve("/"), resolve("/login")]);
 
     const guardRoute = (path: string) => {
       if (getToken()) return;

@@ -1,4 +1,5 @@
 import { browser } from "$app/environment";
+import { resolve } from "$app/paths";
 import { clearToken, getToken, setToken } from "./session";
 
 const API_BASE =
@@ -9,7 +10,7 @@ const buildUrl = (path: string) => `${API_BASE}${path.startsWith("/") ? path : `
 
 const redirectToLogin = () => {
   if (!browser) return;
-  window.location.href = "/login";
+  window.location.href = resolve("/login");
 };
 
 const parseTokenFromResponse = (raw: string): string => {
@@ -61,11 +62,9 @@ export const authFetch = async (path: string, init: RequestInit = {}) => {
     headers,
   });
 
-  if (!response.ok) {
+  if (!response.ok && (response.status === 401 || response.status === 403)) {
     clearToken();
-    if (response.status === 401 || response.status === 403) {
-      redirectToLogin();
-    }
+    redirectToLogin();
   }
 
   return response;
