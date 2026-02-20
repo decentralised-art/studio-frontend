@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { base, resolve } from "$app/paths";
+  import { goto } from "$app/navigation";
+  import { asset, resolve } from "$app/paths";
 
   import Button from "$lib/components/ui/Button.svelte";
   import Input from "$lib/components/ui/Input.svelte";
@@ -19,7 +20,7 @@
     kind: "human",
     address: "",
     nickname: "Unknown",
-    avatarUrl: `${base}/avatars/lyra.svg`,
+    avatarUrl: asset("/avatars/lyra.svg"),
     bio: "",
     authored: {
       performativeTransactions: 0,
@@ -151,7 +152,7 @@
   const loadProfile = async () => {
     if (!getToken()) {
       isRedirecting = true;
-      if (typeof window !== "undefined") window.location.href = resolve("/login");
+      await goto(resolve("/login"));
       return;
     }
 

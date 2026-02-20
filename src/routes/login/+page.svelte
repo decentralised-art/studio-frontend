@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { goto } from "$app/navigation";
   import { resolve } from "$app/paths";
+  import { page } from "$app/state";
 
   import Button from "$lib/components/ui/Button.svelte";
   import Input from "$lib/components/ui/Input.svelte";
@@ -84,6 +85,11 @@
     if (getToken()) {
       goto(resolve("/account"));
       return;
+    }
+
+    const navigationState = page.state as Record<string, unknown> | null;
+    if (navigationState?.register === true) {
+      showRegister = true;
     }
 
     const params = new URLSearchParams(window.location.search);

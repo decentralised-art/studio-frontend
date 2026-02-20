@@ -18,9 +18,10 @@ export default defineConfig({
   server: {
     proxy: {
       "/api": {
-        target: "https://api.hypermusic.ai",
+        target: "https://api.decentralised.art",
         changeOrigin: true,
         secure: true,
+        rewrite: (path) => path.replace(/^\/api(\/|$)/, "/"),
       },
     },
   },
