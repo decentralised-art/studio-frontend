@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { goto } from "$app/navigation";
   import { resolve } from "$app/paths";
   import Button from "$lib/components/ui/Button.svelte";
   import SectionShell from "$lib/components/ui/SectionShell.svelte";
@@ -20,6 +21,12 @@
   let typedText = $state(slogans[0] ?? "");
   let wordIndex = $state(0);
   let isTyping = $state(true);
+
+  const openRegister = () => {
+    goto(resolve("/login"), {
+      state: { register: true } as App.PageState,
+    });
+  };
 
   $effect(() => {
     if (slogans.length === 0) return;
@@ -92,7 +99,7 @@
           <Button
             variant="subtle"
             onclick={() => {
-              window.location.href = `${resolve("/login")}?register=1`;
+              openRegister();
             }}
           >
             Get started →
@@ -100,7 +107,7 @@
           <Button
             variant="subtle"
             onclick={() => {
-              window.location.href = resolve("/explore");
+              goto(resolve("/explore"));
             }}
             >Explore particles
           </Button>

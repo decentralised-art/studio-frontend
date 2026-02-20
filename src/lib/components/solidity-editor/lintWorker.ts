@@ -1,3 +1,5 @@
+import { buildServicesApiUrl } from "$lib/url/url";
+
 export type LintIssue = {
   message: string;
   severity: "error" | "warning" | "info";
@@ -93,7 +95,7 @@ self.onmessage = (ev: MessageEvent<Req>) => {
     let issues: LintIssue[] = [];
     try {
       if (mode === "server") {
-        issues = await serverLint(code, endpoint ?? "/api/solidity/lint");
+        issues = await serverLint(code, endpoint ?? buildServicesApiUrl("/solidity/lint"));
       } else {
         issues = lightLint(code);
       }

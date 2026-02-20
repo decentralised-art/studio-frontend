@@ -6,6 +6,7 @@
   import type { FeatureNodePropsType } from "./flowEditorTypes";
 
   import Input from "$lib/components/ui/Input.svelte";
+  import { buildChainApiUrl } from "$lib/url/url";
 
   let { id, data, isConnectable, selected }: FeatureNodePropsType = $props();
 
@@ -30,10 +31,10 @@
     }
 
     try {
-      const res = await fetch(
-        `https://api.decentralised.art/feature/${encodeURIComponent(trimmed)}`,
-        { method: "HEAD", cache: "no-store" },
-      );
+      const res = await fetch(buildChainApiUrl(`/feature/${encodeURIComponent(trimmed)}`), {
+        method: "HEAD",
+        cache: "no-store",
+      });
 
       if (!res.ok) {
         // 404 etc → mark as not existing, no throw

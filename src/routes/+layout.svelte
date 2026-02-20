@@ -2,39 +2,37 @@
   import { onMount } from "svelte";
   import { goto } from "$app/navigation";
   import { resolve } from "$app/paths";
-  import { page } from "$app/stores";
+  import { page } from "$app/state";
   import "$lib/styles/style.css";
   import favicon from "$lib/assets/favicon.svg";
   import { getToken } from "$lib/auth/session";
 
   let { children } = $props();
   let isAuthenticated = $state(false);
+  const allowedRouteIds = new Set(["/", "/login"]);
+  const guardRoute = (routeId: string | null) => {
+    if (getToken()) return;
+    if (routeId === null) return;
+    if (allowedRouteIds.has(routeId)) return;
+    goto(resolve("/login"));
+  };
 
   onMount(() => {
-    const allowedPaths: Set<string> = new Set([resolve("/"), resolve("/login")]);
-
-    const guardRoute = (path: string) => {
-      if (getToken()) return;
-      if (allowedPaths.has(path)) return;
-      goto(resolve("/login"));
-    };
-
     const syncAuth = () => {
       isAuthenticated = Boolean(getToken());
-      guardRoute(window.location.pathname);
+      guardRoute(page.route.id);
     };
 
     syncAuth();
     window.addEventListener("auth:change", syncAuth);
 
-    const unsubscribe = page.subscribe(($page) => {
-      guardRoute($page.url.pathname);
-    });
-
     return () => {
       window.removeEventListener("auth:change", syncAuth);
-      unsubscribe();
     };
+  });
+
+  $effect(() => {
+    if (!isAuthenticated) guardRoute(page.route.id);
   });
 </script>
 

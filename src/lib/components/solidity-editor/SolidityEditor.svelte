@@ -3,13 +3,14 @@
   import * as monaco from "monaco-editor";
   import { ensureSolidityLanguage } from "./monacoSolidity";
   import type { LintIssue } from "./lintWorker";
+  import { buildServicesApiUrl } from "$lib/url/url";
 
   // Svelte 5 props
   let {
     value = $bindable(""),
     readOnly = false,
     lintMode = "server" as "server" | "light",
-    lintEndpoint = "/api/solidity/lint",
+    lintEndpoint = buildServicesApiUrl("/solidity/lint"),
     onChange,
   } = $props<{
     value?: string;

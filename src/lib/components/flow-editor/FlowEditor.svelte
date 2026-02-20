@@ -26,6 +26,7 @@
   import { addingConnectionCreatesCycle } from "./graphUtils";
   import type { ApiFeature } from "$lib/dcn/dcnApi";
   import { SvelteSet } from "svelte/reactivity";
+  import { buildChainApiUrl } from "$lib/url/url";
 
   // map to components
   const nodeTypes = {
@@ -207,10 +208,10 @@
 
       visited.add(featureName);
 
-      const res = await fetch(
-        `https://api.decentralised.art/feature/${encodeURIComponent(featureName)}`,
-        { method: "GET", cache: "no-store" },
-      );
+      const res = await fetch(buildChainApiUrl(`/feature/${encodeURIComponent(featureName)}`), {
+        method: "GET",
+        cache: "no-store",
+      });
 
       if (!res.ok) {
         console.warn("Failed to GET feature", featureName, res.status);

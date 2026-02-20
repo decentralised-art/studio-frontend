@@ -1,6 +1,4 @@
-import { base } from "$app/paths";
-
-const withBasePath = (path: string) => `${base}${path.startsWith("/") ? path : `/${path}`}`;
+import { asset } from "$app/paths";
 
 export type UserKind = "human" | "agent";
 
@@ -26,7 +24,7 @@ export const mockUsers: User[] = [
     kind: "human",
     address: "0x3b4c8f2a7d5e9a1c6b4f8e2d7a1c5f9b3a7d8e1f",
     nickname: "Lyra N.",
-    avatarUrl: withBasePath("/avatars/lyra.svg"),
+    avatarUrl: asset("/avatars/lyra.svg"),
     bio: "Composer and PT architect shaping spatial rhythm studies.",
     authored: {
       performativeTransactions: 12,
@@ -41,7 +39,7 @@ export const mockUsers: User[] = [
     kind: "human",
     address: "0x8a71d4c93f2b5e6071a9c3f5b7d8e2f1a6c4b9d0",
     nickname: "Milo K.",
-    avatarUrl: withBasePath("/avatars/milo.svg"),
+    avatarUrl: asset("/avatars/milo.svg"),
     bio: "Builds rhythmic agents and lattice-driven PTs.",
     authored: {
       performativeTransactions: 9,
@@ -56,7 +54,7 @@ export const mockUsers: User[] = [
     kind: "human",
     address: "0x5f12a8b9c3d4e5f60718293a4b5c6d7e8f9012a3",
     nickname: "Rae S.",
-    avatarUrl: withBasePath("/avatars/rae.svg"),
+    avatarUrl: asset("/avatars/rae.svg"),
     bio: "Explores spectral mirrors and chroma feedback loops.",
     authored: {
       performativeTransactions: 7,
@@ -71,7 +69,7 @@ export const mockUsers: User[] = [
     kind: "human",
     address: "0xc21b4d6e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c",
     nickname: "Jun A.",
-    avatarUrl: withBasePath("/avatars/jun.svg"),
+    avatarUrl: asset("/avatars/jun.svg"),
     bio: "Weaves collaborative scores and tempo-linked PTs.",
     authored: {
       performativeTransactions: 10,
@@ -86,7 +84,7 @@ export const mockUsers: User[] = [
     kind: "human",
     address: "0xd903f1a2b4c5d6e7f8091a2b3c4d5e6f708192a3",
     nickname: "Iris Q.",
-    avatarUrl: withBasePath("/avatars/iris.svg"),
+    avatarUrl: asset("/avatars/iris.svg"),
     bio: "Builds adaptive tempo lattices and sync logic.",
     authored: {
       performativeTransactions: 6,
@@ -101,7 +99,7 @@ export const mockUsers: User[] = [
     kind: "human",
     address: "0x91b2c3d4e5f60718293a4b5c6d7e8f9012a3b4c5",
     nickname: "Nia P.",
-    avatarUrl: withBasePath("/avatars/nia.svg"),
+    avatarUrl: asset("/avatars/nia.svg"),
     bio: "Visual storyteller shaping chromatic PTs.",
     authored: {
       performativeTransactions: 5,
@@ -116,7 +114,7 @@ export const mockUsers: User[] = [
     kind: "agent",
     address: "0xa11c0de4b5f60718293a4b5c6d7e8f9012a3b4c6",
     nickname: "Aurora Agent",
-    avatarUrl: withBasePath("/avatars/aurora.svg"),
+    avatarUrl: asset("/avatars/aurora.svg"),
     bio: "Autonomous arranger tuned for emergent harmony.",
     authored: {
       performativeTransactions: 14,

@@ -25,6 +25,19 @@ To create a production version of your app:
 npm run build
 ```
 
+Optional build/runtime env vars:
+
+```sh
+# Mount app under reverse-proxy prefix (e.g. /app)
+PUBLIC_BASE_PATH=/app
+
+# Services API base URL (defaults to https://api.decentralised.art/services)
+VITE_SERVICES_API_BASE_URL=https://api.decentralised.art/services
+
+# Chain API base URL (defaults to https://api.decentralised.art/chain)
+VITE_CHAIN_API_BASE_URL=https://api.decentralised.art/chain
+```
+
 You can preview the production build with `npm run preview`.
 
 > To deploy your app, you may need to install an [adapter](https://svelte.dev/docs/kit/adapters) for your target environment.
