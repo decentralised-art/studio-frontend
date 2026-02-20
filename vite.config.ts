@@ -21,7 +21,7 @@ export default defineConfig({
         target: "https://api.decentralised.art",
         changeOrigin: true,
         secure: true,
-        rewrite: (path) => path.replace(/^\/api/, ""),
+        rewrite: (path) => path.replace(/^\/api(\/|$)/, "/"),
       },
     },
   },
