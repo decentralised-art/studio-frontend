@@ -2,7 +2,7 @@
   import { onMount } from "svelte";
   import { goto } from "$app/navigation";
   import { resolve } from "$app/paths";
-  import { page } from "$app/stores";
+  import { page } from "$app/state";
   import "$lib/styles/style.css";
   import favicon from "$lib/assets/favicon.svg";
   import { getToken } from "$lib/auth/session";
@@ -10,34 +10,34 @@
   let { children } = $props();
   let isAuthenticated = $state(false);
   let currentPath = $state("");
+  let redirectInProgress = false;
+  const allowedRouteIds = new Set(["/", "/login"]);
+  const guardRoute = (routeId: string | null) => {
+    if (redirectInProgress) return;
+    if (getToken()) return;
+    if (routeId === null) return;
+    if (allowedRouteIds.has(routeId)) return;
+    redirectInProgress = true;
+    goto(resolve("/login"), { replaceState: true });
+  };
 
   onMount(() => {
-    const allowedPaths: Set<string> = new Set([resolve("/"), resolve("/login")]);
-
-    const guardRoute = (path: string) => {
-      if (getToken()) return;
-      if (allowedPaths.has(path)) return;
-      goto(resolve("/login"));
-    };
-
     const syncAuth = () => {
       isAuthenticated = Boolean(getToken());
       currentPath = window.location.pathname;
-      guardRoute(window.location.pathname);
+      guardRoute(page.route.id);
     };
 
     syncAuth();
     window.addEventListener("auth:change", syncAuth);
-
-    const unsubscribe = page.subscribe(($page) => {
-      currentPath = $page.url.pathname;
-      guardRoute($page.url.pathname);
-    });
-
     return () => {
       window.removeEventListener("auth:change", syncAuth);
-      unsubscribe();
     };
+  });
+
+  $effect(() => {
+    currentPath = page.url.pathname;
+    if (!isAuthenticated) guardRoute(page.route.id);
   });
 </script>
 

@@ -1,16 +1,12 @@
 import { browser } from "$app/environment";
+import { goto } from "$app/navigation";
 import { resolve } from "$app/paths";
+import { buildServicesApiUrl } from "$lib/url/url";
 import { clearToken, getToken, setToken } from "./session";
-
-const API_BASE =
-  import.meta.env.VITE_API_BASE_URL?.toString() ??
-  (import.meta.env.DEV ? "/api" : "https://api.hypermusic.ai/api");
-
-const buildUrl = (path: string) => `${API_BASE}${path.startsWith("/") ? path : `/${path}`}`;
 
 const redirectToLogin = () => {
   if (!browser) return;
-  window.location.href = resolve("/login");
+  goto(resolve("/login"));
 };
 
 const parseTokenFromResponse = (raw: string): string => {
@@ -57,7 +53,7 @@ export const authFetch = async (path: string, init: RequestInit = {}) => {
   const token = getToken();
   if (token) headers.set("Authorization", `Bearer ${token}`);
 
-  const response = await fetch(buildUrl(path), {
+  const response = await fetch(buildServicesApiUrl(path), {
     ...init,
     headers,
   });
@@ -71,7 +67,7 @@ export const authFetch = async (path: string, init: RequestInit = {}) => {
 };
 
 export const login = async (email: string, password: string): Promise<string> => {
-  const response = await fetch(buildUrl("/auth/login"), {
+  const response = await fetch(buildServicesApiUrl("/auth/login"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ email, password }),
@@ -92,7 +88,7 @@ export const login = async (email: string, password: string): Promise<string> =>
 };
 
 export const registerUser = async (email: string, displayName: string, password: string) => {
-  const response = await fetch(buildUrl("/users"), {
+  const response = await fetch(buildServicesApiUrl("/users"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
