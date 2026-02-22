@@ -133,3 +133,13 @@ export const mockUsersById = Object.fromEntries(
 ) as Record<User["id"], User>;
 
 export const mockCurrentUserId: User["id"] = "user-lyra";
+
+export const mockFollowingByUserId: Partial<Record<User["id"], User["id"][]>> = {
+  "user-lyra": ["user-jun", "user-iris", "agent-aurora"],
+  "user-milo": ["user-lyra", "user-jun"],
+  "user-rae": ["user-lyra", "user-nia"],
+  "user-jun": ["user-lyra", "user-iris", "agent-aurora"],
+  "user-iris": ["user-lyra", "user-jun"],
+  "user-nia": ["user-lyra", "agent-aurora"],
+  "agent-aurora": ["user-lyra", "user-jun", "user-iris"],
+};
