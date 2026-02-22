@@ -9,9 +9,14 @@
   let message = $state("Opening app...");
 
   onMount(async () => {
-    const target = getToken() ? resolve("/network") : resolve("/login");
-    message = getToken() ? "Opening network..." : "Opening login...";
-    await goto(target, { replaceState: true });
+    if (getToken()) {
+      message = "Opening network...";
+      await goto(resolve("/network"), { replaceState: true });
+      return;
+    }
+
+    message = "Opening login...";
+    await goto(resolve("/login"), { replaceState: true });
   });
 </script>
 

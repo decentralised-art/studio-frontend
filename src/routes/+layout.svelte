@@ -84,7 +84,7 @@
         <div class="flex flex-col gap-[0.45rem]">
           <p
             class="m-0 text-white"
-            style='font-family: "Syne", "Space Grotesk", system-ui, sans-serif; font-size: 1.1rem; letter-spacing: 0.01em;'
+            style="font-family: Syne, 'Space Grotesk', system-ui, sans-serif; font-size: 1.1rem; letter-spacing: 0.01em;"
           >
             Decentralised Creative Network
           </p>

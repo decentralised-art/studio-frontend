@@ -17,11 +17,37 @@ export default defineConfig({
 
   server: {
     proxy: {
+      "/api/auth": {
+        target: "http://127.0.0.1:4000",
+        changeOrigin: true,
+        secure: false,
+      },
+      "/api/users": {
+        target: "http://127.0.0.1:4000",
+        changeOrigin: true,
+        secure: false,
+      },
+      "/api/social": {
+        target: "http://127.0.0.1:4000",
+        changeOrigin: true,
+        secure: false,
+      },
+      "/api/chain": {
+        target: "https://api.decentralised.art",
+        changeOrigin: true,
+        secure: true,
+        rewrite: (path) => path.replace(/^\/api\/chain(\/|$)/, "/chain/"),
+      },
+      "/api/services": {
+        target: "https://api.decentralised.art",
+        changeOrigin: true,
+        secure: true,
+        rewrite: (path) => path.replace(/^\/api\/services(\/|$)/, "/services/"),
+      },
       "/api": {
         target: "https://api.decentralised.art",
         changeOrigin: true,
         secure: true,
-        rewrite: (path) => path.replace(/^\/api(\/|$)/, "/"),
       },
     },
   },

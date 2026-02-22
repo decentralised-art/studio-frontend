@@ -1,12 +1,32 @@
 import { browser } from "$app/environment";
 import { goto } from "$app/navigation";
 import { resolve } from "$app/paths";
+import { mockCurrentUserId, mockUsersById } from "$lib/data/users";
 import { buildServicesApiUrl } from "$lib/url/url";
 import { clearToken, getToken, setToken } from "./session";
+
+const DEV_AUTH_BYPASS =
+  import.meta.env.DEV && import.meta.env.VITE_DEV_AUTH_BYPASS?.toString() === "1";
+const DEV_AUTH_BYPASS_TOKEN = "dev-auth-bypass-token";
+
+export const isDevAuthBypassEnabled = DEV_AUTH_BYPASS;
 
 const redirectToLogin = () => {
   if (!browser) return;
   goto(resolve("/login"));
+};
+
+const buildDevUserPayload = () => {
+  const user = mockUsersById[mockCurrentUserId];
+  return { user };
+};
+
+export const loginWithDevMockAccount = async (): Promise<string> => {
+  if (!DEV_AUTH_BYPASS) {
+    throw new Error("Dev auth bypass is disabled.");
+  }
+  setToken(DEV_AUTH_BYPASS_TOKEN);
+  return DEV_AUTH_BYPASS_TOKEN;
 };
 
 const parseTokenFromResponse = (raw: string): string => {
@@ -67,6 +87,10 @@ export const authFetch = async (path: string, init: RequestInit = {}) => {
 };
 
 export const login = async (email: string, password: string): Promise<string> => {
+  if (DEV_AUTH_BYPASS) {
+    return loginWithDevMockAccount();
+  }
+
   const response = await fetch(buildServicesApiUrl("/auth/login"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -88,6 +112,14 @@ export const login = async (email: string, password: string): Promise<string> =>
 };
 
 export const registerUser = async (email: string, displayName: string, password: string) => {
+  if (DEV_AUTH_BYPASS) {
+    return {
+      ...buildDevUserPayload(),
+      mock: true,
+      registered_as: { email, displayName, password: password ? "********" : "" },
+    };
+  }
+
   const response = await fetch(buildServicesApiUrl("/users"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -107,12 +139,22 @@ export const registerUser = async (email: string, displayName: string, password:
 };
 
 export const logout = async (): Promise<void> => {
+  if (DEV_AUTH_BYPASS) {
+    clearToken();
+    redirectToLogin();
+    return;
+  }
+
   await authFetch("/auth/logout", { method: "POST" });
   clearToken();
   redirectToLogin();
 };
 
 export const getMe = async () => {
+  if (DEV_AUTH_BYPASS) {
+    return buildDevUserPayload();
+  }
+
   const response = await authFetch("/auth/me");
   if (!response.ok) {
     throw new Error("Failed to load account.");

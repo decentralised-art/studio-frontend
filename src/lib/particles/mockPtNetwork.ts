@@ -121,8 +121,6 @@ const buildAddSequence = (steps: number[]): MockTransformationDef[] =>
   steps.map((step) => ({ name: "add", args: [step] }));
 
 const rhythmPattern = buildAddSequence([1, 1, 2, 1, 1, 2, 2, 1]);
-const durationPattern = buildAddSequence([1, 1, 2, 1, 2, 1, 1, 2]);
-const velocityPattern = buildAddSequence([92, 86, 95, 88, 90, 84, 96, 87]);
 
 const melodyPitchIndexes = buildAddSequence([1, 2, 1, 3, 1, 2, 2]);
 const melodyTimeIndexes = buildAddSequence([1, 1, 1, 2, 1, 1]);

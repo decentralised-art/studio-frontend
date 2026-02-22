@@ -34,10 +34,7 @@
     </header>
 
     <div class="event-graph">
-      <SocialParticleDependencyFlow
-        particleId={event.particleId}
-        {onParticleOpen}
-      />
+      <SocialParticleDependencyFlow particleId={event.particleId} {onParticleOpen} />
     </div>
 
     <div class="event-body">

@@ -8,7 +8,12 @@
   import Input from "$lib/components/ui/Input.svelte";
   import SectionShell from "$lib/components/ui/SectionShell.svelte";
 
-  import { login, registerUser } from "$lib/auth/api";
+  import {
+    isDevAuthBypassEnabled,
+    login,
+    loginWithDevMockAccount,
+    registerUser,
+  } from "$lib/auth/api";
   import { getToken } from "$lib/auth/session";
 
   let form = $state({
@@ -81,6 +86,19 @@
     }
   };
 
+  const handleDevMockLogin = async () => {
+    loginError = "";
+    isSubmitting = true;
+    try {
+      await loginWithDevMockAccount();
+      await goto(resolve("/account"));
+    } catch (err) {
+      loginError = err instanceof Error ? err.message : "Dev mock login failed.";
+    } finally {
+      isSubmitting = false;
+    }
+  };
+
   onMount(() => {
     if (getToken()) {
       goto(resolve("/account"));
@@ -119,6 +137,20 @@
           {isSubmitting ? "Signing in..." : "Sign in"}
         </Button>
       </div>
+
+      {#if isDevAuthBypassEnabled}
+        <div class="actions dev-actions">
+          <Button
+            variant="ghost"
+            type="button"
+            onclick={handleDevMockLogin}
+            disabled={isSubmitting}
+          >
+            Use mock account (dev)
+          </Button>
+        </div>
+        <p class="success">Dev auth bypass enabled (`VITE_DEV_AUTH_BYPASS=1`).</p>
+      {/if}
 
       <button type="button" class="toggle" onclick={() => (showRegister = !showRegister)}>
         Don't have an account yet? <span class="toggle-emphasis">Register</span>
@@ -199,6 +231,10 @@
 
   .actions {
     @apply flex items-center justify-end;
+  }
+
+  .dev-actions {
+    @apply justify-start;
   }
 
   .error {

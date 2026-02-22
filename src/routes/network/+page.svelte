@@ -3,10 +3,7 @@
   import Button from "$lib/components/ui/Button.svelte";
   import Input from "$lib/components/ui/Input.svelte";
   import SocialEventCard from "$lib/components/social/SocialEventCard.svelte";
-  import {
-    mockSocialEvents,
-    mockSocialNetworkGraph,
-  } from "$lib/social/mockSocialFeed";
+  import { mockSocialEvents, mockSocialNetworkGraph } from "$lib/social/mockSocialFeed";
   import { networkNodeStudioKind, type NetworkGraphNode } from "$lib/network/mockNetworkGraph";
   import {
     mockCurrentUserId,
@@ -83,7 +80,11 @@
 
   const openParticleInStudio = (particleId: string | NetworkGraphNode) => {
     const resolvedParticleId =
-      typeof particleId === "string" ? particleId : particleId.kind === "particle" ? particleId.entityId : null;
+      typeof particleId === "string"
+        ? particleId
+        : particleId.kind === "particle"
+          ? particleId.entityId
+          : null;
     if (!resolvedParticleId) return;
     const base = resolve("/studio");
     const target = new URL(base, window.location.origin);
@@ -206,10 +207,7 @@
     {:else}
       {#each feedEvents as event (event.id)}
         <div class="feed-card-shell">
-          <SocialEventCard
-            {event}
-            onParticleOpen={openParticleInStudio}
-          />
+          <SocialEventCard {event} onParticleOpen={openParticleInStudio} />
         </div>
       {/each}
     {/if}

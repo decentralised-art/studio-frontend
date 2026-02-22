@@ -1,5 +1,6 @@
 <script lang="ts">
   import { Background, SvelteFlow, type Edge, type NodeTypes } from "@xyflow/svelte";
+  import { SvelteMap } from "svelte/reactivity";
   import { tick } from "svelte";
   import "@xyflow/svelte/dist/style.css";
 
@@ -24,7 +25,9 @@
   const builtNodes = $derived.by(() => graph.nodes);
   const builtEdges = $derived.by(() => graph.edges);
   const flowId = $derived(`social-flow-${particleId}`);
-  const graphSignature = $derived.by(() => `${particleId}:${builtNodes.length}:${builtEdges.length}`);
+  const graphSignature = $derived.by(
+    () => `${particleId}:${builtNodes.length}:${builtEdges.length}`,
+  );
   const flowHeight = $derived.by(() => {
     const dimCount = builtNodes.filter((node) => node.data.kind === "dimension").length;
     const depCount = builtNodes.filter((node) => node.data.kind === "particle").length;
@@ -89,7 +92,9 @@
     );
 
   const getCompositeForDimension = (dimensionId: string) => {
-    const edge = flowEdges.find((item) => item.source === dimensionId && item.sourceHandle === "out");
+    const edge = flowEdges.find(
+      (item) => item.source === dimensionId && item.sourceHandle === "out",
+    );
     if (!edge?.target) return null;
     const target = flowNodes.find((node) => node.id === edge.target);
     if (!target || target.data.kind !== "particle") return null;
@@ -99,7 +104,7 @@
   const layoutFeatureClusters = () => {
     if (!flowShellEl || !flowNodes.length) return;
 
-    const updates = new Map<string, { x: number; y: number }>();
+    const updates = new SvelteMap<string, { x: number; y: number }>();
     const gapX = 24;
     const gapY = 48;
     const defaultSize = { width: 160, height: 60 };
@@ -207,7 +212,11 @@
   });
 </script>
 
-<div class="social-dependency-flow" bind:this={flowShellEl} style={`--social-flow-height: ${flowHeight}px;`}>
+<div
+  class="social-dependency-flow"
+  bind:this={flowShellEl}
+  style={`--social-flow-height: ${flowHeight}px;`}
+>
   <button
     type="button"
     class="flow-expand-btn"
@@ -216,10 +225,10 @@
     onclick={openAnnouncedParticle}
   >
     <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M4 9V4h5" />
-      <path d="M15 4h5v5" />
-      <path d="M20 15v5h-5" />
-      <path d="M9 20H4v-5" />
+      <path d="M4 9V4h5"></path>
+      <path d="M15 4h5v5"></path>
+      <path d="M20 15v5h-5"></path>
+      <path d="M9 20H4v-5"></path>
     </svg>
   </button>
   {#key `${particleId}:${builtNodes.length}:${builtEdges.length}`}

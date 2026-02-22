@@ -1,5 +1,5 @@
-import { mockUsersById } from "$lib/data/users";
 import { mockExploreParticles, mockParticleViews } from "$lib/data/exploreParticles";
+import { mockUsersById } from "$lib/data/users";
 import {
   buildMockNetworkGraph,
   type NetworkGraphData,
@@ -41,7 +41,9 @@ const registryFeatureByName = new Map(
 
 const ensureExistingIds = (ids: string[]) => ids.filter((id) => byId.has(id));
 
-const particleViewLabelById = new Map(mockParticleViews.map((view) => [view.id, view.label] as const));
+const particleViewLabelById = new Map(
+  mockParticleViews.map((view) => [view.id, view.label] as const),
+);
 
 export const mockSocialEvents: SocialEvent[] = mockExploreParticles
   .map((particle) => {
@@ -83,9 +85,7 @@ export const countEventCreatedKinds = (
   return counts;
 };
 
-export const formatEventSummary = (
-  event: SocialEvent,
-): string => {
+export const formatEventSummary = (event: SocialEvent): string => {
   const author = mockUsersById[event.authorId]?.nickname ?? "Unknown";
   const target = event.formatLabel ? ` for ${event.formatLabel}` : "";
   return `${author} created a new particle${target}: ${event.particleLabel}.`;
@@ -185,7 +185,9 @@ export const buildSocialEventGraphSlice = (
 
   const rootFeatureNodeId = `feature:${registryParticle.featureName}`;
   const baseNodes = graph.nodes
-    .filter((node) => keepNodeIds.has(node.id) && (node.kind === "particle" || node.kind === "feature"))
+    .filter(
+      (node) => keepNodeIds.has(node.id) && (node.kind === "particle" || node.kind === "feature"),
+    )
     .map((node) => {
       if (node.kind !== "feature") return node;
       const featureName = node.entityId;
