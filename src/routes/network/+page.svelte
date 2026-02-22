@@ -16,8 +16,12 @@
 
   let followSearch = $state("");
   let localFollowing = $state<User["id"][]>([...(mockFollowingByUserId[mockCurrentUserId] ?? [])]);
+  let localToolboxParticles = $state<string[]>([
+    ...(mockUsersById[mockCurrentUserId]?.toolbox ?? []),
+  ]);
 
   const followedAuthorIds = $derived.by(() => new Set(localFollowing));
+  const toolboxParticleIds = $derived.by(() => new Set(localToolboxParticles));
   const searchQuery = $derived.by(() => followSearch.trim().toLowerCase());
 
   const userSearchResults = $derived.by(() => {
@@ -96,6 +100,15 @@
   const followUser = (userId: User["id"]) => {
     if (localFollowing.includes(userId)) return;
     localFollowing = [...localFollowing, userId];
+  };
+
+  const addParticleToToolbox = (particleId: string) => {
+    if (toolboxParticleIds.has(particleId)) return;
+    localToolboxParticles = [...localToolboxParticles, particleId];
+    const currentUser = mockUsersById[mockCurrentUserId];
+    if (currentUser && !currentUser.toolbox.includes(particleId)) {
+      currentUser.toolbox = [...currentUser.toolbox, particleId];
+    }
   };
 </script>
 
@@ -207,7 +220,12 @@
     {:else}
       {#each feedEvents as event (event.id)}
         <div class="feed-card-shell">
-          <SocialEventCard {event} onParticleOpen={openParticleInStudio} />
+          <SocialEventCard
+            {event}
+            onParticleOpen={openParticleInStudio}
+            onAddToToolbox={addParticleToToolbox}
+            inToolbox={toolboxParticleIds.has(event.particleId)}
+          />
         </div>
       {/each}
     {/if}
