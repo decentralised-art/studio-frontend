@@ -1,7 +1,11 @@
 import adapter from "@sveltejs/adapter-node";
 import { vitePreprocess } from "@sveltejs/vite-plugin-svelte";
 
-const rawBase = process.env.PUBLIC_BASE_PATH?.trim() ?? "";
+const isProdBuild = process.env.NODE_ENV === "production";
+const rawBase =
+  process.env.PUBLIC_BASE_PATH?.trim() ??
+  process.env.BASE_PATH?.trim() ??
+  (isProdBuild ? "/app" : "");
 const normalizedBase =
   rawBase && rawBase !== "/" ? `/${rawBase}`.replace(/\/+/g, "/").replace(/\/$/, "") : "";
 
