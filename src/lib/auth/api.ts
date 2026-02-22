@@ -174,6 +174,12 @@ export const getUserById = async (userId: string) => {
   const response = await fetch(buildServicesApiUrl(`/users/${encodeURIComponent(userId)}`));
   const payload = await parseResponseBody(response);
   if (!response.ok) {
+    // Transitional mixed mode: the network feed still uses mock user IDs (user-*, agent-*),
+    // while auth/account runs against the real backend. Keep mock profiles functional in prod.
+    const mockUser = mockUsersById[userId];
+    if (response.status === 404 && mockUser) {
+      return { user: mockUser };
+    }
     throw new Error(extractErrorMessage(payload));
   }
   return payload;
