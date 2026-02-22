@@ -27,7 +27,7 @@ jobs:
         run: npm run build
         env:
           NODE_OPTIONS: --max_old_space_size=4096
-          PUBLIC_BASE_PATH: ${{ vars.PUBLIC_BASE_PATH }}
+          PUBLIC_BASE_PATH: ${{ vars.PUBLIC_BASE_PATH || 'app' }}
           VITE_SERVICES_API_BASE_URL: ${{ vars.VITE_SERVICES_API_BASE_URL }}
           VITE_CHAIN_API_BASE_URL: ${{ vars.VITE_CHAIN_API_BASE_URL }}
 
