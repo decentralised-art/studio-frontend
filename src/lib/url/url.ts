@@ -1,21 +1,19 @@
 const defaultApiOrigin = "https://api.decentralised.art";
+const isDev = import.meta.env.DEV;
 
-const normalizeBase = (rawBase: string, fallbackPath: string): string =>
-  (rawBase.trim().length > 0 ? rawBase.trim() : `${defaultApiOrigin}${fallbackPath}`).replace(
-    /\/+$/,
-    "",
-  );
+const normalizeBase = (rawBase: string, fallbackBase: string): string =>
+  (rawBase.trim().length > 0 ? rawBase.trim() : fallbackBase).replace(/\/+$/, "");
 
 const servicesBase = normalizeBase(
   import.meta.env.VITE_SERVICES_API_BASE_URL?.toString() ??
     import.meta.env.VITE_API_BASE_URL?.toString() ??
     "",
-  "/services",
+  isDev ? "/api" : `${defaultApiOrigin}/api`,
 );
 
 const chainBase = normalizeBase(
   import.meta.env.VITE_CHAIN_API_BASE_URL?.toString() ?? "",
-  "/chain",
+  isDev ? "/api/chain" : `${defaultApiOrigin}/chain`,
 );
 
 const joinUrl = (base: string, path: string): string =>

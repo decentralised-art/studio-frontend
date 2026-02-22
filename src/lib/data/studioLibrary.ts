@@ -72,11 +72,6 @@ const transformationMeta: Record<string, { name?: string; summary?: string; auth
     summary: "Adds with modular wraparound.",
     authorId: "user-rae",
   },
-  set: {
-    name: "Set",
-    summary: "Sets values to a constant.",
-    authorId: "user-lyra",
-  },
   mirror: {
     name: "Mirror",
     summary: "Mirrors values around an axis.",

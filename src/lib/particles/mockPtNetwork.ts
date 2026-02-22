@@ -90,10 +90,6 @@ const mockTransformations = {
       return ((next % mod) + mod) % mod;
     },
   },
-  set: {
-    argc: 1,
-    run: (_x: number, args: number[]) => args[0] ?? 0,
-  },
   mirror: {
     argc: 1,
     run: (x: number, args: number[]) => {
@@ -124,12 +120,7 @@ const scaleMinorSteps = [2, 1, 2, 2, 1, 2, 2];
 const buildAddSequence = (steps: number[]): MockTransformationDef[] =>
   steps.map((step) => ({ name: "add", args: [step] }));
 
-const buildSetSequence = (values: number[]): MockTransformationDef[] =>
-  values.map((value) => ({ name: "set", args: [value] }));
-
 const rhythmPattern = buildAddSequence([1, 1, 2, 1, 1, 2, 2, 1]);
-const durationPattern = buildSetSequence([1, 1, 2, 1, 2, 1, 1, 2]);
-const velocityPattern = buildSetSequence([92, 86, 95, 88, 90, 84, 96, 87]);
 
 const melodyPitchIndexes = buildAddSequence([1, 2, 1, 3, 1, 2, 2]);
 const melodyTimeIndexes = buildAddSequence([1, 1, 1, 2, 1, 1]);
@@ -152,11 +143,11 @@ const mockFeatures: Record<string, MockFeatureDef> = {
   },
   "duration-values": {
     name: "duration-values",
-    dimensions: [{ label: "duration", transformations: durationPattern }],
+    dimensions: [{ label: "duration", transformations: buildAddSequence([1]) }],
   },
   "velocity-values": {
     name: "velocity-values",
-    dimensions: [{ label: "velocity", transformations: velocityPattern }],
+    dimensions: [{ label: "velocity", transformations: buildAddSequence([1]) }],
   },
   "major-scale-pattern": {
     name: "major-scale-pattern",
