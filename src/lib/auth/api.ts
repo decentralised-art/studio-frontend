@@ -1,7 +1,7 @@
 import { browser } from "$app/environment";
 import { goto } from "$app/navigation";
 import { resolve } from "$app/paths";
-import { mockCurrentUserId, mockUsersById } from "$lib/data/users";
+import { mockCurrentUserId, mockFollowingByUserId, mockUsersById } from "$lib/data/users";
 import { buildServicesApiUrl } from "$lib/url/url";
 import { clearToken, getToken, setToken } from "./session";
 
@@ -160,4 +160,127 @@ export const getMe = async () => {
     throw new Error("Failed to load account.");
   }
   return response.json();
+};
+
+export const getUserById = async (userId: string) => {
+  if (DEV_AUTH_BYPASS) {
+    const user = mockUsersById[userId];
+    if (!user) {
+      throw new Error("User not found.");
+    }
+    return { user };
+  }
+
+  const response = await fetch(buildServicesApiUrl(`/users/${encodeURIComponent(userId)}`));
+  const payload = await parseResponseBody(response);
+  if (!response.ok) {
+    throw new Error(extractErrorMessage(payload));
+  }
+  return payload;
+};
+
+export const updateUserById = async (
+  userId: string,
+  patch: Record<string, unknown>,
+): Promise<unknown> => {
+  if (DEV_AUTH_BYPASS) {
+    const user = mockUsersById[userId];
+    if (!user) throw new Error("User not found.");
+    const displayName = typeof patch.display_name === "string" ? patch.display_name : undefined;
+    const profileJson =
+      patch.profile_json && typeof patch.profile_json === "object"
+        ? (patch.profile_json as Record<string, unknown>)
+        : undefined;
+    const publicProfile =
+      profileJson?.public && typeof profileJson.public === "object"
+        ? (profileJson.public as Record<string, unknown>)
+        : profileJson;
+    const bio = typeof publicProfile?.bio === "string" ? publicProfile.bio : undefined;
+
+    if (displayName) user.nickname = displayName;
+    if (typeof bio === "string") user.bio = bio;
+
+    return { user };
+  }
+
+  const response = await authFetch(`/users/${encodeURIComponent(userId)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+  const payload = await parseResponseBody(response);
+  if (!response.ok) {
+    throw new Error(extractErrorMessage(payload));
+  }
+  return payload;
+};
+
+export const getFollowingIds = async (): Promise<string[]> => {
+  if (DEV_AUTH_BYPASS) {
+    return [...(mockFollowingByUserId[mockCurrentUserId] ?? [])];
+  }
+
+  const response = await authFetch("/social/following");
+  const payload = await parseResponseBody(response);
+  if (!response.ok) {
+    throw new Error(extractErrorMessage(payload));
+  }
+  return Array.isArray(payload)
+    ? payload.filter((entry): entry is string => typeof entry === "string")
+    : [];
+};
+
+export const getFollowersIds = async (): Promise<string[]> => {
+  if (DEV_AUTH_BYPASS) {
+    return Object.entries(mockFollowingByUserId)
+      .filter(([, following]) => (following ?? []).includes(mockCurrentUserId))
+      .map(([userId]) => userId);
+  }
+
+  const response = await authFetch("/social/followers");
+  const payload = await parseResponseBody(response);
+  if (!response.ok) {
+    throw new Error(extractErrorMessage(payload));
+  }
+  return Array.isArray(payload)
+    ? payload.filter((entry): entry is string => typeof entry === "string")
+    : [];
+};
+
+export const followUserById = async (followedId: string): Promise<void> => {
+  if (DEV_AUTH_BYPASS) {
+    const current = mockFollowingByUserId[mockCurrentUserId] ?? [];
+    if (!current.includes(followedId)) {
+      mockFollowingByUserId[mockCurrentUserId] = [...current, followedId];
+    }
+    return;
+  }
+
+  const response = await authFetch("/social/follow", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ followed_id: followedId }),
+  });
+  if (!response.ok) {
+    const payload = await parseResponseBody(response);
+    throw new Error(extractErrorMessage(payload));
+  }
+};
+
+export const unfollowUserById = async (followedId: string): Promise<void> => {
+  if (DEV_AUTH_BYPASS) {
+    const current = mockFollowingByUserId[mockCurrentUserId] ?? [];
+    mockFollowingByUserId[mockCurrentUserId] = current.filter((id) => id !== followedId);
+    return;
+  }
+
+  const response = await authFetch("/social/unfollow", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ followed_id: followedId }),
+  });
+  if (!response.ok) {
+    const payload = await parseResponseBody(response);
+    throw new Error(extractErrorMessage(payload));
+  }
 };
