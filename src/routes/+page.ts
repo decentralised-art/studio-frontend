@@ -1,5 +1,5 @@
-import { redirect } from "@sveltejs/kit";
 import { base } from "$app/paths";
+import { redirect } from "@sveltejs/kit";
 
 import { getToken } from "$lib/auth/session";
 
