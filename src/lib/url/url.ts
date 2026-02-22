@@ -8,12 +8,12 @@ const servicesBase = normalizeBase(
   import.meta.env.VITE_SERVICES_API_BASE_URL?.toString() ??
     import.meta.env.VITE_API_BASE_URL?.toString() ??
     "",
-  isDev ? "/api" : `${defaultApiOrigin}/api`,
+  isDev ? "/services" : `${defaultApiOrigin}/services`,
 );
 
 const chainBase = normalizeBase(
   import.meta.env.VITE_CHAIN_API_BASE_URL?.toString() ?? "",
-  isDev ? "/api/chain" : `${defaultApiOrigin}/chain`,
+  isDev ? "/chain" : `${defaultApiOrigin}/chain`,
 );
 
 const joinUrl = (base: string, path: string): string =>
