@@ -16,9 +16,11 @@
   const {
     particleId,
     onParticleOpen,
+    displayMode = "card",
   }: {
     particleId: string;
     onParticleOpen?: ((particleId: string) => void) | undefined;
+    displayMode?: "card" | "page";
   } = $props();
 
   const graph = $derived.by(() => buildParticleDependencyGraph(particleId));
@@ -31,6 +33,10 @@
   const flowHeight = $derived.by(() => {
     const dimCount = builtNodes.filter((node) => node.data.kind === "dimension").length;
     const depCount = builtNodes.filter((node) => node.data.kind === "particle").length;
+    if (displayMode === "page") {
+      if (dimCount === 0 && depCount === 0) return 420;
+      return Math.min(760, Math.max(420, 340 + dimCount * 34 + depCount * 24));
+    }
     if (dimCount === 0 && depCount === 0) return 280;
     return Math.min(520, Math.max(300, 240 + dimCount * 24 + depCount * 18));
   });

@@ -1,9 +1,10 @@
 <script lang="ts">
   import { resolve } from "$app/paths";
+  import ParticlePostFeed from "$lib/components/feed/ParticlePostFeed.svelte";
+  import { listParticlePosts } from "$lib/feed/particlePostData";
   import Button from "$lib/components/ui/Button.svelte";
   import Input from "$lib/components/ui/Input.svelte";
-  import SocialEventCard from "$lib/components/social/SocialEventCard.svelte";
-  import { mockSocialEvents, mockSocialNetworkGraph } from "$lib/social/mockSocialFeed";
+  import { mockSocialNetworkGraph } from "$lib/social/mockSocialFeed";
   import { networkNodeStudioKind, type NetworkGraphNode } from "$lib/network/mockNetworkGraph";
   import {
     mockCurrentUserId,
@@ -80,7 +81,7 @@
 
   // Feed should render the full event stream; follow state is used for social actions/search,
   // not for suppressing mock events. This keeps the rendering path compatible with future DB feeds.
-  const feedEvents = $derived.by(() => mockSocialEvents);
+  const feedEvents = $derived.by(() => listParticlePosts());
 
   const openParticleInStudio = (particleId: string | NetworkGraphNode) => {
     const resolvedParticleId =
@@ -212,24 +213,12 @@
     </section>
   </div>
 
-  <section class="social-feed" aria-label="Activity feed">
-    {#if feedEvents.length === 0}
-      <div class="feed-empty">
-        <p>No events to display yet.</p>
-      </div>
-    {:else}
-      {#each feedEvents as event (event.id)}
-        <div class="feed-card-shell">
-          <SocialEventCard
-            {event}
-            onParticleOpen={openParticleInStudio}
-            onAddToToolbox={addParticleToToolbox}
-            inToolbox={toolboxParticleIds.has(event.particleId)}
-          />
-        </div>
-      {/each}
-    {/if}
-  </section>
+  <ParticlePostFeed
+    events={feedEvents}
+    onParticleOpen={openParticleInStudio}
+    onAddToToolbox={addParticleToToolbox}
+    {toolboxParticleIds}
+  />
 </div>
 
 <style lang="postcss">
@@ -314,23 +303,6 @@
 
   .search-empty {
     @apply rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-white/60;
-  }
-
-  .social-feed {
-    @apply min-h-0 overflow-y-auto grid gap-3 pb-2 justify-items-center pr-1;
-    align-content: start;
-  }
-
-  .feed-card-shell {
-    @apply mx-auto;
-    width: var(--social-feed-card-width);
-    max-width: 100%;
-  }
-
-  .feed-empty {
-    @apply rounded-3xl border border-white/10 bg-black/40 p-6 text-center text-white/70 mx-auto;
-    width: var(--social-feed-card-width);
-    max-width: 100%;
   }
 
   @media (max-width: 1200px) {

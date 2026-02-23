@@ -1,4 +1,4 @@
-import { mockExploreParticles, mockParticleViews } from "$lib/data/exploreParticles";
+import { mockExploreParticles } from "$lib/data/exploreParticles";
 import { mockUsersById } from "$lib/data/users";
 import {
   buildMockNetworkGraph,
@@ -16,7 +16,8 @@ export type SocialEvent = {
   createdLabel: string;
   particleId: string;
   particleLabel: string;
-  formatLabel?: string;
+  usedParticleIds: string[];
+  usedParticleLabels: string[];
   createdNodeIds: string[];
   reusedNodeIds: string[];
   focusNodeIds: string[];
@@ -41,8 +42,8 @@ const registryFeatureByName = new Map(
 
 const ensureExistingIds = (ids: string[]) => ids.filter((id) => byId.has(id));
 
-const particleViewLabelById = new Map(
-  mockParticleViews.map((view) => [view.id, view.label] as const),
+const particleLabelById = new Map(
+  mockExploreParticles.map((particle) => [particle.id, particle.name] as const),
 );
 
 export const mockSocialEvents: SocialEvent[] = mockExploreParticles
@@ -50,9 +51,9 @@ export const mockSocialEvents: SocialEvent[] = mockExploreParticles
     const particleNodeId = `particle:${particle.id}`;
     const registryParticle = registryParticleByName.get(particle.id);
     const featureNodeId = registryParticle ? `feature:${registryParticle.featureName}` : null;
-    const dependencyNodeIds = (registryParticle?.composites ?? [])
-      .filter((name): name is string => Boolean(name))
-      .map((name) => `particle:${name}`);
+    const usedParticleIds = [...particle.dependencies];
+    const usedParticleLabels = usedParticleIds.map((id) => particleLabelById.get(id) ?? id);
+    const dependencyNodeIds = usedParticleIds.map((id) => `particle:${id}`);
     return {
       id: `event-particle-created-${particle.id}`,
       authorId: particle.authorId,
@@ -60,7 +61,8 @@ export const mockSocialEvents: SocialEvent[] = mockExploreParticles
       createdLabel: particle.createdLabel,
       particleId: particle.id,
       particleLabel: particle.name,
-      formatLabel: particleViewLabelById.get(particle.viewId),
+      usedParticleIds,
+      usedParticleLabels,
       createdNodeIds: ensureExistingIds([particleNodeId]),
       reusedNodeIds: ensureExistingIds([
         ...(featureNodeId ? [featureNodeId] : []),
@@ -87,8 +89,13 @@ export const countEventCreatedKinds = (
 
 export const formatEventSummary = (event: SocialEvent): string => {
   const author = mockUsersById[event.authorId]?.nickname ?? "Unknown";
-  const target = event.formatLabel ? ` for ${event.formatLabel}` : "";
-  return `${author} created a new particle${target}: ${event.particleLabel}.`;
+  if (event.usedParticleLabels.length === 0) {
+    return `${author} created a new particle: ${event.particleLabel}.`;
+  }
+  const dependencyList = new Intl.ListFormat("en", { style: "long", type: "conjunction" }).format(
+    event.usedParticleLabels,
+  );
+  return `${author} created a new particle: ${event.particleLabel}, with ${dependencyList}.`;
 };
 
 export const getEventNodesByKind = (

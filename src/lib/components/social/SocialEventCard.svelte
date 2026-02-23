@@ -3,7 +3,7 @@
   import Card from "$lib/components/ui/Card.svelte";
   import SocialParticleDependencyFlow from "$lib/components/social/SocialParticleDependencyFlow.svelte";
   import { mockUsersById } from "$lib/data/users";
-  import { formatEventSummary, type SocialEvent } from "$lib/social/mockSocialFeed";
+  import type { SocialEvent } from "$lib/social/mockSocialFeed";
   const {
     event,
     onParticleOpen,
@@ -17,7 +17,12 @@
   } = $props();
 
   const author = $derived.by(() => mockUsersById[event.authorId] ?? null);
-  const summary = $derived.by(() => formatEventSummary(event));
+  const usedParticles = $derived.by(() =>
+    event.usedParticleIds.map((id, index) => ({
+      id,
+      label: event.usedParticleLabels[index] ?? id,
+    })),
+  );
   const handleAddToToolbox = (eventClick: MouseEvent) => {
     eventClick.preventDefault();
     eventClick.stopPropagation();
@@ -51,11 +56,19 @@
         {/if}
         <div class="author-meta">
           <div class="author-row">
-            <a class="author-name author-link" href={resolve("/u/[id]", { id: event.authorId })}
-              >{author?.nickname ?? event.authorId}</a
-            >
+            <div class="author-identity">
+              <a class="author-name author-link" href={resolve("/u/[id]", { id: event.authorId })}
+                >{author?.nickname ?? event.authorId}</a
+              >
+              <p class="event-time">{event.createdLabel}</p>
+            </div>
+            <span class="author-event-text">
+              created a new particle:
+              <a class="event-particle-link" href={resolve("/p/[id]", { id: event.particleId })}>
+                {event.particleLabel}
+              </a>
+            </span>
           </div>
-          <p class="event-time">{event.createdLabel}</p>
         </div>
       </div>
     </header>
@@ -65,7 +78,23 @@
     </div>
 
     <div class="event-body">
-      <p class="event-summary">{summary}</p>
+      <div class="event-links" aria-label="Particle dependencies">
+        {#if usedParticles.length > 0}
+          <p class="event-link-row">
+            <span class="event-link-label">Dependencies:</span>
+            <span class="event-dependency-links">
+              {#each usedParticles as particleRef, index (particleRef.id)}
+                <a class="event-dependency-link" href={resolve("/p/[id]", { id: particleRef.id })}>
+                  {particleRef.label}
+                </a>
+                {#if index < usedParticles.length - 1}
+                  <span class="event-link-separator" aria-hidden="true">, </span>
+                {/if}
+              {/each}
+            </span>
+          </p>
+        {/if}
+      </div>
     </div>
   </article>
 </Card>
@@ -132,7 +161,12 @@
   }
 
   .author-row {
-    @apply flex items-center gap-2;
+    @apply flex flex-wrap items-baseline gap-x-2 gap-y-1;
+  }
+
+  .author-identity {
+    @apply min-w-0;
+    line-height: 1;
   }
 
   .author-name {
@@ -148,12 +182,42 @@
     @apply mt-0.5 text-[0.62rem] uppercase tracking-[0.16em] text-white/45;
   }
 
+  .author-event-text {
+    @apply text-sm text-white/75 leading-snug;
+    align-self: baseline;
+  }
+
   .event-body {
     @apply grid gap-1;
   }
 
-  .event-summary {
-    @apply text-sm leading-snug text-white/90;
+  .event-links {
+    @apply grid gap-1 text-xs;
+  }
+
+  .event-link-row {
+    @apply flex flex-wrap items-baseline gap-x-2 gap-y-1 text-white/70 leading-snug;
+  }
+
+  .event-link-label {
+    @apply uppercase tracking-[0.14em] text-[0.62rem] text-white/40;
+  }
+
+  .event-particle-link,
+  .event-dependency-link {
+    @apply text-white/85 hover:text-white no-underline transition;
+  }
+
+  .event-particle-link {
+    @apply font-medium;
+  }
+
+  .event-dependency-links {
+    @apply flex flex-wrap items-baseline;
+  }
+
+  .event-link-separator {
+    @apply text-white/35;
   }
 
   .event-graph {

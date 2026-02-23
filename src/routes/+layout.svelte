@@ -51,7 +51,7 @@
     style="background: rgba(4, 14, 19, 0.58); border-bottom-color: rgba(233, 244, 244, 0.1);"
   >
     <nav class="max-w-6xl mx-auto h-14 px-4 flex items-center justify-between gap-4">
-      <a href={resolve("/")} class="flex items-center gap-2">
+      <a href="https://decentralised.art/" class="flex items-center gap-2">
         <!-- logo here -->
         <span class="text-sm font-semibold tracking-[0.08em] uppercase">
           Decentralised Creative Network
@@ -60,12 +60,10 @@
 
       <div class="flex items-center gap-4 text-sm text-white/70">
         {#if isAuthenticated}
-          <a href="https://decentralised.art/" class="hover:text-white">Home</a>
           <a href={resolve("/")} class="hover:text-white">Network</a>
           <a href={resolve("/studio")} class="hover:text-white">Studio</a>
           <a href={resolve("/account")} class="hover:text-white">Account</a>
         {:else}
-          <a href="https://decentralised.art/" class="hover:text-white">Home</a>
           <a href={resolve("/login")} class="hover:text-white">Login</a>
         {/if}
       </div>
