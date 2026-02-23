@@ -3,8 +3,6 @@
   import Input from "$lib/components/ui/Input.svelte";
   import SectionShell from "$lib/components/ui/SectionShell.svelte";
   import SelectInput from "$lib/components/ui/SelectInput.svelte";
-  import UserContribution from "$lib/components/user/UserContribution.svelte";
-  import UserToolbox from "$lib/components/user/UserToolbox.svelte";
   import UserProfileView from "$lib/components/user/UserProfileView.svelte";
   import type { ProfileViewUser } from "$lib/user/profileModel";
 
@@ -99,111 +97,96 @@
 </script>
 
 <div class="profile-page-shell">
-  <div class="profile-main-column">
-    {#if isSelf}
-      <SectionShell>
-        <form class="form" onsubmit={handleSubmit}>
-          <div class="avatar-row">
-            <div class="avatar">
-              <img src={profile.avatarUrl} alt={profile.nickname} class="avatar-img" />
-            </div>
-
-            <div class="avatar-meta">
-              <p class="avatar-title">Profile photo</p>
-              <p class="avatar-subtitle">Swap avatars later.</p>
-            </div>
+  {#if isSelf}
+    <SectionShell>
+      <form class="form" onsubmit={handleSubmit}>
+        <div class="avatar-row">
+          <div class="avatar">
+            <img src={profile.avatarUrl} alt={profile.nickname} class="avatar-img" />
           </div>
 
-          <Input label="Nickname" bind:value={profile.nickname} />
-
-          <SelectInput
-            label="Account type"
-            disabled={true}
-            bind:value={profile.kind}
-            options={[
-              { value: "human", label: "Human" },
-              { value: "agent", label: "AI agent" },
-            ]}
-          />
-
-          <label class="field">
-            <span class="input-label">Bio</span>
-            <textarea
-              class="input bio-textarea"
-              bind:value={profile.bio}
-              placeholder="Describe your creative focus"
-            ></textarea>
-          </label>
-
-          <Input label="Ethereum address" value={profile.address} disabled={true} />
-
-          <div class="actions">
-            <Button variant="primary" type="submit" disabled={isSaving}>
-              {isSaving ? "Saving..." : "Save changes"}
-            </Button>
-            <Button variant="ghost" type="button" onclick={handleDiscard}>Discard</Button>
-            <Button variant="ghost" type="button" onclick={handleLogoutClick}>Logout</Button>
+          <div class="avatar-meta">
+            <p class="avatar-title">Profile photo</p>
+            <p class="avatar-subtitle">Swap avatars later.</p>
           </div>
+        </div>
 
-          {#if saveError}
-            <p class="save-status save-status--error">{saveError}</p>
-          {:else if saveSuccess}
-            <p class="save-status save-status--success">{saveSuccess}</p>
-          {/if}
-        </form>
-      </SectionShell>
-    {:else}
-      <UserProfileView
-        {user}
-        title="Public profile"
-        subtitle={`Read-only profile view${user.kind === "agent" ? " (AI agent)" : ""}`}
-        showEmail={false}
-        actionLabel={isPublicOwner
-          ? "Edit profile"
-          : showFollowAction
-            ? followPending
-              ? isFollowing
-                ? "Unfollowing..."
-                : "Following..."
-              : isFollowing
-                ? "Unfollow"
-                : "Follow"
-            : undefined}
-        actionVariant={isPublicOwner || isFollowing ? "ghost" : "primary"}
-        actionDisabled={followPending}
-        {followersCount}
-        {followingCount}
-        {socialCountersDisabled}
-        {onOpenFollowers}
-        {onOpenFollowing}
-        onAction={isPublicOwner
-          ? handleEditProfile
-          : showFollowAction
-            ? handleToggleFollow
-            : undefined}
-      />
-    {/if}
-  </div>
+        <Input label="Nickname" bind:value={profile.nickname} />
 
-  <div class="profile-side-column">
-    <UserContribution {user} />
-    <UserToolbox {user} />
-  </div>
+        <SelectInput
+          label="Account type"
+          disabled={true}
+          bind:value={profile.kind}
+          options={[
+            { value: "human", label: "Human" },
+            { value: "agent", label: "AI agent" },
+          ]}
+        />
+
+        <label class="field">
+          <span class="input-label">Bio</span>
+          <textarea
+            class="input bio-textarea"
+            bind:value={profile.bio}
+            placeholder="Describe your creative focus"
+          ></textarea>
+        </label>
+
+        <Input label="Ethereum address" value={profile.address} disabled={true} />
+
+        <div class="actions">
+          <Button variant="primary" type="submit" disabled={isSaving}>
+            {isSaving ? "Saving..." : "Save changes"}
+          </Button>
+          <Button variant="ghost" type="button" onclick={handleDiscard}>Discard</Button>
+          <Button variant="ghost" type="button" onclick={handleLogoutClick}>Logout</Button>
+        </div>
+
+        {#if saveError}
+          <p class="save-status save-status--error">{saveError}</p>
+        {:else if saveSuccess}
+          <p class="save-status save-status--success">{saveSuccess}</p>
+        {/if}
+      </form>
+    </SectionShell>
+  {:else}
+    <UserProfileView
+      {user}
+      title="Public profile"
+      subtitle={`Read-only profile view${user.kind === "agent" ? " (AI agent)" : ""}`}
+      showEmail={false}
+      actionLabel={isPublicOwner
+        ? "Edit profile"
+        : showFollowAction
+          ? followPending
+            ? isFollowing
+              ? "Unfollowing..."
+              : "Following..."
+            : isFollowing
+              ? "Unfollow"
+              : "Follow"
+          : undefined}
+      actionVariant={isPublicOwner || isFollowing ? "ghost" : "primary"}
+      actionDisabled={followPending}
+      {followersCount}
+      {followingCount}
+      {socialCountersDisabled}
+      {onOpenFollowers}
+      {onOpenFollowing}
+      onAction={isPublicOwner
+        ? handleEditProfile
+        : showFollowAction
+          ? handleToggleFollow
+          : undefined}
+    />
+  {/if}
 </div>
 
 <style lang="postcss">
   @reference "$lib/styles/style.css";
 
   .profile-page-shell {
-    @apply py-4 grid gap-6 lg:grid-cols-[minmax(0,0.62fr)_minmax(0,0.38fr)];
-  }
-
-  .profile-main-column {
-    @apply space-y-6;
-  }
-
-  .profile-side-column {
-    @apply space-y-6;
+    @apply py-4;
   }
 
   .form {

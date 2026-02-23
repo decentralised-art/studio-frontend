@@ -4,6 +4,9 @@
   import { resolve } from "$app/paths";
   import { page } from "$app/stores";
 
+  import ParticlePostFeed from "$lib/components/feed/ParticlePostFeed.svelte";
+  import { listParticlePostsByAuthor } from "$lib/feed/particlePostData";
+  import { networkNodeStudioKind } from "$lib/network/mockNetworkGraph";
   import SectionShell from "$lib/components/ui/SectionShell.svelte";
   import Button from "$lib/components/ui/Button.svelte";
   import UserProfilePage from "$lib/components/user/UserProfilePage.svelte";
@@ -16,7 +19,7 @@
     unfollowUserById,
   } from "$lib/auth/api";
   import { getToken } from "$lib/auth/session";
-  import { mockFollowingByUserId, mockUsersById } from "$lib/data/users";
+  import { mockCurrentUserId, mockFollowingByUserId, mockUsersById } from "$lib/data/users";
   import type { ProfileViewUser } from "$lib/user/profileModel";
   import { normalizeProfileUser } from "$lib/user/profileModel";
 
@@ -31,6 +34,9 @@
   let followPending = $state(false);
   let activeSocialList = $state<"followers" | "following" | null>(null);
   let socialListsUnavailable = $state(false);
+  let localToolboxParticles = $state<string[]>([
+    ...(mockUsersById[mockCurrentUserId]?.toolbox ?? []),
+  ]);
 
   const loadUser = async () => {
     const userId = $page.params.id?.trim() ?? "";
@@ -160,6 +166,25 @@
         ? "Following"
         : "",
   );
+  const toolboxParticleIds = $derived.by(() => new Set(localToolboxParticles));
+  const userFeedEvents = $derived.by(() => (user ? listParticlePostsByAuthor(user.id) : []));
+
+  const openParticleInStudio = (particleId: string) => {
+    const base = resolve("/studio");
+    const target = new URL(base, window.location.origin);
+    target.searchParams.set("network_kind", networkNodeStudioKind("particle"));
+    target.searchParams.set("network_id", particleId);
+    window.open(target.toString(), "_blank", "noopener,noreferrer");
+  };
+
+  const addParticleToToolbox = (particleId: string) => {
+    if (toolboxParticleIds.has(particleId)) return;
+    localToolboxParticles = [...localToolboxParticles, particleId];
+    const currentUser = mockUsersById[mockCurrentUserId];
+    if (currentUser && !currentUser.toolbox.includes(particleId)) {
+      currentUser.toolbox = [...currentUser.toolbox, particleId];
+    }
+  };
 
   onMount(loadUser);
 </script>
@@ -185,26 +210,38 @@
     </SectionShell>
   {:else if user}
     <div class="public-profile-stack">
-      <UserProfilePage
-        {user}
-        mode="public"
-        {viewerUserId}
-        isFollowing={viewerFollowingIds.includes(user.id)}
-        {followPending}
-        followersCount={displayedFollowerIds.length}
-        followingCount={displayedFollowingIds.length}
-        socialCountersDisabled={socialListsUnavailable}
-        onOpenFollowers={openFollowersList}
-        onOpenFollowing={openFollowingList}
-        onToggleFollow={handleToggleFollow}
-        onEditProfile={handleEditProfile}
-      />
+      <div class="profile-card-shell">
+        <UserProfilePage
+          {user}
+          mode="public"
+          {viewerUserId}
+          isFollowing={viewerFollowingIds.includes(user.id)}
+          {followPending}
+          followersCount={displayedFollowerIds.length}
+          followingCount={displayedFollowingIds.length}
+          socialCountersDisabled={socialListsUnavailable}
+          onOpenFollowers={openFollowersList}
+          onOpenFollowing={openFollowingList}
+          onToggleFollow={handleToggleFollow}
+          onEditProfile={handleEditProfile}
+        />
+      </div>
 
       {#if actionError}
-        <SectionShell>
+        <SectionShell className="profile-card-shell">
           <p class="action-error">{actionError}</p>
         </SectionShell>
       {/if}
+
+      <div class="profile-post-feed profile-card-shell">
+        <ParticlePostFeed
+          events={userFeedEvents}
+          onParticleOpen={openParticleInStudio}
+          onAddToToolbox={addParticleToToolbox}
+          {toolboxParticleIds}
+          emptyMessage="No particle posts by this user yet."
+        />
+      </div>
 
       {#if activeSocialList}
         <div class="social-list-overlay" role="presentation">
@@ -267,6 +304,13 @@
 
   .public-profile-stack {
     @apply space-y-4;
+    --social-feed-card-width: min(50vw, 56rem);
+  }
+
+  .profile-card-shell {
+    @apply mx-auto;
+    width: var(--social-feed-card-width);
+    max-width: 100%;
   }
 
   .status {
@@ -351,5 +395,17 @@
 
   .social-list-id {
     @apply text-xs text-white/45 truncate;
+  }
+
+  @media (max-width: 1200px) {
+    .public-profile-stack {
+      --social-feed-card-width: min(68vw, 56rem);
+    }
+  }
+
+  @media (max-width: 900px) {
+    .public-profile-stack {
+      --social-feed-card-width: 100%;
+    }
   }
 </style>
