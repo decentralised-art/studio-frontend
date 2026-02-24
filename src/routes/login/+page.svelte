@@ -8,12 +8,8 @@
   import Input from "$lib/components/ui/Input.svelte";
   import SectionShell from "$lib/components/ui/SectionShell.svelte";
 
-  import {
-    isDevAuthBypassEnabled,
-    login,
-    loginWithDevMockAccount,
-    registerUser,
-  } from "$lib/auth/api";
+  import { authenticateAllMockAccountsInChain, login, registerUser } from "$lib/auth/api";
+  import type { MockChainAuthResult } from "$lib/auth/api";
   import { getToken } from "$lib/auth/session";
 
   let form = $state({
@@ -23,6 +19,9 @@
 
   let isSubmitting = $state(false);
   let loginError = $state("");
+  let isMockAuthRunning = $state(false);
+  let mockAuthError = $state("");
+  let mockAuthResults = $state<MockChainAuthResult[]>([]);
   let showRegister = $state(false);
 
   let registerForm = $state({
@@ -86,18 +85,22 @@
     }
   };
 
-  const handleDevMockLogin = async () => {
-    loginError = "";
-    isSubmitting = true;
+  const handleAuthenticateAllMockAccounts = async () => {
+    mockAuthError = "";
+    isMockAuthRunning = true;
     try {
-      await loginWithDevMockAccount();
-      await goto(resolve("/account"));
+      mockAuthResults = await authenticateAllMockAccountsInChain();
     } catch (err) {
-      loginError = err instanceof Error ? err.message : "Dev mock login failed.";
+      mockAuthError = err instanceof Error ? err.message : "Mock chain auth failed.";
+      mockAuthResults = [];
     } finally {
-      isSubmitting = false;
+      isMockAuthRunning = false;
     }
   };
+
+  const mockAuthSuccessCount = $derived.by(() =>
+    mockAuthResults.reduce((count, result) => count + (result.success ? 1 : 0), 0),
+  );
 
   onMount(() => {
     if (getToken()) {
@@ -114,6 +117,8 @@
     if (params.has("register")) {
       showRegister = true;
     }
+
+    void handleAuthenticateAllMockAccounts();
   });
 </script>
 
@@ -138,18 +143,80 @@
         </Button>
       </div>
 
-      {#if isDevAuthBypassEnabled}
-        <div class="actions dev-actions">
-          <Button
-            variant="ghost"
-            type="button"
-            onclick={handleDevMockLogin}
-            disabled={isSubmitting}
-          >
-            Use mock account (dev)
-          </Button>
+      <div class="actions dev-actions">
+        <Button
+          variant="ghost"
+          type="button"
+          onclick={handleAuthenticateAllMockAccounts}
+          disabled={isSubmitting || isMockAuthRunning}
+        >
+          {isMockAuthRunning ? "Authenticating mock accounts..." : "Authenticate all mock accounts"}
+        </Button>
+      </div>
+
+      {#if mockAuthError}
+        <p class="error">{mockAuthError}</p>
+      {/if}
+
+      {#if mockAuthResults.length > 0}
+        <div class="mock-auth-results">
+          <p class="success">
+            Chain auth completed for {mockAuthResults.length} mocked accounts. Success:
+            {mockAuthSuccessCount}/{mockAuthResults.length}.
+          </p>
+
+          {#each mockAuthResults as result (result.userId)}
+            <div class="mock-result-card">
+              <p class="mock-result-title">{result.nickname} ({result.userId})</p>
+              <p class={result.success ? "success" : "error"}>
+                {result.success ? "Authenticated" : "Authentication failed"}
+              </p>
+
+              <div class="mock-result-line">
+                <span class="mock-result-label">public_key</span>
+                <code class="mock-result-value">{result.publicKey}</code>
+              </div>
+              <div class="mock-result-line">
+                <span class="mock-result-label">private_key</span>
+                <code class="mock-result-value">{result.privateKey}</code>
+              </div>
+              <div class="mock-result-line">
+                <span class="mock-result-label">auth_request["address"]</span>
+                <code class="mock-result-value">{result.address}</code>
+              </div>
+              <div class="mock-result-line">
+                <span class="mock-result-label">auth_request["message"]</span>
+                <code class="mock-result-value">{result.message ?? "n/a"}</code>
+              </div>
+              <div class="mock-result-line">
+                <span class="mock-result-label">auth_request["signature"]</span>
+                <code class="mock-result-value">{result.signature ?? "n/a"}</code>
+              </div>
+              <div class="mock-result-line">
+                <span class="mock-result-label">nonce</span>
+                <code class="mock-result-value">{result.nonce ?? "n/a"}</code>
+              </div>
+              <div class="mock-result-line">
+                <span class="mock-result-label">jwt</span>
+                <code class="mock-result-value">{result.token ?? "n/a"}</code>
+              </div>
+              <div class="mock-result-line">
+                <span class="mock-result-label">patched_user_id</span>
+                <code class="mock-result-value">{result.patchedUserId ?? "n/a"}</code>
+              </div>
+              <div class="mock-result-line">
+                <span class="mock-result-label">ethereum_address_patched</span>
+                <code class="mock-result-value"
+                  >{result.ethereumAddressPatched ? "true" : "false"}</code
+                >
+              </div>
+
+              {#if result.error}
+                <p class="error">{result.error}</p>
+              {/if}
+            </div>
+          {/each}
         </div>
-        <p class="success">Dev auth bypass enabled (`VITE_DEV_AUTH_BYPASS=1`).</p>
       {/if}
 
       <button type="button" class="toggle" onclick={() => (showRegister = !showRegister)}>
@@ -235,6 +302,30 @@
 
   .dev-actions {
     @apply justify-start;
+  }
+
+  .mock-auth-results {
+    @apply border border-white/10 rounded-lg p-3 space-y-3 bg-black/20;
+  }
+
+  .mock-result-card {
+    @apply border border-white/10 rounded-md p-3 space-y-2;
+  }
+
+  .mock-result-title {
+    @apply text-sm font-semibold text-white;
+  }
+
+  .mock-result-line {
+    @apply grid grid-cols-1 gap-1;
+  }
+
+  .mock-result-label {
+    @apply text-xs text-white/70;
+  }
+
+  .mock-result-value {
+    @apply text-[11px] text-white/90 break-all font-mono;
   }
 
   .error {
