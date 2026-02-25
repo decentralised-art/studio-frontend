@@ -92,7 +92,7 @@ const normalizeKey = (value: string) => value.toLowerCase().replace(/[\s-_]+/g, 
 const slugify = (value: string) =>
   value
     .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/[^a-z0-9_]+/g, "-")
     .replace(/^-+|-+$/g, "");
 
 const buildNameMap = (names: string[]) => {
@@ -211,8 +211,12 @@ const buildFeatureFromGraph = (
         if (typeof item === "string") {
           return parseTransformationLabel(item, nameMap);
         }
-        const label = item.args.length ? `${item.name}(${item.args.join(", ")})` : item.name;
-        return parseTransformationLabel(label, nameMap);
+        const normalized = normalizeKey(item.name);
+        const canonical = nameMap.get(normalized) ?? item.name;
+        return {
+          name: canonical as MockTransformationDef["name"],
+          args: [...item.args],
+        };
       }),
     };
   });
@@ -228,6 +232,16 @@ const resolveCompositeName = (dimensionId: string, graph: StudioGraph) => {
   const target = graph.nodes.find((node) => node.id === edge.target);
   if (!target || target.data.kind !== "particle") return null;
   return resolveNodeName(target);
+};
+
+const resolveConditionNameForFeature = (featureId: string, graph: StudioGraph) => {
+  const edge = graph.edges.find(
+    (item) => item.target === featureId && (item.targetHandle ?? "") === "condition",
+  );
+  if (!edge?.source) return null;
+  const source = graph.nodes.find((node) => node.id === edge.source);
+  if (!source || source.data.kind !== "condition") return null;
+  return resolveNodeName(source);
 };
 
 const findRootFeature = (graph: StudioGraph) => {
@@ -264,10 +278,13 @@ const buildRootParticle = (
     }
   });
 
+  const conditionName = resolveConditionNameForFeature(featureNode.id, graph) ?? undefined;
+
   return {
     name: rootName,
     featureName,
     composites,
+    conditionName,
   } satisfies MockParticleDef;
 };
 

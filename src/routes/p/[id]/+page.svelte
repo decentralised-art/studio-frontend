@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount } from "svelte";
   import { page } from "$app/stores";
   import { resolve } from "$app/paths";
 
@@ -6,6 +7,9 @@
   import {
     getParticleRecordById,
     listParticlePostsReferencingParticle,
+    syncParticlePostDataFromChain,
+    type ParticlePostEvent,
+    type ParticleRecord,
   } from "$lib/feed/particlePostData";
   import SocialParticleDependencyFlow from "$lib/components/social/SocialParticleDependencyFlow.svelte";
   import Button from "$lib/components/ui/Button.svelte";
@@ -16,12 +20,13 @@
   let localToolboxParticles = $state<string[]>([
     ...(mockUsersById[mockCurrentUserId]?.toolbox ?? []),
   ]);
+  let particle = $state<ParticleRecord | null>(null);
+  let relatedEvents = $state<ParticlePostEvent[]>([]);
+  let particleLoading = $state(true);
 
   const toolboxParticleIds = $derived.by(() => new Set(localToolboxParticles));
   const particleId = $derived.by(() => $page.params.id?.trim() ?? "");
-  const particle = $derived.by(() => getParticleRecordById(particleId));
   const author = $derived.by(() => (particle ? (mockUsersById[particle.authorId] ?? null) : null));
-  const relatedEvents = $derived.by(() => listParticlePostsReferencingParticle(particleId));
 
   const openParticleInStudio = (targetParticleId: string) => {
     const base = resolve("/studio");
@@ -39,14 +44,36 @@
       currentUser.toolbox = [...currentUser.toolbox, targetParticleId];
     }
   };
+
+  const loadParticlePageData = async () => {
+    particleLoading = true;
+    try {
+      await syncParticlePostDataFromChain();
+    } finally {
+      particle = getParticleRecordById(particleId);
+      relatedEvents = listParticlePostsReferencingParticle(particleId);
+      particleLoading = false;
+    }
+  };
+
+  onMount(() => {
+    void loadParticlePageData();
+  });
 </script>
 
 <div class="particle-page">
-  {#if !particle}
+  {#if particleLoading}
+    <SectionShell className="page-card-shell">
+      <div class="status">
+        <p class="status-title">Loading particle...</p>
+        <p class="status-subtitle">Fetching chain-backed particle data.</p>
+      </div>
+    </SectionShell>
+  {:else if !particle}
     <SectionShell className="page-card-shell">
       <div class="status">
         <p class="status-title">Particle not found</p>
-        <p class="status-subtitle">No mock particle matches this ID yet.</p>
+        <p class="status-subtitle">No synced particle matches this ID yet.</p>
       </div>
     </SectionShell>
   {:else}

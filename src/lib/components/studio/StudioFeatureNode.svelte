@@ -22,6 +22,7 @@
 </script>
 
 <div class="feature-node {selectedClass}">
+  <Handle type="target" position={Position.Top} id="condition" />
   <div class="feature-title">{data.label}</div>
   <div class="feature-meta">{dimensionCount} dimensions</div>
   {#each Array(dimensionCount) as _, index (index)}

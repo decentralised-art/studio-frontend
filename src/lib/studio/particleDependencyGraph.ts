@@ -1,8 +1,9 @@
 import type { Edge, Node } from "@xyflow/svelte";
 
-import { mockExploreParticles } from "$lib/data/exploreParticles";
-import { mockFeatures } from "$lib/data/studioLibrary";
-import { mockRegistrySnapshot } from "$lib/particles/mockPtNetwork";
+import {
+  getParticleDependencyRegistrySnapshot,
+  getParticleRecordById,
+} from "$lib/feed/particlePostData";
 
 export type StudioDependencyTransformationInstance = {
   id: string;
@@ -31,20 +32,9 @@ export type StudioDependencyNode = Node<StudioDependencyNodeData>;
 
 const titleize = (value: string) =>
   value
-    .split("-")
+    .split(/[-_]/g)
     .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
     .join(" ");
-
-const featureNameByRegistryName = new Map(
-  mockFeatures.map((item) => [item.id.replace(/^feature-/, ""), item.name] as const),
-);
-const particleNameById = new Map(mockExploreParticles.map((item) => [item.id, item.name] as const));
-const particleByName = new Map(
-  mockRegistrySnapshot.particles.map((particle) => [particle.name, particle] as const),
-);
-const featureByName = new Map(
-  mockRegistrySnapshot.features.map((feature) => [feature.name, feature] as const),
-);
 
 const createTransformationInstance = (
   key: string,
@@ -60,6 +50,10 @@ const createTransformationInstance = (
 export const buildParticleDependencyGraph = (
   particleName: string,
 ): { nodes: StudioDependencyNode[]; edges: Edge[] } => {
+  const { particles: particleRegistry, features: featureRegistry } =
+    getParticleDependencyRegistrySnapshot();
+  const particleByName = new Map(Object.entries(particleRegistry));
+  const featureByName = new Map(Object.entries(featureRegistry));
   const particle = particleByName.get(particleName);
   if (!particle) return { nodes: [], edges: [] };
 
@@ -78,7 +72,7 @@ export const buildParticleDependencyGraph = (
     draggable: false,
     position: { x: featureX, y: featureY },
     data: {
-      label: featureNameByRegistryName.get(feature.name) ?? titleize(feature.name),
+      label: titleize(feature.name),
       kind: "feature",
       dimensions: feature.dimensions.length,
       sourceId: feature.name,
@@ -137,7 +131,7 @@ export const buildParticleDependencyGraph = (
       draggable: false,
       position: { x: columnX, y: compositeRowY },
       data: {
-        label: particleNameById.get(compositeName) ?? titleize(compositeName),
+        label: getParticleRecordById(compositeName)?.name ?? titleize(compositeName),
         kind: "particle",
         particleId: compositeName,
         networkId: compositeName,

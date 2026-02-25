@@ -5,7 +5,11 @@
   import { page } from "$app/stores";
 
   import ParticlePostFeed from "$lib/components/feed/ParticlePostFeed.svelte";
-  import { listParticlePostsByAuthor } from "$lib/feed/particlePostData";
+  import {
+    listParticlePostsByAuthor,
+    syncParticlePostDataFromChain,
+    type ParticlePostEvent,
+  } from "$lib/feed/particlePostData";
   import { networkNodeStudioKind } from "$lib/network/mockNetworkGraph";
   import SectionShell from "$lib/components/ui/SectionShell.svelte";
   import Button from "$lib/components/ui/Button.svelte";
@@ -37,6 +41,7 @@
   let localToolboxParticles = $state<string[]>([
     ...(mockUsersById[mockCurrentUserId]?.toolbox ?? []),
   ]);
+  let userFeedEvents = $state<ParticlePostEvent[]>([]);
 
   const loadUser = async () => {
     const userId = $page.params.id?.trim() ?? "";
@@ -58,9 +63,11 @@
               .then((payload) => normalizeProfileUser(payload))
               .catch(() => null)
           : Promise.resolve(null),
+        syncParticlePostDataFromChain().catch(() => null),
       ]);
 
       user = normalizeProfileUser(userPayload);
+      userFeedEvents = listParticlePostsByAuthor(user.id);
       viewerUserId = mePayload?.id ?? null;
       socialListsUnavailable = false;
 
@@ -167,8 +174,6 @@
         : "",
   );
   const toolboxParticleIds = $derived.by(() => new Set(localToolboxParticles));
-  const userFeedEvents = $derived.by(() => (user ? listParticlePostsByAuthor(user.id) : []));
-
   const openParticleInStudio = (particleId: string) => {
     const base = resolve("/studio");
     const target = new URL(base, window.location.origin);

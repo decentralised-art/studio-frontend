@@ -4,7 +4,11 @@
   import { resolve } from "$app/paths";
 
   import ParticlePostFeed from "$lib/components/feed/ParticlePostFeed.svelte";
-  import { listParticlePostsByAuthor } from "$lib/feed/particlePostData";
+  import {
+    listParticlePostsByAuthor,
+    syncParticlePostDataFromChain,
+    type ParticlePostEvent,
+  } from "$lib/feed/particlePostData";
   import { networkNodeStudioKind } from "$lib/network/mockNetworkGraph";
   import Button from "$lib/components/ui/Button.svelte";
   import SectionShell from "$lib/components/ui/SectionShell.svelte";
@@ -26,6 +30,7 @@
   let localToolboxParticles = $state<string[]>([
     ...(mockUsersById[mockCurrentUserId]?.toolbox ?? []),
   ]);
+  let accountFeedEvents = $state<ParticlePostEvent[]>([]);
 
   const asRecord = (value: unknown): Record<string, unknown> =>
     value && typeof value === "object" && !Array.isArray(value)
@@ -45,8 +50,12 @@
     saveSuccess = "";
 
     try {
-      const data = await getMe();
+      const [data] = await Promise.all([
+        getMe(),
+        syncParticlePostDataFromChain().catch(() => null),
+      ]);
       currentUser = normalizeProfileUser(data);
+      accountFeedEvents = listParticlePostsByAuthor(currentUser.id);
     } catch (err) {
       error = err instanceof Error ? err.message : "Unable to load account.";
     } finally {
@@ -59,10 +68,6 @@
   };
 
   const toolboxParticleIds = $derived.by(() => new Set(localToolboxParticles));
-  const accountFeedEvents = $derived.by(() =>
-    currentUser ? listParticlePostsByAuthor(currentUser.id) : [],
-  );
-
   const openParticleInStudio = (particleId: string) => {
     const base = resolve("/studio");
     const target = new URL(base, window.location.origin);

@@ -4,7 +4,14 @@ import { resolve } from "$app/paths";
 import { mockCurrentUserId, mockUsers } from "$lib/data/users";
 import { buildChainApiUrl, buildServicesApiUrl } from "$lib/url/url";
 import { createChainAuthRequest, getOrCreateMockEthereumAccount } from "./mockEthereum";
-import { clearToken, getToken, setToken } from "./session";
+import {
+  clearChainToken,
+  clearToken,
+  getChainToken,
+  getToken,
+  setChainToken,
+  setToken,
+} from "./session";
 
 export type MockChainAuthResult = {
   userId: string;
@@ -21,6 +28,13 @@ export type MockChainAuthResult = {
   success: boolean;
   error: string | null;
 };
+
+const MOCK_USER_PASSWORD = "mock-user-password";
+
+const mockCredentialsForUser = (userId: string) => ({
+  email: `${userId}@mock.decentralised.art`,
+  password: MOCK_USER_PASSWORD,
+});
 
 const redirectToLogin = () => {
   if (!browser) return;
@@ -221,8 +235,14 @@ const authenticateMockUserInChain = async (
     token = await requestChainAuthToken(authRequest);
     if (mockUser) {
       mockUser.address = account.address;
-      patchedUserId = userId;
     }
+
+    const servicesPatch = await ensureMockUserServicesEthereumAddress(
+      userId,
+      nickname,
+      account.address,
+    );
+    patchedUserId = servicesPatch.patchedUserId;
 
     return {
       userId,
@@ -235,9 +255,9 @@ const authenticateMockUserInChain = async (
       signature,
       token,
       patchedUserId,
-      ethereumAddressPatched: patchedUserId !== null,
+      ethereumAddressPatched: servicesPatch.ethereumAddressPatched,
       success: true,
-      error: null,
+      error: servicesPatch.error,
     };
   } catch (err) {
     return {
@@ -255,6 +275,65 @@ const authenticateMockUserInChain = async (
       success: false,
       error: err instanceof Error ? err.message : "Chain auth failed.",
     };
+  }
+};
+
+const extractUserIdFromUserPayload = (payload: unknown): string | null => {
+  if (!payload || typeof payload !== "object") return null;
+  const record = payload as Record<string, unknown>;
+  if (typeof record.id === "string") return record.id;
+  const user = record.user;
+  if (user && typeof user === "object") {
+    const nested = user as Record<string, unknown>;
+    if (typeof nested.id === "string") return nested.id;
+  }
+  return null;
+};
+
+const ensureMockUserServicesEthereumAddress = async (
+  userId: string,
+  nickname: string,
+  ethereumAddress: string,
+): Promise<{
+  patchedUserId: string | null;
+  ethereumAddressPatched: boolean;
+  error: string | null;
+}> => {
+  const previousToken = getToken();
+  const credentials = mockCredentialsForUser(userId);
+
+  try {
+    try {
+      await login(credentials.email, credentials.password);
+    } catch {
+      await registerUser(credentials.email, nickname, credentials.password);
+      await login(credentials.email, credentials.password);
+    }
+
+    const me = await getMe();
+    const realUserId = extractUserIdFromUserPayload(me);
+    if (!realUserId) {
+      throw new Error("Services auth succeeded, but /auth/me did not return a user id.");
+    }
+
+    await updateUserById(realUserId, { ethereum_address: ethereumAddress });
+    return {
+      patchedUserId: realUserId,
+      ethereumAddressPatched: true,
+      error: null,
+    };
+  } catch (error) {
+    return {
+      patchedUserId: null,
+      ethereumAddressPatched: false,
+      error:
+        error instanceof Error
+          ? `Chain auth succeeded, but failed to patch services user: ${error.message}`
+          : "Chain auth succeeded, but failed to patch services user.",
+    };
+  } finally {
+    if (previousToken) setToken(previousToken);
+    else clearToken();
   }
 };
 
@@ -279,8 +358,19 @@ export const loginWithMockChainAccount = async (
     throw new Error(result.error ?? "Mock chain login failed.");
   }
 
-  setToken(result.token);
+  setChainToken(result.token);
   return result.token;
+};
+
+export const chainAuthFetch = async (path: string, init: RequestInit = {}) => {
+  const headers = new Headers(init.headers);
+  const token = getChainToken();
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+
+  return fetch(buildChainApiUrl(path), {
+    ...init,
+    headers,
+  });
 };
 
 export const authFetch = async (path: string, init: RequestInit = {}) => {
@@ -344,6 +434,7 @@ export const registerUser = async (email: string, displayName: string, password:
 export const logout = async (): Promise<void> => {
   await authFetch("/auth/logout", { method: "POST" });
   clearToken();
+  clearChainToken();
   redirectToLogin();
 };
 
