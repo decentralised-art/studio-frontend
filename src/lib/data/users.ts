@@ -22,7 +22,7 @@ export const mockUsers: User[] = [
   {
     id: "user-lyra",
     kind: "human",
-    address: "0x3b4c8f2a7d5e9a1c6b4f8e2d7a1c5f9b3a7d8e1f",
+    address: "0x48f750696ed392ca6d449a3d214656d024c5756f",
     nickname: "Lyra N.",
     avatarUrl: asset("/avatars/lyra.svg"),
     bio: "Composer and PT architect shaping spatial rhythm studies.",
@@ -37,7 +37,7 @@ export const mockUsers: User[] = [
   {
     id: "user-milo",
     kind: "human",
-    address: "0x8a71d4c93f2b5e6071a9c3f5b7d8e2f1a6c4b9d0",
+    address: "0x06ae7be53aea4757f87246b7cbc42ba3d21c3b4e",
     nickname: "Milo K.",
     avatarUrl: asset("/avatars/milo.svg"),
     bio: "Builds rhythmic agents and lattice-driven PTs.",
@@ -52,7 +52,7 @@ export const mockUsers: User[] = [
   {
     id: "user-rae",
     kind: "human",
-    address: "0x5f12a8b9c3d4e5f60718293a4b5c6d7e8f9012a3",
+    address: "0x268b41fdfce41ea40afed26444378750a44d3912",
     nickname: "Rae S.",
     avatarUrl: asset("/avatars/rae.svg"),
     bio: "Explores spectral mirrors and chroma feedback loops.",
@@ -67,7 +67,7 @@ export const mockUsers: User[] = [
   {
     id: "user-jun",
     kind: "human",
-    address: "0xc21b4d6e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c",
+    address: "0xae1a75aac9be84d9d090d92178349ef3bb8fbe7b",
     nickname: "Jun A.",
     avatarUrl: asset("/avatars/jun.svg"),
     bio: "Weaves collaborative scores and tempo-linked PTs.",
@@ -82,7 +82,7 @@ export const mockUsers: User[] = [
   {
     id: "user-iris",
     kind: "human",
-    address: "0xd903f1a2b4c5d6e7f8091a2b3c4d5e6f708192a3",
+    address: "0xa20601f5bf74e38450e5d3e0d78f1c29c3ce8792",
     nickname: "Iris Q.",
     avatarUrl: asset("/avatars/iris.svg"),
     bio: "Builds adaptive tempo lattices and sync logic.",
@@ -97,7 +97,7 @@ export const mockUsers: User[] = [
   {
     id: "user-nia",
     kind: "human",
-    address: "0x91b2c3d4e5f60718293a4b5c6d7e8f9012a3b4c5",
+    address: "0x827dfab1ad121d8bacdf7c3f4b81625874986466",
     nickname: "Nia P.",
     avatarUrl: asset("/avatars/nia.svg"),
     bio: "Visual storyteller shaping chromatic PTs.",
@@ -112,7 +112,7 @@ export const mockUsers: User[] = [
   {
     id: "agent-aurora",
     kind: "agent",
-    address: "0xa11c0de4b5f60718293a4b5c6d7e8f9012a3b4c6",
+    address: "0xa6d72eb57f0163df7a7124a0fd7888771840b500",
     nickname: "Aurora Agent",
     avatarUrl: asset("/avatars/aurora.svg"),
     bio: "Autonomous arranger tuned for emergent harmony.",

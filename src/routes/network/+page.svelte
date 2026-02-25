@@ -1,10 +1,15 @@
 <script lang="ts">
+  import { onMount } from "svelte";
   import { resolve } from "$app/paths";
   import ParticlePostFeed from "$lib/components/feed/ParticlePostFeed.svelte";
-  import { listParticlePosts } from "$lib/feed/particlePostData";
+  import {
+    listParticlePosts,
+    listParticleSearchEntities,
+    syncParticlePostDataFromChain,
+    type ParticlePostEvent,
+  } from "$lib/feed/particlePostData";
   import Button from "$lib/components/ui/Button.svelte";
   import Input from "$lib/components/ui/Input.svelte";
-  import { mockSocialNetworkGraph } from "$lib/social/mockSocialFeed";
   import { networkNodeStudioKind, type NetworkGraphNode } from "$lib/network/mockNetworkGraph";
   import {
     mockCurrentUserId,
@@ -16,6 +21,8 @@
   import type { NetworkNodeKind } from "$lib/network/mockNetworkGraph";
 
   let followSearch = $state("");
+  let feedEvents = $state<ParticlePostEvent[]>([]);
+  let chainElements = $state(listParticleSearchEntities());
   let localFollowing = $state<User["id"][]>([...(mockFollowingByUserId[mockCurrentUserId] ?? [])]);
   let localToolboxParticles = $state<string[]>([
     ...(mockUsersById[mockCurrentUserId]?.toolbox ?? []),
@@ -53,35 +60,50 @@
 
   const entitySearchResults = $derived.by(() => {
     if (!searchQuery) return [] as EntitySearchResult[];
-    const allowedKinds = new Set<SearchableEntityKind>([
-      "particle",
-      "feature",
-      "transformation",
-      "condition",
-    ]);
-    return mockSocialNetworkGraph.nodes
-      .filter((node): node is typeof node & { kind: SearchableEntityKind } =>
-        allowedKinds.has(node.kind as SearchableEntityKind),
+    return (
+      [
+        ...chainElements.particles.map((item) => ({ ...item, kind: "particle" as const })),
+        ...chainElements.features.map((item) => ({ ...item, kind: "feature" as const })),
+        ...chainElements.transformations.map((item) => ({
+          ...item,
+          kind: "transformation" as const,
+        })),
+        ...chainElements.conditions.map((item) => ({ ...item, kind: "condition" as const })),
+      ] as Array<
+        { kind: SearchableEntityKind } & {
+          id: string;
+          label: string;
+          summary: string;
+          authorId: string;
+        }
+      >
+    )
+      .filter((item) =>
+        `${item.label} ${item.id} ${item.summary}`.toLowerCase().includes(searchQuery),
       )
-      .filter((node) =>
-        `${node.label} ${node.entityId} ${node.summary}`.toLowerCase().includes(searchQuery),
-      )
-      .map((node) => ({
-        id: node.id,
-        label: node.label,
-        kind: node.kind,
-        entityId: node.entityId,
-        summary: node.summary,
-        creatorName: mockUsersById[node.creatorId ?? ""]?.nickname ?? "unknown contributor",
+      .map((item) => ({
+        id: `${item.kind}:${item.id}`,
+        label: item.label,
+        kind: item.kind,
+        entityId: item.id,
+        summary: item.summary,
+        creatorName: mockUsersById[item.authorId]?.nickname ?? "unknown contributor",
       }))
       .slice(0, 10);
   });
 
   const showSearchResults = $derived.by(() => searchQuery.length > 0);
 
-  // Feed should render the full event stream; follow state is used for social actions/search,
-  // not for suppressing mock events. This keeps the rendering path compatible with future DB feeds.
-  const feedEvents = $derived.by(() => listParticlePosts());
+  const loadChainFeed = async () => {
+    try {
+      await syncParticlePostDataFromChain();
+    } catch (error) {
+      console.error("[Network feed] Failed to sync chain-backed particle posts.", error);
+    } finally {
+      feedEvents = listParticlePosts();
+      chainElements = listParticleSearchEntities();
+    }
+  };
 
   const openParticleInStudio = (particleId: string | NetworkGraphNode) => {
     const resolvedParticleId =
@@ -111,6 +133,10 @@
       currentUser.toolbox = [...currentUser.toolbox, particleId];
     }
   };
+
+  onMount(() => {
+    void loadChainFeed();
+  });
 </script>
 
 <div class="social-page">
