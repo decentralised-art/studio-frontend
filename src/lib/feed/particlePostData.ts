@@ -1,5 +1,5 @@
 import type { ExploreParticle } from "$lib/data/exploreParticles";
-import { mockUsers } from "$lib/data/users";
+import { extraChainSyncSources, mockUsers } from "$lib/data/users";
 import type { FormatFeedEvent } from "$lib/formats/localFormats";
 import type { MockFeatureDef, MockParticleDef } from "$lib/particles/mockPtNetwork";
 import type { SocialEvent } from "$lib/social/mockSocialFeed";
@@ -91,14 +91,27 @@ const mergeParticleRecordIntoStructures = (
 };
 
 const mergeSnapshots = async (): Promise<ParticlePostCache> => {
-  const settled = await Promise.allSettled(
-    mockUsers
+  const chainSources = [
+    ...mockUsers
       .filter((user) => Boolean(user.address?.trim()))
-      .map((user) =>
-        fetchChainOwnedStudioSnapshot(user.address, {
-          authorId: user.id,
-        }),
-      ),
+      .map((user) => ({
+        address: user.address,
+        authorId: user.id,
+      })),
+    ...extraChainSyncSources
+      .filter((source) => Boolean(source.address?.trim()))
+      .map((source) => ({
+        address: source.address,
+        authorId: source.id,
+      })),
+  ];
+
+  const settled = await Promise.allSettled(
+    chainSources.map((source) =>
+      fetchChainOwnedStudioSnapshot(source.address, {
+        authorId: source.authorId,
+      }),
+    ),
   );
 
   const nextParticlesById = new Map<string, ParticleRecord>();

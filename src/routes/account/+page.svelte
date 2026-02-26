@@ -25,12 +25,22 @@
   let error = $state("");
   let isRedirecting = $state(false);
   let isSaving = $state(false);
+  let isLinkingWallet = $state(false);
   let saveError = $state("");
   let saveSuccess = $state("");
   let localToolboxParticles = $state<string[]>([
     ...(mockUsersById[mockCurrentUserId]?.toolbox ?? []),
   ]);
   let accountFeedEvents = $state<ParticlePostEvent[]>([]);
+
+  type Eip1193Provider = {
+    request: (args: { method: string; params?: unknown[] | object }) => Promise<unknown>;
+    isMetaMask?: boolean;
+  };
+
+  type WindowWithEthereum = Window & {
+    ethereum?: Eip1193Provider;
+  };
 
   const asRecord = (value: unknown): Record<string, unknown> =>
     value && typeof value === "object" && !Array.isArray(value)
@@ -125,6 +135,37 @@
     }
   };
 
+  const handleLinkMetamask = async () => {
+    if (!currentUser) return;
+
+    isLinkingWallet = true;
+    saveError = "";
+    saveSuccess = "";
+
+    try {
+      const provider = (window as WindowWithEthereum).ethereum;
+      if (!provider) {
+        throw new Error("MetaMask is not available in this browser.");
+      }
+
+      const accounts = await provider.request({ method: "eth_requestAccounts" });
+      const address =
+        Array.isArray(accounts) && typeof accounts[0] === "string" ? accounts[0].trim() : "";
+
+      if (!address) {
+        throw new Error("No Ethereum account was selected in MetaMask.");
+      }
+
+      const payload = await updateUserById(currentUser.id, { ethereum_address: address });
+      currentUser = normalizeProfileUser(payload);
+      saveSuccess = "Ethereum address linked.";
+    } catch (err) {
+      saveError = err instanceof Error ? err.message : "Failed to link MetaMask.";
+    } finally {
+      isLinkingWallet = false;
+    }
+  };
+
   onMount(loadProfile);
 </script>
 
@@ -189,7 +230,9 @@
           mode="self"
           onLogout={handleLogout}
           onSave={handleSaveProfile}
+          onLinkWallet={handleLinkMetamask}
           {isSaving}
+          {isLinkingWallet}
           {saveError}
           {saveSuccess}
         />

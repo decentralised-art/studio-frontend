@@ -63,7 +63,7 @@
     postChainTransformationDetailed,
   } from "$lib/chain/registryApi";
   import { mockPlugins, type LibraryItem } from "$lib/data/studioLibrary";
-  import { mockCurrentUserId, mockUsersById } from "$lib/data/users";
+  import { extraChainSyncSources, mockCurrentUserId, mockUsersById } from "$lib/data/users";
   import {
     createLocalFormat,
     loadLocalFormats,
@@ -1353,34 +1353,46 @@
 
   const syncChainOwnedRegistry = async () => {
     chainSyncError = null;
-    chainSyncStatus = "Fetching chain registry for mock users...";
+    chainSyncStatus = "Fetching chain registry for mock users and configured sources...";
     chainSyncBusy = true;
     try {
       const users = Object.values(mockUsersById);
+      const sources = [
+        ...users.map((user) => ({
+          address: typeof user.address === "string" ? user.address.trim() : "",
+          authorId: user.id,
+          label: user.nickname,
+        })),
+        ...extraChainSyncSources.map((source) => ({
+          address: source.address.trim(),
+          authorId: source.id,
+          label: source.label,
+        })),
+      ];
       let totalParticles = 0;
       let totalFeatures = 0;
       let totalTransformations = 0;
       let totalConditions = 0;
-      let syncedUsers = 0;
+      let syncedSources = 0;
 
-      for (const user of users) {
-        const address = typeof user.address === "string" ? user.address.trim() : "";
+      for (const source of sources) {
+        const address = source.address;
         if (!address) continue;
-        chainSyncStatus = `Fetching chain registry for ${user.nickname}...`;
+        chainSyncStatus = `Fetching chain registry for ${source.label}...`;
         const snapshot = await withChainAuthRetry(() =>
           fetchChainOwnedStudioSnapshot(address, {
-            authorId: user.id,
+            authorId: source.authorId,
           }),
         );
         mergeChainSyncSnapshot(snapshot);
-        syncedUsers += 1;
+        syncedSources += 1;
         totalParticles += snapshot.particles.length;
         totalFeatures += Object.keys(snapshot.registry.features).length;
         totalTransformations += Object.keys(snapshot.registry.transformations).length;
         totalConditions += Object.keys(snapshot.registry.conditions).length;
       }
 
-      chainSyncStatus = `Synced ${syncedUsers} users · ${totalParticles} particles · ${totalFeatures} features · ${totalTransformations} transformations · ${totalConditions} conditions.`;
+      chainSyncStatus = `Synced ${syncedSources} sources · ${totalParticles} particles · ${totalFeatures} features · ${totalTransformations} transformations · ${totalConditions} conditions.`;
     } catch (error) {
       chainSyncError =
         error instanceof Error ? error.message : "Failed to sync owned chain registry.";

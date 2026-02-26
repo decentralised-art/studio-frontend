@@ -13,7 +13,9 @@
     mode,
     onLogout,
     onSave,
+    onLinkWallet,
     isSaving = false,
+    isLinkingWallet = false,
     saveError = "",
     saveSuccess = "",
     viewerUserId = null,
@@ -31,7 +33,9 @@
     mode: ProfileMode;
     onLogout?: (() => void | Promise<void>) | undefined;
     onSave?: ((payload: { nickname: string; bio: string }) => void | Promise<void>) | undefined;
+    onLinkWallet?: (() => void | Promise<void>) | undefined;
     isSaving?: boolean;
+    isLinkingWallet?: boolean;
     saveError?: string;
     saveSuccess?: string;
     viewerUserId?: string | null;
@@ -87,6 +91,10 @@
     await onLogout?.();
   };
 
+  const handleLinkWallet = async () => {
+    await onLinkWallet?.();
+  };
+
   const handleToggleFollow = async () => {
     await onToggleFollow?.();
   };
@@ -132,7 +140,29 @@
           ></textarea>
         </label>
 
-        <Input label="Ethereum address" value={profile.address} disabled={true} />
+        <label class="field">
+          <span class="input-label">Ethereum address</span>
+          <div class="wallet-row">
+            <input
+              class="input wallet-input"
+              value={profile.address}
+              disabled={true}
+              placeholder="Not linked"
+            />
+            <Button
+              variant="ghost"
+              type="button"
+              onclick={handleLinkWallet}
+              disabled={isLinkingWallet}
+            >
+              {isLinkingWallet
+                ? "Linking..."
+                : profile.address
+                  ? "Relink MetaMask"
+                  : "Link MetaMask"}
+            </Button>
+          </div>
+        </label>
 
         <div class="actions">
           <Button variant="primary" type="submit" disabled={isSaving}>
@@ -231,6 +261,14 @@
 
   .bio-textarea {
     @apply min-h-[120px];
+  }
+
+  .wallet-row {
+    @apply flex flex-col gap-2 sm:flex-row sm:items-center;
+  }
+
+  .wallet-input {
+    @apply flex-1;
   }
 
   .actions {

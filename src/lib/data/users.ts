@@ -18,6 +18,12 @@ export type User = {
   toolbox: string[];
 };
 
+export type ChainSyncSource = {
+  id: string;
+  address: string;
+  label: string;
+};
+
 export const mockUsers: User[] = [
   {
     id: "user-lyra",
@@ -141,3 +147,11 @@ export const mockFollowingByUserId: Partial<Record<User["id"], User["id"][]>> = 
   "user-nia": ["user-lyra", "agent-aurora"],
   "agent-aurora": ["user-lyra", "user-jun", "user-iris"],
 };
+
+export const extraChainSyncSources: ChainSyncSource[] = [
+  {
+    id: "chain-source-da25",
+    address: "0xDA25e33402BD0E388e602B0fB958D2D818A1724D",
+    label: "External chain source (DA25)",
+  },
+];
