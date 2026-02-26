@@ -43,7 +43,9 @@
       disabled={inToolbox}
     >
       <svg viewBox="0 0 24 24" aria-hidden="true">
-        <path d="M12 5v14M5 12h14"></path>
+        <path
+          d="M12 20.4c-.3 0-.7-.1-.9-.3C7.6 17.2 4 14.2 4 9.9 4 7.1 6.1 5 8.9 5c1.4 0 2.7.6 3.6 1.6C13.4 5.6 14.7 5 16.1 5 18.9 5 21 7.1 21 9.9c0 4.3-3.6 7.3-7.1 10.2-.2.2-.6.3-.9.3Z"
+        ></path>
       </svg>
     </button>
 
@@ -60,7 +62,9 @@
               <a class="author-name author-link" href={resolve("/u/[id]", { id: event.authorId })}
                 >{author?.nickname ?? event.authorId}</a
               >
-              <p class="event-time">{event.createdLabel}</p>
+              {#if event.createdLabel}
+                <p class="event-time">{event.createdLabel}</p>
+              {/if}
             </div>
             <span class="author-event-text">
               created a new particle:
@@ -138,6 +142,15 @@
     stroke-width: 1.8;
     stroke-linecap: round;
     stroke-linejoin: round;
+  }
+
+  .toolbox-add-button:not(.is-saved) svg {
+    fill: transparent;
+  }
+
+  .toolbox-add-button.is-saved svg {
+    fill: currentColor;
+    fill-opacity: 0.15;
   }
 
   .event-header {

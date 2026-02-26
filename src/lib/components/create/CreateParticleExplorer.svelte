@@ -6,6 +6,7 @@
   type ViewFilter = ParticleView["id"] | "all";
   let {
     particles = [],
+    loading = false,
     views = [],
     usersById = {},
     selectedId,
@@ -21,6 +22,7 @@
     onOpen,
   }: {
     particles?: ExploreParticle[];
+    loading?: boolean;
     views?: ParticleView[];
     usersById?: Record<User["id"], User>;
     selectedId?: ExploreParticle["id"];
@@ -82,7 +84,14 @@
   </div>
 
   <div class="list">
-    {#if particles.length === 0}
+    {#if loading && particles.length === 0}
+      {#each Array.from({ length: 5 }) as _, index (`particle-skeleton-${index}`)}
+        <div class="skeleton-card" aria-hidden="true">
+          <div class="skeleton-title shimmer"></div>
+          <div class="skeleton-subtitle shimmer"></div>
+        </div>
+      {/each}
+    {:else if particles.length === 0}
       <p class="empty">No particles match these filters yet.</p>
     {:else}
       {#each particles as particle (particle.id)}
@@ -169,5 +178,33 @@
 
   .empty {
     @apply text-[0.7rem] text-white/50;
+  }
+
+  .skeleton-card {
+    @apply rounded-xl border border-white/10 bg-white/5 p-3 grid gap-2;
+  }
+
+  .skeleton-title {
+    @apply h-3 rounded-full bg-white/10;
+    width: 70%;
+  }
+
+  .skeleton-subtitle {
+    @apply h-2 rounded-full bg-white/8;
+    width: 42%;
+  }
+
+  .shimmer {
+    animation: explorer-skeleton-pulse 1.4s ease-in-out infinite;
+  }
+
+  @keyframes explorer-skeleton-pulse {
+    0%,
+    100% {
+      opacity: 0.45;
+    }
+    50% {
+      opacity: 0.9;
+    }
   }
 </style>

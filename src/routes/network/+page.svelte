@@ -2,12 +2,20 @@
   import { onMount } from "svelte";
   import { resolve } from "$app/paths";
   import ParticlePostFeed from "$lib/components/feed/ParticlePostFeed.svelte";
+  import { addParticleToCurrentUserToolbox, getCurrentUserToolboxLibrary } from "$lib/auth/api";
   import {
+    getParticleLabelMap,
     listParticlePosts,
     listParticleSearchEntities,
     syncParticlePostDataFromChain,
+    type NetworkFeedEvent,
     type ParticlePostEvent,
   } from "$lib/feed/particlePostData";
+  import {
+    buildFormatFeedEvents,
+    loadLocalFormats,
+    type ParticleFormat,
+  } from "$lib/formats/localFormats";
   import Button from "$lib/components/ui/Button.svelte";
   import Input from "$lib/components/ui/Input.svelte";
   import { networkNodeStudioKind, type NetworkGraphNode } from "$lib/network/mockNetworkGraph";
@@ -22,6 +30,9 @@
 
   let followSearch = $state("");
   let feedEvents = $state<ParticlePostEvent[]>([]);
+  let feedLoading = $state(true);
+  let formats = $state<ParticleFormat[]>([]);
+  let networkFeedEvents = $state<NetworkFeedEvent[]>([]);
   let chainElements = $state(listParticleSearchEntities());
   let localFollowing = $state<User["id"][]>([...(mockFollowingByUserId[mockCurrentUserId] ?? [])]);
   let localToolboxParticles = $state<string[]>([
@@ -58,6 +69,16 @@
     creatorName: string;
   };
 
+  type FormatSearchResult = {
+    id: string;
+    slug: string;
+    name: string;
+    authorId: string;
+    authorName: string;
+    terminalParticleIds: string[];
+    terminalParticleLabels: string[];
+  };
+
   const entitySearchResults = $derived.by(() => {
     if (!searchQuery) return [] as EntitySearchResult[];
     return (
@@ -92,9 +113,35 @@
       .slice(0, 10);
   });
 
+  const formatSearchResults = $derived.by(() => {
+    if (!searchQuery) return [] as FormatSearchResult[];
+    const particleLabels = getParticleLabelMap();
+    return formats
+      .filter((format) => {
+        const authorName = mockUsersById[format.authorId]?.nickname ?? format.authorId;
+        const deps = format.terminalParticleIds.map((id) => particleLabels.get(id) ?? id).join(" ");
+        return `${format.name} ${format.slug} ${authorName} ${deps}`
+          .toLowerCase()
+          .includes(searchQuery);
+      })
+      .map((format) => ({
+        id: format.id,
+        slug: format.slug,
+        name: format.name,
+        authorId: format.authorId,
+        authorName: mockUsersById[format.authorId]?.nickname ?? format.authorId,
+        terminalParticleIds: [...format.terminalParticleIds],
+        terminalParticleLabels: format.terminalParticleIds.map(
+          (id) => particleLabels.get(id) ?? id,
+        ),
+      }))
+      .slice(0, 10);
+  });
+
   const showSearchResults = $derived.by(() => searchQuery.length > 0);
 
   const loadChainFeed = async () => {
+    feedLoading = true;
     try {
       await syncParticlePostDataFromChain();
     } catch (error) {
@@ -102,6 +149,11 @@
     } finally {
       feedEvents = listParticlePosts();
       chainElements = listParticleSearchEntities();
+      const formatEvents = buildFormatFeedEvents(formats, getParticleLabelMap());
+      networkFeedEvents = [...feedEvents, ...formatEvents].sort(
+        (a, b) => b.createdAt - a.createdAt,
+      );
+      feedLoading = false;
     }
   };
 
@@ -127,14 +179,27 @@
 
   const addParticleToToolbox = (particleId: string) => {
     if (toolboxParticleIds.has(particleId)) return;
+    const previous = [...localToolboxParticles];
     localToolboxParticles = [...localToolboxParticles, particleId];
     const currentUser = mockUsersById[mockCurrentUserId];
     if (currentUser && !currentUser.toolbox.includes(particleId)) {
       currentUser.toolbox = [...currentUser.toolbox, particleId];
     }
+    void addParticleToCurrentUserToolbox(particleId).catch((error) => {
+      console.error("[Network feed] Failed to persist toolbox update.", error);
+      localToolboxParticles = previous;
+    });
   };
 
   onMount(() => {
+    formats = loadLocalFormats();
+    void getCurrentUserToolboxLibrary()
+      .then((toolbox) => {
+        localToolboxParticles = [...toolbox.particles];
+      })
+      .catch((error) => {
+        console.warn("[Network feed] Failed to load toolbox from profile.", error);
+      });
     void loadChainFeed();
   });
 </script>
@@ -146,7 +211,7 @@
         <div class="follow-search-field">
           <Input
             label=""
-            placeholder="Search users, particles, features, transformations, conditions"
+            placeholder="Search users, particles, features, transformations, conditions, formats"
             value={followSearch}
             oninput={(event) => {
               followSearch = event.currentTarget.value;
@@ -231,7 +296,29 @@
             </div>
           {/if}
 
-          {#if userSearchResults.length === 0 && entitySearchResults.length === 0}
+          {#if formatSearchResults.length}
+            <div class="result-group">
+              <p class="result-group-label">Formats</p>
+              {#each formatSearchResults as format (format.id)}
+                <div class="follow-candidate-item" role="listitem">
+                  <div class="candidate-meta">
+                    <div class="candidate-avatar candidate-avatar--glyph" aria-hidden="true">F</div>
+                    <div class="candidate-text">
+                      <p class="candidate-name">{format.name}</p>
+                      <p class="candidate-kind">
+                        by {format.authorName} · {format.terminalParticleLabels.length} dependencies
+                      </p>
+                    </div>
+                  </div>
+                  <a class="candidate-link-btn" href={resolve("/f/[slug]", { slug: format.slug })}>
+                    Open
+                  </a>
+                </div>
+              {/each}
+            </div>
+          {/if}
+
+          {#if userSearchResults.length === 0 && entitySearchResults.length === 0 && formatSearchResults.length === 0}
             <div class="search-empty" role="listitem">No users or network elements found.</div>
           {/if}
         </div>
@@ -240,7 +327,8 @@
   </div>
 
   <ParticlePostFeed
-    events={feedEvents}
+    loading={feedLoading}
+    events={networkFeedEvents}
     onParticleOpen={openParticleInStudio}
     onAddToToolbox={addParticleToToolbox}
     {toolboxParticleIds}
@@ -325,6 +413,14 @@
 
   .candidate-state {
     @apply text-[0.62rem] uppercase tracking-[0.14em] text-white/45 px-1;
+  }
+
+  .candidate-link-btn {
+    @apply text-xs px-2.5 py-1.5 rounded-lg border border-white/10 bg-white/5 text-white/75 no-underline transition;
+  }
+
+  .candidate-link-btn:hover {
+    @apply border-white/25 text-white bg-white/10;
   }
 
   .search-empty {

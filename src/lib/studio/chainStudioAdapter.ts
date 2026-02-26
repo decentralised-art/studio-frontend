@@ -9,6 +9,7 @@ import {
 } from "$lib/chain/registryApi";
 import type { ExploreParticle } from "$lib/data/exploreParticles";
 import type { LibraryItem } from "$lib/data/studioLibrary";
+import { mockUsers } from "$lib/data/users";
 import type { MockFeatureDef, MockParticleDef } from "$lib/particles/mockPtNetwork";
 
 type ChainRuntimeShape = {
@@ -38,7 +39,7 @@ export type ChainStudioParticleFetchResult = {
 
 const titleize = (value: string) =>
   value
-    .split("-")
+    .split(/[-_]/g)
     .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
     .join(" ");
 
@@ -272,7 +273,7 @@ export const fetchChainOwnedStudioSnapshot = async (
 
 export const fetchChainParticleForStudio = async (
   particleName: string,
-  options: { authorId: string },
+  options?: { authorId?: string },
 ): Promise<ChainStudioParticleFetchResult> => {
   const particlePayload = await getChainParticle(particleName);
   const particle = normalizeParticle(particlePayload);
@@ -280,12 +281,17 @@ export const fetchChainParticleForStudio = async (
 
   const featurePayload = await getChainFeature(particle.featureName);
   const feature = normalizeFeature(featurePayload) ?? undefined;
+  const ownerAddress = (particlePayload.owner ?? "").toLowerCase();
+  const authorId =
+    options?.authorId?.trim() ||
+    mockUsers.find((user) => (user.address ?? "").toLowerCase() === ownerAddress)?.id ||
+    "user-lyra";
 
   return {
     registry: {
       feature,
       particle,
     },
-    particleMeta: mapExploreParticle(particle, options.authorId, Date.now()),
+    particleMeta: mapExploreParticle(particle, authorId, Date.now()),
   };
 };

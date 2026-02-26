@@ -5,6 +5,7 @@
 
   import ParticlePostFeed from "$lib/components/feed/ParticlePostFeed.svelte";
   import {
+    ensureParticleRecordLoadedById,
     getParticleRecordById,
     listParticlePostsReferencingParticle,
     syncParticlePostDataFromChain,
@@ -14,6 +15,7 @@
   import SocialParticleDependencyFlow from "$lib/components/social/SocialParticleDependencyFlow.svelte";
   import Button from "$lib/components/ui/Button.svelte";
   import SectionShell from "$lib/components/ui/SectionShell.svelte";
+  import { addParticleToCurrentUserToolbox, getCurrentUserToolboxLibrary } from "$lib/auth/api";
   import { mockCurrentUserId, mockUsersById } from "$lib/data/users";
   import { networkNodeStudioKind } from "$lib/network/mockNetworkGraph";
 
@@ -38,11 +40,16 @@
 
   const addParticleToToolbox = (targetParticleId: string) => {
     if (toolboxParticleIds.has(targetParticleId)) return;
+    const previous = [...localToolboxParticles];
     localToolboxParticles = [...localToolboxParticles, targetParticleId];
     const currentUser = mockUsersById[mockCurrentUserId];
     if (currentUser && !currentUser.toolbox.includes(targetParticleId)) {
       currentUser.toolbox = [...currentUser.toolbox, targetParticleId];
     }
+    void addParticleToCurrentUserToolbox(targetParticleId).catch((err) => {
+      console.error("[Particle page] Failed to persist toolbox update.", err);
+      localToolboxParticles = previous;
+    });
   };
 
   const loadParticlePageData = async () => {
@@ -51,12 +58,22 @@
       await syncParticlePostDataFromChain();
     } finally {
       particle = getParticleRecordById(particleId);
+      if (!particle && particleId) {
+        particle = await ensureParticleRecordLoadedById(particleId);
+      }
       relatedEvents = listParticlePostsReferencingParticle(particleId);
       particleLoading = false;
     }
   };
 
   onMount(() => {
+    void getCurrentUserToolboxLibrary()
+      .then((toolbox) => {
+        localToolboxParticles = [...toolbox.particles];
+      })
+      .catch((error) => {
+        console.warn("[Particle page] Failed to load toolbox from profile.", error);
+      });
     void loadParticlePageData();
   });
 </script>

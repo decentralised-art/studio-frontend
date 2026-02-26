@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { SvelteMap, SvelteSet } from "svelte/reactivity";
+  import { resolve } from "$app/paths";
 
   import {
     Background,
@@ -46,7 +47,12 @@
     fetchChainParticleForStudio,
     type ChainStudioSyncResult,
   } from "$lib/studio/chainStudioAdapter";
-  import { getMe, loginWithMockChainAccount } from "$lib/auth/api";
+  import {
+    getCurrentUserToolboxLibrary,
+    getMe,
+    loginWithMockChainAccount,
+    saveCurrentUserToolboxLibrary,
+  } from "$lib/auth/api";
   import { clearChainToken, getChainToken } from "$lib/auth/session";
   import {
     ChainApiRequestError,
@@ -58,6 +64,11 @@
   } from "$lib/chain/registryApi";
   import { mockPlugins, type LibraryItem } from "$lib/data/studioLibrary";
   import { mockCurrentUserId, mockUsersById } from "$lib/data/users";
+  import {
+    createLocalFormat,
+    loadLocalFormats,
+    type ParticleFormat,
+  } from "$lib/formats/localFormats";
 
   type PanelMode = "open" | "hidden";
   type RightPanelMode = "assistant" | "inspector" | "both" | "hidden";
@@ -141,7 +152,7 @@
   let selectedParticleId = $state<ExploreParticle["id"] | undefined>(undefined);
   let selectedNodeId = $state<string | null>(null);
   let selectedViewId = $state<"all" | string>("all");
-  let explorerSource = $state<"network" | "toolbox">("network");
+  let explorerSource = $state<"network" | "toolbox" | "formats">("network");
   let libraryTab = $state<"particles" | "features" | "transformations" | "conditions" | "plugins">(
     "particles",
   );
@@ -164,9 +175,16 @@
   let chainSyncBusy = $state(false);
   let chainSyncStatus = $state<string | null>(null);
   let chainSyncError = $state<string | null>(null);
+  let toolboxLoadBusy = $state(true);
   let chainDeployBusy = $state(false);
   let chainDeployStatus = $state<string | null>(null);
   let chainDeployError = $state<string | null>(null);
+  let localFormats = $state<ParticleFormat[]>([]);
+  let formatNameDraft = $state("");
+  let formatParticleSearchDraft = $state("");
+  let selectedFormatParticleIds = $state<string[]>([]);
+  let formatCreateError = $state<string | null>(null);
+  let formatCreateStatus = $state<string | null>(null);
   type DeployTraceEntry = {
     id: string;
     method: "POST";
@@ -206,6 +224,7 @@
   let conditionDraftCode = $state("return true;");
   let conditionDraftError = $state<string | null>(null);
   const conditionCodeById = new SvelteMap<string, string>();
+  const selectedFormatParticleIdSet = $derived.by(() => new Set(selectedFormatParticleIds));
 
   const transformationEditorReadOnly = $derived.by(
     () => transformationEditorStatus === "network" || transformationEditorLocked,
@@ -685,6 +704,8 @@
     }
 
     loadNetworkSelectionFromQuery();
+    localFormats = loadLocalFormats();
+    void loadToolboxLibraryFromProfile();
     if (!chainAutoSyncStarted) {
       chainAutoSyncStarted = true;
       void syncChainOwnedRegistry();
@@ -715,6 +736,38 @@
     plugin: [],
   });
 
+  const persistToolboxLibrary = async (nextToolboxLibrary: ToolboxLibrary) => {
+    try {
+      await saveCurrentUserToolboxLibrary({
+        particles: [...nextToolboxLibrary.particles],
+        feature: [...nextToolboxLibrary.feature],
+        transformation: [...nextToolboxLibrary.transformation],
+        condition: [...nextToolboxLibrary.condition],
+        plugin: [...nextToolboxLibrary.plugin],
+      });
+    } catch (error) {
+      console.warn("[Studio] Failed to persist toolbox library.", error);
+    }
+  };
+
+  const loadToolboxLibraryFromProfile = async () => {
+    toolboxLoadBusy = true;
+    try {
+      const saved = await getCurrentUserToolboxLibrary();
+      toolboxLibrary = {
+        particles: saved.particles.map(normalizeToolboxId),
+        feature: [...saved.feature],
+        transformation: [...saved.transformation],
+        condition: [...saved.condition],
+        plugin: [...saved.plugin],
+      };
+    } catch (error) {
+      console.warn("[Studio] Failed to load toolbox library from profile.", error);
+    } finally {
+      toolboxLoadBusy = false;
+    }
+  };
+
   const networkParticles = $derived.by(() =>
     [...deployedParticles].sort((a, b) => b.createdAt - a.createdAt),
   );
@@ -735,6 +788,27 @@
   });
 
   const filteredParticles = $derived.by(() => availableParticles);
+  const formatParticleChoices = $derived.by(() =>
+    [...networkParticles].sort((a, b) => a.name.localeCompare(b.name)),
+  );
+  const formatParticleById = $derived.by(
+    () => new Map(formatParticleChoices.map((particle) => [particle.id, particle] as const)),
+  );
+  const selectedFormatParticles = $derived.by(() =>
+    selectedFormatParticleIds
+      .map((id) => formatParticleById.get(id) ?? null)
+      .filter((particle): particle is ExploreParticle => Boolean(particle)),
+  );
+  const formatParticleSearchResults = $derived.by(() => {
+    const query = formatParticleSearchDraft.trim().toLowerCase();
+    if (!query) return [] as ExploreParticle[];
+    return formatParticleChoices
+      .filter((particle) => !selectedFormatParticleIdSet.has(particle.id))
+      .filter((particle) => {
+        return `${particle.name} ${particle.id} ${particle.summary}`.toLowerCase().includes(query);
+      })
+      .slice(0, 8);
+  });
   const selectedNode = $derived.by(() => nodes.find((node) => node.id === selectedNodeId) ?? null);
   const inspectorNode = $derived.by(() => {
     if (selectedNode) return selectedNode;
@@ -1266,8 +1340,11 @@
       const name = resolveNodeName(node);
       const code = getConditionCode(node.id);
       const compiled = compileConditionCode(code);
+      const parsedSnippet = parseSoliditySnippet(code);
       registry[name] = {
-        argc: Math.max(0, inferArgsCountFromSnippet(code).minArgsCount),
+        argc: parsedSnippet.ok
+          ? Math.max(0, inferArgsCountFromSnippet(parsedSnippet.value).minArgsCount)
+          : 0,
         check: compiled.ok ? compiled.value : alwaysTrueConditionCheck,
       };
     });
@@ -1312,6 +1389,8 @@
       chainSyncBusy = false;
     }
   };
+
+  const isNonNull = <T,>(value: T | null): value is T => value !== null;
 
   const collectDraftTransformationSources = (graphNodes: StudioNode[]) => {
     const sources = new SvelteMap<string, { code: string }>();
@@ -2352,13 +2431,98 @@
   const addParticleToToolbox = (particle: ExploreParticle) => {
     const id = normalizeToolboxId(particle.id);
     if (toolboxLibrary.particles.includes(id)) return;
-    toolboxLibrary = { ...toolboxLibrary, particles: [...toolboxLibrary.particles, id] };
+    const next = { ...toolboxLibrary, particles: [...toolboxLibrary.particles, id] };
+    toolboxLibrary = next;
+    void persistToolboxLibrary(next);
   };
 
   const addLibraryToToolbox = (item: LibraryItem) => {
     const kind = item.kind;
     if (toolboxLibrary[kind].includes(item.id)) return;
-    toolboxLibrary = { ...toolboxLibrary, [kind]: [...toolboxLibrary[kind], item.id] };
+    const next = { ...toolboxLibrary, [kind]: [...toolboxLibrary[kind], item.id] };
+    toolboxLibrary = next;
+    void persistToolboxLibrary(next);
+  };
+
+  const toggleFormatParticleSelection = (particleId: string) => {
+    formatCreateError = null;
+    formatCreateStatus = null;
+    if (selectedFormatParticleIdSet.has(particleId)) {
+      selectedFormatParticleIds = selectedFormatParticleIds.filter((id) => id !== particleId);
+      return;
+    }
+    selectedFormatParticleIds = [...selectedFormatParticleIds, particleId];
+  };
+
+  const addFormatParticleSelection = (particleId: string) => {
+    if (selectedFormatParticleIdSet.has(particleId)) return;
+    formatCreateError = null;
+    formatCreateStatus = null;
+    selectedFormatParticleIds = [...selectedFormatParticleIds, particleId];
+  };
+
+  const tryAddFormatParticleByToken = (rawToken: string) => {
+    const token = rawToken.trim().toLowerCase();
+    if (!token) return false;
+    const match =
+      formatParticleChoices.find((particle) => particle.id.toLowerCase() === token) ??
+      formatParticleChoices.find((particle) => particle.name.toLowerCase() === token);
+    if (!match) return false;
+    addFormatParticleSelection(match.id);
+    return true;
+  };
+
+  const commitFormatParticleSearchInput = () => {
+    const raw = formatParticleSearchDraft;
+    const tokens = raw
+      .split(",")
+      .map((segment) => segment.trim())
+      .filter(Boolean);
+    if (!tokens.length) return;
+
+    let addedAny = false;
+    for (const token of tokens) {
+      if (tryAddFormatParticleByToken(token)) {
+        addedAny = true;
+      }
+    }
+
+    if (addedAny) {
+      formatParticleSearchDraft = "";
+      formatCreateError = null;
+      formatCreateStatus = null;
+      return;
+    }
+
+    const first = tokens[0];
+    formatCreateError = `No synced particle matched "${first}".`;
+  };
+
+  const resetFormatDraft = () => {
+    formatNameDraft = "";
+    formatParticleSearchDraft = "";
+    selectedFormatParticleIds = [];
+    formatCreateError = null;
+    formatCreateStatus = null;
+  };
+
+  const handleCreateFormat = () => {
+    formatCreateError = null;
+    formatCreateStatus = null;
+    try {
+      const result = createLocalFormat({
+        name: formatNameDraft,
+        authorId: mockCurrentUserId,
+        terminalParticleIds: selectedFormatParticleIds,
+        existing: localFormats,
+      });
+      localFormats = result.formats;
+      formatCreateStatus = `Created format ${result.created.name}.`;
+      formatNameDraft = "";
+      selectedFormatParticleIds = [];
+    } catch (error) {
+      formatCreateError = error instanceof Error ? error.message : "Failed to create format.";
+    }
   };
 
   const getDimensionNodesForFeature = (featureId: string) =>
@@ -3035,9 +3199,7 @@
             },
           };
         })
-        .filter((value): value is { method: string; path: string; body: unknown } =>
-          Boolean(value),
-        );
+        .filter(isNonNull);
 
       const rootDef = runtime.registry.particles[runtime.rootParticle];
       const particleRequest = rootDef
@@ -3647,6 +3809,13 @@
           >
             Toolbox
           </button>
+          <button
+            type="button"
+            class={`source-tab ${explorerSource === "formats" ? "is-active" : ""}`}
+            onclick={() => (explorerSource = "formats")}
+          >
+            Formats
+          </button>
         </div>
         {#if explorerSource === "network" && (chainSyncStatus || chainSyncError)}
           <div
@@ -3668,80 +3837,199 @@
             {/if}
           </div>
         {/if}
-        <div class="left-tabs">
-          <button
-            type="button"
-            class="scroll-arrow"
-            aria-label="Scroll element tabs left"
-            onclick={() => leftTabsEl?.scrollBy({ left: -120, behavior: "smooth" })}
-          >
-            ‹
-          </button>
-          <div class="left-tabs-track" bind:this={leftTabsEl}>
-            <Button
-              variant="subtle"
-              selected={libraryTab === "particles"}
-              onclick={() => (libraryTab = "particles")}
+        {#if explorerSource !== "formats"}
+          <div class="left-tabs">
+            <button
+              type="button"
+              class="scroll-arrow"
+              aria-label="Scroll element tabs left"
+              onclick={() => leftTabsEl?.scrollBy({ left: -120, behavior: "smooth" })}
             >
-              Particles
-            </Button>
-            <Button
-              variant="subtle"
-              selected={libraryTab === "features"}
-              onclick={() => (libraryTab = "features")}
+              ‹
+            </button>
+            <div class="left-tabs-track" bind:this={leftTabsEl}>
+              <Button
+                variant="subtle"
+                selected={libraryTab === "particles"}
+                onclick={() => (libraryTab = "particles")}
+              >
+                Particles
+              </Button>
+              <Button
+                variant="subtle"
+                selected={libraryTab === "features"}
+                onclick={() => (libraryTab = "features")}
+              >
+                Features
+              </Button>
+              <Button
+                variant="subtle"
+                selected={libraryTab === "transformations"}
+                onclick={() => (libraryTab = "transformations")}
+              >
+                Transformations
+              </Button>
+              <Button
+                variant="subtle"
+                selected={libraryTab === "conditions"}
+                onclick={() => (libraryTab = "conditions")}
+              >
+                Conditions
+              </Button>
+              <Button
+                variant="subtle"
+                selected={libraryTab === "plugins"}
+                onclick={() => (libraryTab = "plugins")}
+              >
+                Plugins
+              </Button>
+            </div>
+            <button
+              type="button"
+              class="scroll-arrow"
+              aria-label="Scroll element tabs right"
+              onclick={() => leftTabsEl?.scrollBy({ left: 120, behavior: "smooth" })}
             >
-              Features
-            </Button>
-            <Button
-              variant="subtle"
-              selected={libraryTab === "transformations"}
-              onclick={() => (libraryTab = "transformations")}
-            >
-              Transformations
-            </Button>
-            <Button
-              variant="subtle"
-              selected={libraryTab === "conditions"}
-              onclick={() => (libraryTab = "conditions")}
-            >
-              Conditions
-            </Button>
-            <Button
-              variant="subtle"
-              selected={libraryTab === "plugins"}
-              onclick={() => (libraryTab = "plugins")}
-            >
-              Plugins
-            </Button>
+              ›
+            </button>
           </div>
-          <button
-            type="button"
-            class="scroll-arrow"
-            aria-label="Scroll element tabs right"
-            onclick={() => leftTabsEl?.scrollBy({ left: 120, behavior: "smooth" })}
-          >
-            ›
-          </button>
-        </div>
-        <div class="list-header">
-          <div class="list-title">{listTitle}</div>
-          <button
-            class="info-dot"
-            type="button"
-            data-tooltip={listTooltip}
-            style={`--tooltip-x:${tooltipX}px; --tooltip-y:${tooltipY}px;`}
-            aria-label={`${listTitle} definition`}
-            onmousemove={(event) => {
-              tooltipX = event.clientX;
-              tooltipY = event.clientY;
-            }}
-          >
-            ?
-          </button>
-        </div>
-        {#if libraryTab === "particles"}
+          <div class="list-header">
+            <div class="list-title">{listTitle}</div>
+            <button
+              class="info-dot"
+              type="button"
+              data-tooltip={listTooltip}
+              style={`--tooltip-x:${tooltipX}px; --tooltip-y:${tooltipY}px;`}
+              aria-label={`${listTitle} definition`}
+              onmousemove={(event) => {
+                tooltipX = event.clientX;
+                tooltipY = event.clientY;
+              }}
+            >
+              ?
+            </button>
+          </div>
+        {/if}
+        {#if explorerSource === "formats"}
+          <section class="format-panel" aria-label="Create format">
+            <div class="format-panel-head">
+              <p class="format-panel-title">Create format</p>
+              <span class="format-panel-count">{selectedFormatParticleIds.length} selected</span>
+            </div>
+            <p class="format-panel-copy">
+              Select terminal particles and save a named format. It will appear as a format event in
+              the network feed.
+            </p>
+            <input
+              class="format-panel-input"
+              type="text"
+              placeholder="Format name"
+              bind:value={formatNameDraft}
+              oninput={() => {
+                formatCreateError = null;
+                formatCreateStatus = null;
+              }}
+            />
+            <input
+              class="format-panel-input format-panel-input--compact"
+              type="text"
+              placeholder="Add terminal particles by name (comma or Enter)"
+              bind:value={formatParticleSearchDraft}
+              onkeydown={(event) => {
+                if (event.key === "Enter" || event.key === ",") {
+                  event.preventDefault();
+                  commitFormatParticleSearchInput();
+                }
+              }}
+              onblur={() => {
+                if (formatParticleSearchDraft.trim()) commitFormatParticleSearchInput();
+              }}
+              oninput={() => {
+                formatCreateError = null;
+                formatCreateStatus = null;
+              }}
+            />
+            {#if selectedFormatParticles.length > 0}
+              <div class="format-selected-list" aria-label="Selected terminal particles">
+                <span class="format-selected-label">Selected:</span>
+                <span class="format-selected-values">
+                  {#each selectedFormatParticles as particle, index (particle.id)}
+                    <button
+                      type="button"
+                      class="format-selected-item"
+                      onclick={() => toggleFormatParticleSelection(particle.id)}
+                      title="Remove particle"
+                    >
+                      {particle.name}
+                    </button>
+                    {#if index < selectedFormatParticles.length - 1}
+                      <span class="format-selected-separator" aria-hidden="true">, </span>
+                    {/if}
+                  {/each}
+                </span>
+              </div>
+            {/if}
+            {#if formatParticleChoices.length === 0}
+              <p class="format-panel-empty">
+                No chain particles synced yet. Use the Network tab sync first.
+              </p>
+            {:else if formatParticleSearchDraft.trim().length > 0}
+              {#if formatParticleSearchResults.length > 0}
+                <div class="format-search-results" role="list" aria-label="Particle matches">
+                  {#each formatParticleSearchResults as particle (particle.id)}
+                    <button
+                      type="button"
+                      class="format-search-result"
+                      onclick={() => {
+                        addFormatParticleSelection(particle.id);
+                        formatParticleSearchDraft = "";
+                      }}
+                    >
+                      <span class="format-search-result-name">{particle.name}</span>
+                      <span class="format-search-result-id">{particle.id}</span>
+                    </button>
+                  {/each}
+                </div>
+              {:else}
+                <p class="format-panel-empty">No particle matches that name.</p>
+              {/if}
+            {/if}
+            <div class="format-panel-actions">
+              <Button variant="ghost" type="button" onclick={resetFormatDraft}>Reset</Button>
+              <Button
+                variant="primary"
+                type="button"
+                onclick={handleCreateFormat}
+                disabled={!formatNameDraft.trim() || selectedFormatParticleIds.length === 0}
+              >
+                Create format
+              </Button>
+            </div>
+            {#if formatCreateStatus}
+              <p class="format-panel-status">{formatCreateStatus}</p>
+            {/if}
+            {#if formatCreateError}
+              <p class="format-panel-error">{formatCreateError}</p>
+            {/if}
+            {#if localFormats.length > 0}
+              <div class="format-panel-list">
+                <p class="format-panel-subtitle">Saved formats</p>
+                <div class="format-panel-list-items">
+                  {#each localFormats.slice(0, 8) as format (format.id)}
+                    <a class="format-panel-link" href={resolve("/f/[slug]", { slug: format.slug })}>
+                      <span>{format.name}</span>
+                      <small>{format.terminalParticleIds.length} terminals</small>
+                    </a>
+                  {/each}
+                </div>
+              </div>
+            {/if}
+          </section>
+        {:else if libraryTab === "particles"}
           <CreateParticleExplorer
             particles={filteredParticles}
+            loading={(explorerSource === "network" && chainSyncBusy) ||
+              (explorerSource === "toolbox" && toolboxLoadBusy)}
             views={mockParticleViews}
             usersById={mockUsersById}
             selectedId={selectedParticleId}
@@ -3759,6 +4047,8 @@
           <StudioLibraryList
             title="Features"
             items={libraryItems}
+            loading={(explorerSource === "network" && chainSyncBusy) ||
+              (explorerSource === "toolbox" && toolboxLoadBusy)}
             usersById={mockUsersById}
             onAdd={(item) => addLibraryNode(item, null)}
             onToolbox={addLibraryToToolbox}
@@ -3770,6 +4060,8 @@
           <StudioLibraryList
             title="Transformations"
             items={libraryItems}
+            loading={(explorerSource === "network" && chainSyncBusy) ||
+              (explorerSource === "toolbox" && toolboxLoadBusy)}
             usersById={mockUsersById}
             onAdd={(item) => addLibraryNode(item, null)}
             onToolbox={addLibraryToToolbox}
@@ -3781,6 +4073,8 @@
           <StudioLibraryList
             title="Conditions"
             items={libraryItems}
+            loading={(explorerSource === "network" && chainSyncBusy) ||
+              (explorerSource === "toolbox" && toolboxLoadBusy)}
             usersById={mockUsersById}
             onAdd={(item) => addLibraryNode(item, null)}
             onToolbox={addLibraryToToolbox}
@@ -3792,6 +4086,8 @@
           <StudioLibraryList
             title="Plugins"
             items={libraryItems}
+            loading={(explorerSource === "network" && chainSyncBusy) ||
+              (explorerSource === "toolbox" && toolboxLoadBusy)}
             usersById={mockUsersById}
             onAdd={(item) => addLibraryNode(item, null)}
             onToolbox={addLibraryToToolbox}
@@ -5328,6 +5624,117 @@
 
   .list-title {
     @apply text-[0.7rem] uppercase tracking-[0.28em] text-white/70;
+  }
+
+  .format-panel {
+    @apply grid gap-2 rounded-md border border-white/10 bg-black/40 p-2 min-h-0;
+  }
+
+  .format-panel-head {
+    @apply flex items-center justify-between gap-2;
+  }
+
+  .format-panel-title {
+    @apply text-[0.6rem] uppercase tracking-[0.22em] text-white/70;
+  }
+
+  .format-panel-count {
+    @apply text-[0.55rem] uppercase tracking-[0.16em] text-white/40;
+  }
+
+  .format-panel-copy {
+    @apply text-[0.65rem] text-white/50 leading-snug;
+  }
+
+  .format-panel-input {
+    @apply w-full rounded-md border border-white/10 bg-black/60 px-2 py-1.5 text-[0.75rem]
+      text-white/85 outline-none focus:border-emerald-400/60;
+  }
+
+  .format-panel-input--compact {
+    @apply text-[0.7rem] py-1.5;
+  }
+
+  .format-panel-empty {
+    @apply rounded-md border border-white/10 bg-white/5 px-2 py-1.5 text-[0.65rem] text-white/55;
+  }
+
+  .format-selected-list {
+    @apply flex flex-wrap items-baseline gap-x-1 text-[0.65rem] text-white/65;
+  }
+
+  .format-selected-label {
+    @apply uppercase tracking-[0.14em] text-[0.55rem] text-white/40;
+  }
+
+  .format-selected-values {
+    @apply flex flex-wrap items-baseline;
+  }
+
+  .format-selected-item {
+    @apply text-[0.68rem] text-white/80 hover:text-white underline decoration-white/20 underline-offset-2;
+  }
+
+  .format-selected-separator {
+    @apply text-white/35;
+  }
+
+  .format-search-results {
+    @apply grid gap-1 max-h-40 overflow-y-auto pr-1;
+  }
+
+  .format-search-result {
+    @apply flex items-center justify-between gap-2 rounded-md border border-white/10 bg-white/5
+      px-2 py-1.5 text-left transition;
+  }
+
+  .format-search-result:hover {
+    @apply border-white/25 bg-white/10;
+  }
+
+  .format-search-result-name {
+    @apply text-[0.7rem] text-white/80 truncate;
+  }
+
+  .format-search-result-id {
+    @apply text-[0.55rem] uppercase tracking-[0.14em] text-white/40 shrink-0;
+  }
+
+  .format-panel-actions {
+    @apply flex items-center justify-end gap-2;
+  }
+
+  .format-panel-status {
+    @apply text-[0.65rem] text-emerald-200;
+  }
+
+  .format-panel-error {
+    @apply text-[0.65rem] text-red-300;
+  }
+
+  .format-panel-list {
+    @apply mt-1 grid gap-1.5 border-t border-white/10 pt-2;
+  }
+
+  .format-panel-subtitle {
+    @apply text-[0.55rem] uppercase tracking-[0.18em] text-white/45;
+  }
+
+  .format-panel-list-items {
+    @apply grid gap-1;
+  }
+
+  .format-panel-link {
+    @apply flex items-center justify-between gap-2 rounded-md border border-white/10 bg-white/5
+      px-2 py-1.5 text-[0.65rem] text-white/75 no-underline transition;
+  }
+
+  .format-panel-link:hover {
+    @apply border-white/25 text-white;
+  }
+
+  .format-panel-link small {
+    @apply text-[0.55rem] uppercase tracking-[0.14em] text-white/45;
   }
 
   .studio :global(.svelte-flow__node) {

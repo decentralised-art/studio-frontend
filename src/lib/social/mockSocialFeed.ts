@@ -10,6 +10,7 @@ import {
 import { mockRegistrySnapshot } from "$lib/particles/mockPtNetwork";
 
 export type SocialEvent = {
+  type: "particle";
   id: string;
   authorId: string;
   createdAt: number;
@@ -55,6 +56,7 @@ export const mockSocialEvents: SocialEvent[] = mockExploreParticles
     const usedParticleLabels = usedParticleIds.map((id) => particleLabelById.get(id) ?? id);
     const dependencyNodeIds = usedParticleIds.map((id) => `particle:${id}`);
     return {
+      type: "particle",
       id: `event-particle-created-${particle.id}`,
       authorId: particle.authorId,
       createdAt: particle.createdAt,

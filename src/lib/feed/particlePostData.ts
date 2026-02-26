@@ -1,10 +1,15 @@
 import type { ExploreParticle } from "$lib/data/exploreParticles";
 import { mockUsers } from "$lib/data/users";
+import type { FormatFeedEvent } from "$lib/formats/localFormats";
 import type { MockFeatureDef, MockParticleDef } from "$lib/particles/mockPtNetwork";
 import type { SocialEvent } from "$lib/social/mockSocialFeed";
-import { fetchChainOwnedStudioSnapshot } from "$lib/studio/chainStudioAdapter";
+import {
+  fetchChainOwnedStudioSnapshot,
+  fetchChainParticleForStudio,
+} from "$lib/studio/chainStudioAdapter";
 
 export type ParticlePostEvent = SocialEvent;
+export type NetworkFeedEvent = ParticlePostEvent | FormatFeedEvent;
 
 export type ParticleRecord = Pick<
   ExploreParticle,
@@ -46,11 +51,13 @@ const emptyCache = (): ParticlePostCache => ({
 
 let cache: ParticlePostCache = emptyCache();
 let loadPromise: Promise<ParticlePostCache> | null = null;
+const terminalSetCache = new Map<string, string[]>();
 
 const rebuildEventsFromParticles = (particles: ParticleRecord[]): ParticlePostEvent[] => {
   const labelById = new Map(particles.map((particle) => [particle.id, particle.name] as const));
   return particles
     .map((particle) => ({
+      type: "particle",
       id: `event-particle-created-${particle.id}`,
       authorId: particle.authorId,
       createdAt: particle.createdAt,
@@ -64,6 +71,23 @@ const rebuildEventsFromParticles = (particles: ParticleRecord[]): ParticlePostEv
       focusNodeIds: [],
     }))
     .sort((a, b) => b.createdAt - a.createdAt);
+};
+
+const mergeParticleRecordIntoStructures = (
+  particle: ParticleRecord,
+  nextParticlesById: Map<string, ParticleRecord>,
+  searchByKind: {
+    particles: Map<string, { id: string; label: string; summary: string; authorId: string }>;
+  },
+) => {
+  if (nextParticlesById.has(particle.id)) return;
+  nextParticlesById.set(particle.id, particle);
+  searchByKind.particles.set(`particle:${particle.id}`, {
+    id: particle.id,
+    label: particle.name,
+    summary: particle.summary,
+    authorId: particle.authorId,
+  });
 };
 
 const mergeSnapshots = async (): Promise<ParticlePostCache> => {
@@ -133,7 +157,6 @@ const mergeSnapshots = async (): Promise<ParticlePostCache> => {
     });
 
     snapshot.particles.forEach((particle) => {
-      if (nextParticlesById.has(particle.id)) return;
       const createdAt = Date.now() - particleCounter * 1000;
       particleCounter += 1;
       const record: ParticleRecord = {
@@ -145,17 +168,51 @@ const mergeSnapshots = async (): Promise<ParticlePostCache> => {
             : `${particle.name} particle synced from chain.`,
         authorId: particle.authorId,
         createdAt,
-        createdLabel: "synced",
+        createdLabel: "",
         dependencies: [...particle.dependencies],
       };
-      nextParticlesById.set(record.id, record);
-      searchByKind.particles.set(`particle:${record.id}`, {
-        id: record.id,
-        label: record.name,
-        summary: record.summary,
-        authorId: record.authorId,
-      });
+      mergeParticleRecordIntoStructures(record, nextParticlesById, searchByKind);
     });
+  }
+
+  // Pull one-hop dependency particles so /p/[id] links and search can resolve referenced particles
+  // even when they are not owned by the 7 synced mock users.
+  const missingDependencyIds = Array.from(
+    new Set(
+      Array.from(nextParticlesById.values()).flatMap((particle) =>
+        particle.dependencies.filter((id) => !nextParticlesById.has(id)),
+      ),
+    ),
+  );
+
+  if (missingDependencyIds.length > 0) {
+    const dependencyFetches = await Promise.allSettled(
+      missingDependencyIds.map((id) => fetchChainParticleForStudio(id)),
+    );
+
+    for (const result of dependencyFetches) {
+      if (result.status !== "fulfilled") continue;
+      const fetched = result.value;
+      if (fetched.registry.feature) {
+        nextRegistry.features[fetched.registry.feature.name] = fetched.registry.feature;
+      }
+      if (fetched.registry.particle) {
+        nextRegistry.particles[fetched.registry.particle.name] = fetched.registry.particle;
+      }
+      if (fetched.particleMeta) {
+        const fallbackRecord: ParticleRecord = {
+          id: fetched.particleMeta.id,
+          name: fetched.particleMeta.name,
+          summary: fetched.particleMeta.summary,
+          authorId: fetched.particleMeta.authorId,
+          createdAt: Date.now() - particleCounter * 1000,
+          createdLabel: "",
+          dependencies: [...fetched.particleMeta.dependencies],
+        };
+        particleCounter += 1;
+        mergeParticleRecordIntoStructures(fallbackRecord, nextParticlesById, searchByKind);
+      }
+    }
   }
 
   const particles = Array.from(nextParticlesById.values()).sort(
@@ -182,6 +239,7 @@ export const syncParticlePostDataFromChain = async (options?: { force?: boolean 
     loadPromise = mergeSnapshots()
       .then((next) => {
         cache = next;
+        terminalSetCache.clear();
         return cache;
       })
       .catch((error) => {
@@ -204,6 +262,57 @@ export const listParticlePostsReferencingParticle = (particleId: string): Partic
 export const getParticleRecordById = (particleId: string): ParticleRecord | null =>
   cache.particlesById.get(particleId) ?? null;
 
+export const ensureParticleRecordLoadedById = async (
+  particleId: string,
+): Promise<ParticleRecord | null> => {
+  const existing = cache.particlesById.get(particleId) ?? null;
+  if (existing) return existing;
+
+  try {
+    const fetched = await fetchChainParticleForStudio(particleId);
+    if (fetched.registry.feature) {
+      cache.registry.features[fetched.registry.feature.name] = fetched.registry.feature;
+    }
+    if (fetched.registry.particle) {
+      cache.registry.particles[fetched.registry.particle.name] = fetched.registry.particle;
+    }
+    if (!fetched.particleMeta) return null;
+
+    const record: ParticleRecord = {
+      id: fetched.particleMeta.id,
+      name: fetched.particleMeta.name,
+      summary: fetched.particleMeta.summary,
+      authorId: fetched.particleMeta.authorId,
+      createdAt: fetched.particleMeta.createdAt,
+      createdLabel: fetched.particleMeta.createdLabel,
+      dependencies: [...fetched.particleMeta.dependencies],
+    };
+    cache.particlesById.set(record.id, record);
+    cache.searchable.particles = [
+      ...cache.searchable.particles.filter((item) => item.id !== record.id),
+      {
+        id: record.id,
+        label: record.name,
+        summary: record.summary,
+        authorId: record.authorId,
+      },
+    ].sort((a, b) => a.label.localeCompare(b.label));
+    terminalSetCache.clear();
+    return record;
+  } catch {
+    return null;
+  }
+};
+
+export const listParticleRecords = (): ParticleRecord[] => Array.from(cache.particlesById.values());
+
+export const getParticleLabelMap = (): ReadonlyMap<string, string> =>
+  new Map(
+    Array.from(cache.particlesById.values()).map(
+      (particle) => [particle.id, particle.name] as const,
+    ),
+  );
+
 export const getParticleDependencyRegistrySnapshot = (): ParticleDependencyRegistrySnapshot =>
   cache.registry;
 
@@ -214,4 +323,51 @@ export const isParticlePostDataLoaded = () => cache.loaded;
 export const resetParticlePostDataCacheForDebug = () => {
   cache = emptyCache();
   loadPromise = null;
+  terminalSetCache.clear();
+};
+
+const sortUnique = (values: string[]) =>
+  Array.from(new Set(values)).sort((a, b) => a.localeCompare(b));
+
+const computeTerminalSet = (particleId: string, seen = new Set<string>()): string[] => {
+  if (terminalSetCache.has(particleId)) return terminalSetCache.get(particleId)!;
+  if (seen.has(particleId)) return [particleId];
+  seen.add(particleId);
+
+  const registryParticle = cache.registry.particles[particleId];
+  if (!registryParticle) {
+    const leaf = [particleId];
+    terminalSetCache.set(particleId, leaf);
+    seen.delete(particleId);
+    return leaf;
+  }
+
+  const composites = (registryParticle.composites ?? []).filter(
+    (value): value is string => typeof value === "string" && value.trim().length > 0,
+  );
+
+  if (!composites.length) {
+    const leaf = [particleId];
+    terminalSetCache.set(particleId, leaf);
+    seen.delete(particleId);
+    return leaf;
+  }
+
+  const merged = sortUnique(composites.flatMap((name) => computeTerminalSet(name, seen)));
+  terminalSetCache.set(particleId, merged);
+  seen.delete(particleId);
+  return merged;
+};
+
+export const getParticleTerminalSet = (particleId: string): string[] =>
+  computeTerminalSet(particleId);
+
+const sameStringSet = (a: string[], b: string[]) =>
+  a.length === b.length && a.every((value, index) => value === b[index]);
+
+export const findParticlesByTerminalSet = (terminalParticleIds: string[]): ParticleRecord[] => {
+  const target = sortUnique(terminalParticleIds);
+  return listParticleRecords().filter((particle) =>
+    sameStringSet(getParticleTerminalSet(particle.id), target),
+  );
 };

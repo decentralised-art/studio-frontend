@@ -6,6 +6,7 @@
   let {
     title = "Library",
     items = [],
+    loading = false,
     usersById = {},
     selectedId,
     draggable = false,
@@ -17,6 +18,7 @@
   }: {
     title?: string;
     items?: LibraryItem[];
+    loading?: boolean;
     usersById?: Record<User["id"], User>;
     selectedId?: LibraryItem["id"];
     draggable?: boolean;
@@ -56,7 +58,14 @@
   {/if}
 
   <div class="list">
-    {#if items.length === 0}
+    {#if loading && items.length === 0}
+      {#each Array.from({ length: 5 }) as _, index (`library-skeleton-${index}`)}
+        <div class="skeleton-card" aria-hidden="true">
+          <div class="skeleton-title shimmer"></div>
+          <div class="skeleton-subtitle shimmer"></div>
+        </div>
+      {/each}
+    {:else if items.length === 0}
       <p class="empty">No entries yet.</p>
     {:else}
       {#each items as item (item.id)}
@@ -109,5 +118,33 @@
 
   .empty {
     @apply text-[0.7rem] text-white/50;
+  }
+
+  .skeleton-card {
+    @apply rounded-xl border border-white/10 bg-white/5 p-3 grid gap-2;
+  }
+
+  .skeleton-title {
+    @apply h-3 rounded-full bg-white/10;
+    width: 66%;
+  }
+
+  .skeleton-subtitle {
+    @apply h-2 rounded-full bg-white/8;
+    width: 38%;
+  }
+
+  .shimmer {
+    animation: library-skeleton-pulse 1.4s ease-in-out infinite;
+  }
+
+  @keyframes library-skeleton-pulse {
+    0%,
+    100% {
+      opacity: 0.45;
+    }
+    50% {
+      opacity: 0.9;
+    }
   }
 </style>

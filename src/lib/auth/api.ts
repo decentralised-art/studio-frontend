@@ -477,6 +477,127 @@ export const updateUserById = async (
   return payload;
 };
 
+type ToolboxLibraryProfile = {
+  particles: string[];
+  feature: string[];
+  transformation: string[];
+  condition: string[];
+  plugin: string[];
+};
+
+const asRecord = (value: unknown): Record<string, unknown> =>
+  value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+
+const asStringArray = (value: unknown): string[] =>
+  Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+
+const uniqueStrings = (values: string[]) =>
+  Array.from(new Set(values.map((v) => v.trim()).filter(Boolean)));
+
+const defaultToolboxLibrary = (): ToolboxLibraryProfile => ({
+  particles: [],
+  feature: [],
+  transformation: [],
+  condition: [],
+  plugin: [],
+});
+
+const parseToolboxLibraryFromProfileJson = (profileJsonRaw: unknown): ToolboxLibraryProfile => {
+  const profileJson = asRecord(profileJsonRaw);
+  const profilePublic = asRecord(profileJson.public ?? profileJson.profile ?? profileJson);
+  const toolboxLibrary = asRecord(profilePublic.toolbox_library ?? profilePublic.toolboxLibrary);
+  const legacyParticles = asStringArray(profilePublic.toolbox);
+
+  return {
+    particles: uniqueStrings([...asStringArray(toolboxLibrary.particles), ...legacyParticles]),
+    feature: uniqueStrings(asStringArray(toolboxLibrary.feature)),
+    transformation: uniqueStrings(asStringArray(toolboxLibrary.transformation)),
+    condition: uniqueStrings(asStringArray(toolboxLibrary.condition)),
+    plugin: uniqueStrings(asStringArray(toolboxLibrary.plugin)),
+  };
+};
+
+const extractUserEnvelope = (
+  payload: unknown,
+): {
+  userId: string;
+  profileJson: Record<string, unknown>;
+  rootUser: Record<string, unknown>;
+} | null => {
+  const root = asRecord(payload);
+  const nested = root.user && typeof root.user === "object" ? asRecord(root.user) : root;
+  const userId = typeof nested.id === "string" ? nested.id : "";
+  if (!userId) return null;
+  const profileJson = asRecord(nested.profile_json ?? nested.profileJson);
+  return { userId, profileJson, rootUser: nested };
+};
+
+const mergeToolboxIntoProfileJson = (
+  existingProfileJsonRaw: unknown,
+  toolboxLibrary: ToolboxLibraryProfile,
+): Record<string, unknown> => {
+  const existingProfileJson = asRecord(existingProfileJsonRaw);
+  const profilePublic = asRecord(
+    existingProfileJson.public ?? existingProfileJson.profile ?? existingProfileJson,
+  );
+
+  return {
+    ...existingProfileJson,
+    public: {
+      ...profilePublic,
+      toolbox: [...toolboxLibrary.particles],
+      toolbox_library: {
+        particles: [...toolboxLibrary.particles],
+        feature: [...toolboxLibrary.feature],
+        transformation: [...toolboxLibrary.transformation],
+        condition: [...toolboxLibrary.condition],
+        plugin: [...toolboxLibrary.plugin],
+      },
+    },
+  };
+};
+
+export const getCurrentUserToolboxLibrary = async (): Promise<ToolboxLibraryProfile> => {
+  const me = await getMe();
+  const envelope = extractUserEnvelope(me);
+  if (!envelope) {
+    return defaultToolboxLibrary();
+  }
+  return parseToolboxLibraryFromProfileJson(envelope.profileJson);
+};
+
+export const saveCurrentUserToolboxLibrary = async (
+  toolboxLibrary: ToolboxLibraryProfile,
+): Promise<void> => {
+  const me = await getMe();
+  const envelope = extractUserEnvelope(me);
+  if (!envelope) {
+    throw new Error("Unable to resolve current user for toolbox save.");
+  }
+
+  const normalized: ToolboxLibraryProfile = {
+    particles: uniqueStrings(toolboxLibrary.particles),
+    feature: uniqueStrings(toolboxLibrary.feature),
+    transformation: uniqueStrings(toolboxLibrary.transformation),
+    condition: uniqueStrings(toolboxLibrary.condition),
+    plugin: uniqueStrings(toolboxLibrary.plugin),
+  };
+
+  const nextProfileJson = mergeToolboxIntoProfileJson(envelope.profileJson, normalized);
+  await updateUserById(envelope.userId, { profile_json: nextProfileJson });
+};
+
+export const addParticleToCurrentUserToolbox = async (particleId: string): Promise<void> => {
+  const toolbox = await getCurrentUserToolboxLibrary();
+  if (toolbox.particles.includes(particleId)) return;
+  await saveCurrentUserToolboxLibrary({
+    ...toolbox,
+    particles: [...toolbox.particles, particleId],
+  });
+};
+
 export const getFollowingIds = async (): Promise<string[]> => {
   const response = await authFetch("/social/following");
   const payload = await parseResponseBody(response);

@@ -14,7 +14,7 @@
   import SectionShell from "$lib/components/ui/SectionShell.svelte";
   import UserProfilePage from "$lib/components/user/UserProfilePage.svelte";
 
-  import { getMe, logout, updateUserById } from "$lib/auth/api";
+  import { addParticleToCurrentUserToolbox, getMe, logout, updateUserById } from "$lib/auth/api";
   import { getToken } from "$lib/auth/session";
   import { mockCurrentUserId, mockUsersById } from "$lib/data/users";
   import type { ProfileViewUser } from "$lib/user/profileModel";
@@ -55,6 +55,7 @@
         syncParticlePostDataFromChain().catch(() => null),
       ]);
       currentUser = normalizeProfileUser(data);
+      localToolboxParticles = [...currentUser.toolbox];
       accountFeedEvents = listParticlePostsByAuthor(currentUser.id);
     } catch (err) {
       error = err instanceof Error ? err.message : "Unable to load account.";
@@ -78,11 +79,16 @@
 
   const addParticleToToolbox = (particleId: string) => {
     if (toolboxParticleIds.has(particleId)) return;
+    const previous = [...localToolboxParticles];
     localToolboxParticles = [...localToolboxParticles, particleId];
     const currentUser = mockUsersById[mockCurrentUserId];
     if (currentUser && !currentUser.toolbox.includes(particleId)) {
       currentUser.toolbox = [...currentUser.toolbox, particleId];
     }
+    void addParticleToCurrentUserToolbox(particleId).catch((err) => {
+      console.error("[Account] Failed to persist toolbox update.", err);
+      localToolboxParticles = previous;
+    });
   };
 
   const handleSaveProfile = async ({ nickname, bio }: { nickname: string; bio: string }) => {
@@ -124,12 +130,45 @@
 
 <div class="account-page">
   {#if isLoading}
-    <SectionShell>
-      <div class="status">
-        <p class="status-title">Loading account...</p>
-        <p class="status-subtitle">Fetching your latest profile details.</p>
+    <div class="account-content loading-offset">
+      <div class="profile-card-shell">
+        <SectionShell>
+          <div class="profile-skeleton" aria-hidden="true">
+            <div class="profile-skeleton-head">
+              <div class="profile-skeleton-avatar shimmer"></div>
+              <div class="profile-skeleton-lines">
+                <div class="profile-skeleton-line shimmer line-sm"></div>
+                <div class="profile-skeleton-line shimmer line-xs"></div>
+              </div>
+            </div>
+            <div class="profile-skeleton-field">
+              <div class="profile-skeleton-label shimmer"></div>
+              <div class="profile-skeleton-input shimmer"></div>
+            </div>
+            <div class="profile-skeleton-field">
+              <div class="profile-skeleton-label shimmer"></div>
+              <div class="profile-skeleton-input shimmer"></div>
+            </div>
+            <div class="profile-skeleton-field">
+              <div class="profile-skeleton-label shimmer"></div>
+              <div class="profile-skeleton-textarea shimmer"></div>
+            </div>
+            <div class="profile-skeleton-field">
+              <div class="profile-skeleton-label shimmer"></div>
+              <div class="profile-skeleton-input shimmer"></div>
+            </div>
+            <div class="profile-skeleton-actions">
+              <div class="profile-skeleton-button shimmer"></div>
+              <div class="profile-skeleton-button shimmer"></div>
+              <div class="profile-skeleton-button shimmer"></div>
+            </div>
+          </div>
+        </SectionShell>
       </div>
-    </SectionShell>
+      <div class="profile-post-feed profile-card-shell">
+        <ParticlePostFeed loading events={[]} {toolboxParticleIds} />
+      </div>
+    </div>
   {:else if error}
     <SectionShell>
       <div class="status">
@@ -181,6 +220,10 @@
     --social-feed-card-width: min(50vw, 56rem);
   }
 
+  .loading-offset {
+    @apply pt-3 md:pt-4;
+  }
+
   .profile-card-shell {
     @apply mx-auto;
     width: var(--social-feed-card-width);
@@ -201,6 +244,76 @@
 
   .actions {
     @apply flex flex-wrap gap-2;
+  }
+
+  .profile-skeleton {
+    @apply grid gap-5;
+  }
+
+  .profile-skeleton-head {
+    @apply flex items-center gap-4;
+  }
+
+  .profile-skeleton-avatar {
+    @apply h-16 w-16 rounded-full border border-white/10 bg-white/5 shrink-0;
+  }
+
+  .profile-skeleton-lines {
+    @apply flex-1 grid gap-2 min-w-0;
+  }
+
+  .profile-skeleton-line {
+    @apply rounded-full bg-white/10;
+  }
+
+  .profile-skeleton-line.line-sm {
+    width: min(9rem, 55%);
+    height: 0.8rem;
+  }
+
+  .profile-skeleton-line.line-xs {
+    width: min(7rem, 45%);
+    height: 0.55rem;
+  }
+
+  .profile-skeleton-field {
+    @apply grid gap-2;
+  }
+
+  .profile-skeleton-label {
+    @apply h-2 rounded-full bg-white/10;
+    width: 7.5rem;
+  }
+
+  .profile-skeleton-input {
+    @apply h-10 rounded-lg border border-white/10 bg-white/5;
+  }
+
+  .profile-skeleton-textarea {
+    @apply rounded-lg border border-white/10 bg-white/5;
+    min-height: 7.5rem;
+  }
+
+  .profile-skeleton-actions {
+    @apply flex flex-wrap gap-2 pt-1;
+  }
+
+  .profile-skeleton-button {
+    @apply h-9 w-28 rounded-lg border border-white/10 bg-white/5;
+  }
+
+  .shimmer {
+    animation: profile-skeleton-pulse 1.4s ease-in-out infinite;
+  }
+
+  @keyframes profile-skeleton-pulse {
+    0%,
+    100% {
+      opacity: 0.45;
+    }
+    50% {
+      opacity: 0.9;
+    }
   }
 
   @media (max-width: 1200px) {

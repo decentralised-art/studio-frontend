@@ -6,6 +6,7 @@
     title = "",
     subtitle = "",
     variant = "primary",
+    className = "",
     dot = false,
     children,
     actions,
@@ -13,13 +14,16 @@
     title?: string;
     subtitle?: string;
     variant?: Variant;
+    className?: string;
     dot?: boolean;
     children?: Snippet; // default slot
     actions?: Snippet; // named slot: slot="actions"
   } = $props();
 </script>
 
-<section class={`section-shell ${variant === "primary" ? "section-primary" : "section-subtle"}`}>
+<section
+  class={`section-shell ${variant === "primary" ? "section-primary" : "section-subtle"} ${className}`}
+>
   <header class="section-shell-header">
     <div class="flex items-center gap-3">
       {#if dot}
