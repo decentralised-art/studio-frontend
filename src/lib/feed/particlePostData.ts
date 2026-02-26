@@ -70,7 +70,11 @@ const rebuildEventsFromParticles = (particles: ParticleRecord[]): ParticlePostEv
       reusedNodeIds: [],
       focusNodeIds: [],
     }))
-    .sort((a, b) => b.createdAt - a.createdAt);
+    .sort((a, b) => {
+      const byCreatedAt = b.createdAt - a.createdAt;
+      if (byCreatedAt !== 0) return byCreatedAt;
+      return a.particleId.localeCompare(b.particleId);
+    });
 };
 
 const mergeParticleRecordIntoStructures = (
@@ -228,9 +232,11 @@ const mergeSnapshots = async (): Promise<ParticlePostCache> => {
     }
   }
 
-  const particles = Array.from(nextParticlesById.values()).sort(
-    (a, b) => b.createdAt - a.createdAt,
-  );
+  const particles = Array.from(nextParticlesById.values()).sort((a, b) => {
+    const byCreatedAt = b.createdAt - a.createdAt;
+    if (byCreatedAt !== 0) return byCreatedAt;
+    return a.id.localeCompare(b.id);
+  });
 
   return {
     loaded: true,

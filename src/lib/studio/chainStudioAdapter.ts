@@ -37,6 +37,47 @@ export type ChainStudioParticleFetchResult = {
   particleMeta?: ExploreParticle;
 };
 
+const normalizeEpochMs = (value: unknown): number | null => {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    if (value <= 0) return null;
+    return value < 1_000_000_000_000 ? value * 1000 : value;
+  }
+
+  if (typeof value === "string" && value.trim().length > 0) {
+    const numeric = Number(value);
+    if (Number.isFinite(numeric) && numeric > 0) {
+      return numeric < 1_000_000_000_000 ? numeric * 1000 : numeric;
+    }
+    const parsed = Date.parse(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+
+  return null;
+};
+
+const extractParticleCreatedAt = (payload: ChainParticleResponse): number | null => {
+  const record = payload as Record<string, unknown>;
+  const candidates: unknown[] = [
+    record.created_at,
+    record.createdAt,
+    record.timestamp,
+    record.time,
+    record.block_time,
+    record.blockTime,
+    record.block_timestamp,
+    record.blockTimestamp,
+    record.tx_time,
+    record.txTime,
+  ];
+
+  for (const candidate of candidates) {
+    const normalized = normalizeEpochMs(candidate);
+    if (normalized !== null) return normalized;
+  }
+
+  return null;
+};
+
 const titleize = (value: string) =>
   value
     .split(/[-_]/g)
@@ -171,10 +212,12 @@ export const fetchChainOwnedStudioSnapshot = async (
     )
     .map((result) => result.value);
   const particlePayloads = (
-    await Promise.allSettled(ownedParticles.map((name) => getChainParticle(name)))
+    await Promise.allSettled(
+      ownedParticles.map(async (name) => [name, await getChainParticle(name)] as const),
+    )
   )
     .filter(
-      (result): result is PromiseFulfilledResult<ChainParticleResponse> =>
+      (result): result is PromiseFulfilledResult<readonly [string, ChainParticleResponse]> =>
         result.status === "fulfilled",
     )
     .map((result) => result.value);
@@ -224,7 +267,7 @@ export const fetchChainOwnedStudioSnapshot = async (
     });
   });
 
-  particlePayloads.forEach((payload) => {
+  particlePayloads.forEach(([, payload]) => {
     const particle = normalizeParticle(payload);
     if (!particle) return;
     particles[particle.name] = particle;
@@ -265,9 +308,17 @@ export const fetchChainOwnedStudioSnapshot = async (
         mapConditionLibraryItem(name, options.authorId, payload.sol_src),
       ),
     },
-    particles: Object.values(particles).map((item, index) =>
-      mapExploreParticle(item, options.authorId, syncedAt - index),
-    ),
+    particles: particlePayloads
+      .map(([, payload], index) => {
+        const particle = normalizeParticle(payload);
+        if (!particle) return null;
+        return mapExploreParticle(
+          particle,
+          options.authorId,
+          extractParticleCreatedAt(payload) ?? Math.max(1, syncedAt - index),
+        );
+      })
+      .filter((particle): particle is ExploreParticle => Boolean(particle)),
   };
 };
 
@@ -292,6 +343,10 @@ export const fetchChainParticleForStudio = async (
       feature,
       particle,
     },
-    particleMeta: mapExploreParticle(particle, authorId, Date.now()),
+    particleMeta: mapExploreParticle(
+      particle,
+      authorId,
+      extractParticleCreatedAt(particlePayload) ?? Date.now(),
+    ),
   };
 };
