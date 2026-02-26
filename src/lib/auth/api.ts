@@ -1,7 +1,7 @@
 import { browser } from "$app/environment";
 import { goto } from "$app/navigation";
 import { resolve } from "$app/paths";
-import { mockCurrentUserId, mockUsers } from "$lib/data/users";
+import { extraChainSourceProfiles, mockCurrentUserId, mockUsers } from "$lib/data/users";
 import { buildChainApiUrl, buildServicesApiUrl } from "$lib/url/url";
 import { createChainAuthRequest, getOrCreateMockEthereumAccount } from "./mockEthereum";
 import {
@@ -452,7 +452,9 @@ export const getUserById = async (userId: string) => {
   if (!response.ok) {
     // Transitional mixed mode: the network feed still uses mock user IDs (user-*, agent-*),
     // while auth/account runs against the real backend. Keep mock profiles functional in prod.
-    const mockUser = mockUsers.find((entry) => entry.id === userId);
+    const mockUser = [...mockUsers, ...extraChainSourceProfiles].find(
+      (entry) => entry.id === userId,
+    );
     if (response.status === 404 && mockUser) {
       return { user: mockUser };
     }

@@ -2,7 +2,7 @@
   import { resolve } from "$app/paths";
   import Card from "$lib/components/ui/Card.svelte";
   import SocialParticleDependencyFlow from "$lib/components/social/SocialParticleDependencyFlow.svelte";
-  import { mockUsersById } from "$lib/data/users";
+  import { displayUsersById } from "$lib/data/users";
   import type { SocialEvent } from "$lib/social/mockSocialFeed";
   const {
     event,
@@ -16,7 +16,7 @@
     inToolbox?: boolean;
   } = $props();
 
-  const author = $derived.by(() => mockUsersById[event.authorId] ?? null);
+  const author = $derived.by(() => displayUsersById[event.authorId] ?? null);
   const usedParticles = $derived.by(() =>
     event.usedParticleIds.map((id, index) => ({
       id,

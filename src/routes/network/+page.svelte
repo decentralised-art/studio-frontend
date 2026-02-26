@@ -20,6 +20,7 @@
   import Input from "$lib/components/ui/Input.svelte";
   import { networkNodeStudioKind, type NetworkGraphNode } from "$lib/network/mockNetworkGraph";
   import {
+    displayUsersById,
     mockCurrentUserId,
     mockFollowingByUserId,
     mockUsers,
@@ -108,7 +109,7 @@
         kind: item.kind,
         entityId: item.id,
         summary: item.summary,
-        creatorName: mockUsersById[item.authorId]?.nickname ?? "unknown contributor",
+        creatorName: displayUsersById[item.authorId]?.nickname ?? "unknown contributor",
       }))
       .slice(0, 10);
   });
@@ -118,7 +119,7 @@
     const particleLabels = getParticleLabelMap();
     return formats
       .filter((format) => {
-        const authorName = mockUsersById[format.authorId]?.nickname ?? format.authorId;
+        const authorName = displayUsersById[format.authorId]?.nickname ?? format.authorId;
         const deps = format.terminalParticleIds.map((id) => particleLabels.get(id) ?? id).join(" ");
         return `${format.name} ${format.slug} ${authorName} ${deps}`
           .toLowerCase()
@@ -129,7 +130,7 @@
         slug: format.slug,
         name: format.name,
         authorId: format.authorId,
-        authorName: mockUsersById[format.authorId]?.nickname ?? format.authorId,
+        authorName: displayUsersById[format.authorId]?.nickname ?? format.authorId,
         terminalParticleIds: [...format.terminalParticleIds],
         terminalParticleLabels: format.terminalParticleIds.map(
           (id) => particleLabels.get(id) ?? id,

@@ -136,6 +136,28 @@ export const mockUsersById = Object.fromEntries(
   mockUsers.map((user) => [user.id, user] as const),
 ) as Record<User["id"], User>;
 
+export const extraChainSourceProfiles: User[] = [
+  {
+    id: "chain-source-da25",
+    kind: "agent",
+    address: "0xDA25e33402BD0E388e602B0fB958D2D818A1724D",
+    nickname: "OpenClawd Agent Bob",
+    avatarUrl: asset("/avatars/aurora.svg"),
+    bio: "External chain source mirrored into the network feed.",
+    authored: {
+      performativeTransactions: 0,
+      features: 0,
+      transformations: 0,
+      conditions: 0,
+    },
+    toolbox: [],
+  },
+];
+
+export const displayUsersById = Object.fromEntries(
+  [...mockUsers, ...extraChainSourceProfiles].map((user) => [user.id, user] as const),
+) as Record<string, User>;
+
 export const mockCurrentUserId: User["id"] = "user-lyra";
 
 export const mockFollowingByUserId: Partial<Record<User["id"], User["id"][]>> = {
@@ -152,6 +174,6 @@ export const extraChainSyncSources: ChainSyncSource[] = [
   {
     id: "chain-source-da25",
     address: "0xDA25e33402BD0E388e602B0fB958D2D818A1724D",
-    label: "External chain source (DA25)",
+    label: "OpenClawd Agent Bob",
   },
 ];

@@ -16,7 +16,7 @@
   import Button from "$lib/components/ui/Button.svelte";
   import SectionShell from "$lib/components/ui/SectionShell.svelte";
   import { addParticleToCurrentUserToolbox, getCurrentUserToolboxLibrary } from "$lib/auth/api";
-  import { mockCurrentUserId, mockUsersById } from "$lib/data/users";
+  import { displayUsersById, mockCurrentUserId, mockUsersById } from "$lib/data/users";
   import { networkNodeStudioKind } from "$lib/network/mockNetworkGraph";
 
   let localToolboxParticles = $state<string[]>([
@@ -28,7 +28,9 @@
 
   const toolboxParticleIds = $derived.by(() => new Set(localToolboxParticles));
   const particleId = $derived.by(() => $page.params.id?.trim() ?? "");
-  const author = $derived.by(() => (particle ? (mockUsersById[particle.authorId] ?? null) : null));
+  const author = $derived.by(() =>
+    particle ? (displayUsersById[particle.authorId] ?? null) : null,
+  );
 
   const openParticleInStudio = (targetParticleId: string) => {
     const base = resolve("/studio");
