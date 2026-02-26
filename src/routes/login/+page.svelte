@@ -2,7 +2,6 @@
   import { onMount } from "svelte";
   import { goto } from "$app/navigation";
   import { resolve } from "$app/paths";
-  import { page } from "$app/state";
 
   import Button from "$lib/components/ui/Button.svelte";
   import Input from "$lib/components/ui/Input.svelte";
@@ -23,17 +22,6 @@
   let isMockAuthRunning = $state(false);
   let mockAuthError = $state("");
   let mockAuthResults = $state<MockChainAuthResult[]>([]);
-  let showRegister = $state(false);
-
-  let registerForm = $state({
-    email: "",
-    displayName: "",
-    password: "",
-  });
-
-  let isRegistering = $state(false);
-  let registerError = $state("");
-  let registerSuccess = $state("");
   let mockLoginError = $state("");
   const isDev = import.meta.env.DEV;
 
@@ -64,37 +52,6 @@
     }
   };
 
-  const handleRegister = async (event: SubmitEvent) => {
-    event.preventDefault();
-    registerError = "";
-    registerSuccess = "";
-
-    if (
-      !registerForm.email.trim() ||
-      !registerForm.displayName.trim() ||
-      !registerForm.password.trim()
-    ) {
-      registerError = "Email, display name, and password are required.";
-      return;
-    }
-
-    isRegistering = true;
-    try {
-      await registerUser(
-        registerForm.email.trim(),
-        registerForm.displayName.trim(),
-        registerForm.password,
-      );
-      registerSuccess = "Account created. You can now log in.";
-      form.email = registerForm.email.trim();
-      form.password = "";
-    } catch (err) {
-      registerError = err instanceof Error ? err.message : "Registration failed.";
-    } finally {
-      isRegistering = false;
-    }
-  };
-
   const handleAuthenticateAllMockAccounts = async () => {
     mockAuthError = "";
     isMockAuthRunning = true;
@@ -114,8 +71,6 @@
 
     mockLoginError = "";
     loginError = "";
-    registerError = "";
-    registerSuccess = "";
     isSubmitting = true;
 
     const credentials = mockCredentialsForUser(user.id);
@@ -145,16 +100,6 @@
     if (getToken()) {
       goto(resolve("/account"));
       return;
-    }
-
-    const navigationState = page.state as Record<string, unknown> | null;
-    if (navigationState?.register === true) {
-      showRegister = true;
-    }
-
-    const params = new URLSearchParams(window.location.search);
-    if (params.has("register")) {
-      showRegister = true;
     }
 
     if (isDev) {
@@ -215,7 +160,7 @@
               <Button
                 variant="ghost"
                 type="button"
-                disabled={isSubmitting || isMockAuthRunning || isRegistering}
+                disabled={isSubmitting || isMockAuthRunning}
                 onclick={() => loginWithMockUser(user.id)}
               >
                 {user.nickname}
@@ -304,57 +249,10 @@
         {/if}
       {/if}
 
-      <button type="button" class="toggle" onclick={() => (showRegister = !showRegister)}>
-        Don't have an account yet? <span class="toggle-emphasis">Register</span>
-      </button>
+      <p class="registration-closed">
+        New account registration is temporarily disabled while the app is still in development.
+      </p>
     </form>
-
-    {#if showRegister}
-      <div class="register">
-        <div class="register-header">
-          <h2 class="register-title">Create account</h2>
-          <p class="register-subtitle">Join the network with a new identity.</p>
-        </div>
-
-        <form class="form" onsubmit={handleRegister}>
-          <Input
-            label="Email"
-            type="email"
-            bind:value={registerForm.email}
-            placeholder="you@hypermusic.ai"
-          />
-          <Input
-            label="Display name"
-            type="text"
-            bind:value={registerForm.displayName}
-            placeholder="Your public handle"
-          />
-          <Input
-            label="Password"
-            type="password"
-            bind:value={registerForm.password}
-            placeholder="••••••••"
-          />
-
-          {#if registerError}
-            <p class="error">{registerError}</p>
-          {/if}
-
-          {#if registerSuccess}
-            <p class="success">{registerSuccess}</p>
-          {/if}
-
-          <div class="actions">
-            <Button variant="primary" type="submit" disabled={isRegistering}>
-              {isRegistering ? "Creating..." : "Create account"}
-            </Button>
-            <Button variant="ghost" type="button" onclick={() => (showRegister = false)}>
-              Back to login
-            </Button>
-          </div>
-        </form>
-      </div>
-    {/if}
   </SectionShell>
 </div>
 
@@ -453,27 +351,7 @@
     @apply text-sm text-emerald-300;
   }
 
-  .toggle {
-    @apply text-xs text-white/60 underline text-left;
-  }
-
-  .toggle-emphasis {
-    @apply text-white/80;
-  }
-
-  .register {
-    @apply mt-8 border-t border-white/10 pt-6 space-y-4;
-  }
-
-  .register-header {
-    @apply space-y-1;
-  }
-
-  .register-title {
-    @apply text-lg font-semibold text-white;
-  }
-
-  .register-subtitle {
-    @apply text-sm text-white/60;
+  .registration-closed {
+    @apply text-xs text-white/55 text-left;
   }
 </style>
