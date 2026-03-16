@@ -334,6 +334,7 @@
       .toLowerCase()
       .replace(/[^a-z0-9_]+/g, "-")
       .replace(/^-+|-+$/g, "");
+  const touchDeps = (..._deps: unknown[]) => _deps.length;
 
   const uniqueStrings = (values: string[]) =>
     Array.from(new Set(values.map((value) => value.trim()).filter((value) => value.length > 0)));
@@ -941,7 +942,7 @@
   });
 
   $effect(() => {
-    connectorConditionEdgeFingerprint;
+    touchDeps(connectorConditionEdgeFingerprint);
     queueMicrotask(() => {
       syncAllConnectorRowPreviews({ schedule: false });
     });
@@ -975,16 +976,15 @@
   });
 
   $effect(() => {
-    libraryTab;
+    touchDeps(libraryTab);
     libraryCreateActionError = null;
   });
 
   $effect(() => {
-    activeTabId;
-    activeTab?.label;
-    activeTab?.particleId;
-    nodes.length;
-    if (!activeTab || activeTab.particleId || isConnectorTreeTab(activeTabId)) return;
+    const nodeCount = nodes.length;
+    const currentTab = activeTab;
+    touchDeps(activeTabId, currentTab?.label, currentTab?.particleId, nodeCount);
+    if (!currentTab || currentTab.particleId || isConnectorTreeTab(activeTabId)) return;
     ensureActiveDraftTabRootConnector();
   });
 
@@ -1224,7 +1224,7 @@
   );
 
   $effect(() => {
-    nodePositionSignature;
+    touchDeps(nodePositionSignature);
     scheduleNodeSpacing();
   });
 
@@ -5594,14 +5594,14 @@
   } => {
     const currentResolved = buildResolvedConnectorTreePreview() as ApiResolvedTreePreview;
 
-    const connectorByName = new Map<string, ApiResolvedConnectorPreview>();
-    const readOnlyByName = new Map<string, boolean>();
+    const connectorByName = new SvelteMap<string, ApiResolvedConnectorPreview>();
+    const readOnlyByName = new SvelteMap<string, boolean>();
 
     (resolved.connectors ?? []).forEach((connector) => {
       const name = `${connector.name ?? ""}`.trim();
       if (!name) return;
       connectorByName.set(name, connector);
-      if (Boolean(connector.from_network)) {
+      if (connector.from_network) {
         readOnlyByName.set(name, true);
       }
     });
@@ -5632,7 +5632,7 @@
     });
     const mergedLinks = [...mutableInputLinks, ...currentReadOnlyLinks];
 
-    const connectorBodyByName = new Map<string, Record<string, unknown>>();
+    const connectorBodyByName = new SvelteMap<string, Record<string, unknown>>();
     connectorByName.forEach((connector, name) => {
       const isReadOnly = readOnlyByName.get(name) ?? false;
       if (isReadOnly && deployedRegistry.connectors[name]) {

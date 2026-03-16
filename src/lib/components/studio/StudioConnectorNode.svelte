@@ -58,10 +58,10 @@
   );
 
   const handleLeft = (index: number) => ((index + 1) / (dimensionCount + 1)) * 100;
+  const touchDeps = (..._deps: unknown[]) => _deps.length;
 
   $effect(() => {
-    connectorRowsFingerprint;
-    showTopInlet;
+    touchDeps(connectorRowsFingerprint, showTopInlet);
     if (dimensionCount >= 0) {
       updateNodeInternals(id);
     }
