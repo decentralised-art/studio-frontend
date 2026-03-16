@@ -247,7 +247,6 @@
   let transformationEditorLocked = $state(false);
   let transformationEditorDeployBusy = $state(false);
   let transformationDraftName = $state("");
-  let transformationDraftArgs = $state("");
   let transformationDraftCode = $state("return x + args[0];");
   let transformationDraftError = $state<string | null>(null);
   const transformationCodeById = new SvelteMap<string, string>();
@@ -380,8 +379,6 @@
       .filter((num) => Number.isFinite(num))
       .map((num) => Math.trunc(num));
 
-  const transformationArgsArray = $derived.by(() => parseArgsInput(transformationDraftArgs));
-
   const transformationTemplate = $derived.by(() => {
     const contractName = toContractName(transformationDraftName);
     const nameRes = parseContractName(contractName);
@@ -391,7 +388,7 @@
     if (!codeRes.ok) return `// error: ${codeRes.error}`;
 
     const inferred = inferArgsCountFromSnippet(codeRes.value);
-    const argsCount = Math.max(transformationArgsArray.length, inferred.minArgsCount);
+    const argsCount = inferred.minArgsCount;
 
     return renderTransformationSolidity({
       name: nameRes.value,
@@ -399,14 +396,6 @@
       code: codeRes.value,
       baseImportPath: "../TransformationBase.sol",
     });
-  });
-
-  const transformationArgsWarning = $derived.by(() => {
-    const codeRes = parseSoliditySnippet(transformationDraftCode);
-    if (!codeRes.ok) return null;
-    const inferred = inferArgsCountFromSnippet(codeRes.value);
-    if (inferred.minArgsCount <= transformationArgsArray.length) return null;
-    return `Snippet references args[${inferred.maxIndex}]. Provide at least ${inferred.minArgsCount} argument(s).`;
   });
 
   const defaultDraftCode = "return x + args[0];";
@@ -436,13 +425,6 @@
       code: codeRes.value,
       baseImportPath: "../ConditionBase.sol",
     });
-  });
-
-  const conditionArgsInfo = $derived.by(() => {
-    const codeRes = parseSoliditySnippet(conditionDraftCode);
-    if (!codeRes.ok) return null;
-    const inferred = inferArgsCountFromSnippet(codeRes.value);
-    return `Inferred condition args count: ${inferred.minArgsCount}`;
   });
 
   const compileTransformationCode = (code: string) => {
@@ -1299,6 +1281,101 @@
     );
   };
 
+  const removeTransformationFromDimension = (dimensionId: string, transformationId: string) => {
+    transformationCodeById.delete(transformationId);
+    updateDimensionTransformations(dimensionId, (current) =>
+      current.filter((tx) => tx.id !== transformationId),
+    );
+  };
+
+  let transformationDragState = $state<{ dimensionId: string; fromIndex: number } | null>(null);
+  let transformationDropState = $state<{ dimensionId: string; dropIndex: number } | null>(null);
+
+  const moveTransformationInDimension = (
+    dimensionId: string,
+    fromIndex: number,
+    toInsertIndex: number,
+  ) => {
+    updateDimensionTransformations(dimensionId, (current) => {
+      if (fromIndex < 0 || fromIndex >= current.length) return current;
+      const next = [...current];
+      const [picked] = next.splice(fromIndex, 1);
+      if (!picked) return current;
+      const clampedTarget = Math.max(0, Math.min(toInsertIndex, next.length));
+      const adjustedTarget =
+        fromIndex < clampedTarget ? Math.max(0, clampedTarget - 1) : clampedTarget;
+      next.splice(adjustedTarget, 0, picked);
+      return next;
+    });
+  };
+
+  const handleTransformationDragStart = (
+    event: DragEvent,
+    dimensionId: string,
+    fromIndex: number,
+  ) => {
+    transformationDragState = { dimensionId, fromIndex };
+    transformationDropState = null;
+    if (event.dataTransfer) {
+      event.dataTransfer.effectAllowed = "move";
+      event.dataTransfer.setData("text/plain", `${dimensionId}:${fromIndex}`);
+    }
+  };
+
+  const handleTransformationDragOver = (
+    event: DragEvent,
+    dimensionId: string,
+    dropIndex: number,
+  ) => {
+    if (!transformationDragState || transformationDragState.dimensionId !== dimensionId) return;
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+    transformationDropState = { dimensionId, dropIndex };
+  };
+
+  const getTransformationInsertIndexFromRow = (event: DragEvent, rowIndex: number): number => {
+    const current = event.currentTarget as HTMLElement | null;
+    const bounds = current?.getBoundingClientRect();
+    if (!bounds) return rowIndex;
+    return event.clientY < bounds.top + bounds.height / 2 ? rowIndex : rowIndex + 1;
+  };
+
+  const handleTransformationRowDragOver = (
+    event: DragEvent,
+    dimensionId: string,
+    rowIndex: number,
+  ) => {
+    if (!transformationDragState || transformationDragState.dimensionId !== dimensionId) return;
+    const dropIndex = getTransformationInsertIndexFromRow(event, rowIndex);
+    handleTransformationDragOver(event, dimensionId, dropIndex);
+  };
+
+  const handleTransformationRowDrop = (event: DragEvent, dimensionId: string, rowIndex: number) => {
+    const dropIndex = getTransformationInsertIndexFromRow(event, rowIndex);
+    handleTransformationDrop(event, dimensionId, dropIndex);
+  };
+
+  const handleTransformationDrop = (event: DragEvent, dimensionId: string, dropIndex: number) => {
+    event.preventDefault();
+    const dragState = transformationDragState;
+    transformationDragState = null;
+    transformationDropState = null;
+    if (!dragState || dragState.dimensionId !== dimensionId) return;
+    moveTransformationInDimension(dimensionId, dragState.fromIndex, dropIndex);
+  };
+
+  const endTransformationDrag = () => {
+    transformationDragState = null;
+    transformationDropState = null;
+  };
+
+  const transformationRowDropClass = (dimensionId: string, rowIndex: number): string => {
+    if (transformationDropState?.dimensionId !== dimensionId) return "";
+    if (transformationDropState.dropIndex === rowIndex) return "is-drop-before";
+    if (transformationDropState.dropIndex === rowIndex + 1) return "is-drop-after";
+    return "";
+  };
+
   const addTransformationToSelectedDimension = (
     label: string,
     status: TransformationInstance["status"] = "draft",
@@ -1494,7 +1571,6 @@
     transformationEditorStatus = "draft";
     transformationEditorLocked = false;
     transformationDraftName = createUniqueName("transformation", "new_transformation");
-    transformationDraftArgs = "0";
     transformationDraftCode = defaultDraftCode;
     transformationDraftError = null;
   };
@@ -2662,11 +2738,12 @@
       return;
     }
 
-    const compiled = compileConditionCode(conditionDraftCode);
-    if (!compiled.ok) {
-      conditionDraftError = compiled.error;
+    const snippetParsed = parseSoliditySnippet(conditionDraftCode);
+    if (!snippetParsed.ok) {
+      conditionDraftError = snippetParsed.error;
       return;
     }
+    const compiled = compileConditionCode(conditionDraftCode);
 
     if (!isValidChainName(trimmedName)) {
       conditionDraftError =
@@ -2726,10 +2803,10 @@
       deployTraceEntries = [...deployTraceEntries, successEntry];
       logDeployTraceEntryToConsole(successEntry);
 
-      const snippetParsed = parseSoliditySnippet(conditionDraftCode);
-      const inferredArgsCount = snippetParsed.ok
-        ? Math.max(0, inferArgsCountFromSnippet(snippetParsed.value).minArgsCount)
-        : 0;
+      const inferredArgsCount = Math.max(
+        0,
+        inferArgsCountFromSnippet(snippetParsed.value).minArgsCount,
+      );
       conditionCodeById.set(nodeId, conditionDraftCode);
       updateNodeData(nodeId, {
         label: trimmedName,
@@ -2741,7 +2818,10 @@
         ...deployedRegistry,
         conditions: {
           ...deployedRegistry.conditions,
-          [trimmedName]: { argc: inferredArgsCount, check: alwaysTrueConditionCheck },
+          [trimmedName]: {
+            argc: inferredArgsCount,
+            check: compiled.ok ? compiled.value : alwaysTrueConditionCheck,
+          },
         },
       };
       deployedLibrary = {
@@ -2807,22 +2887,16 @@
       return;
     }
 
-    const args = transformationArgsArray;
     const snippetParsed = parseSoliditySnippet(transformationDraftCode);
     if (!snippetParsed.ok) {
       transformationDraftError = snippetParsed.error;
       return;
     }
-    const inferred = inferArgsCountFromSnippet(snippetParsed.value);
-    if (args.length < inferred.minArgsCount) {
-      transformationDraftError = `This code references args[${inferred.maxIndex}], so provide at least ${inferred.minArgsCount} argument(s).`;
-      return;
-    }
+    const inferredArgsCount = Math.max(
+      0,
+      inferArgsCountFromSnippet(snippetParsed.value).minArgsCount,
+    );
     const compiled = compileTransformationCode(transformationDraftCode);
-    if (!compiled.ok) {
-      transformationDraftError = compiled.error;
-      return;
-    }
 
     if (!isValidChainName(trimmedName)) {
       transformationDraftError =
@@ -2875,7 +2949,10 @@
         ...deployedRegistry,
         transformations: {
           ...deployedRegistry.transformations,
-          [trimmedName]: { argc: args.length, run: compiled.value },
+          [trimmedName]: {
+            argc: inferredArgsCount,
+            run: compiled.ok ? compiled.value : (x: number) => x,
+          },
         },
       };
       deployedLibrary = {
@@ -2893,7 +2970,7 @@
       if (dimensionId) {
         const dimensionNode = nodesById[dimensionId];
         if (dimensionNode?.data.kind === "dimension" && !dimensionNode.data.fromNetwork) {
-          const createdId = addTransformationToDimension(dimensionId, trimmedName, args, "network");
+          const createdId = addTransformationToDimension(dimensionId, trimmedName, [], "network");
           if (createdId) transformationCodeById.set(createdId, transformationDraftCode);
         }
       }
@@ -7167,11 +7244,39 @@
                         </div>
                         {#if (dimensionNode.data.transformations ?? []).length > 0}
                           <div class="inspector-transform-list inspector-transform-list--compact">
-                            {#each dimensionNode.data.transformations ?? [] as transformation (transformation.id)}
-                              {@const isNetwork = transformation.status === "network"}
+                            {#each dimensionNode.data.transformations ?? [] as transformation, transformationIndex (transformation.id)}
                               {@const canEditArgs = !isReadOnly}
-                              <div class="inspector-transform-row">
-                                <div class="inspector-transform-readonly">
+                              <div
+                                class={`inspector-transform-row ${canEditArgs ? "is-draggable" : ""} ${transformationRowDropClass(
+                                  dimensionNode.id,
+                                  transformationIndex,
+                                )} ${transformationDragState ? "is-drag-active" : ""}`}
+                                role="presentation"
+                                draggable={canEditArgs}
+                                ondragstart={(event) =>
+                                  canEditArgs &&
+                                  handleTransformationDragStart(
+                                    event,
+                                    dimensionNode.id,
+                                    transformationIndex,
+                                  )}
+                                ondragend={endTransformationDrag}
+                                ondragover={(event) =>
+                                  canEditArgs &&
+                                  handleTransformationRowDragOver(
+                                    event,
+                                    dimensionNode.id,
+                                    transformationIndex,
+                                  )}
+                                ondrop={(event) =>
+                                  canEditArgs &&
+                                  handleTransformationRowDrop(
+                                    event,
+                                    dimensionNode.id,
+                                    transformationIndex,
+                                  )}
+                              >
+                                <div class="inspector-transform-main">
                                   <span class="inspector-transform-name">{transformation.name}</span
                                   >
                                   {#if canEditArgs}
@@ -7195,11 +7300,19 @@
                                         : "none"}
                                     </span>
                                   {/if}
-                                </div>
-                                <div class="inspector-transform-meta">
-                                  <span class="inspector-tag">
-                                    {isNetwork ? "Network" : "Draft"}
-                                  </span>
+                                  {#if canEditArgs}
+                                    <button
+                                      type="button"
+                                      class="inspector-remove"
+                                      onclick={() =>
+                                        removeTransformationFromDimension(
+                                          dimensionNode.id,
+                                          transformation.id,
+                                        )}
+                                    >
+                                      Remove
+                                    </button>
+                                  {/if}
                                 </div>
                               </div>
                             {/each}
@@ -7289,11 +7402,39 @@
                       {#if (selectedNode.data.transformations ?? []).length === 0}
                         <div class="inspector-hint">No transformations on this dimension.</div>
                       {:else}
-                        {#each selectedNode.data.transformations ?? [] as transformation (transformation.id)}
-                          {@const isNetwork = transformation.status === "network"}
+                        {#each selectedNode.data.transformations ?? [] as transformation, transformationIndex (transformation.id)}
                           {@const canEditArgs = !isReadOnly}
-                          <div class="inspector-transform-row">
-                            <div class="inspector-transform-readonly">
+                          <div
+                            class={`inspector-transform-row ${canEditArgs ? "is-draggable" : ""} ${transformationRowDropClass(
+                              selectedNode.id,
+                              transformationIndex,
+                            )} ${transformationDragState ? "is-drag-active" : ""}`}
+                            role="presentation"
+                            draggable={canEditArgs}
+                            ondragstart={(event) =>
+                              canEditArgs &&
+                              handleTransformationDragStart(
+                                event,
+                                selectedNode.id,
+                                transformationIndex,
+                              )}
+                            ondragend={endTransformationDrag}
+                            ondragover={(event) =>
+                              canEditArgs &&
+                              handleTransformationRowDragOver(
+                                event,
+                                selectedNode.id,
+                                transformationIndex,
+                              )}
+                            ondrop={(event) =>
+                              canEditArgs &&
+                              handleTransformationRowDrop(
+                                event,
+                                selectedNode.id,
+                                transformationIndex,
+                              )}
+                          >
+                            <div class="inspector-transform-main">
                               <span class="inspector-transform-name">{transformation.name}</span>
                               {#if canEditArgs}
                                 <input
@@ -7316,11 +7457,19 @@
                                     : "none"}
                                 </span>
                               {/if}
-                            </div>
-                            <div class="inspector-transform-meta">
-                              <span class="inspector-tag">
-                                {isNetwork ? "Network" : "Draft"}
-                              </span>
+                              {#if canEditArgs}
+                                <button
+                                  type="button"
+                                  class="inspector-remove"
+                                  onclick={() =>
+                                    removeTransformationFromDimension(
+                                      selectedNode.id,
+                                      transformation.id,
+                                    )}
+                                >
+                                  Remove
+                                </button>
+                              {/if}
                             </div>
                           </div>
                         {/each}
@@ -7765,11 +7914,39 @@
                                 <div
                                   class="inspector-transform-list inspector-transform-list--compact"
                                 >
-                                  {#each dimensionNode.data.transformations ?? [] as transformation (transformation.id)}
-                                    {@const isNetwork = transformation.status === "network"}
+                                  {#each dimensionNode.data.transformations ?? [] as transformation, transformationIndex (transformation.id)}
                                     {@const canEditArgs = !isReadOnly}
-                                    <div class="inspector-transform-row">
-                                      <div class="inspector-transform-readonly">
+                                    <div
+                                      class={`inspector-transform-row ${canEditArgs ? "is-draggable" : ""} ${transformationRowDropClass(
+                                        dimensionNode.id,
+                                        transformationIndex,
+                                      )} ${transformationDragState ? "is-drag-active" : ""}`}
+                                      role="presentation"
+                                      draggable={canEditArgs}
+                                      ondragstart={(event) =>
+                                        canEditArgs &&
+                                        handleTransformationDragStart(
+                                          event,
+                                          dimensionNode.id,
+                                          transformationIndex,
+                                        )}
+                                      ondragend={endTransformationDrag}
+                                      ondragover={(event) =>
+                                        canEditArgs &&
+                                        handleTransformationRowDragOver(
+                                          event,
+                                          dimensionNode.id,
+                                          transformationIndex,
+                                        )}
+                                      ondrop={(event) =>
+                                        canEditArgs &&
+                                        handleTransformationRowDrop(
+                                          event,
+                                          dimensionNode.id,
+                                          transformationIndex,
+                                        )}
+                                    >
+                                      <div class="inspector-transform-main">
                                         <span class="inspector-transform-name"
                                           >{transformation.name}</span
                                         >
@@ -7795,11 +7972,19 @@
                                               : "none"}
                                           </span>
                                         {/if}
-                                      </div>
-                                      <div class="inspector-transform-meta">
-                                        <span class="inspector-tag">
-                                          {isNetwork ? "Network" : "Draft"}
-                                        </span>
+                                        {#if canEditArgs}
+                                          <button
+                                            type="button"
+                                            class="inspector-remove"
+                                            onclick={() =>
+                                              removeTransformationFromDimension(
+                                                dimensionNode.id,
+                                                transformation.id,
+                                              )}
+                                          >
+                                            Remove
+                                          </button>
+                                        {/if}
                                       </div>
                                     </div>
                                   {/each}
@@ -7891,11 +8076,39 @@
                                 No transformations on this dimension.
                               </div>
                             {:else}
-                              {#each selectedNode.data.transformations ?? [] as transformation (transformation.id)}
-                                {@const isNetwork = transformation.status === "network"}
+                              {#each selectedNode.data.transformations ?? [] as transformation, transformationIndex (transformation.id)}
                                 {@const canEditArgs = !isReadOnly}
-                                <div class="inspector-transform-row">
-                                  <div class="inspector-transform-readonly">
+                                <div
+                                  class={`inspector-transform-row ${canEditArgs ? "is-draggable" : ""} ${transformationRowDropClass(
+                                    selectedNode.id,
+                                    transformationIndex,
+                                  )} ${transformationDragState ? "is-drag-active" : ""}`}
+                                  role="presentation"
+                                  draggable={canEditArgs}
+                                  ondragstart={(event) =>
+                                    canEditArgs &&
+                                    handleTransformationDragStart(
+                                      event,
+                                      selectedNode.id,
+                                      transformationIndex,
+                                    )}
+                                  ondragend={endTransformationDrag}
+                                  ondragover={(event) =>
+                                    canEditArgs &&
+                                    handleTransformationRowDragOver(
+                                      event,
+                                      selectedNode.id,
+                                      transformationIndex,
+                                    )}
+                                  ondrop={(event) =>
+                                    canEditArgs &&
+                                    handleTransformationRowDrop(
+                                      event,
+                                      selectedNode.id,
+                                      transformationIndex,
+                                    )}
+                                >
+                                  <div class="inspector-transform-main">
                                     <span class="inspector-transform-name"
                                       >{transformation.name}</span
                                     >
@@ -7920,11 +8133,19 @@
                                           : "none"}
                                       </span>
                                     {/if}
-                                  </div>
-                                  <div class="inspector-transform-meta">
-                                    <span class="inspector-tag">
-                                      {isNetwork ? "Network" : "Draft"}
-                                    </span>
+                                    {#if canEditArgs}
+                                      <button
+                                        type="button"
+                                        class="inspector-remove"
+                                        onclick={() =>
+                                          removeTransformationFromDimension(
+                                            selectedNode.id,
+                                            transformation.id,
+                                          )}
+                                      >
+                                        Remove
+                                      </button>
+                                    {/if}
                                   </div>
                                 </div>
                               {/each}
@@ -8328,20 +8549,6 @@
               transformationDraftError = null;
             }}
           />
-          <label class="editor-label" for="tx-args">Args (comma-separated)</label>
-          <input
-            id="tx-args"
-            class="editor-input"
-            value={transformationDraftArgs}
-            disabled={transformationEditorReadOnly || transformationEditorDeployBusy}
-            oninput={(event) => {
-              const target = event.target as HTMLInputElement | null;
-              transformationDraftArgs = target?.value ?? "";
-            }}
-          />
-          {#if transformationArgsWarning}
-            <div class="editor-hint">{transformationArgsWarning}</div>
-          {/if}
           {#if transformationDraftError}
             <div class="editor-error">{transformationDraftError}</div>
           {/if}
@@ -8393,9 +8600,6 @@
               conditionDraftError = null;
             }}
           />
-          {#if conditionArgsInfo}
-            <div class="editor-hint">{conditionArgsInfo}</div>
-          {/if}
           {#if conditionDraftError}
             <div class="editor-error">{conditionDraftError}</div>
           {/if}
@@ -8911,39 +9115,48 @@
   }
 
   .inspector-transform-row {
-    @apply flex flex-col gap-2;
+    @apply flex min-w-0 items-center rounded-md border border-white/10 bg-black/60 px-2 py-1;
   }
 
-  .inspector-transform-fields {
-    @apply flex items-center gap-2;
+  .inspector-transform-row.is-draggable {
+    @apply cursor-grab active:cursor-grabbing;
   }
 
-  .inspector-transform-fields .inspector-input {
-    @apply flex-1 min-w-[6rem];
+  .inspector-transform-row.is-drag-active * {
+    pointer-events: none;
   }
 
-  .inspector-transform-readonly {
-    @apply flex flex-1 min-w-0 flex-col gap-1 rounded-md border border-white/10 bg-black/60 px-2 py-1;
+  .inspector-transform-row.is-drop-before {
+    box-shadow: inset 0 2px 0 rgba(52, 211, 153, 0.9);
+  }
+
+  .inspector-transform-row.is-drop-after {
+    box-shadow: inset 0 -2px 0 rgba(52, 211, 153, 0.9);
+  }
+
+  .inspector-transform-main {
+    @apply flex min-w-0 flex-1 flex-wrap items-center gap-2;
   }
 
   .inspector-transform-name {
-    @apply text-[0.66rem] font-medium text-white/90;
+    @apply basis-full text-[0.66rem] font-medium text-white/90;
+    overflow-wrap: anywhere;
   }
 
   .inspector-transform-args {
-    @apply text-[0.56rem] uppercase tracking-[0.16em] text-white/45;
+    @apply whitespace-nowrap text-[0.56rem] uppercase tracking-[0.16em] text-white/45;
   }
 
   .inspector-transform-args-input {
-    @apply mt-0 w-24 text-[0.62rem] normal-case tracking-normal;
+    @apply mt-0 min-w-0 flex-1 text-[0.62rem] normal-case tracking-normal;
+  }
+
+  .inspector-transform-main .inspector-remove {
+    margin-left: auto;
   }
 
   .inspector-input--args {
     @apply w-24 flex-none text-[0.65rem];
-  }
-
-  .inspector-transform-meta {
-    @apply flex items-center justify-between gap-2;
   }
 
   .inspector-tag {
