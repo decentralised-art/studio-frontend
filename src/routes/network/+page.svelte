@@ -18,7 +18,7 @@
   } from "$lib/formats/localFormats";
   import Button from "$lib/components/ui/Button.svelte";
   import Input from "$lib/components/ui/Input.svelte";
-  import { networkNodeStudioKind, type NetworkGraphNode } from "$lib/network/mockNetworkGraph";
+  import { networkNodeStudioKind } from "$lib/network/mockNetworkGraph";
   import {
     displayUsersById,
     mockCurrentUserId,
@@ -27,7 +27,6 @@
     mockUsersById,
     type User,
   } from "$lib/data/users";
-  import type { NetworkNodeKind } from "$lib/network/mockNetworkGraph";
 
   let followSearch = $state("");
   let feedEvents = $state<ParticlePostEvent[]>([]);
@@ -56,10 +55,7 @@
       .slice(0, 6);
   });
 
-  type SearchableEntityKind = Extract<
-    NetworkNodeKind,
-    "particle" | "feature" | "transformation" | "condition"
-  >;
+  type SearchableEntityKind = "connector" | "transformation" | "condition";
 
   type EntitySearchResult = {
     id: string;
@@ -70,22 +66,11 @@
     creatorName: string;
   };
 
-  type FormatSearchResult = {
-    id: string;
-    slug: string;
-    name: string;
-    authorId: string;
-    authorName: string;
-    terminalParticleIds: string[];
-    terminalParticleLabels: string[];
-  };
-
   const entitySearchResults = $derived.by(() => {
     if (!searchQuery) return [] as EntitySearchResult[];
     return (
       [
-        ...chainElements.particles.map((item) => ({ ...item, kind: "particle" as const })),
-        ...chainElements.features.map((item) => ({ ...item, kind: "feature" as const })),
+        ...chainElements.connectors.map((item) => ({ ...item, kind: "connector" as const })),
         ...chainElements.transformations.map((item) => ({
           ...item,
           kind: "transformation" as const,
@@ -114,37 +99,12 @@
       .slice(0, 10);
   });
 
-  const formatSearchResults = $derived.by(() => {
-    if (!searchQuery) return [] as FormatSearchResult[];
-    const particleLabels = getParticleLabelMap();
-    return formats
-      .filter((format) => {
-        const authorName = displayUsersById[format.authorId]?.nickname ?? format.authorId;
-        const deps = format.terminalParticleIds.map((id) => particleLabels.get(id) ?? id).join(" ");
-        return `${format.name} ${format.slug} ${authorName} ${deps}`
-          .toLowerCase()
-          .includes(searchQuery);
-      })
-      .map((format) => ({
-        id: format.id,
-        slug: format.slug,
-        name: format.name,
-        authorId: format.authorId,
-        authorName: displayUsersById[format.authorId]?.nickname ?? format.authorId,
-        terminalParticleIds: [...format.terminalParticleIds],
-        terminalParticleLabels: format.terminalParticleIds.map(
-          (id) => particleLabels.get(id) ?? id,
-        ),
-      }))
-      .slice(0, 10);
-  });
-
   const showSearchResults = $derived.by(() => searchQuery.length > 0);
 
   const loadChainFeed = async () => {
     feedLoading = true;
     try {
-      await syncParticlePostDataFromChain();
+      await syncParticlePostDataFromChain({ force: true });
     } catch (error) {
       console.error("[Network feed] Failed to sync chain-backed particle posts.", error);
     } finally {
@@ -158,18 +118,24 @@
     }
   };
 
-  const openParticleInStudio = (particleId: string | NetworkGraphNode) => {
-    const resolvedParticleId =
-      typeof particleId === "string"
-        ? particleId
-        : particleId.kind === "particle"
-          ? particleId.entityId
-          : null;
-    if (!resolvedParticleId) return;
+  const openConnectorInStudio = (connectorId: string) => {
+    if (!connectorId) return;
     const base = resolve("/studio");
     const target = new URL(base, window.location.origin);
-    target.searchParams.set("network_kind", networkNodeStudioKind("particle"));
-    target.searchParams.set("network_id", resolvedParticleId);
+    target.searchParams.set("network_kind", networkNodeStudioKind("connector"));
+    target.searchParams.set("network_id", connectorId);
+    window.open(target.toString(), "_blank", "noopener,noreferrer");
+  };
+
+  const openLibraryEntityInStudio = (
+    kind: Extract<SearchableEntityKind, "transformation" | "condition">,
+    id: string,
+  ) => {
+    if (!id) return;
+    const base = resolve("/studio");
+    const target = new URL(base, window.location.origin);
+    target.searchParams.set("network_kind", kind);
+    target.searchParams.set("network_id", id);
     window.open(target.toString(), "_blank", "noopener,noreferrer");
   };
 
@@ -212,7 +178,7 @@
         <div class="follow-search-field">
           <Input
             label=""
-            placeholder="Search users, particles, features, transformations, conditions, formats"
+            placeholder="Search users, connectors, transformations, conditions"
             value={followSearch}
             oninput={(event) => {
               followSearch = event.currentTarget.value;
@@ -271,55 +237,29 @@
                       </p>
                     </div>
                   </div>
-                  {#if item.kind === "particle"}
+                  {#if item.kind === "connector"}
                     <Button
                       variant="ghost"
-                      onclick={() =>
-                        openParticleInStudio({
-                          id: item.id,
-                          label: item.label,
-                          kind: "particle",
-                          entityId: item.entityId,
-                          summary: item.summary,
-                          x: 0,
-                          y: 0,
-                          size: 0,
-                        })}
+                      onclick={() => openConnectorInStudio(item.entityId)}
                       className="follow-btn"
                     >
                       Open
                     </Button>
                   {:else}
-                    <span class="candidate-state">{item.kind}</span>
+                    <Button
+                      variant="ghost"
+                      onclick={() => openLibraryEntityInStudio(item.kind, item.entityId)}
+                      className="follow-btn"
+                    >
+                      Use
+                    </Button>
                   {/if}
                 </div>
               {/each}
             </div>
           {/if}
 
-          {#if formatSearchResults.length}
-            <div class="result-group">
-              <p class="result-group-label">Formats</p>
-              {#each formatSearchResults as format (format.id)}
-                <div class="follow-candidate-item" role="listitem">
-                  <div class="candidate-meta">
-                    <div class="candidate-avatar candidate-avatar--glyph" aria-hidden="true">F</div>
-                    <div class="candidate-text">
-                      <p class="candidate-name">{format.name}</p>
-                      <p class="candidate-kind">
-                        by {format.authorName} · {format.terminalParticleLabels.length} dependencies
-                      </p>
-                    </div>
-                  </div>
-                  <a class="candidate-link-btn" href={resolve("/f/[slug]", { slug: format.slug })}>
-                    Open
-                  </a>
-                </div>
-              {/each}
-            </div>
-          {/if}
-
-          {#if userSearchResults.length === 0 && entitySearchResults.length === 0 && formatSearchResults.length === 0}
+          {#if userSearchResults.length === 0 && entitySearchResults.length === 0}
             <div class="search-empty" role="listitem">No users or network elements found.</div>
           {/if}
         </div>
@@ -330,7 +270,7 @@
   <ParticlePostFeed
     loading={feedLoading}
     events={networkFeedEvents}
-    onParticleOpen={openParticleInStudio}
+    onParticleOpen={openConnectorInStudio}
     onAddToToolbox={addParticleToToolbox}
     {toolboxParticleIds}
   />

@@ -1,14 +1,40 @@
 import type { ExploreParticle } from "$lib/data/exploreParticles";
-import { extraChainSyncSources, mockUsers } from "$lib/data/users";
 import type { FormatFeedEvent } from "$lib/formats/localFormats";
 import type { MockFeatureDef, MockParticleDef } from "$lib/particles/mockPtNetwork";
-import type { SocialEvent } from "$lib/social/mockSocialFeed";
 import {
   fetchChainOwnedStudioSnapshot,
   fetchChainParticleForStudio,
+  listChainSyncSourcesForApp,
 } from "$lib/studio/chainStudioAdapter";
+import type { StudioConnectorDef } from "$lib/studio/domain/connectorModel";
 
-export type ParticlePostEvent = SocialEvent;
+export type ConnectorPostEvent = {
+  type: "connector";
+  id: string;
+  authorId: string;
+  createdAt: number;
+  createdLabel: string;
+  particleId: string;
+  particleLabel: string;
+  usedParticleIds: string[];
+  usedParticleLabels: string[];
+  createdNodeIds: string[];
+  reusedNodeIds: string[];
+  focusNodeIds: string[];
+};
+
+export type RuntimeCodePostEvent = {
+  type: "transformation" | "condition";
+  id: string;
+  authorId: string;
+  createdAt: number;
+  createdLabel: string;
+  elementId: string;
+  elementLabel: string;
+  runtimeSnippet: string;
+};
+
+export type ParticlePostEvent = ConnectorPostEvent | RuntimeCodePostEvent;
 export type NetworkFeedEvent = ParticlePostEvent | FormatFeedEvent;
 
 export type ParticleRecord = Pick<
@@ -17,6 +43,7 @@ export type ParticleRecord = Pick<
 >;
 
 type ParticleDependencyRegistrySnapshot = {
+  connectors: Record<string, StudioConnectorDef>;
   particles: Record<string, MockParticleDef>;
   features: Record<string, MockFeatureDef>;
 };
@@ -27,8 +54,7 @@ type ParticlePostCache = {
   particlesById: Map<string, ParticleRecord>;
   registry: ParticleDependencyRegistrySnapshot;
   searchable: {
-    particles: Array<{ id: string; label: string; summary: string; authorId: string }>;
-    features: Array<{ id: string; label: string; summary: string; authorId: string }>;
+    connectors: Array<{ id: string; label: string; summary: string; authorId: string }>;
     transformations: Array<{ id: string; label: string; summary: string; authorId: string }>;
     conditions: Array<{ id: string; label: string; summary: string; authorId: string }>;
   };
@@ -45,19 +71,19 @@ const emptyCache = (): ParticlePostCache => ({
   loaded: false,
   events: [],
   particlesById: new Map(),
-  registry: { particles: {}, features: {} },
-  searchable: { particles: [], features: [], transformations: [], conditions: [] },
+  registry: { connectors: {}, particles: {}, features: {} },
+  searchable: { connectors: [], transformations: [], conditions: [] },
 });
 
 let cache: ParticlePostCache = emptyCache();
 let loadPromise: Promise<ParticlePostCache> | null = null;
 const terminalSetCache = new Map<string, string[]>();
 
-const rebuildEventsFromParticles = (particles: ParticleRecord[]): ParticlePostEvent[] => {
+const rebuildEventsFromParticles = (particles: ParticleRecord[]): ConnectorPostEvent[] => {
   const labelById = new Map(particles.map((particle) => [particle.id, particle.name] as const));
   return particles
     .map((particle) => ({
-      type: "particle",
+      type: "connector",
       id: `event-particle-created-${particle.id}`,
       authorId: particle.authorId,
       createdAt: particle.createdAt,
@@ -81,12 +107,12 @@ const mergeParticleRecordIntoStructures = (
   particle: ParticleRecord,
   nextParticlesById: Map<string, ParticleRecord>,
   searchByKind: {
-    particles: Map<string, { id: string; label: string; summary: string; authorId: string }>;
+    connectors: Map<string, { id: string; label: string; summary: string; authorId: string }>;
   },
 ) => {
   if (nextParticlesById.has(particle.id)) return;
   nextParticlesById.set(particle.id, particle);
-  searchByKind.particles.set(`particle:${particle.id}`, {
+  searchByKind.connectors.set(`connector:${particle.id}`, {
     id: particle.id,
     label: particle.name,
     summary: particle.summary,
@@ -94,21 +120,38 @@ const mergeParticleRecordIntoStructures = (
   });
 };
 
-const mergeSnapshots = async (): Promise<ParticlePostCache> => {
-  const chainSources = [
-    ...mockUsers
-      .filter((user) => Boolean(user.address?.trim()))
-      .map((user) => ({
-        address: user.address,
-        authorId: user.id,
-      })),
-    ...extraChainSyncSources
-      .filter((source) => Boolean(source.address?.trim()))
-      .map((source) => ({
-        address: source.address,
-        authorId: source.id,
-      })),
-  ];
+type RuntimeCodeRecord = {
+  type: "transformation" | "condition";
+  id: string;
+  label: string;
+  summary: string;
+  runtimeSnippet: string;
+  authorId: string;
+  createdAt: number;
+};
+
+const normalizeRuntimeSnippet = (value: string): string => {
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  const returnMatch = trimmed.match(/\breturn\b[\s\S]*?;/i);
+  if (returnMatch) return returnMatch[0].replace(/\s+/g, " ").trim();
+  return trimmed.replace(/\s+/g, " ").trim();
+};
+
+const rebuildRuntimeCodeEvents = (records: RuntimeCodeRecord[]): Array<RuntimeCodePostEvent> =>
+  records.map((record) => ({
+    type: record.type,
+    id: `event-${record.type}-created-${record.id}`,
+    authorId: record.authorId,
+    createdAt: record.createdAt,
+    createdLabel: "",
+    elementId: record.id,
+    elementLabel: record.label,
+    runtimeSnippet: record.runtimeSnippet,
+  }));
+
+const mergeSnapshots = async (options?: { forceSources?: boolean }): Promise<ParticlePostCache> => {
+  const chainSources = await listChainSyncSourcesForApp({ force: options?.forceSources });
 
   const settled = await Promise.allSettled(
     chainSources.map((source) =>
@@ -120,18 +163,19 @@ const mergeSnapshots = async (): Promise<ParticlePostCache> => {
 
   const nextParticlesById = new Map<string, ParticleRecord>();
   const nextRegistry: ParticleDependencyRegistrySnapshot = {
+    connectors: {},
     particles: {},
     features: {},
   };
   const searchByKind = {
-    particles: new Map<string, { id: string; label: string; summary: string; authorId: string }>(),
-    features: new Map<string, { id: string; label: string; summary: string; authorId: string }>(),
+    connectors: new Map<string, { id: string; label: string; summary: string; authorId: string }>(),
     transformations: new Map<
       string,
       { id: string; label: string; summary: string; authorId: string }
     >(),
     conditions: new Map<string, { id: string; label: string; summary: string; authorId: string }>(),
   };
+  const runtimeCodeRecordsById = new Map<string, RuntimeCodeRecord>();
 
   let particleCounter = 0;
 
@@ -141,36 +185,61 @@ const mergeSnapshots = async (): Promise<ParticlePostCache> => {
 
     Object.assign(nextRegistry.features, snapshot.registry.features);
     Object.assign(nextRegistry.particles, snapshot.registry.particles);
+    Object.assign(nextRegistry.connectors, snapshot.registry.connectors);
 
-    snapshot.library.features.forEach((item) => {
-      if (!searchByKind.features.has(item.id)) {
-        searchByKind.features.set(item.id, {
-          id: item.id,
-          label: item.name,
-          summary: item.summary,
-          authorId: item.authorId,
-        });
-      }
-    });
     snapshot.library.transformations.forEach((item) => {
+      const transformationId = item.id.replace(/^transform-/, "").trim();
       if (!searchByKind.transformations.has(item.id)) {
         searchByKind.transformations.set(item.id, {
-          id: item.id,
+          id: transformationId || item.id,
           label: item.name,
-          summary: item.summary,
+          summary: item.summary ?? "Synced from chain.",
           authorId: item.authorId,
         });
       }
+      const runtimeSnippet = normalizeRuntimeSnippet(
+        item.runtimeSnippet?.trim() || item.summary?.trim() || "",
+      );
+      if (!runtimeSnippet) return;
+      const eventKey = `transformation:${transformationId || item.id}`;
+      if (runtimeCodeRecordsById.has(eventKey)) return;
+      runtimeCodeRecordsById.set(eventKey, {
+        type: "transformation",
+        id: transformationId || item.id,
+        label: item.name,
+        summary: item.summary ?? "Synced from chain.",
+        runtimeSnippet,
+        authorId: item.authorId,
+        createdAt: Date.now() - particleCounter * 1000,
+      });
+      particleCounter += 1;
     });
     snapshot.library.conditions.forEach((item) => {
+      const conditionId = item.id.replace(/^condition-/, "").trim();
       if (!searchByKind.conditions.has(item.id)) {
         searchByKind.conditions.set(item.id, {
-          id: item.id,
+          id: conditionId || item.id,
           label: item.name,
-          summary: item.summary,
+          summary: item.summary ?? "Synced from chain.",
           authorId: item.authorId,
         });
       }
+      const runtimeSnippet = normalizeRuntimeSnippet(
+        item.runtimeSnippet?.trim() || item.summary?.trim() || "",
+      );
+      if (!runtimeSnippet) return;
+      const eventKey = `condition:${conditionId || item.id}`;
+      if (runtimeCodeRecordsById.has(eventKey)) return;
+      runtimeCodeRecordsById.set(eventKey, {
+        type: "condition",
+        id: conditionId || item.id,
+        label: item.name,
+        summary: item.summary ?? "Synced from chain.",
+        runtimeSnippet,
+        authorId: item.authorId,
+        createdAt: Date.now() - particleCounter * 1000,
+      });
+      particleCounter += 1;
     });
 
     snapshot.particles.forEach((particle) => {
@@ -182,7 +251,7 @@ const mergeSnapshots = async (): Promise<ParticlePostCache> => {
         summary:
           particle.summary && particle.summary.trim().length > 0
             ? particle.summary
-            : `${particle.name} particle synced from chain.`,
+            : `${particle.name} connector synced from chain.`,
         authorId: particle.authorId,
         createdAt,
         createdLabel: "",
@@ -192,8 +261,8 @@ const mergeSnapshots = async (): Promise<ParticlePostCache> => {
     });
   }
 
-  // Pull one-hop dependency particles so /p/[id] links and search can resolve referenced particles
-  // even when they are not owned by the 7 synced mock users.
+  // Pull one-hop dependency connectors so /p/[id] links and search can resolve referenced connectors
+  // even when they are not owned by the currently synced user source set.
   const missingDependencyIds = Array.from(
     new Set(
       Array.from(nextParticlesById.values()).flatMap((particle) =>
@@ -215,6 +284,9 @@ const mergeSnapshots = async (): Promise<ParticlePostCache> => {
       }
       if (fetched.registry.particle) {
         nextRegistry.particles[fetched.registry.particle.name] = fetched.registry.particle;
+      }
+      if (fetched.registry.connector) {
+        nextRegistry.connectors[fetched.registry.connector.name] = fetched.registry.connector;
       }
       if (fetched.particleMeta) {
         const fallbackRecord: ParticleRecord = {
@@ -238,14 +310,25 @@ const mergeSnapshots = async (): Promise<ParticlePostCache> => {
     return a.id.localeCompare(b.id);
   });
 
+  const connectorEvents = rebuildEventsFromParticles(particles);
+  const runtimeCodeEvents = rebuildRuntimeCodeEvents(
+    Array.from(runtimeCodeRecordsById.values()).sort((a, b) => {
+      const byCreatedAt = b.createdAt - a.createdAt;
+      if (byCreatedAt !== 0) return byCreatedAt;
+      return a.id.localeCompare(b.id);
+    }),
+  );
+  const events = [...connectorEvents, ...runtimeCodeEvents].sort(
+    (a, b) => b.createdAt - a.createdAt,
+  );
+
   return {
     loaded: true,
-    events: rebuildEventsFromParticles(particles),
+    events,
     particlesById: nextParticlesById,
     registry: nextRegistry,
     searchable: {
-      particles: Array.from(searchByKind.particles.values()),
-      features: Array.from(searchByKind.features.values()),
+      connectors: Array.from(searchByKind.connectors.values()),
       transformations: Array.from(searchByKind.transformations.values()),
       conditions: Array.from(searchByKind.conditions.values()),
     },
@@ -255,7 +338,7 @@ const mergeSnapshots = async (): Promise<ParticlePostCache> => {
 export const syncParticlePostDataFromChain = async (options?: { force?: boolean }) => {
   if (cache.loaded && !options?.force) return cache;
   if (!loadPromise || options?.force) {
-    loadPromise = mergeSnapshots()
+    loadPromise = mergeSnapshots({ forceSources: Boolean(options?.force) })
       .then((next) => {
         cache = next;
         terminalSetCache.clear();
@@ -276,7 +359,10 @@ export const listParticlePostsByAuthor = (authorId: string): ParticlePostEvent[]
   cache.events.filter((event) => event.authorId === authorId);
 
 export const listParticlePostsReferencingParticle = (particleId: string): ParticlePostEvent[] =>
-  cache.events.filter((event) => event.usedParticleIds.includes(particleId));
+  cache.events.filter(
+    (event): event is ConnectorPostEvent =>
+      event.type === "connector" && event.usedParticleIds.includes(particleId),
+  );
 
 export const getParticleRecordById = (particleId: string): ParticleRecord | null =>
   cache.particlesById.get(particleId) ?? null;
@@ -295,6 +381,9 @@ export const ensureParticleRecordLoadedById = async (
     if (fetched.registry.particle) {
       cache.registry.particles[fetched.registry.particle.name] = fetched.registry.particle;
     }
+    if (fetched.registry.connector) {
+      cache.registry.connectors[fetched.registry.connector.name] = fetched.registry.connector;
+    }
     if (!fetched.particleMeta) return null;
 
     const record: ParticleRecord = {
@@ -307,8 +396,8 @@ export const ensureParticleRecordLoadedById = async (
       dependencies: [...fetched.particleMeta.dependencies],
     };
     cache.particlesById.set(record.id, record);
-    cache.searchable.particles = [
-      ...cache.searchable.particles.filter((item) => item.id !== record.id),
+    cache.searchable.connectors = [
+      ...cache.searchable.connectors.filter((item) => item.id !== record.id),
       {
         id: record.id,
         label: record.name,

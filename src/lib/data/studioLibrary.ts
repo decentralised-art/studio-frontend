@@ -10,6 +10,7 @@ export type LibraryItem = {
   kind: LibraryKind;
   authorId: string;
   summary?: string;
+  runtimeSnippet?: string;
   viewId?: ParticleView["id"];
   dimensions?: number;
 };

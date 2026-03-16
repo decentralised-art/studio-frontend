@@ -1,5 +1,6 @@
 <script lang="ts">
   import { Background, SvelteFlow } from "@xyflow/svelte";
+  import { SvelteMap } from "svelte/reactivity";
   import "@xyflow/svelte/dist/style.css";
 
   import type {
@@ -64,12 +65,64 @@
   const edgeTypes = {
     lineage: LineageEdgeCard,
   };
+
+  const normalizedNodes = $derived.by(() => {
+    if (!nodes.length) return nodes;
+    const cardWidth = 220;
+    const cardHeight = 72;
+    const padding = 18;
+    const placed: Array<{ x: number; y: number; width: number; height: number }> = [];
+    const nextNodes = nodes.map((node) => ({
+      ...node,
+      position: { ...node.position },
+    }));
+    const byId = new SvelteMap(nextNodes.map((node) => [node.id, node] as const));
+    const ordered = [...nextNodes].sort(
+      (a, b) => a.position.y - b.position.y || a.position.x - b.position.x,
+    );
+
+    const overlaps = (
+      lhs: { x: number; y: number; width: number; height: number },
+      rhs: { x: number; y: number; width: number; height: number },
+    ) =>
+      lhs.x < rhs.x + rhs.width + padding &&
+      lhs.x + lhs.width + padding > rhs.x &&
+      lhs.y < rhs.y + rhs.height + padding &&
+      lhs.y + lhs.height + padding > rhs.y;
+
+    ordered.forEach((node) => {
+      const current = byId.get(node.id);
+      if (!current) return;
+      let x = current.position.x;
+      let y = current.position.y;
+      let guard = 0;
+      while (guard < 200) {
+        const overlapping = placed.find((other) =>
+          overlaps({ x, y, width: cardWidth, height: cardHeight }, other),
+        );
+        if (!overlapping) break;
+        y = overlapping.y + overlapping.height + padding;
+        guard += 1;
+      }
+      current.position = { x, y };
+      placed.push({ x, y, width: cardWidth, height: cardHeight });
+    });
+
+    return nextNodes;
+  });
+
+  const normalizedEdges = $derived.by(() =>
+    edges.map((edge) => ({
+      ...edge,
+      type: "lineage" as const,
+    })),
+  );
 </script>
 
 <div class="mini-flow">
   <SvelteFlow
-    {nodes}
-    {edges}
+    nodes={normalizedNodes}
+    edges={normalizedEdges}
     {nodeTypes}
     {edgeTypes}
     defaultEdgeOptions={{
@@ -177,6 +230,31 @@
   .mini-flow :global(.svelte-flow__edge-path) {
     stroke: rgba(255, 255, 255, 0.3);
     stroke-width: 1.5px;
+  }
+
+  .mini-flow :global(.svelte-flow__edge-text) {
+    fill: rgba(255, 255, 255, 0.9) !important;
+  }
+
+  .mini-flow :global(.svelte-flow__edge-textbg) {
+    fill: transparent !important;
+    stroke: transparent !important;
+  }
+
+  .mini-flow :global(.svelte-flow__edge-label) {
+    color: rgba(255, 255, 255, 0.92) !important;
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.65);
+  }
+
+  .mini-flow :global(.svelte-flow__edge-label-renderer .svelte-flow__edge-label) {
+    color: rgba(255, 255, 255, 0.92) !important;
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.65);
   }
 
   .mini-flow :global(.svelte-flow__edge) {

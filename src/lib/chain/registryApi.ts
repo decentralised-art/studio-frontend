@@ -18,14 +18,41 @@ export class ChainApiRequestError extends Error {
   }
 }
 
-type ChainFeatureDimension = {
-  transformations?: Array<{ name?: string; args?: number[] }>;
+export type ChainTransformationArg = number;
+
+export type ChainConnectorTransformationPayload = {
+  name: string;
+  args: ChainTransformationArg[];
 };
 
-export type ChainFeatureResponse = {
+export type ChainConnectorDimensionPayload = {
+  transformations: ChainConnectorTransformationPayload[];
+  composite?: string;
+  bindings?: Record<string, string>;
+};
+
+export type ChainConnectorPayload = {
+  name: string;
+  dimensions: ChainConnectorDimensionPayload[];
+  condition_name?: string;
+  condition_args?: number[];
+};
+
+export type ChainConnectorDimensionResponse = {
+  transformations?: Array<{ name?: string; args?: ChainTransformationArg[] }>;
+  composite?: string;
+  bindings?: Record<string, string>;
+};
+
+export type ChainConnectorResponse = {
   name?: string;
   owner?: string;
-  dimensions?: ChainFeatureDimension[];
+  dimensions?: ChainConnectorDimensionResponse[];
+  condition_name?: string;
+  conditionName?: string;
+  condition_args?: number[];
+  conditionArgs?: number[];
+  address?: string;
 };
 
 export type ChainTransformationResponse = {
@@ -42,28 +69,16 @@ export type ChainConditionResponse = {
   address?: string;
 };
 
-export type ChainParticleResponse = {
-  name?: string;
-  owner?: string;
-  feature_name?: string;
-  featureName?: string;
-  composite_names?: Array<string | null>;
-  compositeNames?: Array<string | null>;
-  composites?: Array<string | null>;
-  condition_name?: string;
-  conditionName?: string;
-  condition_args?: number[];
-  conditionArgs?: number[];
-};
-
 export type ChainAccountResponse = {
   address?: string;
   limit?: number;
   page?: number;
-  owned_particles?: string[];
-  owned_features?: string[];
+  owned_connectors?: string[];
   owned_transformations?: string[];
   owned_conditions?: string[];
+  total_connectors?: number;
+  total_transformations?: number;
+  total_conditions?: number;
 };
 
 const parseBody = async (response: Response) => {
@@ -121,20 +136,52 @@ export const getChainAccount = async (
   const pathFor = (params: { limit: number; page: number }) =>
     `/account/${encodeURIComponent(address)}?limit=${encodeURIComponent(String(params.limit))}&page=${encodeURIComponent(String(params.page))}`;
 
-  try {
-    return await fetchJson<ChainAccountResponse>(pathFor({ limit, page }));
-  } catch (error) {
-    const fallbackLimit = Math.min(limit, 200);
-    const fallbackPage = page <= 0 ? 1 : page;
-    const changed = fallbackLimit !== limit || fallbackPage !== page;
-    if (!changed) throw error;
-    return fetchJson<ChainAccountResponse>(pathFor({ limit: fallbackLimit, page: fallbackPage }));
+  const hasOwnedEntries = (payload: ChainAccountResponse) => {
+    const lists: unknown[] = [
+      payload.owned_connectors,
+      payload.owned_transformations,
+      payload.owned_conditions,
+      // Legacy names (kept for mixed backend versions)
+      (payload as Record<string, unknown>).owned_features,
+      (payload as Record<string, unknown>).owned_particles,
+    ];
+    return lists.some((list) => Array.isArray(list) && list.length > 0);
+  };
+
+  const attempts: Array<{ limit: number; page: number }> = [{ limit, page }];
+  const fallbackLimit = Math.min(limit, 200);
+  const fallbackPage = page <= 0 ? 1 : page;
+  if (fallbackLimit !== limit || fallbackPage !== page) {
+    attempts.push({ limit: fallbackLimit, page: fallbackPage });
   }
+
+  let lastError: unknown = null;
+  let lastPayload: ChainAccountResponse | null = null;
+
+  for (let index = 0; index < attempts.length; index += 1) {
+    const attempt = attempts[index];
+    try {
+      const payload = await fetchJson<ChainAccountResponse>(pathFor(attempt));
+      lastPayload = payload;
+      const isLastAttempt = index === attempts.length - 1;
+      if (hasOwnedEntries(payload) || isLastAttempt) {
+        return payload;
+      }
+    } catch (error) {
+      lastError = error;
+      const isLastAttempt = index === attempts.length - 1;
+      if (isLastAttempt) throw error;
+    }
+  }
+
+  if (lastPayload) return lastPayload;
+  if (lastError) throw lastError;
+  throw new Error("Failed to load chain account.");
 };
 
-export const getChainFeature = async (name: string, version?: string) =>
-  fetchJson<ChainFeatureResponse>(
-    `/feature/${encodeURIComponent(name)}${version ? `/${encodeURIComponent(version)}` : ""}`,
+export const getChainConnector = async (name: string, version?: string) =>
+  fetchJson<ChainConnectorResponse>(
+    `/connector/${encodeURIComponent(name)}${version ? `/${encodeURIComponent(version)}` : ""}`,
   );
 
 export const getChainTransformation = async (name: string, version?: string) =>
@@ -147,20 +194,11 @@ export const getChainCondition = async (name: string, version?: string) =>
     `/condition/${encodeURIComponent(name)}${version ? `/${encodeURIComponent(version)}` : ""}`,
   );
 
-export const getChainParticle = async (name: string, version?: string) =>
-  fetchJson<ChainParticleResponse>(
-    `/particle/${encodeURIComponent(name)}${version ? `/${encodeURIComponent(version)}` : ""}`,
-  );
+export const postChainConnector = async (payload: ChainConnectorPayload) =>
+  postJsonWithChainAuth<ChainConnectorResponse>("/connector", payload);
 
-export const postChainFeature = async (payload: {
-  name: string;
-  dimensions: Array<{ transformations: Array<{ name: string; args: number[] }> }>;
-}) => postJsonWithChainAuth<ChainFeatureResponse>("/feature", payload);
-
-export const postChainFeatureDetailed = async (payload: {
-  name: string;
-  dimensions: Array<{ transformations: Array<{ name: string; args: number[] }> }>;
-}) => postJsonWithChainAuthDetailed<ChainFeatureResponse>("/feature", payload);
+export const postChainConnectorDetailed = async (payload: ChainConnectorPayload) =>
+  postJsonWithChainAuthDetailed<ChainConnectorResponse>("/connector", payload);
 
 export const postChainTransformation = async (payload: { name: string; sol_src: string }) =>
   postJsonWithChainAuth<ChainTransformationResponse>("/transformation", payload);
@@ -173,19 +211,3 @@ export const postChainCondition = async (payload: { name: string; sol_src: strin
 
 export const postChainConditionDetailed = async (payload: { name: string; sol_src: string }) =>
   postJsonWithChainAuthDetailed<ChainConditionResponse>("/condition", payload);
-
-export const postChainParticle = async (payload: {
-  name: string;
-  feature_name: string;
-  composite_names: Array<string | null>;
-  condition_name?: string;
-  condition_args?: number[];
-}) => postJsonWithChainAuth<ChainParticleResponse>("/particle", payload);
-
-export const postChainParticleDetailed = async (payload: {
-  name: string;
-  feature_name: string;
-  composite_names: Array<string | null>;
-  condition_name?: string;
-  condition_args?: number[];
-}) => postJsonWithChainAuthDetailed<ChainParticleResponse>("/particle", payload);

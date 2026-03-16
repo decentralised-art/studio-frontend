@@ -16,10 +16,9 @@
 
   import Button from "$lib/components/ui/Button.svelte";
   import DockPanel from "$lib/components/ui/DockPanel.svelte";
-  import CreateParticleExplorer from "$lib/components/create/CreateParticleExplorer.svelte";
   import FlowInstanceBridge from "$lib/components/studio/FlowInstanceBridge.svelte";
   import StudioDimensionNode from "$lib/components/studio/StudioDimensionNode.svelte";
-  import StudioFeatureNode from "$lib/components/studio/StudioFeatureNode.svelte";
+  import StudioConnectorNode from "$lib/components/studio/StudioConnectorNode.svelte";
   import StudioConditionNode from "$lib/components/studio/StudioConditionNode.svelte";
   import StudioLibraryList from "$lib/components/studio/StudioLibraryList.svelte";
   import StudioParticleNode from "$lib/components/studio/StudioParticleNode.svelte";
@@ -45,6 +44,7 @@
   import {
     fetchChainOwnedStudioSnapshot,
     fetchChainParticleForStudio,
+    listChainSyncSourcesForApp,
     type ChainStudioSyncResult,
   } from "$lib/studio/chainStudioAdapter";
   import {
@@ -57,13 +57,13 @@
   import {
     ChainApiRequestError,
     type ChainApiPostResult,
+    postChainConnectorDetailed,
     postChainConditionDetailed,
-    postChainFeatureDetailed,
-    postChainParticleDetailed,
     postChainTransformationDetailed,
   } from "$lib/chain/registryApi";
   import { mockPlugins, type LibraryItem } from "$lib/data/studioLibrary";
-  import { extraChainSyncSources, mockCurrentUserId, mockUsersById } from "$lib/data/users";
+  import { mockCurrentUserId, mockUsersById } from "$lib/data/users";
+  import type { StudioConnectorDef } from "$lib/studio/domain/connectorModel";
   import {
     createLocalFormat,
     loadLocalFormats,
@@ -90,6 +90,7 @@
   type StudioNodeKind =
     | "particle"
     | "feature"
+    | "connector"
     | "dimension"
     | "transformation"
     | "condition"
@@ -103,6 +104,18 @@
     status: "draft" | "network";
   };
 
+  type ConnectorRowPreview = {
+    dimension: number;
+    transformations: string[];
+  };
+
+  type StandaloneTransformationDraft = {
+    id: string;
+    name: string;
+    args: number[];
+    code: string;
+  };
+
   type StudioNodeData = {
     label: string;
     kind: StudioNodeKind;
@@ -113,8 +126,23 @@
     parentFeatureId?: string;
     dimensionIndex?: number;
     transformations?: TransformationInstance[];
+    connectorRows?: ConnectorRowPreview[];
+    selectedDimensionIndex?: number;
+    conditionLabel?: string | null;
+    boundKind?: "static" | "forwarded" | null;
+    boundSlotLabel?: string | null;
+    boundOwnerName?: string | null;
+    conditionTargetSelected?: boolean;
     networkId?: string;
     fromNetwork?: boolean;
+    placeholder?: boolean;
+    placeholderDetail?: string;
+    placeholderState?: "loading" | "warning";
+    foldedRootConnectorId?: string;
+    connectorTreeCollapsible?: boolean;
+    connectorTreeCollapsed?: boolean;
+    definitionRole?: "root" | "member" | null;
+    tabRoot?: boolean;
     pluginOutput?: PtOutputFeature[];
     pluginTargets?: string[];
     riStart?: number;
@@ -128,6 +156,7 @@
     selected?: boolean;
     type?: string;
     draggable?: boolean;
+    hidden?: boolean;
   };
 
   type RuntimeTransformationDef = {
@@ -141,6 +170,7 @@
   };
 
   type DeployedRegistry = {
+    connectors: Record<string, StudioConnectorDef>;
     features: Record<string, MockFeatureDef>;
     particles: Record<string, MockParticleDef>;
     transformations: Record<string, RuntimeTransformationDef>;
@@ -149,12 +179,15 @@
 
   let nodes = $state.raw<StudioNode[]>([]);
   let edges = $state.raw<Edge[]>([]);
-  let selectedParticleId = $state<ExploreParticle["id"] | undefined>(undefined);
   let selectedNodeId = $state<string | null>(null);
-  let selectedViewId = $state<"all" | string>("all");
+  type ConnectorDropTarget =
+    | { type: "dimension"; connectorId: string; dimensionIndex: number }
+    | { type: "condition"; connectorId: string }
+    | null;
+  let connectorDropTarget = $state<ConnectorDropTarget>(null);
   let explorerSource = $state<"network" | "toolbox" | "formats">("network");
-  let libraryTab = $state<"particles" | "features" | "transformations" | "conditions" | "plugins">(
-    "particles",
+  let libraryTab = $state<"connectors" | "transformations" | "conditions" | "plugins">(
+    "connectors",
   );
   let tooltipX = $state(0);
   let tooltipY = $state(0);
@@ -201,28 +234,33 @@
   let apiEditorStatus = $state<string | null>(null);
   let apiEditorFocused = $state(false);
   let apiEditorLiveApply = $state(true);
+  let apiEditorLastGenerated = $state("");
+  let apiJsonView = $state<"protocol" | "resolved">("protocol");
   let compiledTransformationsByTab = $state<
     Record<string, Record<string, RuntimeTransformationDef>>
   >({});
   let runSamplesCount = $state(12);
   let transformationEditorOpen = $state(false);
   let transformationEditorDimensionId = $state<string | null>(null);
-  let transformationEditorIndex = $state<number | null>(null);
   let transformationEditorId = $state<string | null>(null);
   let transformationEditorStatus = $state<TransformationInstance["status"]>("draft");
   let transformationEditorLocked = $state(false);
+  let transformationEditorDeployBusy = $state(false);
   let transformationDraftName = $state("");
   let transformationDraftArgs = $state("");
-  let transformationDraftCode = $state("return x + (args[0] ?? 0);");
+  let transformationDraftCode = $state("return x + args[0];");
   let transformationDraftError = $state<string | null>(null);
   const transformationCodeById = new SvelteMap<string, string>();
   let conditionEditorOpen = $state(false);
   let conditionEditorNodeId = $state<string | null>(null);
   let conditionEditorStatus = $state<"draft" | "network">("draft");
   let conditionEditorLocked = $state(false);
+  let conditionEditorDeployBusy = $state(false);
   let conditionDraftName = $state("");
   let conditionDraftCode = $state("return true;");
   let conditionDraftError = $state<string | null>(null);
+  let libraryCreateActionError = $state<string | null>(null);
+  let standaloneDraftTransformations = $state<StandaloneTransformationDraft[]>([]);
   const conditionCodeById = new SvelteMap<string, string>();
   const selectedFormatParticleIdSet = $derived.by(() => new Set(selectedFormatParticleIds));
 
@@ -234,6 +272,7 @@
   );
 
   let deployedRegistry = $state<DeployedRegistry>({
+    connectors: {},
     features: {},
     particles: {},
     transformations: {},
@@ -264,6 +303,7 @@
   };
 
   const tabGraphs = new SvelteMap<string, { nodes: StudioNode[]; edges: Edge[] }>();
+  const connectorTreeModelsByTab = new SvelteMap<string, { nodes: StudioNode[]; edges: Edge[] }>();
 
   type ToolboxLibrary = {
     particles: string[];
@@ -275,11 +315,11 @@
 
   type QuickNodeKind =
     | "feature"
+    | "connector"
     | "transformation"
     | "condition"
     | "plugin"
-    | "agent"
-    | "dimension";
+    | "agent";
 
   const titleize = (value: string) =>
     value
@@ -294,6 +334,20 @@
       .toLowerCase()
       .replace(/[^a-z0-9_]+/g, "-")
       .replace(/^-+|-+$/g, "");
+
+  const uniqueStrings = (values: string[]) =>
+    Array.from(new Set(values.map((value) => value.trim()).filter((value) => value.length > 0)));
+
+  const formatTransformationPreviewLabel = (name: string, args: number[] = []) => {
+    const trimmed = name.trim() || "Transformation";
+    if (!args.length) return trimmed;
+    return `${trimmed} (${args.join(", ")})`;
+  };
+
+  const formatTransformationPreview = (transformation: TransformationInstance) =>
+    formatTransformationPreviewLabel(transformation.name, transformation.args);
+
+  const isConnectorKind = (kind: StudioNodeKind) => kind === "feature" || kind === "connector";
 
   const isValidChainName = (value: string) => /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(value);
 
@@ -354,10 +408,15 @@
     return `Snippet references args[${inferred.maxIndex}]. Provide at least ${inferred.minArgsCount} argument(s).`;
   });
 
-  const defaultDraftCode = "return x + (args[0] ?? 0);";
+  const defaultDraftCode = "return x + args[0];";
   const defaultConditionDraftCode = "return true;";
 
-  const getTransformationCode = (id: string) => transformationCodeById.get(id) ?? defaultDraftCode;
+  const getTransformationCode = (id: string) => {
+    const direct = transformationCodeById.get(id);
+    if (direct) return direct;
+    const standalone = standaloneDraftTransformations.find((item) => item.id === id);
+    return standalone?.code ?? defaultDraftCode;
+  };
   const getConditionCode = (id: string) => conditionCodeById.get(id) ?? defaultConditionDraftCode;
 
   const conditionTemplate = $derived.by(() => {
@@ -433,7 +492,7 @@
     return { id, label, particleId };
   };
 
-  const initialTab = createStudioTab("Untitled Particle");
+  const initialTab = createStudioTab("Untitled Connector");
   let tabs = $state<StudioTab[]>([initialTab]);
   let activeTabId = $state<string>(initialTab.id);
   const activeTab = $derived.by(() => tabs.find((tab) => tab.id === activeTabId) ?? null);
@@ -461,7 +520,8 @@
   const bottomSize = $derived.by(() => panelSize(bottomMode, "max-content"));
 
   const nodeTypes: NodeTypes = {
-    feature: StudioFeatureNode,
+    feature: StudioConnectorNode,
+    connector: StudioConnectorNode,
     dimension: StudioDimensionNode,
     particle: StudioParticleNode,
     transformation: StudioTransformationNode,
@@ -571,13 +631,14 @@
   };
 
   const resolveNetworkLibraryItem = (
-    kind: "feature" | "transformation" | "condition" | "plugin",
+    kind: "connector" | "transformation" | "condition" | "plugin",
     rawId: string,
   ): LibraryItem | null => {
     const target = rawId.trim();
     if (!target) return null;
     const key = normalizeKey(target);
-    const pool = networkLibrary[kind] ?? [];
+    const sourceKind = kind === "connector" ? "feature" : kind;
+    const pool = networkLibrary[sourceKind] ?? [];
     return (
       pool.find((item) => {
         const registryName = getLibraryRegistryName(item);
@@ -588,7 +649,7 @@
           normalizeKey(item.name) === key
         );
       }) ??
-      (kind === "plugin"
+      (sourceKind === "plugin"
         ? (networkLibrary.plugin.find(
             (item) => item.viewId === target || normalizeKey(item.viewId ?? "") === key,
           ) ?? null)
@@ -623,8 +684,12 @@
     const kind =
       rawKind === "output"
         ? "plugin"
-        : ["feature", "transformation", "condition", "plugin"].includes(rawKind)
-          ? (rawKind as "feature" | "transformation" | "condition" | "plugin")
+        : ["feature", "connector", "transformation", "condition", "plugin"].includes(rawKind)
+          ? ((rawKind === "feature" ? "connector" : rawKind) as
+              | "connector"
+              | "transformation"
+              | "condition"
+              | "plugin")
           : null;
     if (!kind) {
       clearNetworkIntentQuery();
@@ -774,20 +839,20 @@
 
   const networkLibrary = $derived.by(() => ({
     feature: [...deployedLibrary.features],
-    transformation: [...deployedLibrary.transformations],
+    transformation: [
+      ...deployedLibrary.transformations,
+      ...standaloneDraftTransformations.map((item) => ({
+        id: `draft-transform-${item.id}`,
+        name: item.name,
+        kind: "transformation" as const,
+        authorId: mockCurrentUserId,
+        summary: "Draft (local, not yet published).",
+      })),
+    ],
     condition: [...deployedLibrary.conditions],
     plugin: [...mockPlugins, ...deployedLibrary.plugins],
   }));
 
-  const availableParticles = $derived.by(() => {
-    const base = networkParticles;
-    if (explorerSource === "toolbox") {
-      return base.filter((particle) => toolboxLibrary.particles.includes(particle.id));
-    }
-    return base;
-  });
-
-  const filteredParticles = $derived.by(() => availableParticles);
   const formatParticleChoices = $derived.by(() =>
     [...networkParticles].sort((a, b) => a.name.localeCompare(b.name)),
   );
@@ -818,7 +883,7 @@
       position: { x: 0, y: 0 },
       data: {
         label: activeTab.label,
-        kind: "particle",
+        kind: "connector",
         particleId: activeTab.particleId,
         networkId: activeTab.particleId,
         fromNetwork: Boolean(activeTab.particleId),
@@ -827,6 +892,18 @@
   });
   const nodesById = $derived.by(() =>
     Object.fromEntries(nodes.map((node) => [node.id, node] as const)),
+  );
+  const connectorConditionEdgeFingerprint = $derived.by(() =>
+    edges
+      .filter((edge) => {
+        const sourceNode = edge.source ? nodesById[edge.source] : null;
+        const targetNode = edge.target ? nodesById[edge.target] : null;
+        if (sourceNode?.data.kind !== "condition") return false;
+        return Boolean(targetNode && isConnectorKind(targetNode.data.kind));
+      })
+      .map((edge) => `${edge.source}:${edge.target}:${edge.sourceHandle ?? "out"}`)
+      .sort()
+      .join("|"),
   );
 
   let nameDraft = $state("");
@@ -858,8 +935,32 @@
       return;
     }
     nameDraft = selectedNode.data.label;
-    dimensionDraft =
-      selectedNode.data.kind === "feature" ? (selectedNode.data.dimensions ?? 1) : null;
+    dimensionDraft = isConnectorKind(selectedNode.data.kind)
+      ? (selectedNode.data.dimensions ?? 1)
+      : null;
+  });
+
+  $effect(() => {
+    connectorConditionEdgeFingerprint;
+    queueMicrotask(() => {
+      syncAllConnectorRowPreviews({ schedule: false });
+    });
+  });
+
+  $effect(() => {
+    const target = connectorDropTarget;
+    if (!target) return;
+    const connector = getFeatureNode(target.connectorId);
+    if (!connector || !isConnectorKind(connector.data.kind)) {
+      setConnectorDropTarget(null);
+      return;
+    }
+    if (
+      target.type === "dimension" &&
+      !getDimensionNodeForConnectorIndex(target.connectorId, target.dimensionIndex)
+    ) {
+      setConnectorDropTarget(null);
+    }
   });
 
   $effect(() => {
@@ -873,13 +974,19 @@
     if (rightMode === "assistant") rightMode = "both";
   });
 
-  const handleParticleSelect = (id: ExploreParticle["id"]) => {
-    selectedParticleId = id;
-  };
+  $effect(() => {
+    libraryTab;
+    libraryCreateActionError = null;
+  });
 
-  const handleParticleOpen = (id: ExploreParticle["id"]) => {
-    openParticleTab(id);
-  };
+  $effect(() => {
+    activeTabId;
+    activeTab?.label;
+    activeTab?.particleId;
+    nodes.length;
+    if (!activeTab || activeTab.particleId || isConnectorTreeTab(activeTabId)) return;
+    ensureActiveDraftTabRootConnector();
+  });
 
   const startTabRename = (tab: StudioTab) => {
     if (tab.particleId) return;
@@ -892,6 +999,9 @@
     const next = tabRenameValue.trim();
     if (next) {
       tabs = tabs.map((item) => (item.id === tab.id ? { ...item, label: next } : item));
+      if (tab.id === activeTabId && !tab.particleId) {
+        ensureActiveDraftTabRootConnector();
+      }
     }
     tabRenameId = null;
   };
@@ -901,13 +1011,29 @@
   };
 
   const updateNodeData = (nodeId: string, patch: Partial<StudioNodeData>) => {
+    const currentNode = nodes.find((node) => node.id === nodeId) ?? null;
     nodes = nodes.map((node) =>
       node.id === nodeId ? { ...node, data: { ...node.data, ...patch } } : node,
     );
+    if (currentNode?.data.kind === "condition") {
+      const connectorIds = edges
+        .filter((edge) => {
+          if (edge.source !== nodeId) return false;
+          if ((edge.sourceHandle ?? "out") !== "out") return false;
+          const targetNode = edge.target ? nodesById[edge.target] : null;
+          return Boolean(targetNode && isConnectorKind(targetNode.data.kind));
+        })
+        .map((edge) => edge.target)
+        .filter((id): id is string => typeof id === "string" && id.length > 0);
+      connectorIds.forEach((connectorId) =>
+        syncConnectorRowPreview(connectorId, { schedule: false }),
+      );
+    }
     scheduleLayout();
   };
 
   let layoutFrame: number | null = null;
+  let spacingFrame: number | null = null;
 
   const scheduleLayout = () => {
     if (!canvasEl) return;
@@ -930,6 +1056,88 @@
     };
   };
 
+  const fallbackNodeSize = (node: StudioNode): { width: number; height: number } => {
+    switch (node.data.kind) {
+      case "connector":
+      case "feature":
+        return { width: 280, height: 190 };
+      case "dimension":
+        return { width: 220, height: 120 };
+      case "particle":
+        return { width: 170, height: 70 };
+      case "condition":
+      case "transformation":
+        return { width: 220, height: 96 };
+      case "plugin":
+      case "agent":
+        return { width: 220, height: 120 };
+      default:
+        return { width: 180, height: 80 };
+    }
+  };
+
+  const boxesOverlap = (
+    lhs: { x: number; y: number; width: number; height: number },
+    rhs: { x: number; y: number; width: number; height: number },
+    padding = 20,
+  ) =>
+    lhs.x < rhs.x + rhs.width + padding &&
+    lhs.x + lhs.width + padding > rhs.x &&
+    lhs.y < rhs.y + rhs.height + padding &&
+    lhs.y + lhs.height + padding > rhs.y;
+
+  const ensureNodeSpacing = (sourceNodes: StudioNode[]) => {
+    if (!canvasEl || !sourceNodes.length) return sourceNodes;
+
+    const nextNodes = sourceNodes.map((node) => ({
+      ...node,
+      position: { ...node.position },
+    }));
+    const byId = new SvelteMap(nextNodes.map((node) => [node.id, node] as const));
+    const placed: Array<{ x: number; y: number; width: number; height: number }> = [];
+    let changed = false;
+
+    const ordered = nextNodes
+      .filter((node) => !node.hidden)
+      .sort((a, b) => a.position.y - b.position.y || a.position.x - b.position.x);
+
+    ordered.forEach((node) => {
+      const current = byId.get(node.id);
+      if (!current) return;
+      const size = measureNodeSize(current.id, fallbackNodeSize(current));
+      let x = current.position.x;
+      let y = current.position.y;
+      let guard = 0;
+      while (guard < 256) {
+        const overlapping = placed.find((other) =>
+          boxesOverlap({ x, y, width: size.width, height: size.height }, other),
+        );
+        if (!overlapping) break;
+        y = overlapping.y + overlapping.height + 20;
+        guard += 1;
+      }
+      if (Math.abs(current.position.x - x) > 0.5 || Math.abs(current.position.y - y) > 0.5) {
+        current.position = { x, y };
+        changed = true;
+      }
+      placed.push({ x, y, width: size.width, height: size.height });
+    });
+
+    return changed ? nextNodes : sourceNodes;
+  };
+
+  const scheduleNodeSpacing = () => {
+    if (!canvasEl) return;
+    if (spacingFrame !== null) cancelAnimationFrame(spacingFrame);
+    spacingFrame = requestAnimationFrame(() => {
+      spacingFrame = null;
+      const spacedNodes = ensureNodeSpacing(nodes);
+      if (spacedNodes !== nodes) {
+        nodes = spacedNodes;
+      }
+    });
+  };
+
   const getCompositeForDimension = (dimensionId: string) => {
     const edge = edges.find((item) => item.source === dimensionId && item.sourceHandle === "out");
     if (!edge) return null;
@@ -947,7 +1155,7 @@
     const defaultDimensionSize = { width: 180, height: 80 };
 
     nodes
-      .filter((node) => node.data.kind === "feature")
+      .filter((node) => isConnectorKind(node.data.kind))
       .forEach((feature) => {
         const dimensions = getDimensionNodesForFeature(feature.id).sort(
           (a, b) => (a.data.dimensionIndex ?? 0) - (b.data.dimensionIndex ?? 0),
@@ -996,17 +1204,39 @@
         });
       });
 
-    if (!updates.size) return;
-    nodes = nodes.map((node) => {
-      const update = updates.get(node.id);
-      return update ? { ...node, position: update } : node;
-    });
+    const nextNodes = updates.size
+      ? nodes.map((node) => {
+          const update = updates.get(node.id);
+          return update ? { ...node, position: update } : node;
+        })
+      : nodes;
+    const spacedNodes = ensureNodeSpacing(nextNodes);
+    if (spacedNodes !== nodes) {
+      nodes = spacedNodes;
+    }
   };
+
+  const nodePositionSignature = $derived.by(() =>
+    nodes
+      .filter((node) => !node.hidden)
+      .map((node) => `${node.id}:${Math.round(node.position.x)}:${Math.round(node.position.y)}`)
+      .join("|"),
+  );
+
+  $effect(() => {
+    nodePositionSignature;
+    scheduleNodeSpacing();
+  });
 
   const updateDimensionTransformations = (
     dimensionId: string,
     updater: (current: TransformationInstance[]) => TransformationInstance[],
   ) => {
+    const parentFeatureId = (() => {
+      const dimensionNode = nodes.find((node) => node.id === dimensionId);
+      if (!dimensionNode || dimensionNode.data.kind !== "dimension") return null;
+      return dimensionNode.data.parentFeatureId ?? null;
+    })();
     nodes = nodes.map((node) => {
       if (node.id !== dimensionId) return node;
       if (node.data.fromNetwork) return node;
@@ -1019,6 +1249,9 @@
         },
       };
     });
+    if (parentFeatureId) {
+      syncConnectorRowPreview(parentFeatureId, { schedule: false });
+    }
     scheduleLayout();
   };
 
@@ -1039,37 +1272,306 @@
     args: number[] = [],
     status: TransformationInstance["status"] = "draft",
     insertIndex?: number,
-  ) => {
+  ): string | null => {
+    const created = createTransformationInstance(name, args, status);
+    let inserted = false;
     updateDimensionTransformations(dimensionId, (current) => {
       const next = [...current];
       if (insertIndex === undefined || insertIndex < 0 || insertIndex > next.length) {
-        next.push(createTransformationInstance(name, args, status));
+        next.push(created);
       } else {
-        next.splice(insertIndex, 0, createTransformationInstance(name, args, status));
+        next.splice(insertIndex, 0, created);
       }
+      inserted = true;
       return next;
     });
+    return inserted ? created.id : null;
+  };
+
+  const updateTransformationArgsOnDimension = (
+    dimensionId: string,
+    transformationId: string,
+    rawArgs: string,
+  ) => {
+    const args = parseArgsInput(rawArgs);
+    updateDimensionTransformations(dimensionId, (current) =>
+      current.map((tx) => (tx.id === transformationId ? { ...tx, args } : tx)),
+    );
   };
 
   const addTransformationToSelectedDimension = (
     label: string,
     status: TransformationInstance["status"] = "draft",
   ) => {
+    if (connectorDropTarget?.type === "dimension") {
+      const targetDimension = getDimensionNodeForConnectorIndex(
+        connectorDropTarget.connectorId,
+        connectorDropTarget.dimensionIndex,
+      );
+      if (targetDimension && !targetDimension.data.fromNetwork) {
+        addTransformationToDimension(targetDimension.id, label, [], status);
+        return;
+      }
+      setConnectorDropTarget(null);
+    }
+
     const selected = nodes.find((node) => node.id === selectedNodeId);
-    if (!selected || selected.data.kind !== "dimension") return;
-    if (selected.data.fromNetwork) return;
-    addTransformationToDimension(selected.id, label, [], status);
+    if (!selected) return;
+
+    if (selected.data.kind === "dimension") {
+      if (selected.data.fromNetwork) return;
+      addTransformationToDimension(selected.id, label, [], status);
+      setConnectorDropTarget({
+        type: "dimension",
+        connectorId: selected.data.parentFeatureId ?? selected.id,
+        dimensionIndex: selected.data.dimensionIndex ?? 0,
+      });
+      return;
+    }
+
+    if (isConnectorKind(selected.data.kind)) {
+      const targetDimension = getDimensionNodesForFeature(selected.id)
+        .sort((a, b) => (a.data.dimensionIndex ?? 0) - (b.data.dimensionIndex ?? 0))
+        .at(0);
+      if (!targetDimension || targetDimension.data.fromNetwork) return;
+      addTransformationToDimension(targetDimension.id, label, [], status);
+      setConnectorDropTarget({
+        type: "dimension",
+        connectorId: selected.id,
+        dimensionIndex: targetDimension.data.dimensionIndex ?? 0,
+      });
+    }
+  };
+
+  const getSelectedConnectorNode = (): StudioNode | null => {
+    const selected = nodes.find((node) => node.id === selectedNodeId);
+    if (!selected) return null;
+    if (isConnectorKind(selected.data.kind)) return selected;
+    if (selected.data.kind === "dimension" && selected.data.parentFeatureId) {
+      const parent = getFeatureNode(selected.data.parentFeatureId);
+      if (parent && isConnectorKind(parent.data.kind)) return parent;
+    }
+    return null;
+  };
+
+  const getConnectorDefinitionForName = (connectorName: string): StudioConnectorDef | null => {
+    const trimmed = connectorName.trim();
+    if (!trimmed) return null;
+    if (deployedRegistry.connectors[trimmed]) return deployedRegistry.connectors[trimmed];
+    try {
+      const compiled = compileDraftTransformations(nodes);
+      const runtime = buildStudioRuntime(
+        { nodes, edges },
+        { rootLabel: activeTab?.label ?? "connector", rootParticleId: activeTab?.particleId },
+        buildRuntimeOverrides(compiled.registry),
+      );
+      return runtime.registry.connectors[trimmed] ?? null;
+    } catch {
+      return null;
+    }
+  };
+
+  const collectDirectDefinitionConnectorReferences = (connectorName: string) => {
+    const compositeNames = new SvelteSet<string>();
+    const bindingTargetNames = new SvelteSet<string>();
+    const connector = getConnectorDefinitionForName(connectorName);
+    if (!connector) {
+      return { compositeNames, bindingTargetNames };
+    }
+
+    connector.dimensions.forEach((dimension) => {
+      const compositeName = (dimension.composite ?? "").trim();
+      if (compositeName) compositeNames.add(compositeName);
+      Object.values(dimension.bindings ?? {}).forEach((targetRaw) => {
+        const targetName = `${targetRaw ?? ""}`.trim();
+        if (targetName) bindingTargetNames.add(targetName);
+      });
+    });
+
+    return { compositeNames, bindingTargetNames };
+  };
+
+  $effect(() => {
+    const selectedConnector = getSelectedConnectorNode();
+    const rootConnectorId = selectedConnector?.id ?? null;
+    const rootConnectorName = selectedConnector ? resolveNodeName(selectedConnector) : "";
+    const directlyReferenced = rootConnectorName
+      ? collectDirectDefinitionConnectorReferences(rootConnectorName)
+      : {
+          compositeNames: new SvelteSet<string>(),
+          bindingTargetNames: new SvelteSet<string>(),
+        };
+
+    let changed = false;
+    const nextNodes = nodes.map((node) => {
+      if (!isConnectorKind(node.data.kind)) return node;
+      const nodeName = resolveNodeName(node);
+      const hasDirectCompositeEdgeFromRoot =
+        rootConnectorId !== null &&
+        edges.some(
+          (edge) =>
+            edge.source === rootConnectorId &&
+            edge.target === node.id &&
+            `${edge.label ?? ""}`.toLowerCase().startsWith("composite"),
+        );
+      const hasDirectBindingEdgeFromRoot =
+        rootConnectorId !== null &&
+        edges.some(
+          (edge) =>
+            edge.source === rootConnectorId &&
+            edge.target === node.id &&
+            `${edge.label ?? ""}`.toLowerCase().startsWith("binding"),
+        );
+      const hasBindingOwnedByRoot = edges.some((edge) => {
+        if (edge.target !== node.id) return false;
+        if (!`${edge.label ?? ""}`.toLowerCase().startsWith("binding")) return false;
+        const bindingOwnerName =
+          typeof edge.data === "object" && edge.data
+            ? `${(edge.data as { bindingOwnerName?: unknown }).bindingOwnerName ?? ""}`.trim()
+            : "";
+        return bindingOwnerName === rootConnectorName;
+      });
+      const isCompositeMember =
+        directlyReferenced.compositeNames.has(nodeName) && hasDirectCompositeEdgeFromRoot;
+      const isBindingMember =
+        directlyReferenced.bindingTargetNames.has(nodeName) &&
+        (node.data.boundOwnerName === rootConnectorName ||
+          hasBindingOwnedByRoot ||
+          (!node.data.fromNetwork && hasDirectBindingEdgeFromRoot));
+
+      const nextRole: "root" | "member" | null = rootConnectorId
+        ? node.id === rootConnectorId
+          ? "root"
+          : isCompositeMember || isBindingMember
+            ? "member"
+            : null
+        : null;
+      const currentRole = node.data.definitionRole ?? null;
+      if (currentRole === nextRole) return node;
+      changed = true;
+      return {
+        ...node,
+        data: {
+          ...node.data,
+          definitionRole: nextRole,
+        },
+      };
+    });
+    if (changed) {
+      nodes = nextNodes;
+    }
+  });
+
+  const getPreferredDraftDimensionId = (): string | null => {
+    const selected = nodes.find((node) => node.id === selectedNodeId);
+    if (selected?.data.kind === "dimension" && !selected.data.fromNetwork) {
+      return selected.id;
+    }
+    const selectedConnector = getSelectedConnectorNode();
+    if (selectedConnector && !selectedConnector.data.fromNetwork) {
+      const selectedConnectorDimension = getSortedConnectorDimensions(selectedConnector.id).find(
+        (dimensionNode) => !dimensionNode.data.fromNetwork,
+      );
+      if (selectedConnectorDimension) return selectedConnectorDimension.id;
+    }
+    const firstLocalConnector = nodes.find(
+      (node) => isConnectorKind(node.data.kind) && !node.data.fromNetwork,
+    );
+    if (!firstLocalConnector) return null;
+    const firstLocalDimension = getSortedConnectorDimensions(firstLocalConnector.id).find(
+      (dimensionNode) => !dimensionNode.data.fromNetwork,
+    );
+    return firstLocalDimension?.id ?? null;
+  };
+
+  const openNewTransformationEditor = () => {
+    if (activeTabReadOnly) return;
+    libraryCreateActionError = null;
+    const targetDimensionId = getPreferredDraftDimensionId();
+    transformationEditorOpen = true;
+    transformationEditorDimensionId = targetDimensionId;
+    transformationEditorId = null;
+    transformationEditorStatus = "draft";
+    transformationEditorLocked = false;
+    transformationDraftName = createUniqueName("transformation", "new_transformation");
+    transformationDraftArgs = "0";
+    transformationDraftCode = defaultDraftCode;
+    transformationDraftError = null;
+  };
+
+  const openNewConditionEditor = () => {
+    if (activeTabReadOnly) return;
+    libraryCreateActionError = null;
+    const targetConnector = connectorDropTarget?.connectorId
+      ? (getFeatureNode(connectorDropTarget.connectorId) ?? null)
+      : null;
+    const attachedConnector =
+      targetConnector && isConnectorKind(targetConnector.data.kind)
+        ? targetConnector
+        : getSelectedConnectorNode();
+    const nodeId = `condition-quick-${crypto.randomUUID()}`;
+    const center = getCanvasCenter();
+    const node: StudioNode = {
+      id: nodeId,
+      selected: true,
+      type: "condition",
+      draggable: false,
+      position: attachedConnector
+        ? {
+            x: attachedConnector.position.x,
+            y: attachedConnector.position.y - 140,
+          }
+        : center,
+      data: {
+        label: createUniqueName("condition", "new_condition"),
+        kind: "condition",
+        fromNetwork: false,
+      },
+    };
+    nodes = nodes.map((existing) => ({ ...existing, selected: false }));
+    nodes = [...nodes, node];
+    if (
+      attachedConnector &&
+      !edges.some(
+        (edge) =>
+          edge.source === node.id &&
+          edge.target === attachedConnector.id &&
+          (edge.sourceHandle ?? "out") === "out" &&
+          ((edge.targetHandle ?? "in") === "in" || edge.targetHandle === "condition"),
+      )
+    ) {
+      edges = [
+        ...edges,
+        {
+          id: `edge-${node.id}-${attachedConnector.id}`,
+          source: node.id,
+          sourceHandle: "out",
+          target: attachedConnector.id,
+          targetHandle: "in",
+        },
+      ];
+    }
+    selectedNodeId = node.id;
+    conditionCodeById.set(node.id, defaultConditionDraftCode);
+    openConditionEditor(node);
+    scheduleLayout();
   };
 
   const requestClearCanvas = () => {
+    if (activeTabReadOnly) return;
     clearConfirmOpen = true;
   };
 
   const confirmClearCanvas = () => {
+    if (activeTabReadOnly) {
+      clearConfirmOpen = false;
+      return;
+    }
     nodes = [];
     edges = [];
     selectedNodeId = null;
     tabGraphs.set(activeTabId, { nodes: [], edges: [] });
+    ensureActiveDraftTabRootConnector();
     clearConfirmOpen = false;
   };
 
@@ -1136,6 +1638,7 @@
   const mergeChainSyncSnapshot = (snapshot: ChainStudioSyncResult) => {
     deployedRegistry = {
       ...deployedRegistry,
+      connectors: { ...deployedRegistry.connectors, ...snapshot.registry.connectors },
       features: { ...deployedRegistry.features, ...snapshot.registry.features },
       particles: { ...deployedRegistry.particles, ...snapshot.registry.particles },
       transformations: {
@@ -1256,12 +1759,13 @@
     const fetched = await fetchChainParticleForStudio(particleName, {
       authorId: mockCurrentUserId,
     });
+    const connector = fetched.registry.connector;
     const feature = fetched.registry.feature;
     const particle = fetched.registry.particle;
-    if (!feature || !particle) return false;
+    if (!connector) return false;
 
     const inferredTransformations: Record<string, RuntimeTransformationDef> = {};
-    feature.dimensions.forEach((dimension) => {
+    connector.dimensions.forEach((dimension) => {
       dimension.transformations.forEach((tx) => {
         const name = String(tx.name);
         inferredTransformations[name] ??= {
@@ -1272,17 +1776,26 @@
     });
 
     const inferredConditions: Record<string, RuntimeConditionDef> = {};
-    if (particle.conditionName) {
-      inferredConditions[particle.conditionName] = {
-        argc: particle.conditionArgs?.length ?? 0,
+    if (connector.conditionName) {
+      inferredConditions[connector.conditionName] = {
+        argc: connector.conditionArgs?.length ?? 0,
         check: alwaysTrueConditionCheck,
       };
     }
 
     deployedRegistry = {
       ...deployedRegistry,
-      features: { ...deployedRegistry.features, [feature.name]: feature },
-      particles: { ...deployedRegistry.particles, [particle.name]: particle },
+      connectors: { ...deployedRegistry.connectors, [connector.name]: connector },
+      ...(feature
+        ? {
+            features: { ...deployedRegistry.features, [feature.name]: feature },
+          }
+        : {}),
+      ...(particle
+        ? {
+            particles: { ...deployedRegistry.particles, [particle.name]: particle },
+          }
+        : {}),
       transformations: {
         ...deployedRegistry.transformations,
         ...inferredTransformations,
@@ -1296,19 +1809,19 @@
     deployedLibrary = {
       ...deployedLibrary,
       features: upsertLibraryItem(deployedLibrary.features, {
-        id: `feature-${feature.name}`,
-        name: titleize(feature.name),
+        id: `feature-${connector.name}`,
+        name: titleize(connector.name),
         kind: "feature",
-        authorId: mockCurrentUserId,
+        authorId: fetched.particleMeta?.authorId ?? mockCurrentUserId,
         summary: "Fetched from chain on demand.",
-        dimensions: feature.dimensions.length,
+        dimensions: connector.dimensions.length,
       }),
       transformations: Object.entries(inferredTransformations).reduce((items, [name]) => {
         return upsertLibraryItem(items, {
           id: `transform-${name}`,
           name: titleize(name),
           kind: "transformation",
-          authorId: mockCurrentUserId,
+          authorId: fetched.particleMeta?.authorId ?? mockCurrentUserId,
           summary: "Fetched from chain on demand.",
         });
       }, deployedLibrary.transformations),
@@ -1317,7 +1830,7 @@
           id: `condition-${name}`,
           name: titleize(name),
           kind: "condition",
-          authorId: mockCurrentUserId,
+          authorId: fetched.particleMeta?.authorId ?? mockCurrentUserId,
           summary: "Fetched from chain on demand.",
         });
       }, deployedLibrary.conditions),
@@ -1353,26 +1866,14 @@
 
   const syncChainOwnedRegistry = async () => {
     chainSyncError = null;
-    chainSyncStatus = "Fetching chain registry for mock users and configured sources...";
+    chainSyncStatus = "Fetching chain registry for all services users...";
     chainSyncBusy = true;
     try {
-      const users = Object.values(mockUsersById);
-      const sources = [
-        ...users.map((user) => ({
-          address: typeof user.address === "string" ? user.address.trim() : "",
-          authorId: user.id,
-          label: user.nickname,
-        })),
-        ...extraChainSyncSources.map((source) => ({
-          address: source.address.trim(),
-          authorId: source.id,
-          label: source.label,
-        })),
-      ];
-      let totalParticles = 0;
-      let totalFeatures = 0;
-      let totalTransformations = 0;
-      let totalConditions = 0;
+      const sources = await listChainSyncSourcesForApp({ force: true });
+      const particleIds = new SvelteSet<string>();
+      const connectorNames = new SvelteSet<string>();
+      const transformationIds = new SvelteSet<string>();
+      const conditionIds = new SvelteSet<string>();
       let syncedSources = 0;
 
       for (const source of sources) {
@@ -1385,14 +1886,22 @@
           }),
         );
         mergeChainSyncSnapshot(snapshot);
+        if (
+          isConnectorTreeTab(activeTabId) &&
+          nodes.some((node) => Boolean(node.data.placeholder))
+        ) {
+          refreshConnectorTreeTab(activeTabId);
+        }
         syncedSources += 1;
-        totalParticles += snapshot.particles.length;
-        totalFeatures += Object.keys(snapshot.registry.features).length;
-        totalTransformations += Object.keys(snapshot.registry.transformations).length;
-        totalConditions += Object.keys(snapshot.registry.conditions).length;
+        snapshot.particles.forEach((particle) => particleIds.add(particle.id));
+        Object.keys(snapshot.registry.connectors).forEach((name) => connectorNames.add(name));
+        snapshot.library.transformations.forEach((item) => transformationIds.add(item.id));
+        snapshot.library.conditions.forEach((item) => conditionIds.add(item.id));
       }
 
-      chainSyncStatus = `Synced ${syncedSources} sources · ${totalParticles} particles · ${totalFeatures} features · ${totalTransformations} transformations · ${totalConditions} conditions.`;
+      refreshConnectorTreeTabs();
+
+      chainSyncStatus = `Synced ${syncedSources} sources · ${particleIds.size} particles · ${connectorNames.size} connectors · ${transformationIds.size} transformations · ${conditionIds.size} conditions.`;
     } catch (error) {
       chainSyncError =
         error instanceof Error ? error.message : "Failed to sync owned chain registry.";
@@ -1418,11 +1927,18 @@
         }
       });
     });
+    standaloneDraftTransformations.forEach((tx) => {
+      const name = tx.name.trim();
+      if (!name) return;
+      if (!sources.has(name)) {
+        sources.set(name, { code: tx.code });
+      }
+    });
     return sources;
   };
 
   const publishRuntimeToChain = async (
-    runtime: ReturnType<typeof buildStudioRuntime>,
+    runtime: ReturnType<typeof buildStudioRuntime> | null,
     compiled: Record<string, RuntimeTransformationDef>,
   ) => {
     chainDeployError = null;
@@ -1513,53 +2029,60 @@
       );
     }
 
-    const localFeatures = nodes.filter(
-      (node) => node.data.kind === "feature" && !node.data.fromNetwork,
+    const localConnectors = nodes.filter(
+      (node) => isConnectorKind(node.data.kind) && !node.data.fromNetwork,
     );
-    if (localFeatures.length) {
-      chainDeployStatus = `Publishing ${localFeatures.length} feature(s)...`;
+    if (
+      !runtime &&
+      !localConnectors.length &&
+      !localConditions.length &&
+      !Object.keys(compiled).length
+    ) {
+      throw new Error("Nothing to deploy.");
     }
-    for (const featureNode of localFeatures) {
-      const featureName = resolveNodeName(featureNode);
-      const def = runtime.registry.features[featureName];
+    if (localConnectors.length) {
+      chainDeployStatus = `Publishing ${localConnectors.length} connector(s)...`;
+    }
+    if (!runtime) {
+      return null;
+    }
+    for (const connectorNode of localConnectors) {
+      const connectorName = resolveNodeName(connectorNode);
+      const def = runtime.registry.connectors[connectorName];
       if (!def) continue;
       const requestBody = {
-        name: featureName,
+        name: connectorName,
         dimensions: def.dimensions.map((dimension) => ({
           transformations: dimension.transformations.map((tx) => ({
             name: tx.name,
             args: [...tx.args],
           })),
+          ...(dimension.composite ? { composite: dimension.composite } : {}),
+          ...(Object.keys(dimension.bindings ?? {}).length
+            ? { bindings: { ...dimension.bindings } }
+            : {}),
         })),
+        ...(def.conditionName ? { condition_name: def.conditionName } : {}),
+        ...(def.conditionArgs?.length ? { condition_args: [...def.conditionArgs] } : {}),
       };
-      await traceChainPost("/chain/feature", requestBody, () =>
-        postChainFeatureDetailed(requestBody),
+      await traceChainPost("/chain/connector", requestBody, () =>
+        postChainConnectorDetailed(requestBody),
       );
     }
 
-    const rootDef = runtime.registry.particles[runtime.rootParticle];
-    if (!rootDef) {
-      throw new Error("Graph does not produce a publishable root particle.");
+    if (!localConnectors.length) {
+      return null;
     }
-
-    chainDeployStatus = `Publishing particle ${rootDef.name}...`;
-    const particleRequestBody = {
-      name: rootDef.name,
-      feature_name: rootDef.featureName,
-      composite_names: [...rootDef.composites],
-      ...(rootDef.conditionName ? { condition_name: rootDef.conditionName } : {}),
-      ...(rootDef.conditionArgs?.length ? { condition_args: [...rootDef.conditionArgs] } : {}),
-    };
-    await traceChainPost("/chain/particle", particleRequestBody, () =>
-      postChainParticleDetailed(particleRequestBody),
-    );
-    chainDeployStatus = `Published particle ${rootDef.name}.`;
+    const rootDef = runtime.registry.connectors[runtime.rootConnector];
+    if (!rootDef) return null;
+    chainDeployStatus = `Published connector ${rootDef.name}.`;
     return rootDef.name;
   };
 
   const buildRuntimeOverrides = (
     compiledTransformations: Record<string, RuntimeTransformationDef> = {},
   ) => ({
+    connectors: deployedRegistry.connectors,
     features: deployedRegistry.features,
     particles: deployedRegistry.particles,
     transformations: { ...deployedRegistry.transformations, ...compiledTransformations },
@@ -1572,6 +2095,14 @@
       if (node.data.kind !== "dimension") return;
       (node.data.transformations ?? []).forEach((transformation) => {
         if (transformation.status === "draft") draft.push(transformation);
+      });
+    });
+    standaloneDraftTransformations.forEach((tx) => {
+      draft.push({
+        id: tx.id,
+        name: tx.name,
+        args: [...tx.args],
+        status: "draft",
       });
     });
     return draft;
@@ -1631,7 +2162,7 @@
   ): MockRunningInstance[] => {
     const featureNodesById: Record<string, StudioNode> = Object.fromEntries(
       graphNodes
-        .filter((node) => node.data.kind === "feature")
+        .filter((node) => isConnectorKind(node.data.kind))
         .map((node) => [node.id, node] as const),
     );
     const dimensionByFeature = new SvelteMap<string, SvelteMap<number, StudioNode>>();
@@ -1721,24 +2252,30 @@
     const compiled = compileDraftTransformations(nodes);
     warnings.push(...compiled.warnings);
 
-    const particleName = activeTab.particleId ?? (slugify(activeTab.label) || activeTab.label);
-    const particleKey = normalizeKey(particleName);
-    const networkParticleKeys = new SvelteSet(
-      networkParticles.map((item) => normalizeKey(item.id)),
+    const hasLocalConnectors = nodes.some(
+      (node) => isConnectorKind(node.data.kind) && !node.data.fromNetwork,
     );
-    if (!activeTab.particleId && networkParticleKeys.has(particleKey)) {
-      warnings.push(`Particle already exists in network: ${particleName}.`);
-    }
 
-    if (!isValidChainName(particleName)) {
-      warnings.push(
-        `Invalid particle name for chain deploy: ${particleName}. Use letters, numbers, and underscores only (cannot start with a number).`,
+    if (hasLocalConnectors) {
+      const connectorName = activeTab.particleId ?? (slugify(activeTab.label) || activeTab.label);
+      const connectorKey = normalizeKey(connectorName);
+      const networkConnectorKeys = new SvelteSet(
+        Object.keys(deployedRegistry.connectors).map(normalizeKey),
       );
+      if (!activeTab.particleId && networkConnectorKeys.has(connectorKey)) {
+        warnings.push(`Connector already exists in network: ${connectorName}.`);
+      }
+
+      if (!isValidChainName(connectorName)) {
+        warnings.push(
+          `Invalid connector name for chain deploy: ${connectorName}. Use letters, numbers, and underscores only (cannot start with a number).`,
+        );
+      }
     }
 
     nodes.forEach((node) => {
       if (node.data.fromNetwork) return;
-      if (node.data.kind === "feature" || node.data.kind === "condition") {
+      if (isConnectorKind(node.data.kind) || node.data.kind === "condition") {
         const candidate = resolveNodeName(node);
         if (!isValidChainName(candidate)) {
           warnings.push(
@@ -1764,27 +2301,52 @@
       });
     });
 
-    try {
-      const runtime = buildStudioRuntime(
-        { nodes, edges },
-        { rootLabel: activeTab.label, rootParticleId: activeTab.particleId },
-        buildRuntimeOverrides(compiled.registry),
-      );
-      const rootDef = runtime.registry.particles[runtime.rootParticle];
-      if (!rootDef) {
-        warnings.push("Graph does not produce a publishable root particle.");
-      } else {
-        rootDef.composites.forEach((compositeName, index) => {
-          if (!compositeName) return;
-          if (!deployedRegistry.particles[compositeName]) {
-            warnings.push(
-              `Dependency particle is not available on chain (sync required): ${compositeName} (dimension ${index + 1}).`,
-            );
-          }
-        });
+    standaloneDraftTransformations.forEach((tx) => {
+      if (!isValidChainName(tx.name)) {
+        warnings.push(
+          `Invalid transformation name for chain deploy: ${tx.name}. Use letters, numbers, and underscores only (cannot start with a number).`,
+        );
       }
-    } catch (error) {
-      warnings.push(error instanceof Error ? error.message : "Failed to build deploy preview.");
+    });
+
+    const hasStandaloneElements =
+      standaloneDraftTransformations.length > 0 ||
+      nodes.some((node) => node.data.kind === "condition" && !node.data.fromNetwork);
+    if (!hasLocalConnectors && !hasStandaloneElements) {
+      warnings.push("No local connectors or standalone conditions/transformations to deploy.");
+      compiledTransformationsByTab = {
+        ...compiledTransformationsByTab,
+        [activeTabId]: compiled.registry,
+      };
+      compileWarningsByTab = { ...compileWarningsByTab, [activeTabId]: warnings };
+      compileTimestampByTab = { ...compileTimestampByTab, [activeTabId]: Date.now() };
+      return warnings;
+    }
+
+    if (hasLocalConnectors) {
+      try {
+        const runtime = buildStudioRuntime(
+          { nodes, edges },
+          { rootLabel: activeTab.label, rootParticleId: activeTab.particleId },
+          buildRuntimeOverrides(compiled.registry),
+        );
+        const rootDef = runtime.registry.connectors[runtime.rootConnector];
+        if (!rootDef) {
+          warnings.push("Graph does not produce a publishable root connector.");
+        } else {
+          rootDef.dimensions.forEach((dimension, index) => {
+            const compositeName = dimension.composite ?? null;
+            if (!compositeName) return;
+            if (!deployedRegistry.connectors[compositeName]) {
+              warnings.push(
+                `Dependency connector is not available on chain (sync required): ${compositeName} (dimension ${index + 1}).`,
+              );
+            }
+          });
+        }
+      } catch (error) {
+        warnings.push(error instanceof Error ? error.message : "Failed to build deploy preview.");
+      }
     }
 
     compiledTransformationsByTab = {
@@ -1801,14 +2363,34 @@
     chainDeployError = null;
     chainDeployStatus = null;
     const warnings = compileActiveGraph();
-    if (warnings && warnings.length) return;
+    if (warnings && warnings.length) {
+      chainDeployError = warnings.join(" ");
+      return;
+    }
 
     const compiled = compiledTransformationsByTab[activeTabId] ?? {};
-    const runtime = buildStudioRuntime(
-      { nodes, edges },
-      { rootLabel: activeTab.label, rootParticleId: activeTab.particleId },
-      buildRuntimeOverrides(compiled),
+    const hasLocalConnectors = nodes.some(
+      (node) => isConnectorKind(node.data.kind) && !node.data.fromNetwork,
     );
+    let runtime: ReturnType<typeof buildStudioRuntime> | null = null;
+    if (hasLocalConnectors) {
+      try {
+        runtime = buildStudioRuntime(
+          { nodes, edges },
+          { rootLabel: activeTab.label, rootParticleId: activeTab.particleId },
+          buildRuntimeOverrides(compiled),
+        );
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Failed to build deploy runtime.";
+        chainDeployError = message;
+        compileWarningsByTab = {
+          ...compileWarningsByTab,
+          [activeTabId]: [message],
+        };
+        compileTimestampByTab = { ...compileTimestampByTab, [activeTabId]: Date.now() };
+        return;
+      }
+    }
 
     const localConditionNodes = nodes.filter(
       (node) => node.data.kind === "condition" && !node.data.fromNetwork,
@@ -1816,9 +2398,9 @@
 
     deployTraceEntries = [];
     chainDeployBusy = true;
-    let publishedRootParticleName: string | null = null;
+    let publishedRootConnectorName: string | null = null;
     try {
-      publishedRootParticleName = await publishRuntimeToChain(runtime, compiled);
+      publishedRootConnectorName = await publishRuntimeToChain(runtime, compiled);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Chain deploy failed.";
       chainDeployError = message;
@@ -1875,6 +2457,14 @@
         }, deployedLibrary.transformations),
       };
     }
+    if (Object.keys(compiled).length) {
+      const deployedDraftKeys = new SvelteSet(
+        Object.keys(compiled).map((name) => normalizeKey(name)),
+      );
+      standaloneDraftTransformations = standaloneDraftTransformations.filter(
+        (item) => !deployedDraftKeys.has(normalizeKey(item.name)),
+      );
+    }
 
     if (localConditionNodes.length) {
       deployedRegistry = {
@@ -1904,149 +2494,131 @@
       };
     }
 
-    const existingFeatureKeys = new SvelteSet([
-      ...Object.keys(deployedRegistry.features).map(normalizeKey),
-    ]);
+    if (runtime) {
+      const existingConnectorKeys = new SvelteSet([
+        ...Object.keys(deployedRegistry.connectors).map(normalizeKey),
+      ]);
 
-    const localFeatures = nodes.filter(
-      (node) => node.data.kind === "feature" && !node.data.fromNetwork,
-    );
+      const localConnectors = nodes.filter(
+        (node) => isConnectorKind(node.data.kind) && !node.data.fromNetwork,
+      );
 
-    localFeatures.forEach((node) => {
-      const featureName = resolveNodeName(node);
-      const key = normalizeKey(featureName);
-      if (existingFeatureKeys.has(key)) return;
-      const def = runtime.registry.features[featureName];
-      if (!def) return;
-      deployedRegistry = {
-        ...deployedRegistry,
-        features: { ...deployedRegistry.features, [featureName]: def },
-      };
-      existingFeatureKeys.add(key);
-      deployedLibrary = {
-        ...deployedLibrary,
-        features: upsertLibraryItem(deployedLibrary.features, {
-          id: `feature-${featureName}`,
-          name: node.data.label,
-          kind: "feature",
-          authorId: mockCurrentUserId,
-          summary: "Deployed from Studio.",
-          dimensions: node.data.dimensions ?? def.dimensions.length,
-        }),
-      };
-    });
-
-    nodes = nodes.map((node) => {
-      if (node.data.kind !== "feature") return node;
-      if (node.data.fromNetwork) return node;
-      const featureName = resolveNodeName(node);
-      return {
-        ...node,
-        data: {
-          ...node.data,
-          networkId: featureName,
-          fromNetwork: true,
-        },
-      };
-    });
-
-    const existingParticleKeys = new SvelteSet([
-      ...Object.keys(deployedRegistry.particles).map(normalizeKey),
-    ]);
-
-    const rootName = runtime.rootParticle;
-    const rootKey = normalizeKey(rootName);
-    if (!existingParticleKeys.has(rootKey)) {
-      const rootDef = runtime.registry.particles[rootName];
-      if (rootDef) {
+      localConnectors.forEach((node) => {
+        const connectorName = resolveNodeName(node);
+        const key = normalizeKey(connectorName);
+        if (existingConnectorKeys.has(key)) return;
+        const def = runtime.registry.connectors[connectorName];
+        if (!def) return;
+        const legacyFeatureDef = runtime.registry.features[connectorName];
+        const legacyParticleDef = runtime.registry.particles[connectorName];
         deployedRegistry = {
           ...deployedRegistry,
-          particles: { ...deployedRegistry.particles, [rootName]: rootDef },
+          connectors: { ...deployedRegistry.connectors, [connectorName]: def },
+          features: legacyFeatureDef
+            ? { ...deployedRegistry.features, [connectorName]: legacyFeatureDef }
+            : deployedRegistry.features,
+          particles: {
+            ...deployedRegistry.particles,
+            ...(legacyParticleDef ? { [connectorName]: legacyParticleDef } : {}),
+          },
         };
-        storeParticleRIs(rootName);
-        const createdAt = Date.now();
-        deployedParticles = deployedParticles.some((item) => item.id === rootName)
-          ? deployedParticles
-          : [
-              ...deployedParticles,
-              {
-                id: rootName,
-                name: activeTab.label,
-                summary: "Deployed from Studio.",
-                authorId: mockCurrentUserId,
-                viewId: mockParticleViews[0]?.id ?? "midi",
-                createdAt,
-                createdLabel: "just now",
-                ingredients: [],
-                complexity: 1,
-                transactionName: `${activeTab.label} PT`,
-                dependencies: rootDef.composites.filter(Boolean) as string[],
-              },
-            ];
+        existingConnectorKeys.add(key);
+        deployedLibrary = {
+          ...deployedLibrary,
+          features: upsertLibraryItem(deployedLibrary.features, {
+            id: `feature-${connectorName}`,
+            name: node.data.label,
+            kind: "feature",
+            authorId: mockCurrentUserId,
+            summary: "Deployed from Studio.",
+            dimensions:
+              node.data.dimensions ?? legacyFeatureDef?.dimensions.length ?? def.dimensions.length,
+          }),
+        };
+      });
+
+      nodes = nodes.map((node) => {
+        if (!isConnectorKind(node.data.kind)) return node;
+        if (node.data.fromNetwork) return node;
+        const featureName = resolveNodeName(node);
+        return {
+          ...node,
+          data: {
+            ...node.data,
+            networkId: featureName,
+            fromNetwork: true,
+          },
+        };
+      });
+
+      const existingParticleKeys = new SvelteSet([
+        ...Object.keys(deployedRegistry.particles).map(normalizeKey),
+      ]);
+
+      const rootName = runtime.rootConnector;
+      const rootKey = normalizeKey(rootName);
+      if (!existingParticleKeys.has(rootKey)) {
+        const rootConnectorDef = runtime.registry.connectors[rootName];
+        if (rootConnectorDef) {
+          const rootLegacyParticle = runtime.registry.particles[rootName];
+          deployedRegistry = {
+            ...deployedRegistry,
+            particles: rootLegacyParticle
+              ? { ...deployedRegistry.particles, [rootName]: rootLegacyParticle }
+              : deployedRegistry.particles,
+          };
+          storeParticleRIs(rootName);
+          const createdAt = Date.now();
+          deployedParticles = deployedParticles.some((item) => item.id === rootName)
+            ? deployedParticles
+            : [
+                ...deployedParticles,
+                {
+                  id: rootName,
+                  name: activeTab.label,
+                  summary: "Deployed from Studio.",
+                  authorId: mockCurrentUserId,
+                  viewId: mockParticleViews[0]?.id ?? "midi",
+                  createdAt,
+                  createdLabel: "just now",
+                  ingredients: [],
+                  complexity: 1,
+                  transactionName: `${activeTab.label} PT`,
+                  dependencies: rootConnectorDef.dimensions
+                    .map((dimension) => dimension.composite ?? null)
+                    .filter((value): value is string => Boolean(value)),
+                },
+              ];
+        }
+      }
+
+      if (!activeTab.particleId) {
+        tabs = tabs.map((tab) => (tab.id === activeTabId ? { ...tab, particleId: rootName } : tab));
       }
     }
 
-    if (!activeTab.particleId) {
-      tabs = tabs.map((tab) => (tab.id === activeTabId ? { ...tab, particleId: rootName } : tab));
-    }
-
     deployTimestampByTab = { ...deployTimestampByTab, [activeTabId]: Date.now() };
-    chainDeployStatus = publishedRootParticleName
-      ? `Deployed ${activeTab.label} to chain.`
-      : "Deploy completed without publishing a particle.";
-  };
-
-  const updateTransformationAt = (
-    dimensionId: string,
-    index: number,
-    patch: Partial<Pick<TransformationInstance, "name" | "args" | "status">>,
-  ) => {
-    updateDimensionTransformations(dimensionId, (current) => {
-      if (index < 0 || index >= current.length) return current;
-      const next = [...current];
-      next[index] = { ...next[index], ...patch };
-      return next;
-    });
-  };
-
-  const appendTransformation = (dimensionId: string) => {
-    addTransformationToDimension(dimensionId, "New Transformation", [], "draft");
-  };
-
-  const removeTransformationAt = (dimensionId: string, index: number) => {
-    updateDimensionTransformations(dimensionId, (current) => {
-      if (index < 0 || index >= current.length) return current;
-      const next = [...current];
-      next.splice(index, 1);
-      return next;
-    });
-  };
-
-  const openTransformationEditor = (
-    dimensionId: string,
-    index: number,
-    transformation: TransformationInstance,
-  ) => {
-    const name = transformation.name || "New Transformation";
-    const args = transformation.args ?? [];
-    const key = transformation.id;
-    const dimensionNode = nodes.find((node) => node.id === dimensionId);
-    transformationEditorOpen = true;
-    transformationEditorDimensionId = dimensionId;
-    transformationEditorIndex = index;
-    transformationEditorId = transformation.id;
-    transformationEditorStatus = transformation.status;
-    transformationEditorLocked = Boolean(dimensionNode?.data.fromNetwork);
-    transformationDraftName = name;
-    transformationDraftArgs = args.join(", ");
-    transformationDraftCode = transformationCodeById.get(key) ?? "return x + (args[0] ?? 0);";
-    transformationDraftError = null;
+    if (publishedRootConnectorName) {
+      chainDeployStatus = `Deployed ${activeTab.label} to chain.`;
+    } else if (runtime) {
+      chainDeployStatus = "Deploy completed without publishing a connector.";
+    } else {
+      const deployedParts: string[] = [];
+      if (Object.keys(compiled).length) {
+        deployedParts.push(`${Object.keys(compiled).length} transformation(s)`);
+      }
+      if (localConditionNodes.length) {
+        deployedParts.push(`${localConditionNodes.length} condition(s)`);
+      }
+      chainDeployStatus = deployedParts.length
+        ? `Deployed ${deployedParts.join(" and ")} to chain.`
+        : "Deploy completed.";
+    }
   };
 
   const closeTransformationEditor = () => {
     transformationEditorOpen = false;
     transformationEditorDimensionId = null;
-    transformationEditorIndex = null;
     transformationEditorId = null;
     transformationEditorStatus = "draft";
     transformationEditorLocked = false;
@@ -2069,21 +2641,13 @@
     conditionEditorNodeId = null;
     conditionEditorStatus = "draft";
     conditionEditorLocked = false;
+    conditionEditorDeployBusy = false;
     conditionDraftName = "";
     conditionDraftCode = defaultConditionDraftCode;
     conditionDraftError = null;
   };
 
-  const forkConditionEditor = () => {
-    if (conditionEditorStatus !== "network") return;
-    const baseName = conditionDraftName.trim() || "Condition";
-    conditionDraftName = `${baseName} Draft`;
-    conditionEditorStatus = "draft";
-    conditionEditorLocked = false;
-    conditionDraftError = null;
-  };
-
-  const saveConditionEditor = () => {
+  const saveConditionEditor = async () => {
     if (!conditionEditorOpen) return;
     if (conditionEditorReadOnly) {
       closeConditionEditor();
@@ -2104,32 +2668,138 @@
       return;
     }
 
-    conditionCodeById.set(nodeId, conditionDraftCode);
-    updateNodeData(nodeId, {
-      label: trimmedName,
-      fromNetwork: false,
-      networkId: undefined,
+    if (!isValidChainName(trimmedName)) {
+      conditionDraftError =
+        "Invalid condition name for chain deploy. Use letters, numbers, and underscores only (cannot start with a number).";
+      return;
+    }
+
+    const existing = findRegistryMatch("condition", trimmedName);
+    if (existing && !existing.id.startsWith("condition-quick-")) {
+      conditionDraftError = `Condition ${trimmedName} already exists in network.`;
+      return;
+    }
+
+    const duplicateLocal = nodes.some((node) => {
+      if (node.data.kind !== "condition") return false;
+      if (node.id === nodeId) return false;
+      if (node.data.fromNetwork) return false;
+      return normalizeKey(node.data.label) === normalizeKey(trimmedName);
     });
-    closeConditionEditor();
+    if (duplicateLocal) {
+      conditionDraftError = `Condition ${trimmedName} already exists locally in this graph.`;
+      return;
+    }
+
+    conditionEditorDeployBusy = true;
+    conditionDraftError = null;
+    chainDeployError = null;
+    chainDeployStatus = `Deploying condition ${trimmedName}...`;
+
+    const logDeployTraceEntryToConsole = (entry: DeployTraceEntry) => {
+      const label = `[Studio deploy] ${entry.method} ${entry.path} -> ${entry.responseStatus ?? "n/a"}`;
+      if (typeof console.groupCollapsed === "function") {
+        console.groupCollapsed(label);
+        console.log("Request body:", entry.requestBody);
+        console.log("Response body:", entry.responseBody);
+        console.groupEnd();
+        return;
+      }
+      console.log(label, { requestBody: entry.requestBody, responseBody: entry.responseBody });
+    };
+
+    const requestBody = { name: trimmedName, sol_src: conditionDraftCode };
+    try {
+      await ensureChainAuthForStudio();
+      const result = await withChainAuthRetry(() => postChainConditionDetailed(requestBody));
+
+      const successEntry: DeployTraceEntry = {
+        id: `deploy-trace-${crypto.randomUUID()}`,
+        method: "POST",
+        path: "/chain/condition",
+        requestBody,
+        responseStatus: result.status,
+        responseBody: result.body,
+        ok: true,
+        at: Date.now(),
+      };
+      deployTraceEntries = [...deployTraceEntries, successEntry];
+      logDeployTraceEntryToConsole(successEntry);
+
+      const snippetParsed = parseSoliditySnippet(conditionDraftCode);
+      const inferredArgsCount = snippetParsed.ok
+        ? Math.max(0, inferArgsCountFromSnippet(snippetParsed.value).minArgsCount)
+        : 0;
+      conditionCodeById.set(nodeId, conditionDraftCode);
+      updateNodeData(nodeId, {
+        label: trimmedName,
+        fromNetwork: true,
+        networkId: trimmedName,
+      });
+
+      deployedRegistry = {
+        ...deployedRegistry,
+        conditions: {
+          ...deployedRegistry.conditions,
+          [trimmedName]: { argc: inferredArgsCount, check: alwaysTrueConditionCheck },
+        },
+      };
+      deployedLibrary = {
+        ...deployedLibrary,
+        conditions: upsertLibraryItem(deployedLibrary.conditions, {
+          id: `condition-${slugify(trimmedName)}`,
+          name: trimmedName,
+          kind: "condition",
+          authorId: mockCurrentUserId,
+          summary: "Deployed from Studio.",
+        }),
+      };
+
+      chainDeployStatus = `Deployed condition ${trimmedName}.`;
+      closeConditionEditor();
+    } catch (error) {
+      const errorEntry: DeployTraceEntry = {
+        id: `deploy-trace-${crypto.randomUUID()}`,
+        method: "POST",
+        path: "/chain/condition",
+        requestBody,
+        responseStatus: error instanceof ChainApiRequestError ? error.status : null,
+        responseBody:
+          error instanceof ChainApiRequestError
+            ? error.responseBody
+            : error instanceof Error
+              ? { message: error.message }
+              : { message: "Unknown error" },
+        ok: false,
+        at: Date.now(),
+      };
+      deployTraceEntries = [...deployTraceEntries, errorEntry];
+      logDeployTraceEntryToConsole(errorEntry);
+
+      const responseBody = error instanceof ChainApiRequestError ? error.responseBody : undefined;
+      const responseMessage =
+        responseBody &&
+        typeof responseBody === "object" &&
+        "message" in responseBody &&
+        typeof (responseBody as { message?: unknown }).message === "string"
+          ? ((responseBody as { message: string }).message ?? "").trim()
+          : "";
+      const message =
+        responseMessage || (error instanceof Error ? error.message : "Failed to deploy condition.");
+      conditionDraftError = message;
+      chainDeployError = message;
+      chainDeployStatus = null;
+    } finally {
+      conditionEditorDeployBusy = false;
+    }
   };
 
-  const forkTransformationEditor = () => {
-    if (transformationEditorStatus !== "network") return;
-    const baseName = transformationDraftName.trim() || "Transformation";
-    transformationDraftName = `${baseName} Draft`;
-    transformationEditorStatus = "draft";
-    transformationDraftError = null;
-  };
-
-  const saveTransformationEditor = () => {
+  const saveTransformationEditor = async () => {
     if (!transformationEditorOpen) return;
     if (transformationEditorReadOnly) {
       closeTransformationEditor();
       return;
     }
-    const dimensionId = transformationEditorDimensionId;
-    const index = transformationEditorIndex;
-    if (!dimensionId || index === null) return;
 
     const trimmedName = transformationDraftName.trim();
     if (!trimmedName) {
@@ -2138,26 +2808,237 @@
     }
 
     const args = transformationArgsArray;
-    updateTransformationAt(dimensionId, index, {
-      name: trimmedName,
-      args,
-      status: transformationEditorStatus,
-    });
-    if (transformationEditorId && transformationEditorStatus === "draft") {
-      transformationCodeById.set(transformationEditorId, transformationDraftCode);
+    const snippetParsed = parseSoliditySnippet(transformationDraftCode);
+    if (!snippetParsed.ok) {
+      transformationDraftError = snippetParsed.error;
+      return;
     }
-    closeTransformationEditor();
+    const inferred = inferArgsCountFromSnippet(snippetParsed.value);
+    if (args.length < inferred.minArgsCount) {
+      transformationDraftError = `This code references args[${inferred.maxIndex}], so provide at least ${inferred.minArgsCount} argument(s).`;
+      return;
+    }
+    const compiled = compileTransformationCode(transformationDraftCode);
+    if (!compiled.ok) {
+      transformationDraftError = compiled.error;
+      return;
+    }
+
+    if (!isValidChainName(trimmedName)) {
+      transformationDraftError =
+        "Invalid transformation name for chain deploy. Use letters, numbers, and underscores only (cannot start with a number).";
+      return;
+    }
+
+    const existing = findRegistryMatch("transformation", trimmedName);
+    if (existing && !existing.id.startsWith("draft-transform-")) {
+      transformationDraftError = `Transformation ${trimmedName} already exists in network.`;
+      return;
+    }
+
+    transformationEditorDeployBusy = true;
+    transformationDraftError = null;
+    chainDeployError = null;
+    chainDeployStatus = `Deploying transformation ${trimmedName}...`;
+
+    const logDeployTraceEntryToConsole = (entry: DeployTraceEntry) => {
+      const label = `[Studio deploy] ${entry.method} ${entry.path} -> ${entry.responseStatus ?? "n/a"}`;
+      if (typeof console.groupCollapsed === "function") {
+        console.groupCollapsed(label);
+        console.log("Request body:", entry.requestBody);
+        console.log("Response body:", entry.responseBody);
+        console.groupEnd();
+        return;
+      }
+      console.log(label, { requestBody: entry.requestBody, responseBody: entry.responseBody });
+    };
+
+    const requestBody = { name: trimmedName, sol_src: transformationDraftCode };
+    try {
+      await ensureChainAuthForStudio();
+      const result = await withChainAuthRetry(() => postChainTransformationDetailed(requestBody));
+
+      const successEntry: DeployTraceEntry = {
+        id: `deploy-trace-${crypto.randomUUID()}`,
+        method: "POST",
+        path: "/chain/transformation",
+        requestBody,
+        responseStatus: result.status,
+        responseBody: result.body,
+        ok: true,
+        at: Date.now(),
+      };
+      deployTraceEntries = [...deployTraceEntries, successEntry];
+      logDeployTraceEntryToConsole(successEntry);
+
+      deployedRegistry = {
+        ...deployedRegistry,
+        transformations: {
+          ...deployedRegistry.transformations,
+          [trimmedName]: { argc: args.length, run: compiled.value },
+        },
+      };
+      deployedLibrary = {
+        ...deployedLibrary,
+        transformations: upsertLibraryItem(deployedLibrary.transformations, {
+          id: `transform-${slugify(trimmedName)}`,
+          name: trimmedName,
+          kind: "transformation",
+          authorId: mockCurrentUserId,
+          summary: "Deployed from Studio.",
+        }),
+      };
+
+      const dimensionId = transformationEditorDimensionId;
+      if (dimensionId) {
+        const dimensionNode = nodesById[dimensionId];
+        if (dimensionNode?.data.kind === "dimension" && !dimensionNode.data.fromNetwork) {
+          const createdId = addTransformationToDimension(dimensionId, trimmedName, args, "network");
+          if (createdId) transformationCodeById.set(createdId, transformationDraftCode);
+        }
+      }
+
+      standaloneDraftTransformations = standaloneDraftTransformations.filter(
+        (item) => normalizeKey(item.name) !== normalizeKey(trimmedName),
+      );
+      chainDeployStatus = `Deployed transformation ${trimmedName}.`;
+      closeTransformationEditor();
+    } catch (error) {
+      const errorEntry: DeployTraceEntry = {
+        id: `deploy-trace-${crypto.randomUUID()}`,
+        method: "POST",
+        path: "/chain/transformation",
+        requestBody,
+        responseStatus: error instanceof ChainApiRequestError ? error.status : null,
+        responseBody:
+          error instanceof ChainApiRequestError
+            ? error.responseBody
+            : error instanceof Error
+              ? { message: error.message }
+              : { message: "Unknown error" },
+        ok: false,
+        at: Date.now(),
+      };
+      deployTraceEntries = [...deployTraceEntries, errorEntry];
+      logDeployTraceEntryToConsole(errorEntry);
+
+      const responseBody = error instanceof ChainApiRequestError ? error.responseBody : undefined;
+      const responseMessage =
+        responseBody &&
+        typeof responseBody === "object" &&
+        "message" in responseBody &&
+        typeof (responseBody as { message?: unknown }).message === "string"
+          ? ((responseBody as { message: string }).message ?? "").trim()
+          : "";
+      const message =
+        responseMessage ||
+        (error instanceof Error ? error.message : "Failed to deploy transformation.");
+      transformationDraftError = message;
+      chainDeployError = message;
+      chainDeployStatus = null;
+    } finally {
+      transformationEditorDeployBusy = false;
+    }
+  };
+
+  const isConnectorTreeTab = (tabId: string) => connectorTreeModelsByTab.has(tabId);
+
+  const projectConnectorTreeGraph = (tabId: string) => {
+    const model = connectorTreeModelsByTab.get(tabId);
+    if (!model) return null;
+    const projectedNodes: StudioNode[] = model.nodes.map((node) => {
+      const next: StudioNode = {
+        ...node,
+        position: { ...node.position },
+        data: { ...node.data },
+        hidden: false,
+      };
+      if (isConnectorKind(next.data.kind)) {
+        next.data.connectorTreeCollapsible = false;
+        next.data.connectorTreeCollapsed = false;
+      }
+      return next;
+    });
+    const projectedEdges: Edge[] = model.edges.map((edge) => ({
+      ...edge,
+      ...(edge.style ? { style: { ...edge.style } } : {}),
+    }));
+    return { nodes: projectedNodes, edges: projectedEdges };
   };
 
   const saveActiveGraph = () => {
+    if (isConnectorTreeTab(activeTabId)) {
+      const pluginNodeIds = new SvelteSet(
+        nodes.filter((node) => node.data.kind === "plugin").map((node) => node.id),
+      );
+      const pluginNodes = nodes
+        .filter((node) => pluginNodeIds.has(node.id))
+        .map((node) => ({
+          ...node,
+          position: { ...node.position },
+          data: { ...node.data },
+        }));
+      const pluginEdges = edges
+        .filter((edge) => pluginNodeIds.has(edge.source) || pluginNodeIds.has(edge.target))
+        .map((edge) => ({
+          ...edge,
+          ...(edge.style ? { style: { ...edge.style } } : {}),
+        }));
+      tabGraphs.set(activeTabId, { nodes: pluginNodes, edges: pluginEdges });
+      return;
+    }
     tabGraphs.set(activeTabId, { nodes, edges });
   };
 
   const loadTabGraph = (tabId: string) => {
-    const graph = tabGraphs.get(tabId);
-    nodes = graph?.nodes ?? [];
-    edges = graph?.edges ?? [];
+    const projectedTree = projectConnectorTreeGraph(tabId);
+    if (projectedTree) {
+      const overlay = tabGraphs.get(tabId);
+      const overlayNodes = overlay?.nodes ?? [];
+      const overlayEdges = overlay?.edges ?? [];
+      const mergedNodes = [...projectedTree.nodes];
+      const mergedNodeIdSet = new SvelteSet(mergedNodes.map((node) => node.id));
+      overlayNodes.forEach((node) => {
+        if (mergedNodeIdSet.has(node.id)) return;
+        mergedNodes.push({
+          ...node,
+          position: { ...node.position },
+          data: { ...node.data },
+        });
+        mergedNodeIdSet.add(node.id);
+      });
+      const mergedEdges = [...projectedTree.edges];
+      overlayEdges.forEach((edge) => {
+        if (!mergedNodeIdSet.has(edge.source) || !mergedNodeIdSet.has(edge.target)) return;
+        if (
+          mergedEdges.some(
+            (existing) =>
+              existing.source === edge.source &&
+              existing.target === edge.target &&
+              (existing.sourceHandle ?? "") === (edge.sourceHandle ?? "") &&
+              (existing.targetHandle ?? "") === (edge.targetHandle ?? ""),
+          )
+        ) {
+          return;
+        }
+        mergedEdges.push({
+          ...edge,
+          ...(edge.style ? { style: { ...edge.style } } : {}),
+        });
+      });
+      nodes = mergedNodes;
+      edges = mergedEdges;
+    } else {
+      const graph = tabGraphs.get(tabId);
+      nodes = graph?.nodes ?? [];
+      edges = graph?.edges ?? [];
+      if (tabId === activeTabId) {
+        ensureActiveDraftTabRootConnector();
+      }
+    }
+    syncAllConnectorRowPreviews({ schedule: false });
     selectedNodeId = null;
+    setConnectorDropTarget(null);
     scheduleLayout();
     const output = runOutputByTab[tabId];
     if (output) {
@@ -2174,7 +3055,7 @@
 
   const createEmptyTab = () => {
     saveActiveGraph();
-    const nextTab = createStudioTab(`Untitled Particle ${tabs.length + 1}`);
+    const nextTab = createStudioTab(`Untitled Connector ${tabs.length + 1}`);
     tabs = [...tabs, nextTab];
     activeTabId = nextTab.id;
     loadTabGraph(nextTab.id);
@@ -2182,7 +3063,9 @@
 
   const closeTab = (tabId: string) => {
     if (tabs.length <= 1) {
-      const fallback = createStudioTab("Untitled Particle");
+      tabGraphs.delete(tabId);
+      connectorTreeModelsByTab.delete(tabId);
+      const fallback = createStudioTab("Untitled Connector");
       tabs = [fallback];
       activeTabId = fallback.id;
       loadTabGraph(fallback.id);
@@ -2191,6 +3074,7 @@
     const remaining = tabs.filter((tab) => tab.id !== tabId);
     tabs = remaining;
     tabGraphs.delete(tabId);
+    connectorTreeModelsByTab.delete(tabId);
     if (activeTabId === tabId) {
       const nextActive = remaining[remaining.length - 1];
       activeTabId = nextActive.id;
@@ -2217,13 +3101,20 @@
     const featureY = 80;
     graphNodes.push({
       id: featureId,
-      type: "feature",
+      type: "connector",
       draggable: false,
       position: { x: featureX, y: featureY },
       data: {
         label: featureLabel,
-        kind: "feature",
+        kind: "connector",
         dimensions: feature.dimensions.length,
+        connectorRows: feature.dimensions.map((dimension, dimIndex) => ({
+          dimension: dimIndex + 1,
+          transformations: dimension.transformations.map((transformation) =>
+            formatTransformationPreviewLabel(transformation.name, transformation.args),
+          ),
+        })),
+        conditionLabel: particle.conditionName ? titleize(particle.conditionName) : null,
         sourceId: feature.name,
         networkId: feature.name,
         fromNetwork: true,
@@ -2242,6 +3133,7 @@
       graphNodes.push({
         id: dimensionId,
         type: "dimension",
+        hidden: true,
         draggable: false,
         position: { x: columnX, y: dimensionRowY },
         data: {
@@ -2289,10 +3181,10 @@
           },
         });
         graphEdges.push({
-          id: `edge-${dimensionId}-${compositeId}`,
-          source: dimensionId,
+          id: `edge-${featureId}-dim-${dimIndex}-${compositeId}`,
+          source: featureId,
+          sourceHandle: `dim-${dimIndex}`,
           target: compositeId,
-          sourceHandle: "out",
           targetHandle: "in",
         });
       }
@@ -2301,41 +3193,633 @@
     return { nodes: graphNodes, edges: graphEdges };
   };
 
-  const openParticleTab = async (particleId: string) => {
-    const existing = tabs.find((tab) => tab.particleId === particleId);
-    if (existing) {
-      switchTab(existing.id);
-      return;
-    }
-    saveActiveGraph();
-    const particleMeta = networkParticles.find((item) => item.id === particleId);
-    const label = particleMeta?.name ?? titleize(particleId);
-    const nextTab = createStudioTab(label, particleId);
-    let graph = buildParticleGraph(particleId);
-    tabGraphs.set(nextTab.id, graph);
-    tabs = [...tabs, nextTab];
-    activeTabId = nextTab.id;
-    loadTabGraph(nextTab.id);
+  const getConnectorLibraryLabel = (connectorName: string) =>
+    networkLibrary.feature.find((item) => getLibraryRegistryName(item) === connectorName)?.name ??
+    titleize(connectorName);
 
-    if (graph.nodes.length) return;
+  type IncomingBindingDescriptor = {
+    targetName: string;
+    kind: "static" | "forwarded";
+    fromSlot: number;
+    ownerConnectorName: string;
+    forwarded: Map<number, IncomingBindingDescriptor>;
+  };
+
+  const getSortedCanonicalBindingEntries = (bindings: Record<string, string> = {}) => {
+    const entries = Object.entries(bindings)
+      .map(([slotRaw, targetRaw]) => {
+        const slot = String(slotRaw).trim();
+        if (!/^\d+$/.test(slot)) return null;
+        const slotId = Number.parseInt(slot, 10);
+        if (!Number.isInteger(slotId) || slotId < 0) return null;
+        if (String(slotId) !== slot) return null;
+        const targetName = String(targetRaw ?? "").trim();
+        if (!targetName) return null;
+        return { slotId, targetName };
+      })
+      .filter((value): value is { slotId: number; targetName: string } => Boolean(value));
+    entries.sort((lhs, rhs) => lhs.slotId - rhs.slotId);
+    return entries;
+  };
+
+  const cloneIncomingBindingDescriptor = (
+    binding: IncomingBindingDescriptor | null | undefined,
+    fallbackSlot = 0,
+  ): IncomingBindingDescriptor | null => {
+    if (!binding) return null;
+    const targetName = String(binding.targetName ?? "").trim();
+    if (!targetName) return null;
+    const fromSlot = Number.isInteger(binding.fromSlot) ? binding.fromSlot : fallbackSlot;
+    const ownerConnectorName = String(binding.ownerConnectorName ?? "").trim();
+    return {
+      targetName,
+      kind: binding.kind === "static" ? "static" : "forwarded",
+      fromSlot,
+      ownerConnectorName,
+      forwarded: cloneIncomingBindingMap(binding.forwarded),
+    };
+  };
+
+  const cloneIncomingBindingAsForwarded = (
+    binding: IncomingBindingDescriptor | null | undefined,
+    fallbackSlot = 0,
+  ): IncomingBindingDescriptor | null => {
+    const cloned = cloneIncomingBindingDescriptor(binding, fallbackSlot);
+    if (!cloned) return null;
+    cloned.kind = "forwarded";
+    return cloned;
+  };
+
+  const cloneIncomingBindingMap = (
+    bindings: Map<number, IncomingBindingDescriptor> | null | undefined,
+  ) => {
+    const cloned = new SvelteMap<number, IncomingBindingDescriptor>();
+    if (!(bindings instanceof Map)) return cloned;
+    for (const [slotId, binding] of bindings.entries()) {
+      if (!Number.isInteger(slotId) || slotId < 0) continue;
+      const clonedBinding = cloneIncomingBindingDescriptor(binding, slotId);
+      if (!clonedBinding) continue;
+      cloned.set(slotId, clonedBinding);
+    }
+    return cloned;
+  };
+
+  const getSortedIncomingBindingEntries = (bindings: Map<number, IncomingBindingDescriptor>) =>
+    Array.from(bindings.entries())
+      .filter(([slotId, binding]) => Number.isInteger(slotId) && slotId >= 0 && Boolean(binding))
+      .sort((lhs, rhs) => lhs[0] - rhs[0]);
+
+  const computeConnectorOpenSlots = (
+    connectorName: string,
+    cache = new SvelteMap<string, number>(),
+    visiting = new SvelteSet<string>(),
+  ): number => {
+    if (cache.has(connectorName)) return cache.get(connectorName) ?? 0;
+    if (visiting.has(connectorName)) {
+      throw new Error(`Connector cycle detected at '${connectorName}'.`);
+    }
+    const connector = deployedRegistry.connectors[connectorName];
+    if (!connector) return 0;
+
+    visiting.add(connectorName);
+    try {
+      let openSlots = 0;
+      connector.dimensions.forEach((dimension, dimIndex) => {
+        if (!dimension.composite) {
+          openSlots += 1;
+          return;
+        }
+
+        const childOpenSlots = computeConnectorOpenSlots(dimension.composite, cache, visiting);
+        openSlots += childOpenSlots;
+
+        const staticTargetsByChildSlot = new SvelteMap<number, string>();
+        getSortedCanonicalBindingEntries(dimension.bindings ?? {}).forEach(
+          ({ slotId, targetName }) => {
+            if (slotId >= childOpenSlots) {
+              throw new Error(
+                `Connector '${connectorName}' has out-of-range binding slot ${slotId} at dimension ${dimIndex} (child '${dimension.composite}' exports ${childOpenSlots} slots).`,
+              );
+            }
+            if (staticTargetsByChildSlot.has(slotId)) {
+              throw new Error(
+                `Connector '${connectorName}' has duplicate canonical binding slot ${slotId} at dimension ${dimIndex}.`,
+              );
+            }
+            staticTargetsByChildSlot.set(slotId, targetName);
+          },
+        );
+
+        for (const targetName of staticTargetsByChildSlot.values()) {
+          openSlots += computeConnectorOpenSlots(targetName, cache, visiting);
+        }
+
+        openSlots -= staticTargetsByChildSlot.size;
+      });
+
+      cache.set(connectorName, openSlots);
+      return openSlots;
+    } finally {
+      visiting.delete(connectorName);
+    }
+  };
+
+  const buildConnectorTreeGraph = (
+    rootConnectorName: string,
+    origin: { x: number; y: number },
+  ): { nodes: StudioNode[]; edges: Edge[] } => {
+    const root = deployedRegistry.connectors[rootConnectorName];
+    if (!root) return { nodes: [], edges: [] };
+
+    const graphNodes: StudioNode[] = [];
+    const graphEdges: Edge[] = [];
+    const edgeKeySet = new SvelteSet<string>();
+    const openSlotCache = new SvelteMap<string, number>();
+    const treeInfo = new SvelteMap<string, { depth: number; children: string[] }>();
+    const conditionParentById = new SvelteMap<string, string>();
+    const horizontalSpacing = 380;
+    const verticalSpacing = 340;
+    let leafCursor = 0;
+
+    const pushEdge = (
+      sourceId: string,
+      sourceHandle: string,
+      targetId: string,
+      targetHandle: string,
+      options?: {
+        label?: string;
+        kind?: "composite" | "binding" | "open";
+        bindingOwnerName?: string | null;
+        bindingSlot?: number | null;
+      },
+    ) => {
+      const key = `${sourceId}|${sourceHandle}|${targetId}|${targetHandle}|${options?.kind ?? "plain"}|${options?.label ?? ""}|${options?.bindingOwnerName ?? ""}|${options?.bindingSlot ?? ""}`;
+      if (edgeKeySet.has(key)) return;
+      edgeKeySet.add(key);
+      const isBinding = options?.kind === "binding";
+      const isOpen = options?.kind === "open";
+      graphEdges.push({
+        id: `edge-${crypto.randomUUID()}`,
+        source: sourceId,
+        sourceHandle,
+        target: targetId,
+        targetHandle,
+        ...(options?.label ? { label: options.label } : {}),
+        ...(options?.kind === "composite" || options?.kind === "binding"
+          ? {
+              data: {
+                relation: options.kind,
+                ...(isBinding && options?.bindingOwnerName
+                  ? { bindingOwnerName: options.bindingOwnerName }
+                  : {}),
+                ...(isBinding && typeof options?.bindingSlot === "number"
+                  ? { bindingSlot: options.bindingSlot }
+                  : {}),
+              },
+            }
+          : {}),
+        ...(isBinding
+          ? {
+              style: {
+                stroke: "#c97500",
+                strokeDasharray: "8 5",
+              },
+            }
+          : isOpen
+            ? {
+                style: {
+                  stroke: "#7b8794",
+                  strokeDasharray: "4 6",
+                },
+              }
+            : {}),
+      });
+    };
+
+    const createOpenSlotPlaceholder = (
+      name: string,
+      detail: string,
+      depth: number,
+      kind: "missing" | "cycle" = "missing",
+    ) => {
+      const id = `placeholder-${kind}-${crypto.randomUUID()}`;
+      graphNodes.push({
+        id,
+        type: "particle",
+        draggable: true,
+        position: { x: origin.x, y: origin.y + depth * verticalSpacing },
+        data: {
+          label: kind === "cycle" ? "Connector cycle" : "Loading connector...",
+          kind: "particle",
+          fromNetwork: true,
+          placeholder: true,
+          placeholderDetail: kind === "cycle" ? detail : `waiting for chain sync: ${detail}`,
+          placeholderState: kind === "cycle" ? "warning" : "loading",
+        },
+      });
+      treeInfo.set(id, { depth, children: [] });
+      return id;
+    };
+
+    const expandConnector = (
+      input: {
+        connectorName: string;
+        incomingBindings: Map<number, IncomingBindingDescriptor>;
+        depth: number;
+        boundDescriptor?: {
+          kind: "static" | "forwarded";
+          slotLabel: string;
+          ownerConnectorName?: string | null;
+        } | null;
+      },
+      visiting = new SvelteSet<string>(),
+    ): string => {
+      const connectorName = input.connectorName.trim();
+      if (!connectorName) {
+        return createOpenSlotPlaceholder("Open slot", "Unnamed connector reference", input.depth);
+      }
+
+      if (visiting.has(connectorName)) {
+        return createOpenSlotPlaceholder(
+          "Cycle",
+          `Connector cycle at ${connectorName}`,
+          input.depth,
+          "cycle",
+        );
+      }
+
+      const def = deployedRegistry.connectors[connectorName];
+      if (!def) {
+        return createOpenSlotPlaceholder(
+          "Missing connector",
+          connectorName,
+          input.depth,
+          "missing",
+        );
+      }
+
+      const connectorId = `connector-${connectorName}-${crypto.randomUUID()}`;
+      const connectorNode: StudioNode = {
+        id: connectorId,
+        type: "connector",
+        draggable: true,
+        position: { x: origin.x, y: origin.y + input.depth * verticalSpacing },
+        data: {
+          label: getConnectorLibraryLabel(connectorName),
+          kind: "connector",
+          dimensions: def.dimensions.length,
+          connectorRows: def.dimensions.map((dimension, dimIndex) => ({
+            dimension: dimIndex + 1,
+            transformations: dimension.transformations.map((transformation) =>
+              formatTransformationPreviewLabel(transformation.name, transformation.args),
+            ),
+          })),
+          conditionLabel: def.conditionName ? titleize(def.conditionName) : null,
+          boundKind: input.boundDescriptor?.kind ?? null,
+          boundSlotLabel: input.boundDescriptor?.slotLabel ?? null,
+          boundOwnerName: input.boundDescriptor?.ownerConnectorName ?? null,
+          sourceId: `feature-${connectorName}`,
+          networkId: connectorName,
+          fromNetwork: true,
+          tabRoot: input.depth === 0,
+        },
+      };
+      graphNodes.push(connectorNode);
+      treeInfo.set(connectorId, { depth: input.depth, children: [] });
+
+      if (def.conditionName) {
+        const conditionNodeId = `condition-${connectorName}-${crypto.randomUUID()}`;
+        graphNodes.push({
+          id: conditionNodeId,
+          type: "condition",
+          draggable: true,
+          position: { x: origin.x, y: origin.y + input.depth * verticalSpacing - 120 },
+          data: {
+            label: titleize(def.conditionName),
+            kind: "condition",
+            networkId: def.conditionName,
+            fromNetwork: true,
+          },
+        });
+        conditionParentById.set(conditionNodeId, connectorId);
+        pushEdge(conditionNodeId, "out", connectorId, "in");
+      }
+
+      const nextVisiting = new SvelteSet(visiting);
+      nextVisiting.add(connectorName);
+      let openSlotId = 0;
+
+      for (let dimId = 0; dimId < def.dimensions.length; dimId += 1) {
+        const dimension = def.dimensions[dimId];
+
+        if (!dimension.composite) {
+          const replacement = input.incomingBindings.get(openSlotId) ?? null;
+          if (replacement) {
+            const slotLabel =
+              replacement.kind === "forwarded"
+                ? `slot ${openSlotId} (from slot ${replacement.fromSlot})`
+                : `slot ${openSlotId}`;
+            const childId = expandConnector(
+              {
+                connectorName: replacement.targetName,
+                incomingBindings: cloneIncomingBindingMap(replacement.forwarded),
+                depth: input.depth + 1,
+                boundDescriptor: {
+                  kind: replacement.kind,
+                  slotLabel,
+                  ownerConnectorName: replacement.ownerConnectorName,
+                },
+              },
+              nextVisiting,
+            );
+            treeInfo.get(connectorId)?.children.push(childId);
+            pushEdge(connectorId, `dim-${dimId}`, childId, "in", {
+              kind: "binding",
+              label: `binding · slot ${openSlotId}`,
+              bindingOwnerName: replacement.ownerConnectorName,
+              bindingSlot: openSlotId,
+            });
+          }
+
+          openSlotId += 1;
+          continue;
+        }
+
+        const childOpenSlots = computeConnectorOpenSlots(
+          dimension.composite,
+          openSlotCache,
+          new SvelteSet(nextVisiting),
+        );
+        const staticTargetsByChildSlot = new SvelteMap<number, string>();
+        getSortedCanonicalBindingEntries(dimension.bindings ?? {}).forEach(
+          ({ slotId, targetName }) => {
+            if (slotId >= childOpenSlots || staticTargetsByChildSlot.has(slotId)) return;
+            staticTargetsByChildSlot.set(slotId, targetName);
+          },
+        );
+
+        const slotProjectedStarts = new Array(childOpenSlots).fill(0);
+        const slotProjectedWidths = new Array(childOpenSlots).fill(0);
+        const slotStaticTargets = new Array<string>(childOpenSlots).fill("");
+        const slotSelectedBindings = new Array<IncomingBindingDescriptor | null>(
+          childOpenSlots,
+        ).fill(null);
+        const slotForwardedInternalBindings = Array.from(
+          { length: childOpenSlots },
+          () => new SvelteMap<number, IncomingBindingDescriptor>(),
+        );
+        let childOpenSlotsInParent = 0;
+
+        for (let childSlotId = 0; childSlotId < childOpenSlots; childSlotId += 1) {
+          slotProjectedStarts[childSlotId] = childOpenSlotsInParent;
+          const staticTarget = staticTargetsByChildSlot.get(childSlotId);
+          if (staticTarget) {
+            const staticTargetOpenSlots = computeConnectorOpenSlots(
+              staticTarget,
+              openSlotCache,
+              new SvelteSet(nextVisiting),
+            );
+            slotStaticTargets[childSlotId] = staticTarget;
+            slotSelectedBindings[childSlotId] = {
+              targetName: staticTarget,
+              kind: "static",
+              fromSlot: childSlotId,
+              ownerConnectorName: connectorName,
+              forwarded: new SvelteMap<number, IncomingBindingDescriptor>(),
+            };
+            slotProjectedWidths[childSlotId] = staticTargetOpenSlots;
+            childOpenSlotsInParent += staticTargetOpenSlots;
+            continue;
+          }
+          slotProjectedWidths[childSlotId] = 1;
+          childOpenSlotsInParent += 1;
+        }
+
+        for (const [parentSlotId, parentBinding] of getSortedIncomingBindingEntries(
+          input.incomingBindings,
+        )) {
+          if (parentSlotId < openSlotId) continue;
+          const localSlotId = parentSlotId - openSlotId;
+          if (localSlotId >= childOpenSlotsInParent) continue;
+
+          for (let childSlotId = 0; childSlotId < childOpenSlots; childSlotId += 1) {
+            const rangeStart = slotProjectedStarts[childSlotId];
+            const rangeWidth = slotProjectedWidths[childSlotId];
+            if (rangeWidth <= 0) continue;
+            const rangeEndExclusive = rangeStart + rangeWidth;
+            if (localSlotId < rangeStart || localSlotId >= rangeEndExclusive) continue;
+
+            const staticTarget = slotStaticTargets[childSlotId];
+            if (!staticTarget) {
+              const forwardedBinding = cloneIncomingBindingAsForwarded(parentBinding, parentSlotId);
+              if (forwardedBinding) slotSelectedBindings[childSlotId] = forwardedBinding;
+              break;
+            }
+
+            const offset = localSlotId - rangeStart;
+            const forwardedInternal = cloneIncomingBindingAsForwarded(parentBinding, parentSlotId);
+            if (forwardedInternal) {
+              slotForwardedInternalBindings[childSlotId].set(offset, forwardedInternal);
+            }
+            break;
+          }
+        }
+
+        const childBindings = new SvelteMap<number, IncomingBindingDescriptor>();
+        for (let childSlotId = 0; childSlotId < childOpenSlots; childSlotId += 1) {
+          const selectedBinding = slotSelectedBindings[childSlotId];
+          if (!selectedBinding) continue;
+          const finalized = cloneIncomingBindingDescriptor(selectedBinding, childSlotId);
+          if (!finalized) continue;
+          if (slotStaticTargets[childSlotId]) {
+            finalized.forwarded = cloneIncomingBindingMap(
+              slotForwardedInternalBindings[childSlotId],
+            );
+          }
+          childBindings.set(childSlotId, finalized);
+        }
+
+        const compositeChildId = expandConnector(
+          {
+            connectorName: dimension.composite,
+            incomingBindings: childBindings,
+            depth: input.depth + 1,
+            boundDescriptor: null,
+          },
+          nextVisiting,
+        );
+        treeInfo.get(connectorId)?.children.push(compositeChildId);
+        pushEdge(connectorId, `dim-${dimId}`, compositeChildId, "in", {
+          kind: "composite",
+          label: `composite · D${dimId + 1}`,
+        });
+
+        openSlotId += childOpenSlotsInParent;
+      }
+
+      return connectorId;
+    };
+
+    const rootId = expandConnector({
+      connectorName: rootConnectorName,
+      incomingBindings: new SvelteMap<number, IncomingBindingDescriptor>(),
+      depth: 0,
+      boundDescriptor: null,
+    });
+
+    const xByNodeId = new SvelteMap<string, number>();
+    const computeTreeX = (nodeId: string): number => {
+      const existing = xByNodeId.get(nodeId);
+      if (typeof existing === "number") return existing;
+      const info = treeInfo.get(nodeId);
+      if (!info || info.children.length === 0) {
+        const x = origin.x + leafCursor * horizontalSpacing;
+        leafCursor += 1;
+        xByNodeId.set(nodeId, x);
+        return x;
+      }
+      const childrenX = info.children.map((childId) => computeTreeX(childId));
+      const x = childrenX.reduce((sum, item) => sum + item, 0) / childrenX.length;
+      xByNodeId.set(nodeId, x);
+      return x;
+    };
+
+    const rootX = computeTreeX(rootId);
+    const xShift = origin.x - rootX;
+
+    const minLevelGap = 390;
+    const levelSortedNodeIds = Array.from(treeInfo.entries())
+      .map(([nodeId, info]) => ({ nodeId, depth: info.depth }))
+      .sort(
+        (a, b) =>
+          a.depth - b.depth || (xByNodeId.get(a.nodeId) ?? 0) - (xByNodeId.get(b.nodeId) ?? 0),
+      );
+    let currentDepth: number | null = null;
+    let previousX = 0;
+    levelSortedNodeIds.forEach(({ nodeId, depth }) => {
+      if (currentDepth !== depth) {
+        currentDepth = depth;
+        previousX = -Infinity;
+      }
+      const currentX = xByNodeId.get(nodeId) ?? 0;
+      const nextX = Number.isFinite(previousX)
+        ? Math.max(currentX, previousX + minLevelGap)
+        : currentX;
+      xByNodeId.set(nodeId, nextX);
+      previousX = nextX;
+    });
+
+    const connectorPositionById = new SvelteMap<string, { x: number; y: number }>();
+    graphNodes.forEach((node) => {
+      const info = treeInfo.get(node.id);
+      if (info) {
+        const x = (xByNodeId.get(node.id) ?? origin.x) + xShift;
+        const y = origin.y + info.depth * verticalSpacing;
+        node.position = { x, y };
+        if (isConnectorKind(node.data.kind)) {
+          connectorPositionById.set(node.id, { x, y });
+        }
+      }
+    });
+
+    graphNodes.forEach((node) => {
+      if (node.data.kind !== "dimension") return;
+      const parentId = node.data.parentFeatureId ?? "";
+      const parentPos = connectorPositionById.get(parentId);
+      if (!parentPos) return;
+      const parent = graphNodes.find((candidate) => candidate.id === parentId);
+      const dimensions = Math.max(1, Math.round(parent?.data.dimensions ?? 1));
+      const dimIndex = Math.max(0, Math.round(node.data.dimensionIndex ?? 0));
+      const spacing = 200;
+      const startX = parentPos.x - ((dimensions - 1) * spacing) / 2;
+      node.position = {
+        x: startX + dimIndex * spacing,
+        y: parentPos.y + 160,
+      };
+    });
+
+    conditionParentById.forEach((parentId, conditionId) => {
+      const parentPos = connectorPositionById.get(parentId);
+      const conditionNode = graphNodes.find((candidate) => candidate.id === conditionId);
+      if (!parentPos || !conditionNode) return;
+      conditionNode.position = {
+        x: parentPos.x,
+        y: parentPos.y - 120,
+      };
+    });
+
+    return { nodes: graphNodes, edges: graphEdges };
+  };
+
+  const refreshConnectorTreeTab = (tabId: string) => {
+    const tab = tabs.find((candidate) => candidate.id === tabId);
+    const rootConnectorName = tab?.particleId?.trim() ?? "";
+    if (!rootConnectorName || !connectorTreeModelsByTab.has(tabId)) return;
+    const graph = buildConnectorTreeGraph(rootConnectorName, { x: 360, y: 120 });
+    connectorTreeModelsByTab.set(tabId, graph);
+    tabGraphs.set(tabId, tabGraphs.get(tabId) ?? { nodes: [], edges: [] });
+    if (activeTabId === tabId) loadTabGraph(tabId);
+  };
+
+  const refreshConnectorTreeTabs = () => {
+    tabs.forEach((tab) => {
+      if (!tab.particleId) return;
+      if (!connectorTreeModelsByTab.has(tab.id)) return;
+      refreshConnectorTreeTab(tab.id);
+    });
+  };
+
+  const ensureConnectorTreeTabGraph = async (tabId: string, connectorName: string) => {
+    let graph = buildConnectorTreeGraph(connectorName, { x: 360, y: 120 });
+    connectorTreeModelsByTab.set(tabId, graph);
+    tabGraphs.set(tabId, tabGraphs.get(tabId) ?? { nodes: [], edges: [] });
+    if (activeTabId === tabId) loadTabGraph(tabId);
+    if (graph.nodes.length) return true;
 
     try {
       chainSyncError = null;
-      chainSyncStatus = `Fetching ${particleId} from chain...`;
-      const merged = await withChainAuthRetry(() => syncSingleChainParticle(particleId));
+      chainSyncStatus = `Fetching ${connectorName} from chain...`;
+      const merged = await withChainAuthRetry(() => syncSingleChainParticle(connectorName));
       if (!merged) {
         chainSyncStatus = null;
-        chainSyncError = `Particle ${particleId} was not found in chain registry.`;
-        return;
+        chainSyncError = `Connector ${connectorName} was not found in chain registry.`;
+        return false;
       }
-      graph = buildParticleGraph(particleId);
-      tabGraphs.set(nextTab.id, graph);
-      if (activeTabId === nextTab.id) loadTabGraph(nextTab.id);
-      chainSyncStatus = `Loaded ${particleId} from chain.`;
+      graph = buildConnectorTreeGraph(connectorName, { x: 360, y: 120 });
+      connectorTreeModelsByTab.set(tabId, graph);
+      tabGraphs.set(tabId, tabGraphs.get(tabId) ?? { nodes: [], edges: [] });
+      if (activeTabId === tabId) loadTabGraph(tabId);
+      chainSyncStatus = graph.nodes.length
+        ? `Loaded ${connectorName} from chain.`
+        : `Fetched ${connectorName}, but no tree could be rendered yet.`;
+      return graph.nodes.length > 0;
     } catch (error) {
       chainSyncStatus = null;
-      chainSyncError = error instanceof Error ? error.message : `Failed to fetch ${particleId}.`;
+      chainSyncError = error instanceof Error ? error.message : `Failed to fetch ${connectorName}.`;
+      return false;
     }
+  };
+
+  const openConnectorTab = async (connectorId: string) => {
+    const resolvedId = connectorId.replace(/^feature-/, "").trim();
+    if (!resolvedId) return;
+    const existing = tabs.find((tab) => tab.particleId === resolvedId);
+    if (existing) {
+      switchTab(existing.id);
+      await ensureConnectorTreeTabGraph(existing.id, resolvedId);
+      return;
+    }
+    saveActiveGraph();
+    const label = getConnectorLibraryLabel(resolvedId);
+    const nextTab = createStudioTab(label, resolvedId);
+    tabs = [...tabs, nextTab];
+    activeTabId = nextTab.id;
+    loadTabGraph(nextTab.id);
+    await ensureConnectorTreeTabGraph(nextTab.id, resolvedId);
+  };
+
+  const openParticleTab = async (particleId: string) => {
+    await openConnectorTab(particleId);
   };
 
   type RegistryMatch = {
@@ -2347,6 +3831,11 @@
   const registryByKind = $derived.by<Record<StudioNodeKind, RegistryMatch[]>>(() => ({
     particle: networkParticles.map((item) => ({ id: item.id, name: item.name })),
     feature: networkLibrary.feature.map((item) => ({
+      id: item.id,
+      name: item.name,
+      dimensions: item.dimensions,
+    })),
+    connector: networkLibrary.feature.map((item) => ({
       id: item.id,
       name: item.name,
       dimensions: item.dimensions,
@@ -2371,6 +3860,11 @@
     const localNames = new SvelteSet(
       nodes.filter((node) => node.data.kind === kind).map((node) => normalizeKey(node.data.label)),
     );
+    if (kind === "transformation") {
+      standaloneDraftTransformations.forEach((item) => {
+        localNames.add(normalizeKey(item.name));
+      });
+    }
     let suffix = 1;
     let candidate = baseName;
     while (registryNames.has(normalizeKey(candidate)) || localNames.has(normalizeKey(candidate))) {
@@ -2392,6 +3886,12 @@
     const trimmed = nameDraft.trim();
     if (!trimmed) return;
     if (trimmed === node.data.label) return;
+
+    if (isConnectorKind(node.data.kind) && node.data.tabRoot) {
+      tabs = tabs.map((tab) => (tab.id === activeTabId ? { ...tab, label: trimmed } : tab));
+      ensureActiveDraftTabRootConnector();
+      return;
+    }
 
     const match = findRegistryMatch(node.data.kind, trimmed);
     const matchId = match ? resolveRegistryId(node.data.kind, match.id) : undefined;
@@ -2426,7 +3926,7 @@
       fromNetwork: true,
       dimensions: typeof match?.dimensions === "number" ? match.dimensions : undefined,
     });
-    if (kind === "feature" && typeof match?.dimensions === "number") {
+    if (isConnectorKind(kind) && typeof match?.dimensions === "number") {
       applyDimensionChange(nodeId, match.dimensions);
     }
     pendingNameCollision = null;
@@ -2542,10 +4042,174 @@
       (node) => node.data.kind === "dimension" && node.data.parentFeatureId === featureId,
     );
 
+  const getSortedConnectorDimensions = (connectorId: string) =>
+    getDimensionNodesForFeature(connectorId).sort(
+      (a, b) => (a.data.dimensionIndex ?? 0) - (b.data.dimensionIndex ?? 0),
+    );
+
+  const getDimensionNodeForConnectorIndex = (connectorId: string, dimensionIndex: number) =>
+    getSortedConnectorDimensions(connectorId).find(
+      (node) => (node.data.dimensionIndex ?? -1) === dimensionIndex,
+    ) ?? null;
+
+  const getConditionEdgeForConnector = (connectorId: string) =>
+    edges.find((edge) => {
+      if (edge.target !== connectorId) return false;
+      const sourceNode = edge.source ? nodesById[edge.source] : null;
+      if (sourceNode?.data.kind !== "condition") return false;
+      const targetHandle = edge.targetHandle ?? "in";
+      return targetHandle === "in" || targetHandle === "condition";
+    }) ?? null;
+
+  const getAttachedConditionNodeForConnector = (connectorId: string) => {
+    const conditionEdge = getConditionEdgeForConnector(connectorId);
+    if (!conditionEdge?.source) return null;
+    const node = nodes.find((candidate) => candidate.id === conditionEdge.source) ?? null;
+    if (!node || node.data.kind !== "condition") return null;
+    return node;
+  };
+
   const getFeatureNode = (featureId: string) => nodes.find((node) => node.id === featureId) ?? null;
 
+  const createPlaceholderConnectorRows = (count: number): ConnectorRowPreview[] =>
+    Array.from({ length: Math.max(1, count) }, (_, index) => ({
+      dimension: index + 1,
+      transformations: [],
+    }));
+
+  const buildConnectorRows = (connectorId: string, fallbackCount = 1): ConnectorRowPreview[] => {
+    const dimensions = getSortedConnectorDimensions(connectorId);
+    if (!dimensions.length) {
+      return createPlaceholderConnectorRows(fallbackCount);
+    }
+    return dimensions.map((dimensionNode, index) => ({
+      dimension: (dimensionNode.data.dimensionIndex ?? index) + 1,
+      transformations: (dimensionNode.data.transformations ?? []).map(formatTransformationPreview),
+    }));
+  };
+
+  const connectorRowsEqual = (a: ConnectorRowPreview[] = [], b: ConnectorRowPreview[] = []) => {
+    if (a.length !== b.length) return false;
+    for (let index = 0; index < a.length; index += 1) {
+      if (a[index]?.dimension !== b[index]?.dimension) return false;
+      const aTx = a[index]?.transformations ?? [];
+      const bTx = b[index]?.transformations ?? [];
+      if (aTx.length !== bTx.length) return false;
+      for (let txIndex = 0; txIndex < aTx.length; txIndex += 1) {
+        if (aTx[txIndex] !== bTx[txIndex]) return false;
+      }
+    }
+    return true;
+  };
+
+  const syncConnectorRowPreview = (
+    connectorId: string,
+    options: { schedule?: boolean } = {},
+  ): void => {
+    const connector = getFeatureNode(connectorId);
+    if (!connector || !isConnectorKind(connector.data.kind)) return;
+    const dimensionNodes = getSortedConnectorDimensions(connectorId);
+    const attachedConditionNode = getAttachedConditionNodeForConnector(connectorId);
+    const nextConditionLabel = attachedConditionNode?.data.label ?? null;
+
+    // Network/tree connectors can be rendered without local dimension nodes.
+    // In that case, keep the fetched connectorRows preview instead of replacing
+    // it with local placeholders.
+    if (connector.data.fromNetwork && dimensionNodes.length === 0) {
+      const currentConditionLabel = connector.data.conditionLabel ?? null;
+      if (currentConditionLabel === nextConditionLabel) return;
+      nodes = nodes.map((node) =>
+        node.id === connectorId
+          ? {
+              ...node,
+              data: {
+                ...node.data,
+                conditionLabel: nextConditionLabel,
+              },
+            }
+          : node,
+      );
+      if (options.schedule ?? true) {
+        scheduleLayout();
+      }
+      return;
+    }
+
+    const fallbackCount = Math.max(1, Math.round(connector.data.dimensions ?? 1));
+    const nextRows = buildConnectorRows(connectorId, fallbackCount);
+    const nextDimensions = Math.max(fallbackCount, nextRows.length, 1);
+    let changed = false;
+    const nextNodes = nodes.map((node) => {
+      if (node.id !== connectorId) return node;
+      const currentRows = node.data.connectorRows ?? [];
+      const currentDimensions = Math.max(1, Math.round(node.data.dimensions ?? 1));
+      const currentConditionLabel = node.data.conditionLabel ?? null;
+      if (
+        connectorRowsEqual(currentRows, nextRows) &&
+        currentDimensions === nextDimensions &&
+        currentConditionLabel === nextConditionLabel
+      ) {
+        return node;
+      }
+      changed = true;
+      return {
+        ...node,
+        data: {
+          ...node.data,
+          dimensions: nextDimensions,
+          connectorRows: nextRows,
+          conditionLabel: nextConditionLabel,
+        },
+      };
+    });
+    if (!changed) return;
+    nodes = nextNodes;
+    if (changed && (options.schedule ?? true)) {
+      scheduleLayout();
+    }
+  };
+
+  const syncAllConnectorRowPreviews = (options: { schedule?: boolean } = {}): void => {
+    const connectorIds = nodes
+      .filter((node) => isConnectorKind(node.data.kind))
+      .map((node) => node.id);
+    connectorIds.forEach((connectorId) => {
+      syncConnectorRowPreview(connectorId, { schedule: false });
+    });
+    if (options.schedule ?? true) {
+      scheduleLayout();
+    }
+  };
+
+  const setConnectorDropTarget = (target: ConnectorDropTarget) => {
+    connectorDropTarget = target;
+    nodes = nodes.map((node) => {
+      if (!isConnectorKind(node.data.kind)) return node;
+      const selectedDimensionIndex =
+        target?.type === "dimension" && target.connectorId === node.id
+          ? target.dimensionIndex
+          : undefined;
+      const conditionTargetSelected =
+        target?.type === "condition" && target.connectorId === node.id;
+      if (
+        node.data.selectedDimensionIndex === selectedDimensionIndex &&
+        Boolean(node.data.conditionTargetSelected) === Boolean(conditionTargetSelected)
+      ) {
+        return node;
+      }
+      return {
+        ...node,
+        data: {
+          ...node.data,
+          selectedDimensionIndex,
+          conditionTargetSelected,
+        },
+      };
+    });
+  };
+
   const storeParticleRIs = (particleName: string) => {
-    const rootFeatureNode = nodes.find((node) => node.data.kind === "feature");
+    const rootFeatureNode = nodes.find((node) => isConnectorKind(node.data.kind));
     if (!rootFeatureNode) return;
     const dims = getDimensionNodesForFeature(rootFeatureNode.id).sort(
       (a, b) => (a.data.dimensionIndex ?? 0) - (b.data.dimensionIndex ?? 0),
@@ -2571,6 +4235,8 @@
     return {
       id: `dimension-${feature.id}-${dimensionIndex}-${crypto.randomUUID()}`,
       type: "dimension",
+      hidden: true,
+      draggable: false,
       position: {
         x: startX + dimensionIndex * spacing,
         y: rowY,
@@ -2587,6 +4253,137 @@
         riLocked: false,
       },
     };
+  };
+
+  const createDraftTabRootConnectorNode = (tab: StudioTab): StudioNode => ({
+    id: `feature-root-${crypto.randomUUID()}`,
+    type: "connector",
+    draggable: true,
+    position: { x: 360, y: 120 },
+    data: {
+      label: tab.label,
+      kind: "connector",
+      dimensions: 1,
+      connectorRows: createPlaceholderConnectorRows(1),
+      sourceId: `feature-${slugify(tab.label) || "untitled-connector"}`,
+      fromNetwork: false,
+      tabRoot: true,
+    },
+  });
+
+  const ensureActiveDraftTabRootConnector = () => {
+    const tab = tabs.find((candidate) => candidate.id === activeTabId) ?? null;
+    if (!tab || tab.particleId || isConnectorTreeTab(activeTabId)) return;
+
+    let nextNodes = [...nodes];
+    let nextEdges = [...edges];
+    let changed = false;
+
+    const connectorNodes = nextNodes.filter((node) => isConnectorKind(node.data.kind));
+    let rootNode =
+      connectorNodes.find((node) => Boolean(node.data.tabRoot)) ??
+      connectorNodes.find((node) => normalizeKey(node.data.label) === normalizeKey(tab.label)) ??
+      null;
+
+    if (!rootNode) {
+      rootNode = createDraftTabRootConnectorNode(tab);
+      nextNodes = [...nextNodes, rootNode];
+      changed = true;
+    }
+
+    const rootId = rootNode.id;
+    nextNodes = nextNodes.map((node) => {
+      if (!isConnectorKind(node.data.kind)) return node;
+      const shouldBeRoot = node.id === rootId;
+      const nextLabel = shouldBeRoot ? tab.label : node.data.label;
+      const nextFromNetwork = shouldBeRoot ? false : node.data.fromNetwork;
+      const nextTabRoot = shouldBeRoot;
+      const nextNetworkId = shouldBeRoot ? undefined : node.data.networkId;
+      const nextParticleId = shouldBeRoot ? undefined : node.data.particleId;
+      const nextDimensions = Math.max(1, Math.round(node.data.dimensions ?? 1));
+      if (
+        node.data.label === nextLabel &&
+        Boolean(node.data.fromNetwork) === Boolean(nextFromNetwork) &&
+        Boolean(node.data.tabRoot) === nextTabRoot &&
+        node.data.networkId === nextNetworkId &&
+        node.data.particleId === nextParticleId &&
+        (node.data.dimensions ?? 1) === nextDimensions
+      ) {
+        return node;
+      }
+      changed = true;
+      return {
+        ...node,
+        data: {
+          ...node.data,
+          label: nextLabel,
+          fromNetwork: nextFromNetwork,
+          tabRoot: nextTabRoot,
+          networkId: nextNetworkId,
+          particleId: nextParticleId,
+          dimensions: nextDimensions,
+        },
+      };
+    });
+
+    const refreshedRoot = nextNodes.find((node) => node.id === rootId) ?? null;
+    if (!refreshedRoot || !isConnectorKind(refreshedRoot.data.kind)) {
+      nodes = nextNodes;
+      edges = nextEdges;
+      return;
+    }
+
+    const rootDimensionCount = Math.max(1, Math.round(refreshedRoot.data.dimensions ?? 1));
+    const existingDimensions = nextNodes.filter(
+      (node) => node.data.kind === "dimension" && node.data.parentFeatureId === rootId,
+    );
+
+    const missingDimensions: StudioNode[] = [];
+    for (let index = 0; index < rootDimensionCount; index += 1) {
+      if (existingDimensions.some((dimensionNode) => dimensionNode.data.dimensionIndex === index)) {
+        continue;
+      }
+      missingDimensions.push(createDimensionNode(refreshedRoot, index, rootDimensionCount));
+    }
+
+    if (missingDimensions.length) {
+      nextNodes = [...nextNodes, ...missingDimensions];
+      changed = true;
+    }
+
+    const allRootDimensions = nextNodes.filter(
+      (node) =>
+        node.data.kind === "dimension" &&
+        node.data.parentFeatureId === rootId &&
+        (node.data.dimensionIndex ?? -1) >= 0 &&
+        (node.data.dimensionIndex ?? -1) < rootDimensionCount,
+    );
+    const edgeKeys = new SvelteSet(
+      nextEdges.map((edge) => `${edge.source}|${edge.sourceHandle ?? ""}|${edge.target}`),
+    );
+    const newEdges: Edge[] = [];
+    allRootDimensions.forEach((dimensionNode) => {
+      const dimIndex = dimensionNode.data.dimensionIndex ?? 0;
+      const key = `${rootId}|dim-${dimIndex}|${dimensionNode.id}`;
+      if (edgeKeys.has(key)) return;
+      edgeKeys.add(key);
+      newEdges.push({
+        id: `edge-${rootId}-${dimensionNode.id}-${crypto.randomUUID()}`,
+        source: rootId,
+        sourceHandle: `dim-${dimIndex}`,
+        target: dimensionNode.id,
+        targetHandle: "in",
+      });
+    });
+    if (newEdges.length) {
+      nextEdges = [...nextEdges, ...newEdges];
+      changed = true;
+    }
+
+    if (!changed) return;
+    nodes = nextNodes;
+    edges = nextEdges;
+    syncConnectorRowPreview(rootId, { schedule: false });
   };
 
   const ensureDimensionEdges = (featureId: string, dimensionNodes: StudioNode[]) => {
@@ -2641,6 +4438,7 @@
     }
 
     ensureDimensionEdges(featureId, nextDimensions);
+    syncConnectorRowPreview(featureId, { schedule: false });
     scheduleLayout();
   };
 
@@ -2678,7 +4476,7 @@
   };
 
   const cancelDimensionRemoval = () => {
-    if (selectedNode?.data.kind === "feature") {
+    if (selectedNode && isConnectorKind(selectedNode.data.kind)) {
       dimensionDraft = selectedNode.data.dimensions ?? 1;
     }
     pendingDimensionChange = null;
@@ -2686,7 +4484,7 @@
 
   const libraryKindForTab = (tab: typeof libraryTab): LibraryItem["kind"] | null => {
     switch (tab) {
-      case "features":
+      case "connectors":
         return "feature";
       case "transformations":
         return "transformation";
@@ -2715,10 +4513,8 @@
 
   const listTitle = $derived.by(() => {
     switch (libraryTab) {
-      case "particles":
-        return "Particles";
-      case "features":
-        return "Features";
+      case "connectors":
+        return "Connectors";
       case "transformations":
         return "Transformations";
       case "conditions":
@@ -2732,14 +4528,12 @@
 
   const listTooltip = $derived.by(() => {
     switch (libraryTab) {
-      case "particles":
-        return "A particle is a producer of values. It can be built from many other particles created by different users (humans and AI agents). It connects to other particles through a feature, using the feature’s dimensions as connection points to other particles and selection rules (how to select values from referenced particles).";
-      case "features":
-        return "A feature defines dimensions (connection points) and the transformations that live on those dimensions. It is a template that tells a particle how it can select values from attached particles or output its own values. A feature alone produces nothing; it only gains output when used by a particle.";
+      case "connectors":
+        return "A connector defines dimensions and the transformation chains on those dimensions; each dimension can connect to another connector (or a terminal particle) as a composite input.";
       case "transformations":
-        return "Transformations live on dimensions of a feature. Each dimension has its own list of transformations that specify how values are selected from the particle attached at that dimension.";
+        return "Transformations live on dimensions of a connector. Each dimension has its own list of transformations that specify how values are selected from the particle attached at that dimension.";
       case "conditions":
-        return "A particle only outputs values if its condition is met. Conditions can be financial (e.g., send funds to an address) or non-financial (artistic, contextual, etc.).";
+        return "A connector only outputs values if its condition is met. Conditions can be financial (e.g., send funds to an address) or non-financial (artistic, contextual, etc.).";
       case "plugins":
         return "A plugin consumes the runner’s output streams and renders or sonifies them (MIDI, score, audio, image, etc.).";
       default:
@@ -2765,6 +4559,7 @@
   const resolveRegistryId = (kind: StudioNodeKind, id: string) => {
     switch (kind) {
       case "feature":
+      case "connector":
         return id.replace(/^feature-/, "");
       case "transformation":
         return id.replace(/^transform-/, "");
@@ -2814,23 +4609,121 @@
     ];
   };
 
+  const attachConditionToConnector = (
+    connectorId: string,
+    input: {
+      label: string;
+      status: "draft" | "network";
+      networkId?: string;
+      sourceId?: string;
+    },
+  ) => {
+    const connector = getFeatureNode(connectorId);
+    if (!connector || !isConnectorKind(connector.data.kind) || connector.data.fromNetwork) {
+      return false;
+    }
+
+    const existingEdge = getConditionEdgeForConnector(connectorId);
+    if (existingEdge) {
+      edges = edges.filter((edge) => edge.id !== existingEdge.id);
+    }
+
+    const existingConditionNode =
+      input.status === "network" && input.networkId
+        ? (nodes.find(
+            (node) =>
+              node.data.kind === "condition" &&
+              node.data.fromNetwork &&
+              (node.data.networkId === input.networkId ||
+                normalizeKey(resolveNodeName(node)) === normalizeKey(input.networkId ?? "")),
+          ) ?? null)
+        : null;
+
+    const conditionNode =
+      existingConditionNode ??
+      ({
+        id: `condition-link-${crypto.randomUUID()}`,
+        type: "condition",
+        draggable: false,
+        position: {
+          x: connector.position.x,
+          y: connector.position.y - 140,
+        },
+        data: {
+          label: input.label,
+          kind: "condition",
+          fromNetwork: input.status === "network",
+          ...(input.networkId ? { networkId: input.networkId } : {}),
+          ...(input.sourceId ? { sourceId: input.sourceId } : {}),
+        },
+      } satisfies StudioNode);
+
+    if (!existingConditionNode) {
+      nodes = [...nodes, conditionNode];
+      conditionCodeById.set(conditionNode.id, defaultConditionDraftCode);
+    }
+
+    const edgeExists = edges.some(
+      (edge) =>
+        edge.source === conditionNode.id &&
+        edge.target === connectorId &&
+        (edge.sourceHandle ?? "out") === "out" &&
+        ((edge.targetHandle ?? "in") === "in" || edge.targetHandle === "condition"),
+    );
+    if (!edgeExists) {
+      edges = [
+        ...edges,
+        {
+          id: `edge-${conditionNode.id}-${connectorId}-${crypto.randomUUID()}`,
+          source: conditionNode.id,
+          sourceHandle: "out",
+          target: connectorId,
+          targetHandle: "in",
+        },
+      ];
+    }
+
+    setConnectorDropTarget({ type: "condition", connectorId });
+    syncConnectorRowPreview(connectorId, { schedule: false });
+    scheduleLayout();
+    return true;
+  };
+
   const addLibraryNode = (item: LibraryItem, position: { x: number; y: number } | null = null) => {
     if (activeTabReadOnly && item.kind !== "plugin") return;
     if (item.kind === "transformation") {
       addTransformationToSelectedDimension(item.name, "network");
       return;
     }
+    if (item.kind === "condition" && connectorDropTarget?.type === "condition") {
+      const attached = attachConditionToConnector(connectorDropTarget.connectorId, {
+        label: item.name,
+        status: "network",
+        networkId: getLibraryRegistryName(item),
+        sourceId: item.id,
+      });
+      if (attached) return;
+    }
     const registryName = getLibraryRegistryName(item);
     const nodePosition = position ?? {
       x: 160 + Math.round(Math.random() * 200),
       y: 160 + Math.round(Math.random() * 200),
     };
+    if (item.kind === "feature") {
+      const graph = buildConnectorTreeGraph(registryName, nodePosition);
+      if (graph.nodes.length) {
+        nodes = [...nodes, ...graph.nodes];
+        edges = [...edges, ...graph.edges];
+        scheduleLayout();
+        return;
+      }
+    }
     const node: StudioNode = {
       id: `${item.kind}-${item.id}-${crypto.randomUUID()}`,
       position: nodePosition,
       type:
         item.kind === "feature"
-          ? "feature"
+          ? "connector"
           : item.kind === "plugin"
             ? "plugin"
             : item.kind === "condition"
@@ -2839,12 +4732,16 @@
       draggable: item.kind === "plugin" ? true : undefined,
       data: {
         label: item.name,
-        kind: item.kind,
+        kind: item.kind === "feature" ? "connector" : item.kind,
         sourceId: item.id,
         viewId: item.viewId,
         networkId: registryName,
         fromNetwork: true,
         dimensions: item.dimensions ?? (item.kind === "feature" ? 1 : undefined),
+        connectorRows:
+          item.kind === "feature"
+            ? createPlaceholderConnectorRows(item.dimensions ?? 1)
+            : undefined,
       },
     };
     nodes = [...nodes, node];
@@ -2873,22 +4770,29 @@
       addTransformationToSelectedDimension(label);
       return;
     }
+    if (kind === "condition" && connectorDropTarget?.type === "condition") {
+      const attached = attachConditionToConnector(connectorDropTarget.connectorId, {
+        label,
+        status: "draft",
+      });
+      if (attached) return;
+    }
     const nodePosition = position ?? getCanvasCenter();
     const node: StudioNode = {
       id: `${kind}-quick-${crypto.randomUUID()}`,
       position: nodePosition,
       selected: true,
-      type: kind === "feature" ? "feature" : kind === "dimension" ? "dimension" : kind,
+      type: kind === "feature" || kind === "connector" ? "connector" : kind,
       draggable: kind === "plugin" ? true : undefined,
       data: {
-        label: kind === "dimension" ? "#" : label,
-        kind,
-        dimensions: kind === "feature" ? 1 : undefined,
-        transformations: kind === "dimension" ? [] : undefined,
+        label,
+        kind: kind === "feature" ? "connector" : kind,
+        dimensions: kind === "feature" || kind === "connector" ? 1 : undefined,
+        connectorRows:
+          kind === "feature" || kind === "connector"
+            ? createPlaceholderConnectorRows(1)
+            : undefined,
         fromNetwork: false,
-        riStart: kind === "dimension" ? 0 : undefined,
-        riShift: kind === "dimension" ? 0 : undefined,
-        riLocked: kind === "dimension" ? false : undefined,
       },
     };
     nodes = nodes.map((existing) => ({ ...existing, selected: false }));
@@ -2896,7 +4800,7 @@
     if (kind === "condition") {
       conditionCodeById.set(node.id, defaultConditionDraftCode);
     }
-    if (kind === "feature") {
+    if (kind === "feature" || kind === "connector") {
       applyDimensionChange(node.id, 1);
     }
   };
@@ -2919,8 +4823,30 @@
     if (event.dataTransfer) event.dataTransfer.effectAllowed = "copyMove";
   };
 
+  const resolveConnectorDropTargetFromEvent = (
+    event: MouseEvent | DragEvent | TouchEvent,
+  ): ConnectorDropTarget => {
+    if (!(event.target instanceof Element)) return null;
+    const targetEl = event.target.closest<HTMLElement>("[data-connector-drop-target]");
+    if (!targetEl) return null;
+    const connectorId = targetEl.dataset.connectorId?.trim();
+    const targetType = targetEl.dataset.connectorDropTarget;
+    if (!connectorId || !targetType) return null;
+    if (targetType === "condition") {
+      return { type: "condition", connectorId };
+    }
+    if (targetType === "dimension") {
+      const indexRaw = targetEl.dataset.dimensionIndex;
+      const index = Number(indexRaw);
+      if (!Number.isInteger(index) || index < 0) return null;
+      return { type: "dimension", connectorId, dimensionIndex: index };
+    }
+    return null;
+  };
+
   const handleDrop = (event: DragEvent) => {
     event.preventDefault();
+    const dropTarget = resolveConnectorDropTargetFromEvent(event);
     const quickPayload = event.dataTransfer?.getData("application/x-hypermusic-quick");
     if (quickPayload) {
       try {
@@ -2929,7 +4855,26 @@
           label: string;
         };
         if (activeTabReadOnly && payload.kind !== "plugin") return;
-        if (payload.kind === "transformation") return;
+        if (payload.kind === "transformation") {
+          if (dropTarget?.type === "dimension") {
+            const targetDimension = getDimensionNodeForConnectorIndex(
+              dropTarget.connectorId,
+              dropTarget.dimensionIndex,
+            );
+            if (targetDimension && !targetDimension.data.fromNetwork) {
+              addTransformationToDimension(targetDimension.id, payload.label, [], "draft");
+              setConnectorDropTarget(dropTarget);
+            }
+          }
+          return;
+        }
+        if (payload.kind === "condition" && dropTarget?.type === "condition") {
+          attachConditionToConnector(dropTarget.connectorId, {
+            label: payload.label,
+            status: "draft",
+          });
+          return;
+        }
         const position = screenToFlowPosition
           ? screenToFlowPosition({ x: event.clientX, y: event.clientY })
           : { x: event.clientX, y: event.clientY };
@@ -2944,7 +4889,28 @@
       try {
         const item = JSON.parse(libraryPayload) as LibraryItem;
         if (activeTabReadOnly && item.kind !== "plugin") return;
-        if (item.kind === "transformation") return;
+        if (item.kind === "transformation") {
+          if (dropTarget?.type === "dimension") {
+            const targetDimension = getDimensionNodeForConnectorIndex(
+              dropTarget.connectorId,
+              dropTarget.dimensionIndex,
+            );
+            if (targetDimension && !targetDimension.data.fromNetwork) {
+              addTransformationToDimension(targetDimension.id, item.name, [], "network");
+              setConnectorDropTarget(dropTarget);
+            }
+          }
+          return;
+        }
+        if (item.kind === "condition" && dropTarget?.type === "condition") {
+          attachConditionToConnector(dropTarget.connectorId, {
+            label: item.name,
+            status: "network",
+            networkId: getLibraryRegistryName(item),
+            sourceId: item.id,
+          });
+          return;
+        }
         const position = screenToFlowPosition
           ? screenToFlowPosition({ x: event.clientX, y: event.clientY })
           : { x: event.clientX, y: event.clientY };
@@ -2981,14 +4947,28 @@
     event.preventDefault();
     if (event.dataTransfer) {
       const types = Array.from(event.dataTransfer.types);
-      event.dataTransfer.dropEffect = types.includes("application/x-hypermusic-particle")
-        ? "copy"
-        : "none";
+      const canDropTab =
+        types.includes("application/x-hypermusic-particle") ||
+        types.includes("application/x-hypermusic-library");
+      event.dataTransfer.dropEffect = canDropTab ? "copy" : "none";
     }
   };
 
   const handleTabDrop = (event: DragEvent) => {
     event.preventDefault();
+    const libraryPayload = event.dataTransfer?.getData("application/x-hypermusic-library");
+    if (libraryPayload) {
+      try {
+        const item = JSON.parse(libraryPayload) as LibraryItem;
+        if (item.kind === "feature" || item.id.startsWith("feature-")) {
+          void openConnectorTab(getLibraryRegistryName(item));
+          return;
+        }
+      } catch (error) {
+        console.warn("Failed to parse dropped library payload", error);
+      }
+    }
+
     const payload = event.dataTransfer?.getData("application/x-hypermusic-particle");
     if (!payload) return;
     try {
@@ -3010,7 +4990,20 @@
     nodes: StudioNode[];
     edges: Edge[];
   }) => {
-    if (!activeTabReadOnly) return { nodes: toDelete, edges: toDeleteEdges };
+    if (!activeTabReadOnly) {
+      const rootConnectorId =
+        nodes.find((node) => isConnectorKind(node.data.kind) && Boolean(node.data.tabRoot))?.id ??
+        null;
+      if (!rootConnectorId) return { nodes: toDelete, edges: toDeleteEdges };
+
+      const blockedNodeIds = new SvelteSet<string>([rootConnectorId]);
+      const allowedNodes = toDelete.filter((node) => !blockedNodeIds.has(node.id));
+      const allowedEdges = toDeleteEdges.filter(
+        (edge) => !blockedNodeIds.has(edge.source) && !blockedNodeIds.has(edge.target),
+      );
+      if (!allowedNodes.length && !allowedEdges.length) return false;
+      return { nodes: allowedNodes, edges: allowedEdges };
+    }
     const pluginIds = new SvelteSet(
       toDelete.filter((node) => node.data.kind === "plugin").map((node) => node.id),
     );
@@ -3037,7 +5030,8 @@
     const targetNode = nodesById[connection.target];
     if (!sourceNode || !targetNode) return false;
 
-    if (sourceNode.data.kind === "feature" && targetNode.data.kind === "dimension") {
+    if (isConnectorKind(sourceNode.data.kind) && targetNode.data.kind === "dimension") {
+      if (sourceNode.data.fromNetwork) return false;
       const dimensionIndex = parseDimensionHandle(connection.sourceHandle);
       if (dimensionIndex === null) return false;
       if (connection.targetHandle !== "in") return false;
@@ -3048,11 +5042,27 @@
     }
 
     if (sourceNode.data.kind === "dimension" && targetNode.data.kind === "particle") {
+      if (sourceNode.data.fromNetwork) return false;
       return connection.sourceHandle === "out" && connection.targetHandle === "in";
     }
 
-    if (sourceNode.data.kind === "condition" && targetNode.data.kind === "feature") {
-      return connection.sourceHandle === "out" && connection.targetHandle === "condition";
+    if (isConnectorKind(sourceNode.data.kind) && targetNode.data.kind === "particle") {
+      const dimensionIndex = parseDimensionHandle(connection.sourceHandle);
+      if (dimensionIndex === null) return false;
+      return connection.targetHandle === "in";
+    }
+
+    if (isConnectorKind(sourceNode.data.kind) && isConnectorKind(targetNode.data.kind)) {
+      if (sourceNode.id === targetNode.id) return false;
+      const dimensionIndex = parseDimensionHandle(connection.sourceHandle);
+      if (dimensionIndex === null) return false;
+      return connection.targetHandle === "in";
+    }
+
+    if (sourceNode.data.kind === "condition" && isConnectorKind(targetNode.data.kind)) {
+      if (connection.sourceHandle !== "out") return false;
+      const targetHandle = connection.targetHandle ?? "in";
+      return targetHandle === "in" || targetHandle === "condition";
     }
 
     if (sourceNode.data.kind === "particle" && targetNode.data.kind === "plugin") {
@@ -3087,25 +5097,135 @@
       return;
     }
 
-    edges = [
-      ...edges,
-      {
-        id: `edge-${connection.source}-${connection.target}-${crypto.randomUUID()}`,
-        source: connection.source,
-        target: connection.target,
-        sourceHandle: connection.sourceHandle,
-        targetHandle: connection.targetHandle,
-      },
-    ];
-
     const sourceNode = nodesById[connection.source];
     const targetNode = nodesById[connection.target];
-    if (sourceNode?.data.kind === "feature" && targetNode?.data.kind === "dimension") {
+    const parseEdgeRelation = (edge: Edge): "composite" | "binding" | "unknown" => {
+      if (edge.data && typeof edge.data === "object") {
+        const relation = (edge.data as { relation?: unknown; kind?: unknown }).relation;
+        if (relation === "composite" || relation === "binding") return relation;
+        const kind = (edge.data as { relation?: unknown; kind?: unknown }).kind;
+        if (kind === "composite" || kind === "binding") return kind;
+      }
+      const label = typeof edge.label === "string" ? edge.label.trim().toLowerCase() : "";
+      if (label.startsWith("composite")) return "composite";
+      if (label.startsWith("binding")) return "binding";
+      return "unknown";
+    };
+
+    const parseEdgeBindingSlot = (edge: Edge): number | null => {
+      if (edge.data && typeof edge.data === "object") {
+        const slot = (
+          edge.data as { bindingSlot?: unknown; binding_slot?: unknown; slot?: unknown }
+        ).bindingSlot;
+        if (Number.isInteger(slot) && Number(slot) >= 0) return Number(slot);
+        const alt = (edge.data as { bindingSlot?: unknown; binding_slot?: unknown; slot?: unknown })
+          .binding_slot;
+        if (Number.isInteger(alt) && Number(alt) >= 0) return Number(alt);
+        const legacy = (
+          edge.data as {
+            bindingSlot?: unknown;
+            binding_slot?: unknown;
+            slot?: unknown;
+          }
+        ).slot;
+        if (Number.isInteger(legacy) && Number(legacy) >= 0) return Number(legacy);
+      }
+      const label = typeof edge.label === "string" ? edge.label : "";
+      const match = label.match(/slot\s+(\d+)/i);
+      if (!match) return null;
+      const parsed = Number(match[1]);
+      return Number.isInteger(parsed) && parsed >= 0 ? parsed : null;
+    };
+
+    const nextEdge: Edge = {
+      id: `edge-${connection.source}-${connection.target}-${crypto.randomUUID()}`,
+      source: connection.source,
+      target: connection.target,
+      sourceHandle: connection.sourceHandle,
+      targetHandle: connection.targetHandle,
+    };
+
+    if (
+      sourceNode &&
+      isConnectorKind(sourceNode.data.kind) &&
+      targetNode &&
+      isConnectorKind(targetNode.data.kind)
+    ) {
+      const dimensionIndex = parseDimensionHandle(connection.sourceHandle);
+      if (dimensionIndex !== null) {
+        const sameDimensionEdges = edges.filter((edge) => {
+          if (
+            edge.source !== connection.source ||
+            edge.sourceHandle !== connection.sourceHandle ||
+            edge.targetHandle !== "in"
+          ) {
+            return false;
+          }
+          const edgeTargetNode = nodesById[edge.target];
+          return Boolean(edgeTargetNode && isConnectorKind(edgeTargetNode.data.kind));
+        });
+        const hasComposite = sameDimensionEdges.some(
+          (edge) => parseEdgeRelation(edge) === "composite",
+        );
+        if (!hasComposite) {
+          nextEdge.label = `composite · D${dimensionIndex + 1}`;
+          nextEdge.data = { relation: "composite" };
+        } else {
+          const childConnectorName = resolveNodeName(targetNode);
+          let childOpenSlots = 0;
+          try {
+            childOpenSlots = computeConnectorOpenSlots(childConnectorName);
+          } catch {
+            childOpenSlots = 0;
+          }
+          const usedSlots = new SvelteSet<number>();
+          sameDimensionEdges
+            .filter((edge) => parseEdgeRelation(edge) === "binding")
+            .forEach((edge) => {
+              const slot = parseEdgeBindingSlot(edge);
+              if (slot !== null) usedSlots.add(slot);
+            });
+          let slot = 0;
+          while (usedSlots.has(slot) && slot < childOpenSlots) slot += 1;
+          if (slot >= childOpenSlots) {
+            while (usedSlots.has(slot)) slot += 1;
+          }
+          nextEdge.label = `binding · slot ${slot}`;
+          nextEdge.data = {
+            relation: "binding",
+            bindingSlot: slot,
+            bindingOwnerName: resolveNodeName(sourceNode),
+          };
+          nextEdge.style = {
+            stroke: "#c97500",
+            strokeDasharray: "8 5",
+          };
+        }
+      }
+    }
+
+    edges = [...edges, nextEdge];
+
+    if (
+      sourceNode &&
+      isConnectorKind(sourceNode.data.kind) &&
+      targetNode?.data.kind === "dimension"
+    ) {
       const dimensionIndex = parseDimensionHandle(connection.sourceHandle);
       updateNodeData(targetNode.id, {
         parentFeatureId: sourceNode.id,
         dimensionIndex: dimensionIndex ?? targetNode.data.dimensionIndex,
       });
+    }
+
+    if (
+      sourceNode &&
+      isConnectorKind(sourceNode.data.kind) &&
+      targetNode &&
+      isConnectorKind(targetNode.data.kind)
+    ) {
+      syncConnectorRowPreview(sourceNode.id, { schedule: false });
+      scheduleLayout();
     }
 
     if (sourceNode?.data.kind === "particle" && targetNode?.data.kind === "plugin") {
@@ -3122,135 +5242,244 @@
     node: StudioNode;
     event: MouseEvent | TouchEvent;
   }) => {
-    if (!(event instanceof MouseEvent)) return;
-    if (event.detail < 2) return;
-    if (node.data.kind === "particle" && node.data.particleId) {
-      openParticleTab(node.data.particleId);
+    if (event instanceof MouseEvent) {
+      const openTreeTrigger =
+        event.target instanceof Element
+          ? event.target.closest<HTMLElement>("[data-open-connector-tree]")
+          : null;
+      if (openTreeTrigger && isConnectorKind(node.data.kind)) {
+        const connectorName =
+          (openTreeTrigger.dataset.connectorName ?? "").trim() ||
+          (node.data.networkId ?? "").trim() ||
+          (node.data.sourceId ?? "").trim();
+        if (connectorName) {
+          openConnectorTab(connectorName);
+          return;
+        }
+      }
+
+      const target = resolveConnectorDropTargetFromEvent(event);
+      if (target) {
+        setConnectorDropTarget(target);
+        selectedNodeId = node.id;
+        return;
+      }
+
+      if (event.detail >= 2 && node.data.kind === "particle" && node.data.particleId) {
+        openParticleTab(node.data.particleId);
+      }
     }
   };
 
-  const buildChainDeployPreview = () => {
-    if (!activeTab) {
-      return {
-        ok: false,
-        error: "No active tab.",
-      };
-    }
+  const buildChainConnectorRequestBodyPreview = () => {
+    if (!activeTab) return {};
 
     try {
       const compiled = compileDraftTransformations(nodes);
-      const runtime = buildStudioRuntime(
-        { nodes, edges },
-        { rootLabel: activeTab.label, rootParticleId: activeTab.particleId },
-        buildRuntimeOverrides(compiled.registry),
-      );
-
-      const warnings: string[] = [...compiled.warnings, ...runtime.warnings];
-
-      const particleName = activeTab.particleId ?? (slugify(activeTab.label) || activeTab.label);
-      const particleKey = normalizeKey(particleName);
-      const networkParticleKeys = new SvelteSet(
-        networkParticles.map((item) => normalizeKey(item.id)),
-      );
-      if (!activeTab.particleId && networkParticleKeys.has(particleKey)) {
-        warnings.push(`Particle already exists in network: ${particleName}.`);
-      }
-
-      nodes.forEach((node) => {
-        if (node.data.fromNetwork) return;
-        const existing = findRegistryMatch(node.data.kind, node.data.label);
-        if (existing && normalizeKey(existing.name) === normalizeKey(node.data.label)) {
-          warnings.push(`${titleize(node.data.kind)} already exists: ${node.data.label}.`);
-        }
-      });
-
-      const draftSources = collectDraftTransformationSources(nodes);
-      const localConditions = nodes.filter(
-        (node) => node.data.kind === "condition" && !node.data.fromNetwork,
-      );
-      const localFeatures = nodes.filter(
-        (node) => node.data.kind === "feature" && !node.data.fromNetwork,
-      );
-
-      const conditionRequests = localConditions.map((node) => ({
-        method: "POST",
-        path: "/chain/condition",
-        body: {
-          name: resolveNodeName(node),
-          sol_src: getConditionCode(node.id),
-        },
-      }));
-
-      const transformationRequests = Object.keys(compiled.registry)
-        .sort((a, b) => a.localeCompare(b))
-        .map((name) => ({
-          method: "POST",
-          path: "/chain/transformation",
-          body: {
-            name,
-            sol_src: draftSources.get(name)?.code ?? "",
-          },
-        }));
-
-      const featureRequests = localFeatures
-        .map((featureNode) => {
-          const featureName = resolveNodeName(featureNode);
-          const def = runtime.registry.features[featureName];
-          if (!def) return null;
-          return {
-            method: "POST",
-            path: "/chain/feature",
-            body: {
-              name: featureName,
-              dimensions: def.dimensions.map((dimension) => ({
-                transformations: dimension.transformations.map((tx) => ({
-                  name: tx.name,
-                  args: [...tx.args],
-                })),
-              })),
-            },
-          };
-        })
-        .filter(isNonNull);
-
-      const rootDef = runtime.registry.particles[runtime.rootParticle];
-      const particleRequest = rootDef
-        ? {
-            method: "POST",
-            path: "/chain/particle",
-            body: {
-              name: rootDef.name,
-              feature_name: rootDef.featureName,
-              composite_names: [...rootDef.composites],
-              ...(rootDef.conditionName ? { condition_name: rootDef.conditionName } : {}),
-              ...(rootDef.conditionArgs?.length
-                ? { condition_args: [...rootDef.conditionArgs] }
-                : {}),
-            },
-          }
+      const connectorNodesInGraph = nodes.filter((node) => isConnectorKind(node.data.kind));
+      const hasConnectorGraph = connectorNodesInGraph.length > 0;
+      const selectedConnectorNode = getSelectedConnectorNode();
+      const selectedConnectorName = selectedConnectorNode
+        ? resolveNodeName(selectedConnectorNode)
+        : "";
+      const runtime = hasConnectorGraph
+        ? buildStudioRuntime(
+            { nodes, edges },
+            { rootLabel: activeTab.label, rootParticleId: activeTab.particleId },
+            buildRuntimeOverrides(compiled.registry),
+          )
         : null;
 
+      const connectorName =
+        selectedConnectorName ||
+        runtime?.rootConnector ||
+        activeTab.particleId ||
+        (connectorNodesInGraph[0] ? resolveNodeName(connectorNodesInGraph[0]) : "");
+      if (!connectorName) return {};
+
+      const fromGraphNetworkNode =
+        Boolean(selectedConnectorNode?.data.fromNetwork) ||
+        connectorNodesInGraph.some(
+          (node) => resolveNodeName(node) === connectorName && Boolean(node.data.fromNetwork),
+        );
+      const def =
+        (fromGraphNetworkNode ? deployedRegistry.connectors[connectorName] : undefined) ??
+        runtime?.registry.connectors[connectorName] ??
+        deployedRegistry.connectors[connectorName] ??
+        null;
+      if (!def) return {};
+
       return {
-        ok: true,
-        root_particle: runtime.rootParticle,
-        warnings,
-        requests: {
-          conditions: conditionRequests,
-          transformations: transformationRequests,
-          features: featureRequests,
-          particle: particleRequest,
-        },
+        name: connectorName,
+        dimensions: def.dimensions.map((dimension) => {
+          const base = {
+            transformations: dimension.transformations.map((tx) => ({
+              name: tx.name,
+              args: [...tx.args],
+            })),
+          };
+          return {
+            ...base,
+            ...(dimension.composite ? { composite: dimension.composite } : {}),
+            ...(Object.keys(dimension.bindings ?? {}).length
+              ? { bindings: { ...dimension.bindings } }
+              : {}),
+          };
+        }),
+        condition_name: def.conditionName ?? "",
+        condition_args: def.conditionArgs?.length ? [...def.conditionArgs] : [],
       };
-    } catch (error) {
-      return {
-        ok: false,
-        error: error instanceof Error ? error.message : "Failed to build preview.",
-      };
+    } catch {
+      return {};
     }
   };
 
-  const chainApiPreview = $derived.by(() => buildChainDeployPreview());
-  const chainApiPreviewJson = $derived.by(() => JSON.stringify(chainApiPreview, null, 2));
+  const chainApiProtocolJson = $derived.by(() =>
+    JSON.stringify(buildChainConnectorRequestBodyPreview(), null, 2),
+  );
+
+  const buildResolvedConnectorTreePreview = () => {
+    const visibleNodes = nodes.filter((node) => !node.hidden);
+    const connectorNodes = visibleNodes.filter((node) => isConnectorKind(node.data.kind));
+    if (!connectorNodes.length) {
+      return {
+        root_connector: null,
+        connectors: [],
+        links: [],
+        terminals: [],
+      };
+    }
+
+    const rootNode =
+      connectorNodes.find(
+        (node) =>
+          activeTab?.particleId &&
+          normalizeKey(resolveNodeName(node)) === normalizeKey(activeTab.particleId),
+      ) ??
+      connectorNodes.find((node) => node.data.definitionRole === "root") ??
+      connectorNodes[0];
+    const rootConnectorName = resolveNodeName(rootNode);
+    const links: Array<Record<string, unknown>> = [];
+    const linkKeySet = new SvelteSet<string>();
+
+    const pushLink = (link: Record<string, unknown>) => {
+      const key = JSON.stringify(link);
+      if (linkKeySet.has(key)) return;
+      linkKeySet.add(key);
+      links.push(link);
+    };
+
+    edges.forEach((edge) => {
+      if (!edge.source || !edge.target) return;
+      const sourceNode = nodesById[edge.source] ?? null;
+      const targetNode = nodesById[edge.target] ?? null;
+      if (!sourceNode || !targetNode) return;
+
+      if (isConnectorKind(sourceNode.data.kind) && isConnectorKind(targetNode.data.kind)) {
+        const sourceConnectorName = resolveNodeName(sourceNode);
+        const targetConnectorName = resolveNodeName(targetNode);
+        const label = typeof edge.label === "string" ? edge.label.trim() : "";
+        const relationFromData =
+          edge.data && typeof edge.data === "object"
+            ? `${(edge.data as { relation?: unknown; kind?: unknown }).relation ?? (edge.data as { relation?: unknown; kind?: unknown }).kind ?? ""}`
+                .trim()
+                .toLowerCase()
+            : "";
+        const relation =
+          relationFromData === "binding" || relationFromData === "composite"
+            ? relationFromData
+            : label.toLowerCase().startsWith("binding")
+              ? "binding"
+              : label.toLowerCase().startsWith("composite")
+                ? "composite"
+                : "connector_link";
+        const dimension =
+          parseDimensionHandle(edge.sourceHandle ?? null) !== null
+            ? (parseDimensionHandle(edge.sourceHandle ?? null) ?? 0) + 1
+            : null;
+        const bindingSlotFromData =
+          edge.data && typeof edge.data === "object"
+            ? ((edge.data as { bindingSlot?: unknown; binding_slot?: unknown; slot?: unknown })
+                .bindingSlot ??
+              (edge.data as { bindingSlot?: unknown; binding_slot?: unknown; slot?: unknown })
+                .binding_slot ??
+              (edge.data as { bindingSlot?: unknown; binding_slot?: unknown; slot?: unknown }).slot)
+            : null;
+        const bindingSlotNumber =
+          Number.isInteger(bindingSlotFromData) && Number(bindingSlotFromData) >= 0
+            ? Number(bindingSlotFromData)
+            : null;
+        const bindingSlotMatch = label.match(/slot\s+(\d+)/i);
+        pushLink({
+          owner_connector: sourceConnectorName,
+          from_connector: sourceConnectorName,
+          to_connector: targetConnectorName,
+          relation,
+          ...(dimension !== null ? { dimension } : {}),
+          ...(bindingSlotNumber !== null
+            ? { binding_slot: bindingSlotNumber }
+            : bindingSlotMatch
+              ? { binding_slot: Number(bindingSlotMatch[1]) }
+              : {}),
+          ...(label ? { label } : {}),
+        });
+        return;
+      }
+
+      if (
+        sourceNode.data.kind === "dimension" &&
+        (isConnectorKind(targetNode.data.kind) || targetNode.data.kind === "particle")
+      ) {
+        const ownerConnector = sourceNode.data.parentFeatureId
+          ? (nodesById[sourceNode.data.parentFeatureId] ?? null)
+          : null;
+        if (!ownerConnector || !isConnectorKind(ownerConnector.data.kind)) return;
+        const ownerConnectorName = resolveNodeName(ownerConnector);
+        const targetName = isConnectorKind(targetNode.data.kind)
+          ? resolveNodeName(targetNode)
+          : (targetNode.data.particleId ?? resolveNodeName(targetNode));
+        const dimension =
+          typeof sourceNode.data.dimensionIndex === "number"
+            ? sourceNode.data.dimensionIndex + 1
+            : null;
+        pushLink({
+          owner_connector: ownerConnectorName,
+          from_connector: ownerConnectorName,
+          to: targetName,
+          to_type: isConnectorKind(targetNode.data.kind) ? "connector" : "terminal_particle",
+          relation: isConnectorKind(targetNode.data.kind) ? "composite_or_binding" : "terminal",
+          ...(dimension !== null ? { dimension } : {}),
+        });
+      }
+    });
+
+    return {
+      root_connector: rootConnectorName,
+      root_connector_label: rootNode.data.label,
+      connectors: connectorNodes.map((node) => ({
+        node_id: node.id,
+        name: resolveNodeName(node),
+        label: node.data.label,
+        dimensions: Math.max(1, Math.round(node.data.dimensions ?? 1)),
+        connector_rows: node.data.connectorRows ?? [],
+        condition: node.data.conditionLabel ?? "",
+        from_network: Boolean(node.data.fromNetwork),
+        definition_role: node.data.definitionRole ?? null,
+      })),
+      links,
+      terminals: visibleNodes
+        .filter((node) => node.data.kind === "particle")
+        .map((node) => ({
+          node_id: node.id,
+          id: node.data.particleId ?? resolveNodeName(node),
+          label: node.data.label,
+        })),
+    };
+  };
+
+  const chainApiResolvedJson = $derived.by(() =>
+    JSON.stringify(buildResolvedConnectorTreePreview(), null, 2),
+  );
 
   let apiEditorApplying = false;
   let chainAutoSyncStarted = false;
@@ -3261,60 +5490,425 @@
     body?: Record<string, unknown>;
   };
 
+  type ApiConnectorRequestBody = {
+    name?: string;
+    dimensions?: Array<Record<string, unknown>>;
+    condition_name?: string;
+    condition_args?: number[];
+  };
+
   type ApiDraftPreview = {
     ok?: boolean;
+    warnings?: string[];
+    root_connector?: string | null;
+    deploy_requests?: ApiDraftRequest[];
     requests?: {
       conditions?: ApiDraftRequest[];
       transformations?: ApiDraftRequest[];
-      features?: ApiDraftRequest[];
-      particle?: ApiDraftRequest | null;
+      connectors?: ApiDraftRequest[];
     };
+  };
+
+  type ApiResolvedConnectorPreview = {
+    name?: string;
+    label?: string;
+    dimensions?: number;
+    connector_rows?: Array<{
+      dimension?: number;
+      transformations?: string[];
+    }>;
+    condition?: string;
+    from_network?: boolean;
+  };
+
+  type ApiResolvedLinkPreview = {
+    owner_connector?: string;
+    relation?: string;
+    to_connector?: string;
+    dimension?: number;
+    binding_slot?: number;
+  };
+
+  type ApiResolvedTreePreview = {
+    root_connector?: string | null;
+    root_connector_label?: string | null;
+    connectors?: ApiResolvedConnectorPreview[];
+    links?: ApiResolvedLinkPreview[];
+  };
+
+  const isConnectorRequestBody = (value: unknown): value is ApiConnectorRequestBody => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+    const candidate = value as Record<string, unknown>;
+    return (
+      typeof candidate.name === "string" &&
+      Array.isArray(candidate.dimensions) &&
+      candidate.dimensions.every((dimension) => Boolean(dimension && typeof dimension === "object"))
+    );
+  };
+
+  const isResolvedTreePreview = (value: unknown): value is ApiResolvedTreePreview => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+    const candidate = value as Record<string, unknown>;
+    return Array.isArray(candidate.connectors);
+  };
+
+  const parseTransformationPreview = (
+    rawValue: string,
+  ): { name: string; args: number[] } | null => {
+    const raw = rawValue.trim();
+    if (!raw) return null;
+    const match = raw.match(/^\s*([^()]+?)(?:\(([^)]*)\))?\s*$/);
+    const name = (match?.[1] ?? raw).trim();
+    if (!name) return null;
+    const argsRaw = (match?.[2] ?? "").trim();
+    const args = argsRaw
+      ? argsRaw
+          .split(",")
+          .map((value) => Number(value.trim()))
+          .filter((value) => Number.isFinite(value))
+      : [];
+    return { name, args };
+  };
+
+  const toConnectorBodyFromDef = (connector: StudioConnectorDef): Record<string, unknown> => ({
+    name: connector.name,
+    dimensions: connector.dimensions.map((dimension) => ({
+      transformations: dimension.transformations.map((tx) => ({
+        name: tx.name,
+        args: [...tx.args],
+      })),
+      ...(dimension.composite ? { composite: dimension.composite } : {}),
+      ...(Object.keys(dimension.bindings ?? {}).length
+        ? { bindings: { ...dimension.bindings } }
+        : {}),
+    })),
+    condition_name: connector.conditionName ?? "",
+    condition_args: connector.conditionName ? [...(connector.conditionArgs ?? [])] : [],
+  });
+
+  const convertResolvedTreePreviewToDraft = (
+    resolved: ApiResolvedTreePreview,
+  ): {
+    preview: ApiDraftPreview;
+    readOnlyByName: Map<string, boolean>;
+  } => {
+    const currentResolved = buildResolvedConnectorTreePreview() as ApiResolvedTreePreview;
+
+    const connectorByName = new Map<string, ApiResolvedConnectorPreview>();
+    const readOnlyByName = new Map<string, boolean>();
+
+    (resolved.connectors ?? []).forEach((connector) => {
+      const name = `${connector.name ?? ""}`.trim();
+      if (!name) return;
+      connectorByName.set(name, connector);
+      if (Boolean(connector.from_network)) {
+        readOnlyByName.set(name, true);
+      }
+    });
+
+    (currentResolved.connectors ?? []).forEach((connector) => {
+      const name = `${connector.name ?? ""}`.trim();
+      if (!name || !connector.from_network) return;
+      readOnlyByName.set(name, true);
+      connectorByName.set(name, connector);
+    });
+
+    const readOnlyOwners = new SvelteSet<string>(
+      Array.from(readOnlyByName.entries())
+        .filter(([, flag]) => flag)
+        .map(([name]) => name),
+    );
+
+    const inputLinks = (resolved.links ?? []).filter((link) =>
+      Boolean(link && typeof link === "object"),
+    );
+    const currentReadOnlyLinks = (currentResolved.links ?? []).filter((link) => {
+      const owner = `${link.owner_connector ?? ""}`.trim();
+      return owner.length > 0 && readOnlyOwners.has(owner);
+    });
+    const mutableInputLinks = inputLinks.filter((link) => {
+      const owner = `${link.owner_connector ?? ""}`.trim();
+      return owner.length === 0 || !readOnlyOwners.has(owner);
+    });
+    const mergedLinks = [...mutableInputLinks, ...currentReadOnlyLinks];
+
+    const connectorBodyByName = new Map<string, Record<string, unknown>>();
+    connectorByName.forEach((connector, name) => {
+      const isReadOnly = readOnlyByName.get(name) ?? false;
+      if (isReadOnly && deployedRegistry.connectors[name]) {
+        connectorBodyByName.set(name, toConnectorBodyFromDef(deployedRegistry.connectors[name]));
+        return;
+      }
+
+      const rows = Array.isArray(connector.connector_rows) ? connector.connector_rows : [];
+      const inferredDimensionsFromRows = rows.reduce((max, row) => {
+        const dim = Number(row?.dimension ?? 0);
+        return Number.isFinite(dim) ? Math.max(max, Math.trunc(dim)) : max;
+      }, 0);
+      const configuredDimensions = Math.max(
+        1,
+        Math.trunc(Number(connector.dimensions ?? inferredDimensionsFromRows ?? 1)),
+      );
+      const dimensions = Array.from({ length: configuredDimensions }, () => ({
+        transformations: [] as Array<{ name: string; args: number[] }>,
+        composite: "",
+        bindings: {} as Record<string, string>,
+      }));
+
+      rows.forEach((row) => {
+        const dim = Number(row?.dimension ?? 0);
+        const dimIndex = Number.isFinite(dim) ? Math.trunc(dim) - 1 : -1;
+        if (dimIndex < 0 || dimIndex >= dimensions.length) return;
+        const txLabels = Array.isArray(row?.transformations) ? row.transformations : [];
+        const parsed = txLabels
+          .map((label) => parseTransformationPreview(`${label ?? ""}`))
+          .filter((value): value is { name: string; args: number[] } => Boolean(value));
+        dimensions[dimIndex].transformations = parsed;
+      });
+
+      connectorBodyByName.set(name, {
+        name,
+        dimensions: dimensions.map((dimension) => ({
+          transformations: dimension.transformations.map((tx) => ({
+            name: tx.name,
+            args: [...tx.args],
+          })),
+          ...(dimension.composite ? { composite: dimension.composite } : {}),
+          ...(Object.keys(dimension.bindings).length
+            ? { bindings: { ...dimension.bindings } }
+            : {}),
+        })),
+        condition_name: `${connector.condition ?? ""}`.trim(),
+        condition_args: [],
+      });
+    });
+
+    mergedLinks.forEach((link) => {
+      const owner = `${link.owner_connector ?? ""}`.trim();
+      if (!owner || readOnlyByName.get(owner)) return;
+      const body = connectorBodyByName.get(owner);
+      if (!body) return;
+
+      const dimensions = Array.isArray(body.dimensions)
+        ? (body.dimensions as Array<Record<string, unknown>>)
+        : [];
+      const dimensionNumber = Number(link.dimension ?? 0);
+      const dimensionIndex = Number.isFinite(dimensionNumber)
+        ? Math.trunc(dimensionNumber) - 1
+        : -1;
+      if (dimensionIndex < 0 || dimensionIndex >= dimensions.length) return;
+      const relation = `${link.relation ?? ""}`.trim().toLowerCase();
+      const target = `${link.to_connector ?? ""}`.trim();
+      if (!target) return;
+
+      if (relation === "composite") {
+        dimensions[dimensionIndex].composite = target;
+        return;
+      }
+
+      if (relation === "binding") {
+        const slot = Number(link.binding_slot);
+        if (!Number.isInteger(slot) || slot < 0) return;
+        const bindings =
+          dimensions[dimensionIndex].bindings &&
+          typeof dimensions[dimensionIndex].bindings === "object" &&
+          !Array.isArray(dimensions[dimensionIndex].bindings)
+            ? (dimensions[dimensionIndex].bindings as Record<string, string>)
+            : {};
+        bindings[String(slot)] = target;
+        dimensions[dimensionIndex].bindings = bindings;
+      }
+    });
+
+    const connectorBodies = Array.from(connectorBodyByName.values());
+    const rootConnector = `${resolved.root_connector ?? ""}`.trim();
+    const fallbackRoot =
+      rootConnector ||
+      (connectorBodies.length
+        ? `${(connectorBodies[0] as Record<string, unknown>).name ?? ""}`.trim()
+        : "");
+
+    return {
+      preview: {
+        root_connector: fallbackRoot || null,
+        deploy_requests: connectorBodies.map((body) => ({
+          method: "POST",
+          path: "/chain/connector",
+          body,
+        })),
+      },
+      readOnlyByName,
+    };
+  };
+
+  const normalizeApiRequestPath = (path?: string) => {
+    const raw = typeof path === "string" ? path.trim() : "";
+    if (!raw) return "";
+    try {
+      if (raw.startsWith("http://") || raw.startsWith("https://")) {
+        return new URL(raw).pathname.replace(/\/+$/, "");
+      }
+    } catch {
+      // fall through to raw path
+    }
+    return raw.replace(/\/+$/, "");
+  };
+
+  const isApiPath = (path: string, expected: string) => {
+    const normalized = normalizeApiRequestPath(path);
+    return normalized === expected || normalized.endsWith(expected);
+  };
+
+  const normalizeDeployRequests = (
+    preview: ApiDraftPreview | ApiDraftRequest[],
+  ): ApiDraftRequest[] => {
+    if (Array.isArray(preview)) {
+      return preview.filter((request): request is ApiDraftRequest =>
+        Boolean(request && typeof request === "object"),
+      );
+    }
+
+    if (Array.isArray(preview.deploy_requests)) {
+      return preview.deploy_requests.filter((request): request is ApiDraftRequest =>
+        Boolean(request && typeof request === "object"),
+      );
+    }
+
+    const requests = preview.requests;
+    if (!requests || typeof requests !== "object") return [];
+    const conditions = Array.isArray(requests.conditions) ? requests.conditions : [];
+    const transformations = Array.isArray(requests.transformations) ? requests.transformations : [];
+    const connectors = Array.isArray(requests.connectors) ? requests.connectors : [];
+    return [...conditions, ...transformations, ...connectors].filter(
+      (request): request is ApiDraftRequest => Boolean(request && typeof request === "object"),
+    );
   };
 
   const applyApiPreviewJsonToStudio = (rawJson: string) => {
     if (!activeTab) throw new Error("No active tab.");
-    let parsed: ApiDraftPreview;
+    let parsedRaw: unknown;
     try {
-      parsed = JSON.parse(rawJson) as ApiDraftPreview;
+      parsedRaw = JSON.parse(rawJson) as unknown;
     } catch (error) {
       throw new Error(error instanceof Error ? error.message : "Invalid JSON.");
     }
 
-    const requests = parsed.requests;
-    if (!requests || typeof requests !== "object") {
-      throw new Error("JSON must include a requests object.");
+    let connectorReadOnlyByName = new Map<string, boolean>();
+    let connectorLabelByName = new Map<string, string>();
+    let requestedRootLabelFromResolved = "";
+    if (isResolvedTreePreview(parsedRaw)) {
+      requestedRootLabelFromResolved =
+        typeof parsedRaw.root_connector_label === "string"
+          ? parsedRaw.root_connector_label.trim()
+          : "";
+      connectorLabelByName = new SvelteMap(
+        (parsedRaw.connectors ?? [])
+          .map((connector) => {
+            const name = `${connector.name ?? ""}`.trim();
+            const label = `${connector.label ?? ""}`.trim();
+            return name && label ? ([name, label] as const) : null;
+          })
+          .filter((entry): entry is readonly [string, string] => Boolean(entry)),
+      );
+      const converted = convertResolvedTreePreviewToDraft(parsedRaw);
+      parsedRaw = converted.preview;
+      connectorReadOnlyByName = converted.readOnlyByName;
     }
 
-    const particleReq = requests.particle;
-    const particleBody =
-      particleReq &&
-      typeof particleReq === "object" &&
-      particleReq.body &&
-      typeof particleReq.body === "object"
-        ? (particleReq.body as Record<string, unknown>)
-        : null;
-    if (!particleBody) {
-      throw new Error("requests.particle.body is required.");
+    const parsed: ApiDraftPreview = isConnectorRequestBody(parsedRaw)
+      ? ({
+          root_connector: parsedRaw.name?.trim() ?? "",
+          deploy_requests: [
+            {
+              method: "POST",
+              path: "/chain/connector",
+              body: parsedRaw as Record<string, unknown>,
+            },
+          ],
+        } satisfies ApiDraftPreview)
+      : Array.isArray(parsedRaw)
+        ? ({ deploy_requests: parsedRaw as ApiDraftRequest[] } satisfies ApiDraftPreview)
+        : ((parsedRaw as ApiDraftPreview) ?? {});
+
+    const deployRequests = normalizeDeployRequests(parsed);
+    if (!deployRequests.length) {
+      throw new Error(
+        "JSON must be a connector body or include deploy_requests (or legacy requests.conditions/transformations/connectors).",
+      );
     }
 
-    const particleName = String(particleBody.name ?? "").trim();
-    const featureName = String(particleBody.feature_name ?? "").trim();
-    if (!particleName) throw new Error("requests.particle.body.name is required.");
-    if (!featureName) throw new Error("requests.particle.body.feature_name is required.");
-
-    const compositeNamesRaw = Array.isArray(particleBody.composite_names)
-      ? (particleBody.composite_names as Array<string | null>)
-      : [];
-    const compositeNames = compositeNamesRaw.map((value) =>
-      typeof value === "string" && value.trim() ? value.trim() : null,
+    const connectorReqs = deployRequests.filter((request) =>
+      isApiPath(request.path ?? "", "/chain/connector"),
     );
+    const connectorBodies = connectorReqs
+      .map((request) =>
+        request?.body && typeof request.body === "object"
+          ? (request.body as Record<string, unknown>)
+          : null,
+      )
+      .filter((body): body is Record<string, unknown> => Boolean(body));
+    if (!connectorBodies.length) {
+      throw new Error("deploy_requests must include at least one POST /chain/connector body.");
+    }
 
-    const conditionName =
-      typeof particleBody.condition_name === "string" && particleBody.condition_name.trim()
-        ? particleBody.condition_name.trim()
-        : null;
+    const connectorBodyByName = new SvelteMap<string, Record<string, unknown>>();
+    connectorBodies.forEach((body) => {
+      const name = String(body.name ?? "").trim();
+      if (!name) return;
+      connectorBodyByName.set(name, body);
+    });
 
-    const conditionReqs = Array.isArray(requests.conditions) ? requests.conditions : [];
+    const requestedRootConnector =
+      typeof parsed.root_connector === "string" ? parsed.root_connector.trim() : "";
+    const connectorNames = connectorBodies
+      .map((body) => String(body.name ?? "").trim())
+      .filter((name) => name.length > 0);
+    if (!connectorNames.length) {
+      throw new Error("Each connector request body must include a connector name.");
+    }
+
+    const referencedConnectorNames = new SvelteSet<string>();
+    connectorBodies.forEach((body) => {
+      const dimensions = Array.isArray(body.dimensions)
+        ? (body.dimensions as Array<Record<string, unknown>>)
+        : [];
+      dimensions.forEach((dimension) => {
+        const compositeName =
+          typeof dimension.composite === "string" ? dimension.composite.trim() : "";
+        if (compositeName) referencedConnectorNames.add(compositeName);
+        const bindings =
+          dimension.bindings && typeof dimension.bindings === "object"
+            ? (dimension.bindings as Record<string, unknown>)
+            : {};
+        Object.values(bindings).forEach((targetRaw) => {
+          const targetName = typeof targetRaw === "string" ? targetRaw.trim() : "";
+          if (targetName) referencedConnectorNames.add(targetName);
+        });
+      });
+    });
+
+    const inferredRootConnector =
+      connectorNames.find((name) => !referencedConnectorNames.has(name)) ?? connectorNames[0];
+
+    let rootConnectorName = requestedRootConnector || inferredRootConnector;
+    let requestedRootLabelFallback = "";
+    if (requestedRootConnector && !connectorBodyByName.has(requestedRootConnector)) {
+      // If user typed a human title into `root_connector`, treat it as a label override
+      // and keep the inferred/valid root id.
+      rootConnectorName = inferredRootConnector;
+      requestedRootLabelFallback = requestedRootConnector;
+    }
+    if (!rootConnectorName) {
+      throw new Error("root_connector is required (or inferable from connector dependencies).");
+    }
+    const rootConnectorBody = connectorBodyByName.get(rootConnectorName);
+    if (!rootConnectorBody) {
+      throw new Error(`Connector request for "${rootConnectorName}" is required.`);
+    }
+
+    const conditionReqs = deployRequests.filter((request) =>
+      isApiPath(request.path ?? "", "/chain/condition"),
+    );
     const conditionSourceByName = new SvelteMap<string, string>();
     conditionReqs.forEach((req) => {
       if (!req?.body || typeof req.body !== "object") return;
@@ -3325,9 +5919,9 @@
       conditionSourceByName.set(name, src);
     });
 
-    const transformationReqs = Array.isArray(requests.transformations)
-      ? requests.transformations
-      : [];
+    const transformationReqs = deployRequests.filter((request) =>
+      isApiPath(request.path ?? "", "/chain/transformation"),
+    );
     const transformationSourceByName = new SvelteMap<string, string>();
     transformationReqs.forEach((req) => {
       if (!req?.body || typeof req.body !== "object") return;
@@ -3338,139 +5932,341 @@
       transformationSourceByName.set(name, src);
     });
 
-    const featureReqs = Array.isArray(requests.features) ? requests.features : [];
-    const featureReq = featureReqs.find((req) => {
-      if (!req?.body || typeof req.body !== "object") return false;
-      const body = req.body as Record<string, unknown>;
-      return String(body.name ?? "").trim() === featureName;
-    });
-    const featureBody =
-      featureReq && featureReq.body && typeof featureReq.body === "object"
-        ? (featureReq.body as Record<string, unknown>)
-        : null;
-    if (!featureBody) {
-      throw new Error(`Feature request for "${featureName}" is required.`);
-    }
-
-    const dimensionsRaw = Array.isArray(featureBody.dimensions)
-      ? (featureBody.dimensions as Array<Record<string, unknown>>)
-      : [];
-    if (!dimensionsRaw.length) {
-      throw new Error("Feature must include at least one dimension.");
-    }
-
     const nextNodes: StudioNode[] = [];
     const nextEdges: Edge[] = [];
-    const featureX = 360;
-    const featureY = 80;
+    const connectorNodeByName = new SvelteMap<string, StudioNode>();
+    const particleNodeByName = new SvelteMap<string, StudioNode>();
+    const conditionNodeByName = new SvelteMap<string, StudioNode>();
+    const edgeKeySet = new SvelteSet<string>();
 
-    const featureNode: StudioNode = {
-      id: `feature-${crypto.randomUUID()}`,
-      type: "feature",
-      draggable: false,
-      position: { x: featureX, y: featureY },
-      data: {
-        label: featureName,
-        kind: "feature",
-        dimensions: dimensionsRaw.length,
-        fromNetwork: false,
-      },
+    const adjacency = new SvelteMap<string, string[]>();
+    connectorNames.forEach((name) => adjacency.set(name, []));
+    connectorBodies.forEach((body) => {
+      const sourceName = String(body.name ?? "").trim();
+      if (!sourceName) return;
+      const dimensions = Array.isArray(body.dimensions)
+        ? (body.dimensions as Array<Record<string, unknown>>)
+        : [];
+      const children: string[] = [];
+      dimensions.forEach((dimension) => {
+        const compositeName =
+          typeof dimension.composite === "string" ? dimension.composite.trim() : "";
+        if (compositeName && connectorBodyByName.has(compositeName)) {
+          children.push(compositeName);
+        }
+        const bindings =
+          dimension.bindings && typeof dimension.bindings === "object"
+            ? (dimension.bindings as Record<string, unknown>)
+            : {};
+        Object.values(bindings).forEach((targetRaw) => {
+          const targetName = typeof targetRaw === "string" ? targetRaw.trim() : "";
+          if (targetName && connectorBodyByName.has(targetName)) {
+            children.push(targetName);
+          }
+        });
+      });
+      adjacency.set(sourceName, Array.from(new SvelteSet(children)));
+    });
+
+    const connectorLevel = new SvelteMap<string, number>();
+    const queue: string[] = [];
+    const queued = new SvelteSet<string>();
+    const orderedConnectorNames: string[] = [];
+    const pushConnector = (name: string) => {
+      if (!name || queued.has(name)) return;
+      queued.add(name);
+      queue.push(name);
     };
-    nextNodes.push(featureNode);
+    pushConnector(rootConnectorName);
+    while (queue.length) {
+      const current = queue.shift()!;
+      orderedConnectorNames.push(current);
+      const level = connectorLevel.has(current) ? (connectorLevel.get(current) ?? 0) : 0;
+      connectorLevel.set(current, level);
+      (adjacency.get(current) ?? []).forEach((childName) => {
+        const nextLevel = level + 1;
+        if (!connectorLevel.has(childName) || (connectorLevel.get(childName) ?? 0) > nextLevel) {
+          connectorLevel.set(childName, nextLevel);
+        }
+        pushConnector(childName);
+      });
+    }
+    connectorNames.forEach((name) => {
+      if (!orderedConnectorNames.includes(name)) orderedConnectorNames.push(name);
+      if (!connectorLevel.has(name)) connectorLevel.set(name, 0);
+    });
 
-    if (conditionName) {
-      const isDraftCondition = conditionSourceByName.has(conditionName);
-      const conditionNode: StudioNode = {
-        id: `condition-${crypto.randomUUID()}`,
-        type: "condition",
+    const levelCounters = new SvelteMap<number, number>();
+    orderedConnectorNames.forEach((connectorName) => {
+      const connectorBody = connectorBodyByName.get(connectorName);
+      if (!connectorBody) return;
+      const connectorIsReadOnly = connectorReadOnlyByName.get(connectorName) ?? false;
+      const dimensionsRaw = Array.isArray(connectorBody.dimensions)
+        ? (connectorBody.dimensions as Array<Record<string, unknown>>)
+        : [];
+      if (!dimensionsRaw.length) return;
+      const level = connectorLevel.get(connectorName) ?? 0;
+      const rowIndex = levelCounters.get(level) ?? 0;
+      levelCounters.set(level, rowIndex + 1);
+
+      const connectorRowsFromApi: ConnectorRowPreview[] = dimensionsRaw.map(
+        (dimension, dimIndex) => {
+          const txDefs = Array.isArray(dimension.transformations)
+            ? (dimension.transformations as Array<Record<string, unknown>>)
+            : [];
+          const transformations = txDefs
+            .map((tx) => {
+              const name = typeof tx.name === "string" ? tx.name.trim() : "";
+              if (!name) return null;
+              const args = Array.isArray(tx.args)
+                ? tx.args.map((arg) => Number(arg)).filter((arg) => Number.isFinite(arg))
+                : [];
+              return formatTransformationPreviewLabel(name, args);
+            })
+            .filter((value): value is string => Boolean(value));
+          return {
+            dimension: dimIndex + 1,
+            transformations,
+          };
+        },
+      );
+
+      const connectorNode: StudioNode = {
+        id: `feature-${crypto.randomUUID()}`,
+        type: "connector",
         draggable: false,
-        position: { x: featureX, y: featureY - 120 },
+        position: { x: 260 + level * 360, y: 80 + rowIndex * 320 },
         data: {
-          label: conditionName,
-          kind: "condition",
-          fromNetwork: !isDraftCondition,
-          ...(isDraftCondition ? {} : { networkId: conditionName }),
+          label:
+            (connectorName === rootConnectorName
+              ? requestedRootLabelFromResolved || requestedRootLabelFallback
+              : "") ||
+            connectorLabelByName.get(connectorName) ||
+            connectorName,
+          kind: "connector",
+          dimensions: dimensionsRaw.length,
+          connectorRows: connectorRowsFromApi,
+          fromNetwork: connectorIsReadOnly,
+          tabRoot: connectorName === rootConnectorName,
         },
       };
-      nextNodes.push(conditionNode);
+      connectorNodeByName.set(connectorName, connectorNode);
+      nextNodes.push(connectorNode);
+    });
+
+    const addEdgeIfMissing = (edge: Omit<Edge, "id">) => {
+      const relationPart =
+        edge.data && typeof edge.data === "object"
+          ? `${(edge.data as { relation?: unknown; kind?: unknown }).relation ?? (edge.data as { relation?: unknown; kind?: unknown }).kind ?? ""}`
+          : "";
+      const bindingSlotPart =
+        edge.data && typeof edge.data === "object"
+          ? `${(edge.data as { bindingSlot?: unknown; binding_slot?: unknown; slot?: unknown }).bindingSlot ?? (edge.data as { bindingSlot?: unknown; binding_slot?: unknown; slot?: unknown }).binding_slot ?? (edge.data as { bindingSlot?: unknown; binding_slot?: unknown; slot?: unknown }).slot ?? ""}`
+          : "";
+      const key = `${edge.source}|${edge.sourceHandle ?? ""}|${edge.target}|${edge.targetHandle ?? ""}|${relationPart}|${bindingSlotPart}|${edge.label ?? ""}`;
+      if (edgeKeySet.has(key)) return;
+      edgeKeySet.add(key);
       nextEdges.push({
-        id: `edge-${conditionNode.id}-${featureNode.id}`,
-        source: conditionNode.id,
-        target: featureNode.id,
-        sourceHandle: "out",
-        targetHandle: "condition",
+        id: `edge-${crypto.randomUUID()}`,
+        ...edge,
       });
-      if (isDraftCondition) {
-        conditionCodeById.set(conditionNode.id, conditionSourceByName.get(conditionName) ?? "");
-      }
-    }
+    };
 
-    const compositeRowY = featureY + 320;
-    dimensionsRaw.forEach((dimension, dimIndex) => {
-      const dimNode = createDimensionNode(featureNode, dimIndex, dimensionsRaw.length);
-      const txDefs = Array.isArray(dimension.transformations)
-        ? (dimension.transformations as Array<Record<string, unknown>>)
-        : [];
-      const txInstances = txDefs
-        .map((tx) => {
-          const name = typeof tx.name === "string" ? tx.name.trim() : "";
-          if (!name) return null;
-          const args = Array.isArray(tx.args)
-            ? tx.args.map((arg) => Number(arg)).filter((arg) => Number.isFinite(arg))
-            : [];
-          const isDraft = transformationSourceByName.has(name);
-          return createTransformationInstance(name, args, isDraft ? "draft" : "network");
-        })
-        .filter((value): value is TransformationInstance => Boolean(value));
+    connectorBodies.forEach((connectorBody) => {
+      const connectorName = String(connectorBody.name ?? "").trim();
+      const connectorNode = connectorNodeByName.get(connectorName) ?? null;
+      if (!connectorNode) return;
+      const connectorIsReadOnly = connectorReadOnlyByName.get(connectorName) ?? false;
 
-      dimNode.data = {
-        ...dimNode.data,
-        transformations: txInstances,
-      };
-      nextNodes.push(dimNode);
-      nextEdges.push({
-        id: `edge-${featureNode.id}-${dimNode.id}`,
-        source: featureNode.id,
-        sourceHandle: `dim-${dimIndex}`,
-        target: dimNode.id,
-        targetHandle: "in",
-      });
-
-      txInstances.forEach((tx) => {
-        if (tx.status !== "draft") return;
-        const source = transformationSourceByName.get(tx.name);
-        if (source) transformationCodeById.set(tx.id, source);
-      });
-
-      const compositeName = compositeNames[dimIndex] ?? null;
-      if (compositeName) {
-        const particleMeta = networkParticles.find((item) => item.id === compositeName);
-        const compositeNode: StudioNode = {
-          id: `particle-${crypto.randomUUID()}`,
-          type: "particle",
-          draggable: false,
-          position: { x: dimNode.position.x, y: compositeRowY },
-          data: {
-            label: particleMeta?.name ?? compositeName,
-            kind: "particle",
-            particleId: compositeName,
-            networkId: compositeName,
-            fromNetwork: true,
-          },
-        };
-        nextNodes.push(compositeNode);
-        nextEdges.push({
-          id: `edge-${dimNode.id}-${compositeNode.id}`,
-          source: dimNode.id,
-          target: compositeNode.id,
+      const conditionName =
+        typeof connectorBody.condition_name === "string" ? connectorBody.condition_name.trim() : "";
+      if (conditionName) {
+        let conditionNode = conditionNodeByName.get(conditionName) ?? null;
+        if (!conditionNode) {
+          const isDraftCondition = conditionSourceByName.has(conditionName);
+          conditionNode = {
+            id: `condition-${crypto.randomUUID()}`,
+            type: "condition",
+            draggable: false,
+            position: {
+              x: connectorNode.position.x,
+              y: connectorNode.position.y - 120,
+            },
+            data: {
+              label: conditionName,
+              kind: "condition",
+              fromNetwork: !isDraftCondition,
+              ...(isDraftCondition ? {} : { networkId: conditionName }),
+            },
+          };
+          conditionNodeByName.set(conditionName, conditionNode);
+          nextNodes.push(conditionNode);
+          if (isDraftCondition) {
+            conditionCodeById.set(conditionNode.id, conditionSourceByName.get(conditionName) ?? "");
+          }
+        }
+        addEdgeIfMissing({
+          source: conditionNode.id,
           sourceHandle: "out",
+          target: connectorNode.id,
           targetHandle: "in",
         });
       }
+
+      const dimensionsRaw = Array.isArray(connectorBody.dimensions)
+        ? (connectorBody.dimensions as Array<Record<string, unknown>>)
+        : [];
+      dimensionsRaw.forEach((dimension, dimIndex) => {
+        const dimNode = createDimensionNode(connectorNode, dimIndex, dimensionsRaw.length);
+        const txDefs = Array.isArray(dimension.transformations)
+          ? (dimension.transformations as Array<Record<string, unknown>>)
+          : [];
+        const txInstances = txDefs
+          .map((tx) => {
+            const name = typeof tx.name === "string" ? tx.name.trim() : "";
+            if (!name) return null;
+            const args = Array.isArray(tx.args)
+              ? tx.args.map((arg) => Number(arg)).filter((arg) => Number.isFinite(arg))
+              : [];
+            const isDraft = transformationSourceByName.has(name) || !connectorIsReadOnly;
+            return createTransformationInstance(name, args, isDraft ? "draft" : "network");
+          })
+          .filter((value): value is TransformationInstance => Boolean(value));
+
+        dimNode.data = {
+          ...dimNode.data,
+          transformations: txInstances,
+        };
+        nextNodes.push(dimNode);
+        addEdgeIfMissing({
+          source: connectorNode.id,
+          sourceHandle: `dim-${dimIndex}`,
+          target: dimNode.id,
+          targetHandle: "in",
+        });
+
+        txInstances.forEach((tx) => {
+          if (tx.status !== "draft") return;
+          const source = transformationSourceByName.get(tx.name);
+          if (source) transformationCodeById.set(tx.id, source);
+        });
+
+        const bindingEntries =
+          dimension.bindings && typeof dimension.bindings === "object"
+            ? Object.entries(dimension.bindings as Record<string, unknown>)
+                .filter(([slot]) => /^\d+$/.test(slot.trim()))
+                .sort((a, b) => Number(a[0]) - Number(b[0]))
+                .map(([slot, targetRaw]) => ({
+                  slotId: Number(slot),
+                  targetName: typeof targetRaw === "string" ? targetRaw.trim() : "",
+                }))
+                .filter(
+                  (value) =>
+                    Number.isInteger(value.slotId) && value.slotId >= 0 && value.targetName,
+                )
+            : [];
+        const compositeName =
+          typeof dimension.composite === "string" ? dimension.composite.trim() : "";
+        const targets: Array<{
+          relation: "composite" | "binding";
+          targetName: string;
+          slotId?: number;
+        }> = [
+          ...(compositeName ? [{ relation: "composite" as const, targetName: compositeName }] : []),
+          ...bindingEntries.map((binding) => ({
+            relation: "binding" as const,
+            targetName: binding.targetName,
+            slotId: binding.slotId,
+          })),
+        ];
+
+        targets.forEach((item, targetIndex) => {
+          const targetName = item.targetName;
+          const targetConnectorNode = connectorNodeByName.get(targetName) ?? null;
+          if (targetConnectorNode) {
+            addEdgeIfMissing({
+              source: connectorNode.id,
+              sourceHandle: `dim-${dimIndex}`,
+              target: targetConnectorNode.id,
+              targetHandle: "in",
+              ...(item.relation === "composite"
+                ? {
+                    label: `composite · D${dimIndex + 1}`,
+                    data: { relation: "composite" },
+                  }
+                : {
+                    label: `binding · slot ${item.slotId ?? 0}`,
+                    data: {
+                      relation: "binding",
+                      bindingSlot: item.slotId ?? 0,
+                      bindingOwnerName: connectorName,
+                    },
+                    style: {
+                      stroke: "#c97500",
+                      strokeDasharray: "8 5",
+                    },
+                  }),
+            });
+            return;
+          }
+
+          let particleNode = particleNodeByName.get(targetName) ?? null;
+          if (!particleNode) {
+            const particleMeta = networkParticles.find((item) => item.id === targetName);
+            particleNode = {
+              id: `particle-${crypto.randomUUID()}`,
+              type: "particle",
+              draggable: false,
+              position: {
+                x: dimNode.position.x + targetIndex * 120,
+                y: dimNode.position.y + 180,
+              },
+              data: {
+                label: particleMeta?.name ?? targetName,
+                kind: "particle",
+                particleId: targetName,
+                networkId: targetName,
+                fromNetwork: true,
+              },
+            };
+            particleNodeByName.set(targetName, particleNode);
+            nextNodes.push(particleNode);
+          }
+
+          addEdgeIfMissing({
+            source: connectorNode.id,
+            sourceHandle: `dim-${dimIndex}`,
+            target: particleNode.id,
+            targetHandle: "in",
+            ...(item.relation === "composite"
+              ? {
+                  label: `composite · D${dimIndex + 1}`,
+                  data: { relation: "composite" },
+                }
+              : {
+                  label: `binding · slot ${item.slotId ?? 0}`,
+                  data: {
+                    relation: "binding",
+                    bindingSlot: item.slotId ?? 0,
+                    bindingOwnerName: connectorName,
+                  },
+                  style: {
+                    stroke: "#c97500",
+                    strokeDasharray: "8 5",
+                  },
+                }),
+          });
+        });
+      });
     });
 
     apiEditorApplying = true;
     try {
+      const rootConnectorLabel =
+        requestedRootLabelFromResolved ||
+        requestedRootLabelFallback ||
+        connectorLabelByName.get(rootConnectorName) ||
+        rootConnectorName;
       nodes = nextNodes;
       edges = nextEdges;
       selectedNodeId = null;
@@ -3478,7 +6274,7 @@
         tab.id === activeTabId
           ? {
               ...tab,
-              label: particleName,
+              label: rootConnectorLabel,
               particleId: undefined,
             }
           : tab,
@@ -3519,8 +6315,14 @@
 
   $effect(() => {
     if (apiEditorApplying) return;
-    if (apiEditorFocused) return;
-    apiEditorText = chainApiPreviewJson;
+    const nextGenerated = chainApiResolvedJson;
+    const userHasUnsavedJsonDraft =
+      apiEditorFocused &&
+      apiEditorText.trim().length > 0 &&
+      apiEditorText.trim() !== apiEditorLastGenerated.trim();
+    apiEditorLastGenerated = nextGenerated;
+    if (userHasUnsavedJsonDraft) return;
+    apiEditorText = nextGenerated;
     apiEditorError = null;
     apiEditorStatus = null;
   });
@@ -3534,7 +6336,7 @@
     <div
       class="tab-bar"
       role="tablist"
-      aria-label="Particle tabs"
+      aria-label="Connector tabs"
       tabindex="0"
       ondragover={handleTabDragOver}
       ondrop={handleTabDrop}
@@ -3591,7 +6393,7 @@
       <button
         type="button"
         class="tab tab-add"
-        aria-label="Create new particle tab"
+        aria-label="Create new connector tab"
         onclick={createEmptyTab}
       >
         +
@@ -3607,16 +6409,16 @@
         <div class="top-action-group">
           <Button
             variant="ghost"
-            ariaLabel="New Feature"
-            title="New Feature — A feature defines dimensions (connection points) and the transformations that live on those dimensions."
+            ariaLabel="New Connector"
+            title="New Connector — A connector defines dimensions (connection points) and the transformations that live on those dimensions."
             className="icon-btn"
             draggable
             onclick={(event) => {
               event.preventDefault();
               event.stopPropagation();
-              addQuickNode("feature", "New Feature");
+              addQuickNode("connector", "New Connector");
             }}
-            ondragstart={(event) => handleQuickDragStart(event, "feature", "New Feature")}
+            ondragstart={(event) => handleQuickDragStart(event, "connector", "New Connector")}
           >
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <rect x="4" y="4" width="16" height="16" rx="2"></rect>
@@ -3625,27 +6427,8 @@
           </Button>
           <Button
             variant="ghost"
-            ariaLabel="New Dimension"
-            title="New Dimension — A dimension hosts a chain of transformations for a feature output."
-            className="icon-btn"
-            draggable
-            onclick={(event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              addQuickNode("dimension", "Dimension");
-            }}
-            ondragstart={(event) => handleQuickDragStart(event, "dimension", "Dimension")}
-          >
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M5 7h14"></path>
-              <path d="M5 12h14"></path>
-              <path d="M5 17h14"></path>
-            </svg>
-          </Button>
-          <Button
-            variant="ghost"
             ariaLabel="New Transformation"
-            title="New Transformation — Transformations live on dimensions of a feature and specify how values are selected from the attached particle."
+            title="New Transformation — Transformations live on connector dimensions and specify how values are selected from the attached particle."
             className="icon-btn"
             draggable
             onclick={(event) => {
@@ -3664,7 +6447,7 @@
           <Button
             variant="ghost"
             ariaLabel="New Condition"
-            title="New Condition — A particle only outputs values if its condition is met."
+            title="New Condition — A connector only outputs values if its condition is met."
             className="icon-btn"
             draggable
             onclick={(event) => {
@@ -3751,7 +6534,7 @@
             ariaLabel="Sync my chain registry"
             title={chainSyncError ??
               chainSyncStatus ??
-              "Sync owned chain features, transformations, conditions and particles"}
+              "Sync owned chain connectors, transformations, conditions and particles"}
             className="icon-btn"
             disabled={chainSyncBusy || chainDeployBusy}
             onclick={syncChainOwnedRegistry}
@@ -3862,17 +6645,10 @@
             <div class="left-tabs-track" bind:this={leftTabsEl}>
               <Button
                 variant="subtle"
-                selected={libraryTab === "particles"}
-                onclick={() => (libraryTab = "particles")}
+                selected={libraryTab === "connectors"}
+                onclick={() => (libraryTab = "connectors")}
               >
-                Particles
-              </Button>
-              <Button
-                variant="subtle"
-                selected={libraryTab === "features"}
-                onclick={() => (libraryTab = "features")}
-              >
-                Features
+                Connectors
               </Button>
               <Button
                 variant="subtle"
@@ -4037,27 +6813,9 @@
               </div>
             {/if}
           </section>
-        {:else if libraryTab === "particles"}
-          <CreateParticleExplorer
-            particles={filteredParticles}
-            loading={(explorerSource === "network" && chainSyncBusy) ||
-              (explorerSource === "toolbox" && toolboxLoadBusy)}
-            views={mockParticleViews}
-            usersById={mockUsersById}
-            selectedId={selectedParticleId}
-            bind:selectedViewId
-            onSelect={handleParticleSelect}
-            onOpen={handleParticleOpen}
-            onAdd={(particle) => addParticleNode(particle, null)}
-            onToolbox={addParticleToToolbox}
-            onDragStart={handleDragStart}
-            draggable
-            showHeader={false}
-            showViewFilter={false}
-          />
-        {:else if libraryTab === "features"}
+        {:else if libraryTab === "connectors"}
           <StudioLibraryList
-            title="Features"
+            title="Connectors"
             items={libraryItems}
             loading={(explorerSource === "network" && chainSyncBusy) ||
               (explorerSource === "toolbox" && toolboxLoadBusy)}
@@ -4069,6 +6827,19 @@
             showHeader={false}
           />
         {:else if libraryTab === "transformations"}
+          <div class="library-create-actions">
+            <Button
+              variant="ghost"
+              type="button"
+              disabled={activeTabReadOnly}
+              onclick={openNewTransformationEditor}
+            >
+              New transformation
+            </Button>
+            {#if libraryCreateActionError}
+              <p class="library-create-error">{libraryCreateActionError}</p>
+            {/if}
+          </div>
           <StudioLibraryList
             title="Transformations"
             items={libraryItems}
@@ -4082,6 +6853,19 @@
             showHeader={false}
           />
         {:else if libraryTab === "conditions"}
+          <div class="library-create-actions">
+            <Button
+              variant="ghost"
+              type="button"
+              disabled={activeTabReadOnly}
+              onclick={openNewConditionEditor}
+            >
+              New condition
+            </Button>
+            {#if libraryCreateActionError}
+              <p class="library-create-error">{libraryCreateActionError}</p>
+            {/if}
+          </div>
           <StudioLibraryList
             title="Conditions"
             items={libraryItems}
@@ -4250,12 +7034,13 @@
             {#if inspectorNode}
               {#if selectedNode}
                 {@const isReadOnly = selectedNode.data.fromNetwork}
+                {@const isNameReadOnly = isReadOnly || selectedNode.data.kind === "condition"}
                 <label class="inspector-label" for="node-name">Name</label>
                 <input
                   id="node-name"
                   class="inspector-input"
                   value={nameDraft}
-                  disabled={isReadOnly}
+                  disabled={isNameReadOnly}
                   oninput={(event) => {
                     const target = event.target as HTMLInputElement | null;
                     nameDraft = target?.value ?? "";
@@ -4283,7 +7068,7 @@
                     </div>
                   </div>
                 {/if}
-                {#if selectedNode.data.kind === "feature"}
+                {#if isConnectorKind(selectedNode.data.kind)}
                   <label class="inspector-label" for="node-dimensions">Dimensions</label>
                   <input
                     id="node-dimensions"
@@ -4315,6 +7100,114 @@
                       </div>
                     </div>
                   {/if}
+                  <div class="inspector-section">
+                    <div class="inspector-section-title">Connector dimensions</div>
+                    {#if getSortedConnectorDimensions(selectedNode.id).length === 0}
+                      <div class="inspector-hint">No dimensions configured yet.</div>
+                    {:else}
+                      {#each getSortedConnectorDimensions(selectedNode.id) as dimensionNode, dimIndex (dimensionNode.id)}
+                        {@const locked = dimensionNode.data.riLocked ?? false}
+                        <div class="inspector-row">
+                          <span>#{dimIndex + 1}</span>
+                          <span>{(dimensionNode.data.transformations ?? []).length} tx</span>
+                        </div>
+                        <div class="inspector-inline">
+                          <label
+                            class="inspector-inline-label"
+                            for={`ri-start-${dimensionNode.id}`}
+                          >
+                            Start
+                          </label>
+                          <input
+                            id={`ri-start-${dimensionNode.id}`}
+                            class="inspector-input inspector-input--compact inspector-input--inline"
+                            type="number"
+                            inputmode="numeric"
+                            min="0"
+                            step="1"
+                            value={dimensionNode.data.riStart ?? 0}
+                            disabled={isReadOnly && locked}
+                            oninput={(event) => {
+                              const target = event.target as HTMLInputElement | null;
+                              updateNodeData(dimensionNode.id, {
+                                riStart: toInt(target?.value ?? "0"),
+                              });
+                            }}
+                          />
+                          <label
+                            class="inspector-inline-label"
+                            for={`ri-shift-${dimensionNode.id}`}
+                          >
+                            Shift
+                          </label>
+                          <input
+                            id={`ri-shift-${dimensionNode.id}`}
+                            class="inspector-input inspector-input--compact inspector-input--inline"
+                            type="number"
+                            inputmode="numeric"
+                            min="0"
+                            step="1"
+                            value={dimensionNode.data.riShift ?? 0}
+                            disabled={isReadOnly && locked}
+                            oninput={(event) => {
+                              const target = event.target as HTMLInputElement | null;
+                              updateNodeData(dimensionNode.id, {
+                                riShift: toInt(target?.value ?? "0"),
+                              });
+                            }}
+                          />
+                          <button
+                            type="button"
+                            class={`inspector-toggle ${locked ? "is-locked" : ""}`}
+                            disabled={isReadOnly}
+                            onclick={() => updateNodeData(dimensionNode.id, { riLocked: !locked })}
+                          >
+                            {locked ? "fixed" : "open"}
+                          </button>
+                        </div>
+                        {#if (dimensionNode.data.transformations ?? []).length > 0}
+                          <div class="inspector-transform-list inspector-transform-list--compact">
+                            {#each dimensionNode.data.transformations ?? [] as transformation (transformation.id)}
+                              {@const isNetwork = transformation.status === "network"}
+                              {@const canEditArgs = !isReadOnly}
+                              <div class="inspector-transform-row">
+                                <div class="inspector-transform-readonly">
+                                  <span class="inspector-transform-name">{transformation.name}</span
+                                  >
+                                  {#if canEditArgs}
+                                    <input
+                                      class="inspector-input inspector-input--compact inspector-transform-args-input"
+                                      value={transformation.args.join(", ")}
+                                      placeholder="args: 0, 1"
+                                      oninput={(event) => {
+                                        const target = event.target as HTMLInputElement | null;
+                                        updateTransformationArgsOnDimension(
+                                          dimensionNode.id,
+                                          transformation.id,
+                                          target?.value ?? "",
+                                        );
+                                      }}
+                                    />
+                                  {:else}
+                                    <span class="inspector-transform-args">
+                                      args: {transformation.args.length
+                                        ? transformation.args.join(", ")
+                                        : "none"}
+                                    </span>
+                                  {/if}
+                                </div>
+                                <div class="inspector-transform-meta">
+                                  <span class="inspector-tag">
+                                    {isNetwork ? "Network" : "Draft"}
+                                  </span>
+                                </div>
+                              </div>
+                            {/each}
+                          </div>
+                        {/if}
+                      {/each}
+                    {/if}
+                  </div>
                 {/if}
                 {#if selectedNode.data.kind === "dimension"}
                   {@const locked = selectedNode.data.riLocked ?? false}
@@ -4393,89 +7286,68 @@
                   <div class="inspector-section">
                     <div class="inspector-section-title">Transformations</div>
                     <div class="inspector-transform-list">
-                      {#each selectedNode.data.transformations ?? [] as transformation, index (transformation.id)}
-                        {@const isNetwork = transformation.status === "network"}
-                        <div class="inspector-transform-row">
-                          <div class="inspector-transform-fields">
-                            <input
-                              class="inspector-input inspector-input--compact"
-                              value={transformation.name}
-                              disabled={isNetwork || isReadOnly}
-                              oninput={(event) => {
-                                const target = event.target as HTMLInputElement | null;
-                                const name = target?.value ?? "";
-                                updateTransformationAt(selectedNode.id, index, { name });
-                              }}
-                            />
-                            <input
-                              class="inspector-input inspector-input--compact inspector-input--args"
-                              value={transformation.args.join(", ")}
-                              disabled={isReadOnly}
-                              oninput={(event) => {
-                                const target = event.target as HTMLInputElement | null;
-                                const args = parseArgsInput(target?.value ?? "");
-                                updateTransformationAt(selectedNode.id, index, { args });
-                              }}
-                            />
-                          </div>
-                          <div class="inspector-transform-meta">
-                            <span class="inspector-tag">
-                              {isNetwork ? "Network" : "Draft"}
-                            </span>
-                            <div class="inspector-transform-actions">
-                              <button
-                                type="button"
-                                class="inspector-edit"
-                                onclick={() =>
-                                  openTransformationEditor(selectedNode.id, index, transformation)}
-                              >
-                                Edit
-                              </button>
-                              <button
-                                type="button"
-                                class="inspector-remove"
-                                disabled={isReadOnly}
-                                onclick={() => removeTransformationAt(selectedNode.id, index)}
-                              >
-                                Remove
-                              </button>
+                      {#if (selectedNode.data.transformations ?? []).length === 0}
+                        <div class="inspector-hint">No transformations on this dimension.</div>
+                      {:else}
+                        {#each selectedNode.data.transformations ?? [] as transformation (transformation.id)}
+                          {@const isNetwork = transformation.status === "network"}
+                          {@const canEditArgs = !isReadOnly}
+                          <div class="inspector-transform-row">
+                            <div class="inspector-transform-readonly">
+                              <span class="inspector-transform-name">{transformation.name}</span>
+                              {#if canEditArgs}
+                                <input
+                                  class="inspector-input inspector-input--compact inspector-transform-args-input"
+                                  value={transformation.args.join(", ")}
+                                  placeholder="args: 0, 1"
+                                  oninput={(event) => {
+                                    const target = event.target as HTMLInputElement | null;
+                                    updateTransformationArgsOnDimension(
+                                      selectedNode.id,
+                                      transformation.id,
+                                      target?.value ?? "",
+                                    );
+                                  }}
+                                />
+                              {:else}
+                                <span class="inspector-transform-args">
+                                  args: {transformation.args.length
+                                    ? transformation.args.join(", ")
+                                    : "none"}
+                                </span>
+                              {/if}
+                            </div>
+                            <div class="inspector-transform-meta">
+                              <span class="inspector-tag">
+                                {isNetwork ? "Network" : "Draft"}
+                              </span>
                             </div>
                           </div>
-                        </div>
-                      {/each}
-                      <button
-                        type="button"
-                        class="inspector-action"
-                        disabled={isReadOnly}
-                        onclick={() => appendTransformation(selectedNode.id)}
-                      >
-                        Add transformation
-                      </button>
+                        {/each}
+                      {/if}
                     </div>
                   </div>
                 {/if}
                 {#if selectedNode.data.kind === "condition"}
+                  {@const conditionCodePreview = selectedNode.data.fromNetwork
+                    ? "// Network condition source is immutable and not editable in Studio."
+                    : getConditionCode(selectedNode.id)}
                   <div class="inspector-section">
-                    <div class="inspector-section-title">Condition code</div>
+                    <div class="inspector-section-title">Condition</div>
                     <div class="inspector-hint">
-                      Edit the Solidity snippet that will be published for this condition.
+                      Conditions are immutable once published. Create a new condition from the left
+                      panel and reconnect it if you need changes.
                     </div>
-                    <button
-                      type="button"
-                      class="inspector-action"
-                      onclick={() => openConditionEditor(selectedNode)}
-                    >
-                      Edit condition code
-                    </button>
+                    <pre class="inspector-code-preview">{conditionCodePreview}</pre>
                   </div>
                 {/if}
                 {#if selectedNode.data.kind === "particle" && selectedNode.data.particleId}
                   <button
                     type="button"
                     class="inspector-action"
-                    onclick={() => openParticleTab(selectedNode.data.particleId!)}
+                    onclick={() => openConnectorTab(selectedNode.data.particleId!)}
                   >
-                    Open particle tab
+                    Open connector tab
                   </button>
                 {/if}
               {:else}
@@ -4564,55 +7436,83 @@
             {/if}
           {:else}
             <div class="inspector-section">
-              <div class="inspector-section-title">Chain deploy request preview</div>
-              <div class="inspector-hint">
-                Edit this JSON to update the Studio flow. Valid changes are applied immediately.
-              </div>
-              <div class="inspector-api-controls">
-                <label class="inspector-checkbox">
-                  <input
-                    type="checkbox"
-                    checked={apiEditorLiveApply}
-                    onchange={(event) => {
-                      const target = event.target as HTMLInputElement | null;
-                      apiEditorLiveApply = Boolean(target?.checked);
-                      if (apiEditorLiveApply) {
-                        handleApiEditorInput(apiEditorText);
-                      }
-                    }}
-                  />
-                  <span>Live apply</span>
-                </label>
+              <div class="inspector-section-title">Connector JSON views</div>
+              <div class="inspector-json-view-tabs" role="tablist" aria-label="JSON view mode">
                 <button
                   type="button"
-                  class="inspector-edit"
-                  onclick={applyApiEditorNow}
-                  disabled={apiEditorLiveApply}
+                  class={`inspector-tab ${apiJsonView === "protocol" ? "is-active" : ""}`}
+                  role="tab"
+                  aria-selected={apiJsonView === "protocol"}
+                  onclick={() => (apiJsonView = "protocol")}
                 >
-                  Apply JSON
+                  Protocol JSON
+                </button>
+                <button
+                  type="button"
+                  class={`inspector-tab ${apiJsonView === "resolved" ? "is-active" : ""}`}
+                  role="tab"
+                  aria-selected={apiJsonView === "resolved"}
+                  onclick={() => (apiJsonView = "resolved")}
+                >
+                  Resolved tree JSON
                 </button>
               </div>
-              <textarea
-                class="inspector-json-editor"
-                value={apiEditorText}
-                spellcheck="false"
-                onfocus={() => {
-                  apiEditorFocused = true;
-                }}
-                onblur={() => {
-                  apiEditorFocused = false;
-                }}
-                oninput={(event) => {
-                  const target = event.target as HTMLTextAreaElement | null;
-                  handleApiEditorInput(target?.value ?? "");
-                }}
-              ></textarea>
-              {#if apiEditorError}
-                <div class="inspector-alert">
-                  <div class="inspector-alert-text">{apiEditorError}</div>
+              {#if apiJsonView === "protocol"}
+                <div class="inspector-hint">
+                  Canonical protocol JSON for the selected connector (read-only).
                 </div>
-              {:else if apiEditorStatus}
-                <div class="inspector-hint">{apiEditorStatus}</div>
+                <pre class="inspector-code-preview">{chainApiProtocolJson}</pre>
+              {:else}
+                <div class="inspector-hint">
+                  Edit computed full-tree JSON to update the flow. Read-only (on-chain) connectors
+                  are preserved automatically.
+                </div>
+                <div class="inspector-api-controls">
+                  <label class="inspector-checkbox">
+                    <input
+                      type="checkbox"
+                      checked={apiEditorLiveApply}
+                      onchange={(event) => {
+                        const target = event.target as HTMLInputElement | null;
+                        apiEditorLiveApply = Boolean(target?.checked);
+                        if (apiEditorLiveApply) {
+                          handleApiEditorInput(apiEditorText);
+                        }
+                      }}
+                    />
+                    <span>Live apply</span>
+                  </label>
+                  <button
+                    type="button"
+                    class="inspector-edit"
+                    onclick={applyApiEditorNow}
+                    disabled={apiEditorLiveApply}
+                  >
+                    Apply JSON
+                  </button>
+                </div>
+                <textarea
+                  class="inspector-json-editor"
+                  value={apiEditorText}
+                  spellcheck="false"
+                  onfocus={() => {
+                    apiEditorFocused = true;
+                  }}
+                  onblur={() => {
+                    apiEditorFocused = false;
+                  }}
+                  oninput={(event) => {
+                    const target = event.target as HTMLTextAreaElement | null;
+                    handleApiEditorInput(target?.value ?? "");
+                  }}
+                ></textarea>
+                {#if apiEditorError}
+                  <div class="inspector-alert">
+                    <div class="inspector-alert-text">{apiEditorError}</div>
+                  </div>
+                {:else if apiEditorStatus}
+                  <div class="inspector-hint">{apiEditorStatus}</div>
+                {/if}
               {/if}
             </div>
             <div class="inspector-section">
@@ -4724,12 +7624,13 @@
                   {#if inspectorNode}
                     {#if selectedNode}
                       {@const isReadOnly = selectedNode.data.fromNetwork}
+                      {@const isNameReadOnly = isReadOnly || selectedNode.data.kind === "condition"}
                       <label class="inspector-label" for="node-name-split">Name</label>
                       <input
                         id="node-name-split"
                         class="inspector-input"
                         value={nameDraft}
-                        disabled={isReadOnly}
+                        disabled={isNameReadOnly}
                         oninput={(event) => {
                           const target = event.target as HTMLInputElement | null;
                           nameDraft = target?.value ?? "";
@@ -4757,7 +7658,7 @@
                           </div>
                         </div>
                       {/if}
-                      {#if selectedNode.data.kind === "feature"}
+                      {#if isConnectorKind(selectedNode.data.kind)}
                         <label class="inspector-label" for="node-dimensions-split">Dimensions</label
                         >
                         <input
@@ -4794,6 +7695,119 @@
                             </div>
                           </div>
                         {/if}
+                        <div class="inspector-section">
+                          <div class="inspector-section-title">Connector dimensions</div>
+                          {#if getSortedConnectorDimensions(selectedNode.id).length === 0}
+                            <div class="inspector-hint">No dimensions configured yet.</div>
+                          {:else}
+                            {#each getSortedConnectorDimensions(selectedNode.id) as dimensionNode, dimIndex (dimensionNode.id)}
+                              {@const locked = dimensionNode.data.riLocked ?? false}
+                              <div class="inspector-row">
+                                <span>#{dimIndex + 1}</span>
+                                <span>{(dimensionNode.data.transformations ?? []).length} tx</span>
+                              </div>
+                              <div class="inspector-inline">
+                                <label
+                                  class="inspector-inline-label"
+                                  for={`ri-start-split-${dimensionNode.id}`}
+                                >
+                                  Start
+                                </label>
+                                <input
+                                  id={`ri-start-split-${dimensionNode.id}`}
+                                  class="inspector-input inspector-input--compact inspector-input--inline"
+                                  type="number"
+                                  inputmode="numeric"
+                                  min="0"
+                                  step="1"
+                                  value={dimensionNode.data.riStart ?? 0}
+                                  disabled={isReadOnly && locked}
+                                  oninput={(event) => {
+                                    const target = event.target as HTMLInputElement | null;
+                                    updateNodeData(dimensionNode.id, {
+                                      riStart: toInt(target?.value ?? "0"),
+                                    });
+                                  }}
+                                />
+                                <label
+                                  class="inspector-inline-label"
+                                  for={`ri-shift-split-${dimensionNode.id}`}
+                                >
+                                  Shift
+                                </label>
+                                <input
+                                  id={`ri-shift-split-${dimensionNode.id}`}
+                                  class="inspector-input inspector-input--compact inspector-input--inline"
+                                  type="number"
+                                  inputmode="numeric"
+                                  min="0"
+                                  step="1"
+                                  value={dimensionNode.data.riShift ?? 0}
+                                  disabled={isReadOnly && locked}
+                                  oninput={(event) => {
+                                    const target = event.target as HTMLInputElement | null;
+                                    updateNodeData(dimensionNode.id, {
+                                      riShift: toInt(target?.value ?? "0"),
+                                    });
+                                  }}
+                                />
+                                <button
+                                  type="button"
+                                  class={`inspector-toggle ${locked ? "is-locked" : ""}`}
+                                  disabled={isReadOnly}
+                                  onclick={() =>
+                                    updateNodeData(dimensionNode.id, { riLocked: !locked })}
+                                >
+                                  {locked ? "fixed" : "open"}
+                                </button>
+                              </div>
+                              {#if (dimensionNode.data.transformations ?? []).length > 0}
+                                <div
+                                  class="inspector-transform-list inspector-transform-list--compact"
+                                >
+                                  {#each dimensionNode.data.transformations ?? [] as transformation (transformation.id)}
+                                    {@const isNetwork = transformation.status === "network"}
+                                    {@const canEditArgs = !isReadOnly}
+                                    <div class="inspector-transform-row">
+                                      <div class="inspector-transform-readonly">
+                                        <span class="inspector-transform-name"
+                                          >{transformation.name}</span
+                                        >
+                                        {#if canEditArgs}
+                                          <input
+                                            class="inspector-input inspector-input--compact inspector-transform-args-input"
+                                            value={transformation.args.join(", ")}
+                                            placeholder="args: 0, 1"
+                                            oninput={(event) => {
+                                              const target =
+                                                event.target as HTMLInputElement | null;
+                                              updateTransformationArgsOnDimension(
+                                                dimensionNode.id,
+                                                transformation.id,
+                                                target?.value ?? "",
+                                              );
+                                            }}
+                                          />
+                                        {:else}
+                                          <span class="inspector-transform-args">
+                                            args: {transformation.args.length
+                                              ? transformation.args.join(", ")
+                                              : "none"}
+                                          </span>
+                                        {/if}
+                                      </div>
+                                      <div class="inspector-transform-meta">
+                                        <span class="inspector-tag">
+                                          {isNetwork ? "Network" : "Draft"}
+                                        </span>
+                                      </div>
+                                    </div>
+                                  {/each}
+                                </div>
+                              {/if}
+                            {/each}
+                          {/if}
+                        </div>
                       {/if}
                       {#if selectedNode.data.kind === "dimension"}
                         {@const locked = selectedNode.data.riLocked ?? false}
@@ -4872,93 +7886,72 @@
                         <div class="inspector-section">
                           <div class="inspector-section-title">Transformations</div>
                           <div class="inspector-transform-list">
-                            {#each selectedNode.data.transformations ?? [] as transformation, index (transformation.id)}
-                              {@const isNetwork = transformation.status === "network"}
-                              <div class="inspector-transform-row">
-                                <div class="inspector-transform-fields">
-                                  <input
-                                    class="inspector-input inspector-input--compact"
-                                    value={transformation.name}
-                                    disabled={isNetwork || isReadOnly}
-                                    oninput={(event) => {
-                                      const target = event.target as HTMLInputElement | null;
-                                      const name = target?.value ?? "";
-                                      updateTransformationAt(selectedNode.id, index, { name });
-                                    }}
-                                  />
-                                  <input
-                                    class="inspector-input inspector-input--compact inspector-input--args"
-                                    value={transformation.args.join(", ")}
-                                    disabled={isReadOnly}
-                                    oninput={(event) => {
-                                      const target = event.target as HTMLInputElement | null;
-                                      const args = parseArgsInput(target?.value ?? "");
-                                      updateTransformationAt(selectedNode.id, index, { args });
-                                    }}
-                                  />
-                                </div>
-                                <div class="inspector-transform-meta">
-                                  <span class="inspector-tag">
-                                    {isNetwork ? "Network" : "Draft"}
-                                  </span>
-                                  <div class="inspector-transform-actions">
-                                    <button
-                                      type="button"
-                                      class="inspector-edit"
-                                      onclick={() =>
-                                        openTransformationEditor(
-                                          selectedNode.id,
-                                          index,
-                                          transformation,
-                                        )}
+                            {#if (selectedNode.data.transformations ?? []).length === 0}
+                              <div class="inspector-hint">
+                                No transformations on this dimension.
+                              </div>
+                            {:else}
+                              {#each selectedNode.data.transformations ?? [] as transformation (transformation.id)}
+                                {@const isNetwork = transformation.status === "network"}
+                                {@const canEditArgs = !isReadOnly}
+                                <div class="inspector-transform-row">
+                                  <div class="inspector-transform-readonly">
+                                    <span class="inspector-transform-name"
+                                      >{transformation.name}</span
                                     >
-                                      Edit
-                                    </button>
-                                    <button
-                                      type="button"
-                                      class="inspector-remove"
-                                      disabled={isReadOnly}
-                                      onclick={() => removeTransformationAt(selectedNode.id, index)}
-                                    >
-                                      Remove
-                                    </button>
+                                    {#if canEditArgs}
+                                      <input
+                                        class="inspector-input inspector-input--compact inspector-transform-args-input"
+                                        value={transformation.args.join(", ")}
+                                        placeholder="args: 0, 1"
+                                        oninput={(event) => {
+                                          const target = event.target as HTMLInputElement | null;
+                                          updateTransformationArgsOnDimension(
+                                            selectedNode.id,
+                                            transformation.id,
+                                            target?.value ?? "",
+                                          );
+                                        }}
+                                      />
+                                    {:else}
+                                      <span class="inspector-transform-args">
+                                        args: {transformation.args.length
+                                          ? transformation.args.join(", ")
+                                          : "none"}
+                                      </span>
+                                    {/if}
+                                  </div>
+                                  <div class="inspector-transform-meta">
+                                    <span class="inspector-tag">
+                                      {isNetwork ? "Network" : "Draft"}
+                                    </span>
                                   </div>
                                 </div>
-                              </div>
-                            {/each}
-                            <button
-                              type="button"
-                              class="inspector-action"
-                              disabled={isReadOnly}
-                              onclick={() => appendTransformation(selectedNode.id)}
-                            >
-                              Add transformation
-                            </button>
+                              {/each}
+                            {/if}
                           </div>
                         </div>
                       {/if}
                       {#if selectedNode.data.kind === "condition"}
+                        {@const conditionCodePreview = selectedNode.data.fromNetwork
+                          ? "// Network condition source is immutable and not editable in Studio."
+                          : getConditionCode(selectedNode.id)}
                         <div class="inspector-section">
-                          <div class="inspector-section-title">Condition code</div>
+                          <div class="inspector-section-title">Condition</div>
                           <div class="inspector-hint">
-                            Edit the Solidity snippet that will be published for this condition.
+                            Conditions are immutable once published. Create a new condition from the
+                            left panel and reconnect it if you need changes.
                           </div>
-                          <button
-                            type="button"
-                            class="inspector-action"
-                            onclick={() => openConditionEditor(selectedNode)}
-                          >
-                            Edit condition code
-                          </button>
+                          <pre class="inspector-code-preview">{conditionCodePreview}</pre>
                         </div>
                       {/if}
                       {#if selectedNode.data.kind === "particle" && selectedNode.data.particleId}
                         <button
                           type="button"
                           class="inspector-action"
-                          onclick={() => openParticleTab(selectedNode.data.particleId!)}
+                          onclick={() => openConnectorTab(selectedNode.data.particleId!)}
                         >
-                          Open particle tab
+                          Open connector tab
                         </button>
                       {/if}
                     {:else}
@@ -5049,56 +8042,87 @@
                   {/if}
                 {:else}
                   <div class="inspector-section">
-                    <div class="inspector-section-title">Chain deploy request preview</div>
-                    <div class="inspector-hint">
-                      Edit this JSON to update the Studio flow. Valid changes are applied
-                      immediately.
-                    </div>
-                    <div class="inspector-api-controls">
-                      <label class="inspector-checkbox">
-                        <input
-                          type="checkbox"
-                          checked={apiEditorLiveApply}
-                          onchange={(event) => {
-                            const target = event.target as HTMLInputElement | null;
-                            apiEditorLiveApply = Boolean(target?.checked);
-                            if (apiEditorLiveApply) {
-                              handleApiEditorInput(apiEditorText);
-                            }
-                          }}
-                        />
-                        <span>Live apply</span>
-                      </label>
+                    <div class="inspector-section-title">Connector JSON views</div>
+                    <div
+                      class="inspector-json-view-tabs"
+                      role="tablist"
+                      aria-label="JSON view mode"
+                    >
                       <button
                         type="button"
-                        class="inspector-edit"
-                        onclick={applyApiEditorNow}
-                        disabled={apiEditorLiveApply}
+                        class={`inspector-tab ${apiJsonView === "protocol" ? "is-active" : ""}`}
+                        role="tab"
+                        aria-selected={apiJsonView === "protocol"}
+                        onclick={() => (apiJsonView = "protocol")}
                       >
-                        Apply JSON
+                        Protocol JSON
+                      </button>
+                      <button
+                        type="button"
+                        class={`inspector-tab ${apiJsonView === "resolved" ? "is-active" : ""}`}
+                        role="tab"
+                        aria-selected={apiJsonView === "resolved"}
+                        onclick={() => (apiJsonView = "resolved")}
+                      >
+                        Resolved tree JSON
                       </button>
                     </div>
-                    <textarea
-                      class="inspector-json-editor"
-                      value={apiEditorText}
-                      spellcheck="false"
-                      onfocus={() => {
-                        apiEditorFocused = true;
-                      }}
-                      onblur={() => {
-                        apiEditorFocused = false;
-                      }}
-                      oninput={(event) => {
-                        const target = event.target as HTMLTextAreaElement | null;
-                        handleApiEditorInput(target?.value ?? "");
-                      }}
-                    ></textarea>
-                    {#if apiEditorError}
-                      <div class="inspector-alert">
-                        <div class="inspector-alert-text">{apiEditorError}</div>
+                    {#if apiJsonView === "protocol"}
+                      <div class="inspector-hint">
+                        Canonical protocol JSON for the selected connector (read-only).
                       </div>
-                    {:else if apiEditorStatus}
-                      <div class="inspector-hint">{apiEditorStatus}</div>
+                      <pre class="inspector-code-preview">{chainApiProtocolJson}</pre>
+                    {:else}
+                      <div class="inspector-hint">
+                        Edit computed full-tree JSON to update the flow. Read-only (on-chain)
+                        connectors are preserved automatically.
+                      </div>
+                      <div class="inspector-api-controls">
+                        <label class="inspector-checkbox">
+                          <input
+                            type="checkbox"
+                            checked={apiEditorLiveApply}
+                            onchange={(event) => {
+                              const target = event.target as HTMLInputElement | null;
+                              apiEditorLiveApply = Boolean(target?.checked);
+                              if (apiEditorLiveApply) {
+                                handleApiEditorInput(apiEditorText);
+                              }
+                            }}
+                          />
+                          <span>Live apply</span>
+                        </label>
+                        <button
+                          type="button"
+                          class="inspector-edit"
+                          onclick={applyApiEditorNow}
+                          disabled={apiEditorLiveApply}
+                        >
+                          Apply JSON
+                        </button>
+                      </div>
+                      <textarea
+                        class="inspector-json-editor"
+                        value={apiEditorText}
+                        spellcheck="false"
+                        onfocus={() => {
+                          apiEditorFocused = true;
+                        }}
+                        onblur={() => {
+                          apiEditorFocused = false;
+                        }}
+                        oninput={(event) => {
+                          const target = event.target as HTMLTextAreaElement | null;
+                          handleApiEditorInput(target?.value ?? "");
+                        }}
+                      ></textarea>
+                      {#if apiEditorError}
+                        <div class="inspector-alert">
+                          <div class="inspector-alert-text">{apiEditorError}</div>
+                        </div>
+                      {:else if apiEditorStatus}
+                        <div class="inspector-hint">{apiEditorStatus}</div>
+                      {/if}
                     {/if}
                   </div>
                   <div class="inspector-section">
@@ -5281,16 +8305,11 @@
     <div class="confirm-overlay" role="dialog" aria-modal="true">
       <div class="editor-modal">
         <div class="editor-header">
-          <div class="editor-title">Edit transformation</div>
+          <div class="editor-title">Create transformation</div>
           <div class="editor-header-actions">
             <span class="editor-status">
               {transformationEditorStatus === "network" ? "Network" : "Draft"}
             </span>
-            {#if transformationEditorStatus === "network" && !transformationEditorLocked}
-              <button type="button" class="editor-fork" onclick={forkTransformationEditor}>
-                Fork as draft
-              </button>
-            {/if}
             <button type="button" class="editor-close" onclick={closeTransformationEditor}>
               Close
             </button>
@@ -5302,7 +8321,7 @@
             id="tx-name"
             class="editor-input"
             value={transformationDraftName}
-            disabled={transformationEditorReadOnly}
+            disabled={transformationEditorReadOnly || transformationEditorDeployBusy}
             oninput={(event) => {
               const target = event.target as HTMLInputElement | null;
               transformationDraftName = target?.value ?? "";
@@ -5314,7 +8333,7 @@
             id="tx-args"
             class="editor-input"
             value={transformationDraftArgs}
-            disabled={transformationEditorReadOnly}
+            disabled={transformationEditorReadOnly || transformationEditorDeployBusy}
             oninput={(event) => {
               const target = event.target as HTMLInputElement | null;
               transformationDraftArgs = target?.value ?? "";
@@ -5331,7 +8350,7 @@
           <SolidityEditorShell
             template={transformationTemplate}
             bind:value={transformationDraftCode}
-            readOnly={transformationEditorReadOnly}
+            readOnly={transformationEditorReadOnly || transformationEditorDeployBusy}
           />
         </div>
         <div class="editor-actions">
@@ -5339,10 +8358,10 @@
           <button
             type="button"
             class="primary"
-            disabled={transformationEditorReadOnly}
+            disabled={transformationEditorReadOnly || transformationEditorDeployBusy}
             onclick={saveTransformationEditor}
           >
-            Save
+            {transformationEditorDeployBusy ? "Deploying..." : "Deploy to chain"}
           </button>
         </div>
       </div>
@@ -5353,16 +8372,11 @@
     <div class="confirm-overlay" role="dialog" aria-modal="true">
       <div class="editor-modal">
         <div class="editor-header">
-          <div class="editor-title">Edit condition</div>
+          <div class="editor-title">Create condition</div>
           <div class="editor-header-actions">
             <span class="editor-status"
               >{conditionEditorStatus === "network" ? "Network" : "Draft"}</span
             >
-            {#if conditionEditorStatus === "network" && !conditionEditorLocked}
-              <button type="button" class="editor-fork" onclick={forkConditionEditor}>
-                Fork as draft
-              </button>
-            {/if}
             <button type="button" class="editor-close" onclick={closeConditionEditor}>Close</button>
           </div>
         </div>
@@ -5372,7 +8386,7 @@
             id="condition-name"
             class="editor-input"
             value={conditionDraftName}
-            disabled={conditionEditorReadOnly}
+            disabled={conditionEditorReadOnly || conditionEditorDeployBusy}
             oninput={(event) => {
               const target = event.target as HTMLInputElement | null;
               conditionDraftName = target?.value ?? "";
@@ -5390,7 +8404,7 @@
           <SolidityEditorShell
             template={conditionTemplate}
             bind:value={conditionDraftCode}
-            readOnly={conditionEditorReadOnly}
+            readOnly={conditionEditorReadOnly || conditionEditorDeployBusy}
           />
         </div>
         <div class="editor-actions">
@@ -5398,10 +8412,10 @@
           <button
             type="button"
             class="primary"
-            disabled={conditionEditorReadOnly}
+            disabled={conditionEditorReadOnly || conditionEditorDeployBusy}
             onclick={saveConditionEditor}
           >
-            Save
+            {conditionEditorDeployBusy ? "Deploying..." : "Deploy to chain"}
           </button>
         </div>
       </div>
@@ -5413,7 +8427,7 @@
       <div class="confirm-modal">
         <div class="confirm-title">Clear canvas?</div>
         <div class="confirm-text">
-          This will remove all nodes and connections from the current particle tab.
+          This will remove all nodes and connections from the current connector tab.
         </div>
         <div class="confirm-actions">
           <button type="button" onclick={cancelClearCanvas}>Cancel</button>
@@ -5770,6 +8784,23 @@
     @apply text-[0.7rem] font-semibold tracking-[0.08em];
   }
 
+  .studio :global(.svelte-flow__edge-text) {
+    fill: rgba(255, 255, 255, 0.9) !important;
+  }
+
+  .studio :global(.svelte-flow__edge-textbg) {
+    fill: transparent !important;
+    stroke: transparent !important;
+  }
+
+  .studio :global(.svelte-flow__edge-label) {
+    color: rgba(255, 255, 255, 0.92) !important;
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.65);
+  }
+
   .studio :global(.dock--top .btn),
   .studio :global(.dock--bottom .btn) {
     @apply px-2 py-1 text-xs;
@@ -5803,6 +8834,14 @@
 
   .inspector-tabs {
     @apply inline-flex items-center gap-1 rounded-md border border-white/10 bg-black/70 p-1;
+  }
+
+  .inspector-json-view-tabs {
+    @apply inline-flex w-full items-center gap-1 rounded-md border border-white/10 bg-black/70 p-1;
+  }
+
+  .inspector-json-view-tabs .inspector-tab {
+    @apply flex-1;
   }
 
   .inspector-tab {
@@ -5867,6 +8906,10 @@
     @apply flex flex-col gap-2;
   }
 
+  .inspector-transform-list--compact {
+    @apply mt-1;
+  }
+
   .inspector-transform-row {
     @apply flex flex-col gap-2;
   }
@@ -5877,6 +8920,22 @@
 
   .inspector-transform-fields .inspector-input {
     @apply flex-1 min-w-[6rem];
+  }
+
+  .inspector-transform-readonly {
+    @apply flex flex-1 min-w-0 flex-col gap-1 rounded-md border border-white/10 bg-black/60 px-2 py-1;
+  }
+
+  .inspector-transform-name {
+    @apply text-[0.66rem] font-medium text-white/90;
+  }
+
+  .inspector-transform-args {
+    @apply text-[0.56rem] uppercase tracking-[0.16em] text-white/45;
+  }
+
+  .inspector-transform-args-input {
+    @apply mt-0 w-24 text-[0.62rem] normal-case tracking-normal;
   }
 
   .inspector-input--args {
@@ -5920,6 +8979,20 @@
   .inspector-action {
     @apply mt-2 w-full rounded-md border border-white/10 bg-white/5 px-2 py-1 text-[0.6rem]
       uppercase tracking-[0.18em] text-white/70 hover:border-white/30 hover:text-white;
+  }
+
+  .inspector-code-preview {
+    @apply max-h-44 overflow-auto rounded-md border border-white/10 bg-black/80 p-2 text-[0.6rem] leading-5 text-emerald-100/90;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  .library-create-actions {
+    @apply mb-2 flex flex-col gap-2;
+  }
+
+  .library-create-error {
+    @apply text-[0.62rem] text-rose-300/85;
   }
 
   .inspector-alert {

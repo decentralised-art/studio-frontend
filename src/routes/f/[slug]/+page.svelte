@@ -48,7 +48,7 @@
       matchingParticles = findParticlesByTerminalSet(nextFormat.terminalParticleIds);
       const matchingIds = new Set(matchingParticles.map((particle) => particle.id));
       relatedPosts = listParticlePosts().filter(
-        (event) => event.type === "particle" && matchingIds.has(event.particleId),
+        (event) => event.type === "connector" && matchingIds.has(event.particleId),
       );
     } catch (error) {
       loadError = error instanceof Error ? error.message : "Unable to load format page.";

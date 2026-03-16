@@ -269,8 +269,12 @@
 
   .profile-card-shell {
     @apply mx-auto;
-    width: var(--social-feed-card-width);
-    max-width: 100%;
+    inline-size: min(var(--social-feed-card-width), 100%);
+  }
+
+  .profile-post-feed {
+    @apply mx-auto;
+    inline-size: min(var(--social-feed-card-width), 100%);
   }
 
   .status {

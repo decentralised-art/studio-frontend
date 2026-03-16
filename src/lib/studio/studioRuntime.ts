@@ -9,10 +9,17 @@ import {
   type MockTransformationDef,
 } from "$lib/particles/mockPtNetwork";
 import type { PtOutputFeature } from "$lib/particles/ptMidiAdapter";
+import type { StudioConnectorDef } from "$lib/studio/domain/connectorModel";
+import {
+  normalizeBindingsMap,
+  projectChildSlots,
+  type SlotProjectionRange,
+} from "$lib/studio/domain/slotProjection";
 
 export type StudioNodeKind =
   | "particle"
   | "feature"
+  | "connector"
   | "dimension"
   | "transformation"
   | "condition"
@@ -39,6 +46,8 @@ export type StudioNodeData = {
   >;
   networkId?: string;
   fromNetwork?: boolean;
+  riStart?: number;
+  riShift?: number;
 };
 
 export type StudioNode = {
@@ -52,6 +61,8 @@ export type StudioEdge = {
   target: string;
   sourceHandle?: string | null;
   targetHandle?: string | null;
+  label?: unknown;
+  data?: unknown;
 };
 
 export type StudioGraph = {
@@ -75,6 +86,7 @@ type ConditionRegistry = Record<
 >;
 
 type RuntimeRegistry = {
+  connectors: Record<string, StudioConnectorDef>;
   features: Record<string, MockFeatureDef>;
   particles: Record<string, MockParticleDef>;
   transformations: TransformationRegistry;
@@ -83,6 +95,8 @@ type RuntimeRegistry = {
 
 export type StudioRuntimeSnapshot = {
   registry: RuntimeRegistry;
+  rootConnector: string;
+  // Compatibility alias for still-legacy call sites.
   rootParticle: string;
   warnings: string[];
 };
@@ -119,6 +133,25 @@ const parseTransformationLabel = (
   return { name: canonical as MockTransformationDef["name"], args };
 };
 
+const connectorToFeature = (connector: StudioConnectorDef): MockFeatureDef => ({
+  name: connector.name,
+  dimensions: connector.dimensions.map((dimension, index) => ({
+    label: `dim-${index + 1}`,
+    transformations: dimension.transformations.map((tx) => ({
+      name: tx.name as MockTransformationDef["name"],
+      args: [...tx.args],
+    })),
+  })),
+});
+
+const connectorToParticle = (connector: StudioConnectorDef): MockParticleDef => ({
+  name: connector.name,
+  featureName: connector.name,
+  composites: connector.dimensions.map((dimension) => dimension.composite ?? null),
+  conditionName: connector.conditionName,
+  conditionArgs: connector.conditionName ? [...(connector.conditionArgs ?? [])] : undefined,
+});
+
 const buildBaseRegistry = (): RuntimeRegistry => {
   const features = Object.fromEntries(
     mockRegistrySnapshot.features.map((feature) => [
@@ -136,7 +169,7 @@ const buildBaseRegistry = (): RuntimeRegistry => {
     ]),
   );
 
-  const particles = Object.fromEntries(
+  const particles: Record<string, MockParticleDef> = Object.fromEntries(
     mockRegistrySnapshot.particles.map((particle) => [
       particle.name,
       {
@@ -149,7 +182,27 @@ const buildBaseRegistry = (): RuntimeRegistry => {
     ]),
   );
 
+  const connectors: Record<string, StudioConnectorDef> = {};
+  Object.values(particles).forEach((particle) => {
+    const feature = features[particle.featureName];
+    if (!feature) return;
+    connectors[particle.name] = {
+      name: particle.name,
+      dimensions: feature.dimensions.map((dimension, index) => ({
+        transformations: dimension.transformations.map((tx) => ({
+          name: tx.name as string,
+          args: [...tx.args],
+        })),
+        composite: particle.composites[index] ?? undefined,
+        bindings: {},
+      })),
+      conditionName: particle.conditionName,
+      conditionArgs: particle.conditionName ? [...(particle.conditionArgs ?? [])] : undefined,
+    };
+  });
+
   return {
+    connectors,
     features,
     particles,
     transformations: { ...mockTransformationRegistry },
@@ -169,6 +222,11 @@ const resolveNodeName = (node: StudioNode) => {
   return slugify(node.data.label) || node.data.label;
 };
 
+const isConnectorKind = (kind: StudioNodeKind) => kind === "feature" || kind === "connector";
+
+const isCompositeTargetNode = (node: StudioNode | null) =>
+  Boolean(node && (isConnectorKind(node.data.kind) || node.data.kind === "particle"));
+
 const getDimensionNodesForFeature = (featureId: string, graph: StudioGraph) => {
   const dimensionIds = new Set(
     graph.edges.filter((edge) => edge.source === featureId).map((edge) => edge.target),
@@ -183,20 +241,146 @@ const getDimensionIndex = (dimension: StudioNode, graph: StudioGraph) => {
   return parseDimensionHandle(edge.sourceHandle);
 };
 
-const buildFeatureFromGraph = (
+const getDirectCompositeTargetsForConnectorDimension = (
+  connectorId: string,
+  dimensionIndex: number,
+  graph: StudioGraph,
+) => {
+  const sourceHandle = `dim-${dimensionIndex}`;
+  const targets: StudioNode[] = [];
+  const seen = new Set<string>();
+
+  graph.edges.forEach((edge) => {
+    if (edge.source !== connectorId) return;
+    if ((edge.sourceHandle ?? "") !== sourceHandle) return;
+    if ((edge.targetHandle ?? "") !== "in") return;
+    if (!edge.target) return;
+    const target = graph.nodes.find((node) => node.id === edge.target) ?? null;
+    if (!isCompositeTargetNode(target)) return;
+    if (seen.has(target.id)) return;
+    seen.add(target.id);
+    targets.push(target);
+  });
+
+  return targets;
+};
+
+const parseBindingSlotFromLabel = (label: unknown): number | null => {
+  if (typeof label !== "string") return null;
+  const match = label.match(/slot\s+(\d+)/i);
+  if (!match) return null;
+  const parsed = Number(match[1]);
+  if (!Number.isInteger(parsed) || parsed < 0) return null;
+  return parsed;
+};
+
+const getConnectorEdgeRelation = (edge: StudioEdge): "composite" | "binding" | "unknown" => {
+  if (edge.data && typeof edge.data === "object") {
+    const relation = (edge.data as { relation?: unknown; kind?: unknown }).relation;
+    if (relation === "composite" || relation === "binding") return relation;
+    const kind = (edge.data as { relation?: unknown; kind?: unknown }).kind;
+    if (kind === "composite" || kind === "binding") return kind;
+  }
+  const label = typeof edge.label === "string" ? edge.label.trim().toLowerCase() : "";
+  if (label.startsWith("composite")) return "composite";
+  if (label.startsWith("binding")) return "binding";
+  return "unknown";
+};
+
+const getBindingSlotFromEdge = (edge: StudioEdge): number | null => {
+  if (edge.data && typeof edge.data === "object") {
+    const slot = (edge.data as { bindingSlot?: unknown; binding_slot?: unknown; slot?: unknown })
+      .bindingSlot;
+    if (Number.isInteger(slot) && Number(slot) >= 0) return Number(slot);
+    const altSlot = (edge.data as { bindingSlot?: unknown; binding_slot?: unknown; slot?: unknown })
+      .binding_slot;
+    if (Number.isInteger(altSlot) && Number(altSlot) >= 0) return Number(altSlot);
+    const legacy = (edge.data as { bindingSlot?: unknown; binding_slot?: unknown; slot?: unknown })
+      .slot;
+    if (Number.isInteger(legacy) && Number(legacy) >= 0) return Number(legacy);
+  }
+  return parseBindingSlotFromLabel(edge.label);
+};
+
+const resolveConnectorDimensionLinks = (
+  connectorId: string,
+  dimensionIndex: number,
+  graph: StudioGraph,
+  fallbackDimensionId?: string,
+) => {
+  const sourceHandle = `dim-${dimensionIndex}`;
+  const connectorEdges = graph.edges
+    .filter(
+      (edge) =>
+        edge.source === connectorId &&
+        (edge.sourceHandle ?? "") === sourceHandle &&
+        (edge.targetHandle ?? "") === "in" &&
+        Boolean(edge.target),
+    )
+    .map((edge) => {
+      const target = graph.nodes.find((node) => node.id === edge.target) ?? null;
+      return { edge, target };
+    })
+    .filter((item) => isCompositeTargetNode(item.target));
+
+  if (connectorEdges.length) {
+    const compositeEntry =
+      connectorEdges.find((entry) => getConnectorEdgeRelation(entry.edge) === "composite") ??
+      connectorEdges[0];
+    const compositeNode = compositeEntry?.target ?? null;
+    const composite = compositeNode ? resolveNodeName(compositeNode) : null;
+    const bindings: Record<string, string> = {};
+
+    if (compositeNode && isConnectorKind(compositeNode.data.kind)) {
+      const usedSlots = new Set<number>();
+      let nextSlot = 0;
+      connectorEdges.forEach((item) => {
+        if (item === compositeEntry) return;
+        if (!item.target || !isConnectorKind(item.target.data.kind)) return;
+        let slot = getBindingSlotFromEdge(item.edge);
+        if (slot === null || usedSlots.has(slot)) {
+          while (usedSlots.has(nextSlot)) nextSlot += 1;
+          slot = nextSlot;
+          nextSlot += 1;
+        }
+        usedSlots.add(slot);
+        bindings[String(slot)] = resolveNodeName(item.target);
+      });
+    }
+
+    return { composite, bindings };
+  }
+
+  if (fallbackDimensionId) {
+    const edge = graph.edges.find(
+      (item) => item.source === fallbackDimensionId && (item.sourceHandle ?? "") === "out",
+    );
+    if (edge?.target) {
+      const target = graph.nodes.find((node) => node.id === edge.target) ?? null;
+      if (isCompositeTargetNode(target)) {
+        return { composite: resolveNodeName(target), bindings: {} };
+      }
+    }
+  }
+
+  return { composite: null, bindings: {} as Record<string, string> };
+};
+
+const buildConnectorFromGraph = (
   featureNode: StudioNode,
   graph: StudioGraph,
   nameMap: Map<string, string>,
-): MockFeatureDef => {
-  const featureName = resolveNodeName(featureNode);
+): StudioConnectorDef => {
+  const connectorName = resolveNodeName(featureNode);
   const dimensionNodes = getDimensionNodesForFeature(featureNode.id, graph);
   const dimensionCount = Math.max(featureNode.data.dimensions ?? 1, dimensionNodes.length, 1);
 
-  const dimensions: MockFeatureDef["dimensions"] = Array.from(
+  const dimensions: StudioConnectorDef["dimensions"] = Array.from(
     { length: dimensionCount },
     (_, i) => ({
-      label: `dim-${i + 1}`,
       transformations: [],
+      composite: undefined,
+      bindings: {},
     }),
   );
 
@@ -205,8 +389,8 @@ const buildFeatureFromGraph = (
     const targetIndex = index ?? dimensions.findIndex((dim) => dim.transformations.length === 0);
     if (targetIndex < 0 || targetIndex >= dimensions.length) return;
     const labels = dimension.data.transformations ?? [];
+    const links = resolveConnectorDimensionLinks(featureNode.id, targetIndex, graph, dimension.id);
     dimensions[targetIndex] = {
-      label: `dim-${targetIndex + 1}`,
       transformations: labels.map((item) => {
         if (typeof item === "string") {
           return parseTransformationLabel(item, nameMap);
@@ -214,24 +398,32 @@ const buildFeatureFromGraph = (
         const normalized = normalizeKey(item.name);
         const canonical = nameMap.get(normalized) ?? item.name;
         return {
-          name: canonical as MockTransformationDef["name"],
+          name: canonical as string,
           args: [...item.args],
         };
       }),
+      composite: links.composite ?? undefined,
+      bindings: links.bindings,
+      riStart: dimension.data.riStart,
+      riShift: dimension.data.riShift,
     };
   });
 
-  return { name: featureName, dimensions };
-};
+  for (let index = 0; index < dimensions.length; index += 1) {
+    const links = resolveConnectorDimensionLinks(featureNode.id, index, graph);
+    if (links.composite && !dimensions[index].composite) {
+      dimensions[index].composite = links.composite;
+    }
+    if (Object.keys(links.bindings).length) {
+      dimensions[index].bindings = links.bindings;
+    }
+  }
 
-const resolveCompositeName = (dimensionId: string, graph: StudioGraph) => {
-  const edge = graph.edges.find(
-    (item) => item.source === dimensionId && (item.sourceHandle ?? "") === "out",
-  );
-  if (!edge) return null;
-  const target = graph.nodes.find((node) => node.id === edge.target);
-  if (!target || target.data.kind !== "particle") return null;
-  return resolveNodeName(target);
+  return {
+    name: connectorName,
+    dimensions,
+    conditionName: resolveConditionNameForFeature(featureNode.id, graph) ?? undefined,
+  };
 };
 
 const resolveConditionNameForFeature = (featureId: string, graph: StudioGraph) => {
@@ -245,8 +437,32 @@ const resolveConditionNameForFeature = (featureId: string, graph: StudioGraph) =
 };
 
 const findRootFeature = (graph: StudioGraph) => {
-  const features = graph.nodes.filter((node) => node.data.kind === "feature");
+  const features = graph.nodes.filter((node) => isConnectorKind(node.data.kind));
   if (features.length <= 1) return features[0] ?? null;
+
+  const connectorIds = new Set(features.map((feature) => feature.id));
+  const incomingCompositeTargets = new Set<string>();
+  graph.edges.forEach((edge) => {
+    if (!edge.source || !edge.target) return;
+    if (!connectorIds.has(edge.source) || !connectorIds.has(edge.target)) return;
+    if (parseDimensionHandle(edge.sourceHandle) === null) return;
+    if ((edge.targetHandle ?? "") !== "in") return;
+    incomingCompositeTargets.add(edge.target);
+  });
+
+  const roots = features.filter((feature) => !incomingCompositeTargets.has(feature.id));
+  if (roots.length === 1) return roots[0];
+  if (roots.length > 1) {
+    return (
+      roots
+        .map((feature) => {
+          const outCount = graph.edges.filter((edge) => edge.source === feature.id).length;
+          return { feature, outCount };
+        })
+        .sort((a, b) => b.outCount - a.outCount)[0]?.feature ?? roots[0]
+    );
+  }
+
   return (
     features
       .map((feature) => {
@@ -257,44 +473,140 @@ const findRootFeature = (graph: StudioGraph) => {
   );
 };
 
-const buildRootParticle = (
+const buildRootConnector = (
   featureNode: StudioNode,
   graph: StudioGraph,
-  registry: RuntimeRegistry,
   rootName: string,
-) => {
-  const featureName = resolveNodeName(featureNode);
-  const feature = registry.features[featureName];
-  const dimensionCount = feature?.dimensions.length ?? featureNode.data.dimensions ?? 1;
-  const composites: Array<string | null> = Array.from({ length: dimensionCount }, () => null);
+  nameMap: Map<string, string>,
+): StudioConnectorDef => {
+  const connector = buildConnectorFromGraph(featureNode, graph, nameMap);
+  return { ...connector, name: rootName };
+};
 
-  const dimensionNodes = getDimensionNodesForFeature(featureNode.id, graph);
-  dimensionNodes.forEach((dimension) => {
-    const index = getDimensionIndex(dimension, graph);
-    if (index === null || index < 0 || index >= composites.length) return;
-    const compositeName = resolveCompositeName(dimension.id, graph);
-    if (compositeName && registry.particles[compositeName]) {
-      composites[index] = compositeName;
+const buildStaticBindingsForChild = (
+  registry: RuntimeRegistry,
+  connectorName: string,
+): Array<{ slotId: number; targetOpenSlots: number }> => {
+  const connector = registry.connectors[connectorName];
+  if (!connector) return [];
+  const staticBindings: Array<{ slotId: number; targetOpenSlots: number }> = [];
+  connector.dimensions.forEach((dimension, index) => {
+    if (!dimension.composite) return;
+    const target = registry.connectors[dimension.composite];
+    if (!target) return;
+    staticBindings.push({ slotId: index, targetOpenSlots: target.dimensions.length });
+  });
+  return staticBindings;
+};
+
+const validateBindingsForDimension = (
+  registry: RuntimeRegistry,
+  connector: StudioConnectorDef,
+  dimensionIndex: number,
+  warnings: string[],
+) => {
+  const dimension = connector.dimensions[dimensionIndex];
+  const bindingKeys = Object.keys(dimension.bindings ?? {});
+  if (!bindingKeys.length) return;
+
+  if (!dimension.composite) {
+    warnings.push(
+      `Connector ${connector.name} dimension ${dimensionIndex + 1} has bindings without composite.`,
+    );
+    return;
+  }
+
+  const child = registry.connectors[dimension.composite];
+  if (!child) {
+    warnings.push(
+      `Connector ${connector.name} dimension ${dimensionIndex + 1} references missing composite ${dimension.composite}.`,
+    );
+    return;
+  }
+
+  let normalized;
+  try {
+    normalized = normalizeBindingsMap(dimension.bindings);
+  } catch (error) {
+    warnings.push(
+      `Invalid bindings on ${connector.name} dimension ${dimensionIndex + 1}: ${String(error)}`,
+    );
+    return;
+  }
+
+  let ranges: SlotProjectionRange[];
+  try {
+    ranges = projectChildSlots({
+      childOpenSlots: child.dimensions.length,
+      staticBindings: buildStaticBindingsForChild(registry, child.name),
+    });
+  } catch (error) {
+    warnings.push(
+      `Failed slot projection on ${connector.name} dimension ${dimensionIndex + 1}: ${String(error)}`,
+    );
+    return;
+  }
+
+  const minStart = ranges.length ? ranges[0].projectedStart : 0;
+  const maxEnd = ranges.length
+    ? Math.max(...ranges.map((range) => range.projectedStart + range.projectedWidth))
+    : 0;
+
+  normalized.forEach((binding) => {
+    if (!registry.connectors[binding.targetConnector]) {
+      warnings.push(
+        `Binding target ${binding.targetConnector} not found for ${connector.name} dimension ${dimensionIndex + 1}.`,
+      );
+    }
+    if (binding.slotId < minStart || binding.slotId >= maxEnd) {
+      warnings.push(
+        `Binding slot ${binding.slotId} out of projected range for ${connector.name} dimension ${dimensionIndex + 1}.`,
+      );
     }
   });
+};
 
-  const conditionName = resolveConditionNameForFeature(featureNode.id, graph) ?? undefined;
+const validateConnectorRegistry = (registry: RuntimeRegistry, warnings: string[]) => {
+  Object.values(registry.connectors).forEach((connector) => {
+    connector.dimensions.forEach((dimension, index) => {
+      dimension.transformations.forEach((tx) => {
+        const txDef = registry.transformations[tx.name];
+        if (!txDef) {
+          warnings.push(`Missing transformation: ${tx.name} (connector ${connector.name}).`);
+          return;
+        }
+        if (txDef.argc !== tx.args.length) {
+          warnings.push(
+            `TransformationArgumentsMismatch: ${tx.name} (connector ${connector.name}).`,
+          );
+        }
+      });
+      validateBindingsForDimension(registry, connector, index, warnings);
+    });
 
-  return {
-    name: rootName,
-    featureName,
-    composites,
-    conditionName,
-  } satisfies MockParticleDef;
+    if (connector.conditionName) {
+      const condition = registry.conditions[connector.conditionName];
+      if (!condition) {
+        warnings.push(
+          `Missing condition: ${connector.conditionName} (connector ${connector.name}).`,
+        );
+      } else if ((connector.conditionArgs ?? []).length !== condition.argc) {
+        warnings.push(
+          `ConditionArgumentsMismatch: ${connector.conditionName} (connector ${connector.name}).`,
+        );
+      }
+    }
+  });
 };
 
 export const buildStudioRuntime = (
   graph: StudioGraph,
-  options: { rootLabel: string; rootParticleId?: string },
+  options: { rootLabel: string; rootParticleId?: string; rootConnectorId?: string },
   overrides: Partial<RuntimeRegistry> = {},
 ): StudioRuntimeSnapshot => {
   const baseRegistry = buildBaseRegistry();
   const registry: RuntimeRegistry = {
+    connectors: { ...baseRegistry.connectors, ...(overrides.connectors ?? {}) },
     features: { ...baseRegistry.features, ...(overrides.features ?? {}) },
     particles: { ...baseRegistry.particles, ...(overrides.particles ?? {}) },
     transformations: {
@@ -306,33 +618,50 @@ export const buildStudioRuntime = (
   const warnings: string[] = [];
   const transformationNameMap = buildNameMap(Object.keys(registry.transformations));
 
-  const featureNodes = graph.nodes.filter((node) => node.data.kind === "feature");
+  const featureNodes = graph.nodes.filter((node) => isConnectorKind(node.data.kind));
   featureNodes.forEach((featureNode) => {
-    const def = buildFeatureFromGraph(featureNode, graph, transformationNameMap);
-    const exists = registry.features[def.name];
+    const def = buildConnectorFromGraph(featureNode, graph, transformationNameMap);
+    const exists = registry.connectors[def.name];
     if (exists) {
       if (featureNode.data.fromNetwork) {
-        warnings.push(`Using local override for network feature: ${def.name}.`);
-        registry.features[def.name] = def;
+        warnings.push(`Using local override for network connector: ${def.name}.`);
+        registry.connectors[def.name] = def;
       } else {
-        warnings.push(`Feature already exists in registry: ${def.name}`);
+        warnings.push(`Connector already exists in registry: ${def.name}`);
       }
       return;
     }
-    registry.features[def.name] = def;
+    registry.connectors[def.name] = def;
   });
 
   const rootFeature = findRootFeature(graph);
   const sluggedRoot = slugify(options.rootLabel);
-  const rootName = options.rootParticleId ?? (sluggedRoot || options.rootLabel);
+  const rootName =
+    options.rootConnectorId ?? options.rootParticleId ?? (sluggedRoot || options.rootLabel);
   if (!rootFeature) {
-    warnings.push("No feature node found; cannot build particle.");
-    return { registry, rootParticle: rootName, warnings };
+    warnings.push("No connector node found; cannot build connector.");
+    Object.values(registry.connectors).forEach((connector) => {
+      registry.features[connector.name] = connectorToFeature(connector);
+      registry.particles[connector.name] = connectorToParticle(connector);
+    });
+    validateConnectorRegistry(registry, warnings);
+    return { registry, rootConnector: rootName, rootParticle: rootName, warnings };
   }
 
-  registry.particles[rootName] = buildRootParticle(rootFeature, graph, registry, rootName);
+  registry.connectors[rootName] = buildRootConnector(
+    rootFeature,
+    graph,
+    rootName,
+    transformationNameMap,
+  );
 
-  return { registry, rootParticle: rootName, warnings };
+  Object.values(registry.connectors).forEach((connector) => {
+    registry.features[connector.name] = connectorToFeature(connector);
+    registry.particles[connector.name] = connectorToParticle(connector);
+  });
+  validateConnectorRegistry(registry, warnings);
+
+  return { registry, rootConnector: rootName, rootParticle: rootName, warnings };
 };
 
 const resolveRunningInstance = (instance?: MockRunningInstance): MockRunningInstance => ({
@@ -349,9 +678,42 @@ const runTransform = (registry: RuntimeRegistry, name: string, value: number, ar
   return transformation.run(value, args);
 };
 
+const hydrateLegacyConnector = (
+  registry: RuntimeRegistry,
+  connectorName: string,
+): StudioConnectorDef | null => {
+  const particle = registry.particles[connectorName];
+  if (!particle) return null;
+  const feature = registry.features[particle.featureName];
+  if (!feature) return null;
+
+  const connector: StudioConnectorDef = {
+    name: particle.name,
+    dimensions: feature.dimensions.map((dimension, index) => ({
+      transformations: dimension.transformations.map((tx) => ({
+        name: tx.name as string,
+        args: [...tx.args],
+      })),
+      composite: particle.composites[index] ?? undefined,
+      bindings: {},
+    })),
+    conditionName: particle.conditionName,
+    conditionArgs: particle.conditionName ? [...(particle.conditionArgs ?? [])] : undefined,
+  };
+  registry.connectors[connector.name] = connector;
+  return connector;
+};
+
+const resolveConnector = (
+  registry: RuntimeRegistry,
+  connectorName: string,
+): StudioConnectorDef | null => {
+  return registry.connectors[connectorName] ?? hydrateLegacyConnector(registry, connectorName);
+};
+
 const genSpace = (
   registry: RuntimeRegistry,
-  feature: MockFeatureDef,
+  connector: StudioConnectorDef,
   dimId: number,
   runningInstance: MockRunningInstance,
   samplesCount: number,
@@ -362,7 +724,7 @@ const genSpace = (
   let x = startPoint;
   for (let opId = 0; opId < samplesCount; opId += 1) {
     space[opId] = x;
-    const transformations = feature.dimensions[dimId]?.transformations ?? [];
+    const transformations = connector.dimensions[dimId]?.transformations ?? [];
     if (!transformations.length) continue;
     const def = transformations[(opId + transformShift) % transformations.length];
     x = runTransform(registry, def.name, x, def.args);
@@ -372,75 +734,73 @@ const genSpace = (
 
 const sampleSpace = (
   registry: RuntimeRegistry,
-  feature: MockFeatureDef,
+  connector: StudioConnectorDef,
   dimId: number,
   runningInstance: MockRunningInstance,
   samplesIndexes: number[],
 ) => {
   const maxIndex = samplesIndexes.reduce((max, value) => Math.max(max, value), 0);
-  const space = genSpace(registry, feature, dimId, runningInstance, maxIndex + 1);
+  const space = genSpace(registry, connector, dimId, runningInstance, maxIndex + 1);
   return samplesIndexes.map((index) => space[index] ?? 0);
 };
 
 const getScalarsCount = (
   registry: RuntimeRegistry,
-  particleName: string,
+  connectorName: string,
   visited: Set<string> = new Set(),
 ): number => {
-  if (visited.has(particleName)) throw new Error(`Particle cycle detected: ${particleName}`);
-  visited.add(particleName);
-  const particle = registry.particles[particleName];
-  if (!particle) throw new Error(`Missing particle: ${particleName}`);
+  if (visited.has(connectorName)) throw new Error(`Connector cycle detected: ${connectorName}`);
+  visited.add(connectorName);
+  const connector = resolveConnector(registry, connectorName);
+  if (!connector) throw new Error(`Missing connector: ${connectorName}`);
 
   let count = 0;
-  particle.composites.forEach((composite) => {
+  connector.dimensions.forEach((dimension) => {
+    const composite = dimension.composite ?? null;
     if (!composite) {
       count += 1;
       return;
     }
     count += getScalarsCount(registry, composite, visited);
   });
-  visited.delete(particleName);
+  visited.delete(connectorName);
   return count;
 };
 
 const decompose = (
   registry: RuntimeRegistry,
   path: string,
-  particle: MockParticleDef,
+  connector: StudioConnectorDef,
   runningInstances: MockRunningInstance[],
   runningInstanceId: number,
   indexes: number[],
   dest: number,
   outputs: PtOutputFeature[],
 ): number => {
-  const feature = registry.features[particle.featureName];
-  if (!feature) throw new Error(`Missing feature: ${particle.featureName}`);
-
-  if (particle.conditionName) {
-    const condition = registry.conditions[particle.conditionName];
-    if (!condition) throw new Error(`Missing condition: ${particle.conditionName}`);
-    const args = particle.conditionArgs ?? [];
+  if (connector.conditionName) {
+    const condition = registry.conditions[connector.conditionName];
+    if (!condition) throw new Error(`Missing condition: ${connector.conditionName}`);
+    const args = connector.conditionArgs ?? [];
     if (args.length !== condition.argc) {
-      throw new Error(`ConditionArgumentsMismatch: ${particle.conditionName}`);
+      throw new Error(`ConditionArgumentsMismatch: ${connector.conditionName}`);
     }
     if (!condition.check(args)) {
-      throw new Error(`ConditionNotMet: ${particle.name}`);
+      throw new Error(`ConditionNotMet: ${connector.name}`);
     }
   }
 
-  const currentPath = `${path}/${particle.name}`;
+  const currentPath = `${path}/${connector.name}`;
   let currentDest = dest;
   let currentInstanceId = runningInstanceId;
 
-  for (let dimId = 0; dimId < feature.dimensions.length; dimId += 1) {
+  for (let dimId = 0; dimId < connector.dimensions.length; dimId += 1) {
     const override =
       currentInstanceId < runningInstances.length ? runningInstances[currentInstanceId] : undefined;
     const runningInstance = resolveRunningInstance(override);
     currentInstanceId += 1;
 
-    const compositeIndexes = sampleSpace(registry, feature, dimId, runningInstance, indexes);
-    const compositeName = particle.composites[dimId] ?? null;
+    const compositeIndexes = sampleSpace(registry, connector, dimId, runningInstance, indexes);
+    const compositeName = connector.dimensions[dimId]?.composite ?? null;
 
     if (!compositeName) {
       outputs[currentDest] = { feature_path: currentPath, data: compositeIndexes };
@@ -448,8 +808,8 @@ const decompose = (
       continue;
     }
 
-    const compositeParticle = registry.particles[compositeName];
-    if (!compositeParticle) {
+    const compositeConnector = resolveConnector(registry, compositeName);
+    if (!compositeConnector) {
       outputs[currentDest] = { feature_path: currentPath, data: compositeIndexes };
       currentDest += 1;
       continue;
@@ -458,7 +818,7 @@ const decompose = (
     currentDest = decompose(
       registry,
       currentPath,
-      compositeParticle,
+      compositeConnector,
       runningInstances,
       currentInstanceId,
       compositeIndexes,
@@ -472,13 +832,14 @@ const decompose = (
 
 export const runStudioParticle = (
   registry: RuntimeRegistry,
-  particleName: string,
+  rootName: string,
   config: MockRunConfig = {},
 ): PtOutputFeature[] => {
   const samplesCount = Math.max(1, config.samplesCount ?? 12);
-  const particle = registry.particles[particleName];
-  if (!particle) return [];
-  const scalarsCount = getScalarsCount(registry, particleName);
+  const rootConnector = resolveConnector(registry, rootName);
+  if (!rootConnector) return [];
+
+  const scalarsCount = getScalarsCount(registry, rootConnector.name);
   if (scalarsCount <= 0) return [];
 
   const outputs: PtOutputFeature[] = Array.from({ length: scalarsCount }, () => ({
@@ -490,16 +851,16 @@ export const runStudioParticle = (
   const start = runningInstances[0]?.startPoint ?? 0;
   const indexes = Array.from({ length: samplesCount }, (_, i) => i + start);
 
-  decompose(registry, "", particle, runningInstances, 1, indexes, 0, outputs);
+  decompose(registry, "", rootConnector, runningInstances, 1, indexes, 0, outputs);
   return outputs;
 };
 
 export const runStudioGraph = (
   graph: StudioGraph,
-  options: { rootLabel: string; rootParticleId?: string },
+  options: { rootLabel: string; rootParticleId?: string; rootConnectorId?: string },
   config: MockRunConfig = {},
   overrides: Partial<RuntimeRegistry> = {},
 ): PtOutputFeature[] => {
   const runtime = buildStudioRuntime(graph, options, overrides);
-  return runStudioParticle(runtime.registry, runtime.rootParticle, config);
+  return runStudioParticle(runtime.registry, runtime.rootConnector, config);
 };

@@ -51,7 +51,11 @@
   style="stroke: rgba(255,255,255,0.55); stroke-width: 1.8px;"
 />
 
-<EdgeLabel x={labelX} y={labelY} class="nodrag nopan pointer-events-auto edge-label">
+<EdgeLabel
+  x={labelX}
+  y={labelY}
+  class="nodrag nopan pointer-events-auto edge-label lineage-edge-label"
+>
   <div class="edge-title">{label}</div>
   {#if transformations.length > 0}
     <ul class="edge-list">
@@ -67,9 +71,12 @@
 <style lang="postcss">
   @reference "$lib/styles/style.css";
 
-  :global(.edge-label) {
-    @apply rounded-lg border border-white/15 bg-black/80 px-3 py-2 text-[0.65rem]
-      text-white/80 shadow-lg;
+  :global(.svelte-flow__edge-label.lineage-edge-label) {
+    @apply px-1 py-0.5 text-[0.65rem] text-white/85;
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.65);
   }
 
   .edge-title {

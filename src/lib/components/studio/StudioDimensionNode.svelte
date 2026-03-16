@@ -99,6 +99,25 @@
     return Math.max(0, Math.trunc(next));
   };
 
+  const parseArgsInput = (value: string) =>
+    value
+      .split(",")
+      .map((segment) => Number(segment.trim()))
+      .filter((num) => Number.isFinite(num))
+      .map((num) => Math.trunc(num));
+
+  const updateTransformationArgs = (index: number, rawArgs: string) => {
+    updateTransformations(id, (current) => {
+      if (index < 0 || index >= current.length) return current;
+      const next = [...current];
+      next[index] = {
+        ...next[index],
+        args: parseArgsInput(rawArgs),
+      };
+      return next;
+    });
+  };
+
   const parseTransformationPayload = (event: DragEvent) => {
     const transfer = event.dataTransfer;
     if (!transfer) return null;
@@ -293,6 +312,18 @@
           {#if transformation.args.length}
             <span class="dimension-args">({transformation.args.join(", ")})</span>
           {/if}
+          {#if !readOnly}
+            <input
+              class="dimension-args-input"
+              value={transformation.args.join(", ")}
+              placeholder="args: 0, 1"
+              onpointerdown={(event) => event.stopPropagation()}
+              oninput={(event) => {
+                const target = event.target as HTMLInputElement | null;
+                updateTransformationArgs(index, target?.value ?? "");
+              }}
+            />
+          {/if}
           <button
             type="button"
             class="pill-remove"
@@ -378,6 +409,10 @@
 
   .dimension-args {
     @apply text-white/50;
+  }
+
+  .dimension-args-input {
+    @apply ml-1 w-16 rounded-sm border border-white/15 bg-black/70 px-1 py-[0.05rem] text-[0.5rem] normal-case tracking-normal text-white/80 outline-none;
   }
 
   .pill-remove:disabled {

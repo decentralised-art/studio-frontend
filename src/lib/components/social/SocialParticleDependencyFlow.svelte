@@ -5,8 +5,9 @@
   import "@xyflow/svelte/dist/style.css";
 
   import FlowInstanceBridge from "$lib/components/studio/FlowInstanceBridge.svelte";
+  import StudioConnectorNode from "$lib/components/studio/StudioConnectorNode.svelte";
+  import StudioConditionNode from "$lib/components/studio/StudioConditionNode.svelte";
   import StudioDimensionNode from "$lib/components/studio/StudioDimensionNode.svelte";
-  import StudioFeatureNode from "$lib/components/studio/StudioFeatureNode.svelte";
   import StudioParticleNode from "$lib/components/studio/StudioParticleNode.svelte";
   import {
     buildParticleDependencyGraph,
@@ -42,7 +43,9 @@
   });
 
   const nodeTypes = {
-    feature: StudioFeatureNode,
+    feature: StudioConnectorNode,
+    connector: StudioConnectorNode,
+    condition: StudioConditionNode,
     dimension: StudioDimensionNode,
     particle: StudioParticleNode,
   } as unknown as NodeTypes;
@@ -92,6 +95,72 @@
     };
   };
 
+  const fallbackNodeSize = (node: StudioDependencyNode): { width: number; height: number } => {
+    switch (node.data.kind) {
+      case "feature":
+      case "connector":
+        return { width: 360, height: 190 };
+      case "dimension":
+        return { width: 220, height: 120 };
+      case "particle":
+        return { width: 180, height: 78 };
+      case "condition":
+        return { width: 220, height: 90 };
+      default:
+        return { width: 180, height: 80 };
+    }
+  };
+
+  const boxesOverlap = (
+    lhs: { x: number; y: number; width: number; height: number },
+    rhs: { x: number; y: number; width: number; height: number },
+    padding = 26,
+  ) =>
+    lhs.x < rhs.x + rhs.width + padding &&
+    lhs.x + lhs.width + padding > rhs.x &&
+    lhs.y < rhs.y + rhs.height + padding &&
+    lhs.y + lhs.height + padding > rhs.y;
+
+  const enforceNodeSpacing = (sourceNodes: StudioDependencyNode[]) => {
+    if (!flowShellEl || !sourceNodes.length) return sourceNodes;
+
+    const placed: Array<{ x: number; y: number; width: number; height: number }> = [];
+    const nextNodes = sourceNodes.map((node) => ({
+      ...node,
+      position: { ...node.position },
+    }));
+    const byId = new SvelteMap(nextNodes.map((node) => [node.id, node] as const));
+    let changed = false;
+
+    const ordered = [...nextNodes].sort(
+      (a, b) => a.position.y - b.position.y || a.position.x - b.position.x,
+    );
+
+    ordered.forEach((node) => {
+      const current = byId.get(node.id);
+      if (!current) return;
+      const size = measureNodeSize(current.id, fallbackNodeSize(current));
+      let x = current.position.x;
+      let y = current.position.y;
+      let guard = 0;
+      while (guard < 240) {
+        const overlap = placed.find((other) =>
+          boxesOverlap({ x, y, width: size.width, height: size.height }, other),
+        );
+        if (!overlap) break;
+        x = overlap.x + overlap.width + 26;
+        guard += 1;
+      }
+      if (Math.abs(current.position.x - x) > 0.5 || Math.abs(current.position.y - y) > 0.5) {
+        current.position = { x, y };
+        changed = true;
+      }
+      placed.push({ x, y, width: size.width, height: size.height });
+    });
+
+    return changed ? nextNodes : sourceNodes;
+  };
+
   const getDimensionNodesForFeature = (featureId: string) =>
     flowNodes.filter(
       (node) => node.data.kind === "dimension" && node.data.parentFeatureId === featureId,
@@ -117,7 +186,7 @@
     const defaultDimensionSize = { width: 180, height: 80 };
 
     flowNodes
-      .filter((node) => node.data.kind === "feature")
+      .filter((node) => node.data.kind === "feature" || node.data.kind === "connector")
       .forEach((feature) => {
         const dimensions = getDimensionNodesForFeature(feature.id).sort(
           (a, b) => (a.data.dimensionIndex ?? 0) - (b.data.dimensionIndex ?? 0),
@@ -167,11 +236,16 @@
         });
       });
 
-    if (!updates.size) return;
-    flowNodes = flowNodes.map((node) => {
-      const update = updates.get(node.id);
-      return update ? { ...node, position: update } : node;
-    });
+    const nextNodes = updates.size
+      ? flowNodes.map((node) => {
+          const update = updates.get(node.id);
+          return update ? { ...node, position: update } : node;
+        })
+      : flowNodes;
+    const spaced = enforceNodeSpacing(nextNodes);
+    if (spaced !== flowNodes) {
+      flowNodes = spaced;
+    }
   };
 
   const fitFlow = async () => {
@@ -226,7 +300,7 @@
   <button
     type="button"
     class="flow-expand-btn"
-    aria-label="Open announced particle in studio"
+    aria-label="Open announced connector in studio"
     title="Open in Studio"
     onclick={openAnnouncedParticle}
   >
@@ -320,5 +394,30 @@
   .social-dependency-flow :global(.svelte-flow__edge-path) {
     stroke: rgba(255, 255, 255, 0.24);
     stroke-width: 1.25px;
+  }
+
+  .social-dependency-flow :global(.svelte-flow__edge-text) {
+    fill: rgba(255, 255, 255, 0.9) !important;
+  }
+
+  .social-dependency-flow :global(.svelte-flow__edge-textbg) {
+    fill: transparent !important;
+    stroke: transparent !important;
+  }
+
+  .social-dependency-flow :global(.svelte-flow__edge-label) {
+    color: rgba(255, 255, 255, 0.92) !important;
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.65);
+  }
+
+  .social-dependency-flow :global(.svelte-flow__edge-label-renderer .svelte-flow__edge-label) {
+    color: rgba(255, 255, 255, 0.92) !important;
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.65);
   }
 </style>

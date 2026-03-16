@@ -3,14 +3,19 @@
 
   type ConditionNodeData = {
     label: string;
+    fromNetwork?: boolean;
   };
 
   const { data, selected }: NodeProps<ConditionNodeData> = $props();
   const selectedClass = $derived(selected ? "is-selected" : "");
+  const readOnly = $derived(Boolean(data.fromNetwork));
 </script>
 
 <div class="condition-node {selectedClass}">
   <div class="condition-title">{data.label}</div>
+  {#if readOnly}
+    <div class="condition-readonly">on-chain · read-only</div>
+  {/if}
   <Handle type="source" position={Position.Bottom} id="out" />
 </div>
 
@@ -30,5 +35,9 @@
 
   .condition-title {
     @apply text-[0.65rem] uppercase tracking-[0.2em];
+  }
+
+  .condition-readonly {
+    @apply mt-1 inline-flex w-fit rounded border border-cyan-300/30 bg-cyan-400/10 px-2 py-0.5 text-[0.5rem] uppercase tracking-[0.2em] text-cyan-100/85;
   }
 </style>

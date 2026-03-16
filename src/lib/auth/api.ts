@@ -446,6 +446,147 @@ export const getMe = async () => {
   return response.json();
 };
 
+export type ServicesUserRecord = {
+  id: string;
+  email?: string;
+  display_name?: string;
+  ethereum_address?: string | null;
+  [key: string]: unknown;
+};
+
+const coerceServicesUserRecord = (value: unknown): ServicesUserRecord | null => {
+  if (typeof value === "string") {
+    const id = value.trim();
+    if (!id) return null;
+    return { id };
+  }
+
+  if (!value || typeof value !== "object") return null;
+  const record = value as Record<string, unknown>;
+  const nestedUser =
+    record.user && typeof record.user === "object"
+      ? (record.user as Record<string, unknown>)
+      : null;
+  const base = nestedUser ?? record;
+  const id = typeof base.id === "string" ? base.id.trim() : "";
+  if (!id) return null;
+  return {
+    ...base,
+    id,
+  };
+};
+
+const asUserRecordArray = (payload: unknown): ServicesUserRecord[] => {
+  const toArray = (value: unknown): ServicesUserRecord[] =>
+    Array.isArray(value)
+      ? value
+          .map((item) => coerceServicesUserRecord(item))
+          .filter((item): item is ServicesUserRecord => Boolean(item))
+      : [];
+
+  const direct = toArray(payload);
+  if (direct.length > 0) return direct;
+
+  if (!payload || typeof payload !== "object") return [];
+  const root = payload as Record<string, unknown>;
+
+  const primaryKeys = ["users", "items", "results", "data"] as const;
+  for (const key of primaryKeys) {
+    const found = toArray(root[key]);
+    if (found.length > 0) return found;
+  }
+
+  if (root.data && typeof root.data === "object") {
+    const nested = root.data as Record<string, unknown>;
+    for (const key of primaryKeys) {
+      const found = toArray(nested[key]);
+      if (found.length > 0) return found;
+    }
+  }
+
+  return [];
+};
+
+const mergeUserRecords = (
+  base: ServicesUserRecord,
+  override: ServicesUserRecord | null,
+): ServicesUserRecord => {
+  if (!override) return base;
+  return { ...base, ...override, id: base.id };
+};
+
+const hasEthereumAddress = (user: ServicesUserRecord): boolean => {
+  const direct = user.ethereum_address;
+  if (typeof direct === "string" && direct.trim().length > 0) return true;
+  const alt = user.ethereumAddress;
+  return typeof alt === "string" && alt.trim().length > 0;
+};
+
+const hydrateServicesUsersById = async (
+  users: ServicesUserRecord[],
+): Promise<ServicesUserRecord[]> => {
+  const toHydrate = users.filter((user) => !hasEthereumAddress(user));
+  if (toHydrate.length === 0) return users;
+
+  const settled = await Promise.allSettled(
+    toHydrate.map(async (user) => {
+      const response = await authFetch(`/users/${encodeURIComponent(user.id)}`);
+      const payload = await parseResponseBody(response);
+      if (!response.ok) return [user.id, null] as const;
+      return [user.id, coerceServicesUserRecord(payload)] as const;
+    }),
+  );
+
+  const hydratedById = new Map<string, ServicesUserRecord>();
+  settled.forEach((result) => {
+    if (result.status !== "fulfilled") return;
+    const [id, maybeUser] = result.value;
+    if (maybeUser) hydratedById.set(id, maybeUser);
+  });
+
+  return users.map((user) => mergeUserRecords(user, hydratedById.get(user.id) ?? null));
+};
+
+export const listServicesUsers = async (): Promise<ServicesUserRecord[]> => {
+  const pagedUsers: ServicesUserRecord[] = [];
+  const seenIds = new Set<string>();
+  const pageLimit = 200;
+
+  for (let page = 0; page < 25; page += 1) {
+    const response = await authFetch(`/users?limit=${pageLimit}&page=${page}`);
+    const payload = await parseResponseBody(response);
+    if (!response.ok) {
+      if (page === 0) break;
+      throw new Error(extractErrorMessage(payload));
+    }
+    const batch = asUserRecordArray(payload);
+    if (batch.length === 0) break;
+
+    let newlyAdded = 0;
+    batch.forEach((user) => {
+      if (seenIds.has(user.id)) return;
+      seenIds.add(user.id);
+      pagedUsers.push(user);
+      newlyAdded += 1;
+    });
+
+    // If API ignores page param and repeats the same items, stop to avoid looping.
+    if (newlyAdded === 0) break;
+    if (batch.length < pageLimit) break;
+  }
+
+  if (pagedUsers.length > 0) {
+    return hydrateServicesUsersById(pagedUsers);
+  }
+
+  const fallbackResponse = await authFetch("/users");
+  const fallbackPayload = await parseResponseBody(fallbackResponse);
+  if (!fallbackResponse.ok) {
+    throw new Error(extractErrorMessage(fallbackPayload));
+  }
+  return hydrateServicesUsersById(asUserRecordArray(fallbackPayload));
+};
+
 export const getUserById = async (userId: string) => {
   const response = await fetch(buildServicesApiUrl(`/users/${encodeURIComponent(userId)}`));
   const payload = await parseResponseBody(response);

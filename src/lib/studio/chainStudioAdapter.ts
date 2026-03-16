@@ -1,18 +1,27 @@
+import { browser } from "$app/environment";
+import { listServicesUsers } from "$lib/auth/api";
+import { getOrCreateMockEthereumAccount } from "$lib/auth/mockEthereum";
+import { fromProtocolConnectorPayload } from "$lib/chain/connectorContractAdapter";
 import {
   getChainAccount,
   getChainCondition,
-  getChainFeature,
-  getChainParticle,
+  getChainConnector,
   getChainTransformation,
-  type ChainFeatureResponse,
-  type ChainParticleResponse,
+  type ChainConnectorResponse,
 } from "$lib/chain/registryApi";
 import type { ExploreParticle } from "$lib/data/exploreParticles";
 import type { LibraryItem } from "$lib/data/studioLibrary";
-import { mockUsers } from "$lib/data/users";
+import {
+  extraChainSyncSources,
+  mockUserSeedChainSyncSources,
+  mockUsers,
+  mockUsersById,
+} from "$lib/data/users";
 import type { MockFeatureDef, MockParticleDef } from "$lib/particles/mockPtNetwork";
+import type { StudioConnectorDef } from "$lib/studio/domain/connectorModel";
 
 type ChainRuntimeShape = {
+  connectors: Record<string, StudioConnectorDef>;
   features: Record<string, MockFeatureDef>;
   particles: Record<string, MockParticleDef>;
   transformations: Record<string, { argc: number }>;
@@ -31,10 +40,196 @@ export type ChainStudioSyncResult = {
 
 export type ChainStudioParticleFetchResult = {
   registry: {
+    connector?: StudioConnectorDef;
     feature?: MockFeatureDef;
     particle?: MockParticleDef;
   };
   particleMeta?: ExploreParticle;
+};
+
+export type ChainOwnerSyncSource = {
+  address: string;
+  authorId: string;
+  label: string;
+};
+
+const normalizeAddress = (value: string) => value.trim().toLowerCase();
+
+const fallbackAuthorIdFromAddress = (address: string) => {
+  const normalized = normalizeAddress(address).replace(/^0x/, "");
+  return normalized ? `chain-source-${normalized.slice(0, 8)}` : "chain-source-unknown";
+};
+
+const sourceLabelFromUser = (user: Record<string, unknown>) => {
+  const displayName =
+    typeof user.display_name === "string"
+      ? user.display_name.trim()
+      : typeof user.displayName === "string"
+        ? user.displayName.trim()
+        : "";
+  if (displayName) return displayName;
+  const email = typeof user.email === "string" ? user.email.trim() : "";
+  if (email) return email;
+  const id = typeof user.id === "string" ? user.id.trim() : "";
+  return id || "Unknown user";
+};
+
+const mockUserIdFromServicesUser = (
+  user: Record<string, unknown>,
+): keyof typeof mockUsersById | null => {
+  const email = typeof user.email === "string" ? user.email.trim().toLowerCase() : "";
+  if (email.endsWith("@mock.decentralised.art")) {
+    const id = email.replace(/@mock\.decentralised\.art$/i, "");
+    if (id in mockUsersById) return id as keyof typeof mockUsersById;
+  }
+
+  const displayName =
+    typeof user.display_name === "string"
+      ? user.display_name.trim()
+      : typeof user.displayName === "string"
+        ? user.displayName.trim()
+        : "";
+  if (displayName) {
+    const match = Object.values(mockUsersById).find((entry) => entry.nickname === displayName);
+    if (match) return match.id as keyof typeof mockUsersById;
+  }
+
+  return null;
+};
+
+const resolveMockRuntimeAddress = (userId: string): string => {
+  if (!browser) return "";
+  try {
+    return normalizeAddress(getOrCreateMockEthereumAccount(`mock-user:${userId}`).address);
+  } catch {
+    return "";
+  }
+};
+
+const addSource = (dedup: Map<string, ChainOwnerSyncSource>, source: ChainOwnerSyncSource) => {
+  const address = normalizeAddress(source.address);
+  if (!address) return;
+  if (dedup.has(address)) return;
+  dedup.set(address, {
+    address,
+    authorId: source.authorId,
+    label: source.label,
+  });
+};
+
+const fallbackChainSyncSources = (): ChainOwnerSyncSource[] => {
+  const dedup = new Map<string, ChainOwnerSyncSource>();
+
+  // 1) Seed addresses from source data (immutable baseline)
+  mockUserSeedChainSyncSources.forEach((entry) => {
+    addSource(dedup, {
+      address: entry.address,
+      authorId: entry.id,
+      label: entry.label,
+    });
+  });
+
+  // 2) Current in-memory mock addresses (may be patched after chain auth)
+  mockUsers.forEach((entry) => {
+    addSource(dedup, {
+      address: entry.address,
+      authorId: entry.id,
+      label: entry.nickname,
+    });
+  });
+
+  // 3) Deterministic runtime wallet aliases used by chain auth
+  mockUsers.forEach((entry) => {
+    const runtimeAddress = resolveMockRuntimeAddress(entry.id);
+    if (!runtimeAddress) return;
+    addSource(dedup, {
+      address: runtimeAddress,
+      authorId: entry.id,
+      label: entry.nickname,
+    });
+  });
+
+  // 4) External explicit sources
+  extraChainSyncSources.forEach((entry) => {
+    addSource(dedup, {
+      address: entry.address,
+      authorId: entry.id,
+      label: entry.label,
+    });
+  });
+
+  return Array.from(dedup.values());
+};
+
+let chainSyncSourcesCache: ChainOwnerSyncSource[] | null = null;
+let chainSyncSourcesLoadPromise: Promise<ChainOwnerSyncSource[]> | null = null;
+
+export const listChainSyncSourcesForApp = async (options?: {
+  force?: boolean;
+}): Promise<ChainOwnerSyncSource[]> => {
+  if (chainSyncSourcesCache && !options?.force) return chainSyncSourcesCache;
+  if (chainSyncSourcesLoadPromise && !options?.force) return chainSyncSourcesLoadPromise;
+
+  chainSyncSourcesLoadPromise = (async () => {
+    const fallback = fallbackChainSyncSources();
+    try {
+      const users = await listServicesUsers();
+      const byAddress = new Map<string, ChainOwnerSyncSource>();
+      users.forEach((user) => {
+        const addressRaw =
+          typeof user.ethereum_address === "string"
+            ? user.ethereum_address
+            : typeof user.ethereumAddress === "string"
+              ? user.ethereumAddress
+              : "";
+        const address = normalizeAddress(addressRaw);
+        if (!address) return;
+        if (byAddress.has(address)) return;
+        const mockId = mockUserIdFromServicesUser(user);
+        const authorId =
+          mockId ??
+          (typeof user.id === "string" && user.id.trim().length > 0
+            ? user.id.trim()
+            : fallbackAuthorIdFromAddress(address));
+        const mockLabel = mockId ? (mockUsersById[mockId]?.nickname ?? "") : "";
+        byAddress.set(address, {
+          address,
+          authorId,
+          label: mockLabel || sourceLabelFromUser(user),
+        });
+      });
+
+      // Temporary workaround: always merge with known mock/fallback sources.
+      // Services users can be incomplete early in development (e.g., missing ethereum_address).
+      fallback.forEach((source) => {
+        const address = normalizeAddress(source.address);
+        if (!address) return;
+        if (byAddress.has(address)) return;
+        byAddress.set(address, {
+          address,
+          authorId: source.authorId,
+          label: source.label,
+        });
+      });
+
+      const merged = Array.from(byAddress.values());
+      if (merged.length > 0) {
+        chainSyncSourcesCache = merged;
+        return merged;
+      }
+    } catch (error) {
+      console.warn("[Chain sync] Failed to load users from services API.", error);
+    }
+
+    chainSyncSourcesCache = fallback;
+    return fallback;
+  })();
+
+  try {
+    return await chainSyncSourcesLoadPromise;
+  } finally {
+    chainSyncSourcesLoadPromise = null;
+  }
 };
 
 const normalizeEpochMs = (value: unknown): number | null => {
@@ -55,8 +250,7 @@ const normalizeEpochMs = (value: unknown): number | null => {
   return null;
 };
 
-const extractParticleCreatedAt = (payload: ChainParticleResponse): number | null => {
-  const record = payload as Record<string, unknown>;
+const extractCreatedAtFromRecord = (record: Record<string, unknown>): number | null => {
   const candidates: unknown[] = [
     record.created_at,
     record.createdAt,
@@ -78,63 +272,42 @@ const extractParticleCreatedAt = (payload: ChainParticleResponse): number | null
   return null;
 };
 
+const extractConnectorCreatedAt = (payload: ChainConnectorResponse): number | null =>
+  extractCreatedAtFromRecord(payload as Record<string, unknown>);
+
 const titleize = (value: string) =>
   value
     .split(/[-_]/g)
     .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
     .join(" ");
 
-const normalizeCompositeNames = (payload: ChainParticleResponse): Array<string | null> =>
-  (payload.composite_names ?? payload.compositeNames ?? payload.composites ?? []).map((entry) =>
-    typeof entry === "string" && entry.trim().length > 0 ? entry.trim() : null,
-  );
-
-const normalizeFeatureName = (payload: ChainParticleResponse) =>
-  (payload.feature_name ?? payload.featureName ?? "").trim();
-
-const normalizeConditionName = (payload: ChainParticleResponse) =>
-  (payload.condition_name ?? payload.conditionName ?? "").trim() || undefined;
-
-const normalizeConditionArgs = (payload: ChainParticleResponse) =>
-  (payload.condition_args ?? payload.conditionArgs ?? []).filter(
-    (value): value is number => typeof value === "number" && Number.isFinite(value),
-  );
-
-const normalizeFeature = (payload: ChainFeatureResponse): MockFeatureDef | null => {
-  const name = (payload.name ?? "").trim();
-  if (!name) return null;
-  const dimensions = Array.isArray(payload.dimensions) ? payload.dimensions : [];
-  return {
-    name,
-    dimensions: dimensions.map((dimension, index) => ({
-      label: `dim-${index + 1}`,
-      transformations: (dimension.transformations ?? [])
-        .map((tx) => {
-          const txName = typeof tx?.name === "string" ? tx.name.trim() : "";
-          if (!txName) return null;
-          const args = Array.isArray(tx?.args)
-            ? tx.args.filter((value): value is number => typeof value === "number")
-            : [];
-          return { name: txName as never, args };
-        })
-        .filter((tx): tx is { name: never; args: number[] } => Boolean(tx)),
+const connectorToFeature = (connector: StudioConnectorDef): MockFeatureDef => ({
+  name: connector.name,
+  dimensions: connector.dimensions.map((dimension, index) => ({
+    label: `dim-${index + 1}`,
+    transformations: dimension.transformations.map((tx) => ({
+      // Runtime currently supports known local transformation names only.
+      // Keep chain names for sync/deploy metadata; local run will use identity placeholders.
+      name: tx.name as never,
+      args: [...tx.args],
     })),
-  };
-};
+  })),
+});
 
-const normalizeParticle = (payload: ChainParticleResponse): MockParticleDef | null => {
-  const name = (payload.name ?? "").trim();
-  const featureName = normalizeFeatureName(payload);
-  if (!name || !featureName) return null;
-  const conditionName = normalizeConditionName(payload);
-  const conditionArgs = normalizeConditionArgs(payload);
-  return {
-    name,
-    featureName,
-    composites: normalizeCompositeNames(payload),
-    conditionName,
-    conditionArgs: conditionName ? conditionArgs : undefined,
-  };
+const connectorToParticle = (connector: StudioConnectorDef): MockParticleDef => ({
+  name: connector.name,
+  featureName: connector.name,
+  composites: connector.dimensions.map((dimension) => dimension.composite ?? null),
+  conditionName: connector.conditionName,
+  conditionArgs: connector.conditionName ? [...(connector.conditionArgs ?? [])] : undefined,
+});
+
+const normalizeConnector = (payload: ChainConnectorResponse): StudioConnectorDef | null => {
+  try {
+    return fromProtocolConnectorPayload(payload);
+  } catch {
+    return null;
+  }
 };
 
 const mapFeatureLibraryItem = (feature: MockFeatureDef, authorId: string): LibraryItem => ({
@@ -146,6 +319,21 @@ const mapFeatureLibraryItem = (feature: MockFeatureDef, authorId: string): Libra
   dimensions: feature.dimensions.length,
 });
 
+const extractRuntimeSnippet = (solSrc?: string): string | undefined => {
+  if (!solSrc) return undefined;
+  const trimmed = solSrc.trim();
+  if (!trimmed) return undefined;
+  const returnMatch = trimmed.match(/\breturn\b[\s\S]*?;/i);
+  if (returnMatch) {
+    return returnMatch[0].replace(/\s+/g, " ").trim();
+  }
+  const firstLine = trimmed
+    .split(/\r?\n/g)
+    .map((line) => line.trim())
+    .find((line) => line.length > 0);
+  return firstLine;
+};
+
 const mapTransformationLibraryItem = (
   name: string,
   authorId: string,
@@ -155,7 +343,8 @@ const mapTransformationLibraryItem = (
   name: titleize(name),
   kind: "transformation",
   authorId,
-  summary: solSrc ? "Synced from chain Solidity source." : "Synced from chain.",
+  summary: "Synced from chain.",
+  runtimeSnippet: extractRuntimeSnippet(solSrc),
 });
 
 const mapConditionLibraryItem = (name: string, authorId: string, solSrc?: string): LibraryItem => ({
@@ -163,7 +352,8 @@ const mapConditionLibraryItem = (name: string, authorId: string, solSrc?: string
   name: titleize(name),
   kind: "condition",
   authorId,
-  summary: solSrc ? "Synced from chain Solidity source." : "Synced from chain.",
+  summary: "Synced from chain.",
+  runtimeSnippet: extractRuntimeSnippet(solSrc),
 });
 
 const mapExploreParticle = (
@@ -180,7 +370,9 @@ const mapExploreParticle = (
   createdLabel: "just synced",
   ingredients: [
     titleize(particle.featureName),
-    ...particle.composites.filter(Boolean).map(titleize),
+    ...particle.composites
+      .filter((name): name is string => typeof name === "string" && name.length > 0)
+      .map(titleize),
   ],
   complexity: 1 + particle.composites.filter(Boolean).length,
   transactionName: `${titleize(particle.name)} PT`,
@@ -198,26 +390,17 @@ export const fetchChainOwnedStudioSnapshot = async (
     page: options.page ?? 0,
   });
 
-  const ownedFeatures = uniqueStrings(account.owned_features ?? []);
+  const ownedConnectors = uniqueStrings(account.owned_connectors ?? []);
   const ownedTransformations = uniqueStrings(account.owned_transformations ?? []);
   const ownedConditions = uniqueStrings(account.owned_conditions ?? []);
-  const ownedParticles = uniqueStrings(account.owned_particles ?? []);
 
-  const featurePayloads = (
-    await Promise.allSettled(ownedFeatures.map((name) => getChainFeature(name)))
-  )
-    .filter(
-      (result): result is PromiseFulfilledResult<ChainFeatureResponse> =>
-        result.status === "fulfilled",
-    )
-    .map((result) => result.value);
-  const particlePayloads = (
+  const connectorPayloads = (
     await Promise.allSettled(
-      ownedParticles.map(async (name) => [name, await getChainParticle(name)] as const),
+      ownedConnectors.map(async (name) => [name, await getChainConnector(name)] as const),
     )
   )
     .filter(
-      (result): result is PromiseFulfilledResult<readonly [string, ChainParticleResponse]> =>
+      (result): result is PromiseFulfilledResult<readonly [string, ChainConnectorResponse]> =>
         result.status === "fulfilled",
     )
     .map((result) => result.value);
@@ -248,34 +431,38 @@ export const fetchChainOwnedStudioSnapshot = async (
     )
     .map((result) => result.value);
 
+  const connectors: Record<string, StudioConnectorDef> = {};
   const features: Record<string, MockFeatureDef> = {};
   const particles: Record<string, MockParticleDef> = {};
   const transformations: Record<string, { argc: number }> = {};
   const conditions: Record<string, { argc: number }> = {};
 
-  featurePayloads.forEach((payload) => {
-    const feature = normalizeFeature(payload);
-    if (!feature) return;
+  connectorPayloads.forEach(([, payload]) => {
+    const connector = normalizeConnector(payload);
+    if (!connector) return;
+
+    connectors[connector.name] = connector;
+
+    const feature = connectorToFeature(connector);
+    const particle = connectorToParticle(connector);
+
     features[feature.name] = feature;
-    feature.dimensions.forEach((dimension) => {
+    particles[particle.name] = particle;
+
+    connector.dimensions.forEach((dimension) => {
       dimension.transformations.forEach((tx) => {
         const argc = tx.args.length;
-        transformations[tx.name as string] = {
-          argc: Math.max(argc, transformations[tx.name as string]?.argc ?? 0),
+        transformations[tx.name] = {
+          argc: Math.max(argc, transformations[tx.name]?.argc ?? 0),
         };
       });
     });
-  });
 
-  particlePayloads.forEach(([, payload]) => {
-    const particle = normalizeParticle(payload);
-    if (!particle) return;
-    particles[particle.name] = particle;
-    if (particle.conditionName) {
-      conditions[particle.conditionName] = {
+    if (connector.conditionName) {
+      conditions[connector.conditionName] = {
         argc: Math.max(
-          particle.conditionArgs?.length ?? 0,
-          conditions[particle.conditionName]?.argc ?? 0,
+          connector.conditionArgs?.length ?? 0,
+          conditions[connector.conditionName]?.argc ?? 0,
         ),
       };
     }
@@ -292,6 +479,7 @@ export const fetchChainOwnedStudioSnapshot = async (
 
   return {
     registry: {
+      connectors,
       features,
       particles,
       transformations,
@@ -308,14 +496,15 @@ export const fetchChainOwnedStudioSnapshot = async (
         mapConditionLibraryItem(name, options.authorId, payload.sol_src),
       ),
     },
-    particles: particlePayloads
+    particles: connectorPayloads
       .map(([, payload], index) => {
-        const particle = normalizeParticle(payload);
-        if (!particle) return null;
+        const connector = normalizeConnector(payload);
+        if (!connector) return null;
+        const particle = connectorToParticle(connector);
         return mapExploreParticle(
           particle,
           options.authorId,
-          extractParticleCreatedAt(payload) ?? Math.max(1, syncedAt - index),
+          extractConnectorCreatedAt(payload) ?? Math.max(1, syncedAt - index),
         );
       })
       .filter((particle): particle is ExploreParticle => Boolean(particle)),
@@ -326,27 +515,42 @@ export const fetchChainParticleForStudio = async (
   particleName: string,
   options?: { authorId?: string },
 ): Promise<ChainStudioParticleFetchResult> => {
-  const particlePayload = await getChainParticle(particleName);
-  const particle = normalizeParticle(particlePayload);
-  if (!particle) return { registry: {} };
+  const connectorPayload = await getChainConnector(particleName);
+  const connector = normalizeConnector(connectorPayload);
+  if (!connector) return { registry: {} };
 
-  const featurePayload = await getChainFeature(particle.featureName);
-  const feature = normalizeFeature(featurePayload) ?? undefined;
-  const ownerAddress = (particlePayload.owner ?? "").toLowerCase();
-  const authorId =
-    options?.authorId?.trim() ||
-    mockUsers.find((user) => (user.address ?? "").toLowerCase() === ownerAddress)?.id ||
-    "user-lyra";
+  const feature = connectorToFeature(connector);
+  const particle = connectorToParticle(connector);
+  const ownerAddress = (connectorPayload.owner ?? "").toLowerCase();
+  let authorId = options?.authorId?.trim() ?? "";
+  if (!authorId && ownerAddress) {
+    try {
+      const sources = await listChainSyncSourcesForApp();
+      authorId =
+        sources.find(
+          (source) => normalizeAddress(source.address) === normalizeAddress(ownerAddress),
+        )?.authorId ?? "";
+    } catch {
+      authorId = "";
+    }
+  }
+  if (!authorId) {
+    authorId = mockUsers.find((user) => normalizeAddress(user.address) === ownerAddress)?.id ?? "";
+  }
+  if (!authorId) {
+    authorId = fallbackAuthorIdFromAddress(ownerAddress);
+  }
 
   return {
     registry: {
+      connector,
       feature,
       particle,
     },
     particleMeta: mapExploreParticle(
       particle,
       authorId,
-      extractParticleCreatedAt(particlePayload) ?? Date.now(),
+      extractConnectorCreatedAt(connectorPayload) ?? Date.now(),
     ),
   };
 };

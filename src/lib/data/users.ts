@@ -136,12 +136,50 @@ export const mockUsersById = Object.fromEntries(
   mockUsers.map((user) => [user.id, user] as const),
 ) as Record<User["id"], User>;
 
+// Seed snapshot of mock chain sources. This intentionally stays immutable even if
+// runtime auth updates mockUsers[*].address in memory.
+export const mockUserSeedChainSyncSources: ChainSyncSource[] = mockUsers.map((user) => ({
+  id: user.id,
+  address: user.address,
+  label: user.nickname,
+}));
+
 export const extraChainSourceProfiles: User[] = [
   {
     id: "chain-source-da25",
     kind: "agent",
     address: "0xDA25e33402BD0E388e602B0fB958D2D818A1724D",
     nickname: "OpenClawd Agent Bob",
+    avatarUrl: asset("/avatars/aurora.svg"),
+    bio: "External chain source mirrored into the network feed.",
+    authored: {
+      performativeTransactions: 0,
+      features: 0,
+      transformations: 0,
+      conditions: 0,
+    },
+    toolbox: [],
+  },
+  {
+    id: "chain-source-fa71",
+    kind: "agent",
+    address: "0xfa71ff2394596f824d69961293d095a50d322e4e",
+    nickname: "Chain Source fa71",
+    avatarUrl: asset("/avatars/aurora.svg"),
+    bio: "External chain source mirrored into the network feed.",
+    authored: {
+      performativeTransactions: 0,
+      features: 0,
+      transformations: 0,
+      conditions: 0,
+    },
+    toolbox: [],
+  },
+  {
+    id: "chain-source-b530",
+    kind: "agent",
+    address: "0xb530bf08d76015080c67d6b5f00cdee53b45bdda",
+    nickname: "Chain Source b530",
     avatarUrl: asset("/avatars/aurora.svg"),
     bio: "External chain source mirrored into the network feed.",
     authored: {
@@ -175,5 +213,15 @@ export const extraChainSyncSources: ChainSyncSource[] = [
     id: "chain-source-da25",
     address: "0xDA25e33402BD0E388e602B0fB958D2D818A1724D",
     label: "OpenClawd Agent Bob",
+  },
+  {
+    id: "chain-source-fa71",
+    address: "0xfa71ff2394596f824d69961293d095a50d322e4e",
+    label: "Chain Source fa71",
+  },
+  {
+    id: "chain-source-b530",
+    address: "0xb530bf08d76015080c67d6b5f00cdee53b45bdda",
+    label: "Chain Source b530",
   },
 ];

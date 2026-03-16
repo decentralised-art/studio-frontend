@@ -3,14 +3,27 @@
 
   type ParticleNodeData = {
     label: string;
+    placeholder?: boolean;
+    placeholderDetail?: string;
+    placeholderState?: "loading" | "warning";
   };
 
   const { data, selected }: NodeProps<ParticleNodeData> = $props();
   const selectedClass = $derived(selected ? "is-selected" : "");
+  const isPlaceholder = $derived(Boolean(data.placeholder));
+  const placeholderDetail = $derived((data.placeholderDetail ?? "").trim());
+  const placeholderState = $derived(data.placeholderState ?? "loading");
 </script>
 
-<div class="particle-node {selectedClass}">
+<div
+  class="particle-node {selectedClass} {isPlaceholder
+    ? `is-placeholder is-${placeholderState}`
+    : ''}"
+>
   <div class="particle-title">{data.label}</div>
+  {#if isPlaceholder && placeholderDetail}
+    <div class="particle-detail">{placeholderDetail}</div>
+  {/if}
   <Handle type="target" position={Position.Top} id="in" />
   <Handle type="source" position={Position.Bottom} id="out" />
 </div>
@@ -31,5 +44,38 @@
 
   .particle-title {
     @apply text-[0.7rem] font-semibold uppercase tracking-[0.2em];
+  }
+
+  .particle-node.is-placeholder {
+    @apply border-white/30 bg-white/[0.02] text-white/60;
+    border-style: dashed;
+  }
+
+  .particle-node.is-placeholder.is-loading {
+    animation: placeholder-node-pulse 1.35s ease-in-out infinite;
+  }
+
+  .particle-node.is-placeholder.is-warning {
+    @apply border-amber-300/35 text-amber-100/70;
+    animation: none;
+  }
+
+  .particle-detail {
+    @apply mt-1 text-[0.52rem] uppercase tracking-[0.14em] text-white/45;
+  }
+
+  @keyframes placeholder-node-pulse {
+    0% {
+      background-color: rgba(255, 255, 255, 0.02);
+      border-color: rgba(255, 255, 255, 0.24);
+    }
+    50% {
+      background-color: rgba(255, 255, 255, 0.07);
+      border-color: rgba(94, 234, 212, 0.42);
+    }
+    100% {
+      background-color: rgba(255, 255, 255, 0.02);
+      border-color: rgba(255, 255, 255, 0.24);
+    }
   }
 </style>

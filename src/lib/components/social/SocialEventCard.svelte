@@ -3,14 +3,14 @@
   import Card from "$lib/components/ui/Card.svelte";
   import SocialParticleDependencyFlow from "$lib/components/social/SocialParticleDependencyFlow.svelte";
   import { displayUsersById } from "$lib/data/users";
-  import type { SocialEvent } from "$lib/social/mockSocialFeed";
+  import type { ConnectorPostEvent } from "$lib/feed/particlePostData";
   const {
     event,
     onParticleOpen,
     onAddToToolbox,
     inToolbox = false,
   }: {
-    event: SocialEvent;
+    event: ConnectorPostEvent;
     onParticleOpen?: ((particleId: string) => void) | undefined;
     onAddToToolbox?: ((particleId: string) => void) | undefined;
     inToolbox?: boolean;
@@ -37,7 +37,7 @@
       type="button"
       class={`toolbox-add-button ${inToolbox ? "is-saved" : ""}`}
       title={inToolbox ? "Already in toolbox" : "Add to toolbox"}
-      aria-label={inToolbox ? "Particle already in toolbox" : "Add particle to toolbox"}
+      aria-label={inToolbox ? "Connector already in toolbox" : "Add connector to toolbox"}
       aria-pressed={inToolbox}
       onclick={handleAddToToolbox}
       disabled={inToolbox}
@@ -67,7 +67,7 @@
               {/if}
             </div>
             <span class="author-event-text">
-              created a new particle:
+              created a new connector:
               <a class="event-particle-link" href={resolve("/p/[id]", { id: event.particleId })}>
                 {event.particleLabel}
               </a>
@@ -82,12 +82,12 @@
     </div>
 
     <div class="event-body">
-      <div class="event-links" aria-label="Particle dependencies">
+      <div class="event-links" aria-label="Connector dependencies">
         {#if usedParticles.length > 0}
           <p class="event-link-row">
             <span class="event-link-label">Dependencies:</span>
             <span class="event-dependency-links">
-              {#each usedParticles as particleRef, index (particleRef.id)}
+              {#each usedParticles as particleRef, index (`${particleRef.id}-${index}`)}
                 <a class="event-dependency-link" href={resolve("/p/[id]", { id: particleRef.id })}>
                   {particleRef.label}
                 </a>
