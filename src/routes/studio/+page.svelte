@@ -1886,7 +1886,7 @@
       ...deployedLibrary,
       features: upsertLibraryItem(deployedLibrary.features, {
         id: `feature-${connector.name}`,
-        name: titleize(connector.name),
+        name: connector.name,
         kind: "feature",
         authorId: fetched.particleMeta?.authorId ?? mockCurrentUserId,
         summary: "Fetched from chain on demand.",
@@ -1895,7 +1895,7 @@
       transformations: Object.entries(inferredTransformations).reduce((items, [name]) => {
         return upsertLibraryItem(items, {
           id: `transform-${name}`,
-          name: titleize(name),
+          name,
           kind: "transformation",
           authorId: fetched.particleMeta?.authorId ?? mockCurrentUserId,
           summary: "Fetched from chain on demand.",
@@ -1904,7 +1904,7 @@
       conditions: Object.entries(inferredConditions).reduce((items, [name]) => {
         return upsertLibraryItem(items, {
           id: `condition-${name}`,
-          name: titleize(name),
+          name,
           kind: "condition",
           authorId: fetched.particleMeta?.authorId ?? mockCurrentUserId,
           summary: "Fetched from chain on demand.",
@@ -3172,7 +3172,7 @@
     const featureItem = networkLibrary.feature.find(
       (item) => getLibraryRegistryName(item) === feature.name,
     );
-    const featureLabel = featureItem?.name ?? titleize(feature.name);
+    const featureLabel = featureItem?.name ?? feature.name;
     const featureId = `feature-${feature.name}-${crypto.randomUUID()}`;
     const featureX = 360;
     const featureY = 80;
@@ -3191,7 +3191,7 @@
             formatTransformationPreviewLabel(transformation.name, transformation.args),
           ),
         })),
-        conditionLabel: particle.conditionName ? titleize(particle.conditionName) : null,
+        conditionLabel: particle.conditionName ? particle.conditionName : null,
         sourceId: feature.name,
         networkId: feature.name,
         fromNetwork: true,
@@ -3219,11 +3219,7 @@
           parentFeatureId: featureId,
           dimensionIndex: dimIndex,
           transformations: dimension.transformations.map((transformation) =>
-            createTransformationInstance(
-              titleize(transformation.name),
-              transformation.args,
-              "network",
-            ),
+            createTransformationInstance(transformation.name, transformation.args, "network"),
           ),
           fromNetwork: true,
           riStart: riConfig?.start ?? 0,
@@ -3250,7 +3246,7 @@
           draggable: false,
           position: { x: columnX, y: compositeRowY },
           data: {
-            label: compositeItem?.name ?? titleize(compositeName),
+            label: compositeItem?.name ?? compositeName,
             kind: "particle",
             particleId: compositeName,
             networkId: compositeName,
@@ -3272,7 +3268,7 @@
 
   const getConnectorLibraryLabel = (connectorName: string) =>
     networkLibrary.feature.find((item) => getLibraryRegistryName(item) === connectorName)?.name ??
-    titleize(connectorName);
+    connectorName;
 
   type IncomingBindingDescriptor = {
     targetName: string;
@@ -3551,7 +3547,7 @@
               formatTransformationPreviewLabel(transformation.name, transformation.args),
             ),
           })),
-          conditionLabel: def.conditionName ? titleize(def.conditionName) : null,
+          conditionLabel: def.conditionName ? def.conditionName : null,
           boundKind: input.boundDescriptor?.kind ?? null,
           boundSlotLabel: input.boundDescriptor?.slotLabel ?? null,
           boundOwnerName: input.boundDescriptor?.ownerConnectorName ?? null,
@@ -3572,7 +3568,7 @@
           draggable: true,
           position: { x: origin.x, y: origin.y + input.depth * verticalSpacing - 120 },
           data: {
-            label: titleize(def.conditionName),
+            label: def.conditionName,
             kind: "condition",
             networkId: def.conditionName,
             fromNetwork: true,
@@ -4633,6 +4629,12 @@
     }
   };
 
+  const getLibraryTransformationName = (item: LibraryItem) => {
+    if (item.kind !== "transformation") return item.name;
+    if (item.id.startsWith("draft-transform-")) return item.name;
+    return getLibraryRegistryName(item);
+  };
+
   const resolveRegistryId = (kind: StudioNodeKind, id: string) => {
     switch (kind) {
       case "feature":
@@ -4769,12 +4771,12 @@
   const addLibraryNode = (item: LibraryItem, position: { x: number; y: number } | null = null) => {
     if (activeTabReadOnly && item.kind !== "plugin") return;
     if (item.kind === "transformation") {
-      addTransformationToSelectedDimension(item.name, "network");
+      addTransformationToSelectedDimension(getLibraryTransformationName(item), "network");
       return;
     }
     if (item.kind === "condition" && connectorDropTarget?.type === "condition") {
       const attached = attachConditionToConnector(connectorDropTarget.connectorId, {
-        label: item.name,
+        label: getLibraryRegistryName(item),
         status: "network",
         networkId: getLibraryRegistryName(item),
         sourceId: item.id,
@@ -4973,7 +4975,12 @@
               dropTarget.dimensionIndex,
             );
             if (targetDimension && !targetDimension.data.fromNetwork) {
-              addTransformationToDimension(targetDimension.id, item.name, [], "network");
+              addTransformationToDimension(
+                targetDimension.id,
+                getLibraryTransformationName(item),
+                [],
+                "network",
+              );
               setConnectorDropTarget(dropTarget);
             }
           }
@@ -4981,7 +4988,7 @@
         }
         if (item.kind === "condition" && dropTarget?.type === "condition") {
           attachConditionToConnector(dropTarget.connectorId, {
-            label: item.name,
+            label: getLibraryRegistryName(item),
             status: "network",
             networkId: getLibraryRegistryName(item),
             sourceId: item.id,

@@ -493,12 +493,6 @@ export const getMockPtOutput = (particleName: string, config: MockRunConfig = {}
   return output;
 };
 
-const titleize = (value: string) =>
-  value
-    .split("-")
-    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
-    .join(" ");
-
 export const getMockRunDescriptors = (particleName: string) => {
   const descriptors: MockRunDescriptor[] = [];
 
@@ -508,7 +502,7 @@ export const getMockRunDescriptors = (particleName: string) => {
     const currentPath = `${path}/${particle.name}`;
 
     feature.dimensions.forEach((dimension, dimId) => {
-      const label = `${titleize(particle.name)} / ${dimension.label}`;
+      const label = `${particle.name} / ${dimension.label}`;
       descriptors.push({
         id: `${currentPath}:${dimension.label}`,
         label,
@@ -578,7 +572,7 @@ export const getMockLineageGraph = (particleName: string, maxDepth = 4) => {
         id: name,
         type: "lineage",
         position: { x: depth * 220, y: index * 120 },
-        data: { label: titleize(name) },
+        data: { label: name },
       });
     });
   });

@@ -42,12 +42,6 @@ export type StudioDependencyNodeData = {
 
 export type StudioDependencyNode = Node<StudioDependencyNodeData>;
 
-const titleize = (value: string) =>
-  value
-    .split(/[-_]/g)
-    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
-    .join(" ");
-
 const createTransformationInstance = (
   key: string,
   name: string,
@@ -61,8 +55,8 @@ const createTransformationInstance = (
 
 const formatTransformationPreviewLabel = (name: string, args: number[] = []) => {
   const trimmed = name.trim() || "Transformation";
-  if (!args.length) return titleize(trimmed);
-  return `${titleize(trimmed)} (${args.join(", ")})`;
+  if (!args.length) return trimmed;
+  return `${trimmed} (${args.join(", ")})`;
 };
 
 type IncomingBindingDescriptor = {
@@ -309,7 +303,7 @@ const buildConnectorTreeFromRegistry = (
       draggable: false,
       position: { x: origin.x, y: origin.y + input.depth * verticalSpacing },
       data: {
-        label: titleize(connectorName),
+        label: connectorName,
         kind: "connector",
         dimensions: def.dimensions.length,
         connectorRows: def.dimensions.map((dimension, dimIndex) => ({
@@ -318,7 +312,7 @@ const buildConnectorTreeFromRegistry = (
             formatTransformationPreviewLabel(transformation.name, transformation.args),
           ),
         })),
-        conditionLabel: def.conditionName ? titleize(def.conditionName) : null,
+        conditionLabel: def.conditionName ? def.conditionName : null,
         boundKind: input.boundDescriptor?.kind ?? null,
         boundSlotLabel: input.boundDescriptor?.slotLabel ?? null,
         sourceId: connectorName,
@@ -336,7 +330,7 @@ const buildConnectorTreeFromRegistry = (
         draggable: false,
         position: { x: origin.x, y: origin.y + input.depth * verticalSpacing - 120 },
         data: {
-          label: titleize(def.conditionName),
+          label: def.conditionName,
           kind: "condition",
           networkId: def.conditionName,
           fromNetwork: true,
@@ -614,7 +608,7 @@ export const buildParticleDependencyGraph = (
           y: 252,
         },
         data: {
-          label: getParticleRecordById(dependencyId)?.name ?? titleize(dependencyId),
+          label: getParticleRecordById(dependencyId)?.name ?? dependencyId,
           kind: "particle",
           particleId: dependencyId,
           networkId: dependencyId,
@@ -655,7 +649,7 @@ export const buildParticleDependencyGraph = (
       ? fallbackDependencies
       : (particleRecord?.dependencies ?? []);
     return buildFallbackGraph(
-      particleRecord?.name ?? titleize(particle.name),
+      particleRecord?.name ?? particle.name,
       dependencies.filter((id) => id.trim().length > 0),
     );
   }
@@ -672,7 +666,7 @@ export const buildParticleDependencyGraph = (
     draggable: false,
     position: { x: featureX, y: featureY },
     data: {
-      label: titleize(feature.name),
+      label: feature.name,
       kind: "feature",
       dimensions: feature.dimensions.length,
       sourceId: feature.name,
@@ -703,7 +697,7 @@ export const buildParticleDependencyGraph = (
         transformations: dimension.transformations.map((transformation, txIndex) =>
           createTransformationInstance(
             `${particleName}-${feature.name}-${dimIndex}-${txIndex}-${transformation.name}`,
-            titleize(transformation.name),
+            transformation.name,
             transformation.args,
           ),
         ),
@@ -731,7 +725,7 @@ export const buildParticleDependencyGraph = (
       draggable: false,
       position: { x: columnX, y: compositeRowY },
       data: {
-        label: getParticleRecordById(compositeName)?.name ?? titleize(compositeName),
+        label: getParticleRecordById(compositeName)?.name ?? compositeName,
         kind: "particle",
         particleId: compositeName,
         networkId: compositeName,

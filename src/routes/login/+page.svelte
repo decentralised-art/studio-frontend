@@ -65,7 +65,7 @@
     }
   };
 
-  const loginWithMockUser = async (userId: string) => {
+  const loginWithMockUser = async (userId: string, destination = "/account") => {
     const user = mockUsers.find((entry) => entry.id === userId);
     if (!user) return;
 
@@ -84,12 +84,16 @@
         await registerUser(credentials.email, user.nickname, credentials.password);
         await login(credentials.email, credentials.password);
       }
-      await goto(resolve("/account"));
+      await goto(resolve(destination));
     } catch (err) {
       mockLoginError = err instanceof Error ? err.message : "Mock login failed.";
     } finally {
       isSubmitting = false;
     }
+  };
+
+  const handlePrototypePreview = async () => {
+    await loginWithMockUser("user-lyra", "/studio");
   };
 
   const mockAuthSuccessCount = $derived.by(() =>
@@ -115,8 +119,28 @@
       <p class="subtitle">Access your account and toolbox.</p>
     </div>
 
+    <div class="prototype-preview">
+      <p class="prototype-preview-title">Prototype Preview</p>
+      <p class="prototype-preview-text">
+        DCN is currently in an experimental pre-MVP phase. It is suitable for exploration and demos,
+        but not yet for production-ready projects or persistence-critical workflows.
+      </p>
+      <div class="actions prototype-preview-actions">
+        <Button
+          variant="primary"
+          type="button"
+          onclick={handlePrototypePreview}
+          disabled={isSubmitting || isMockAuthRunning}
+        >
+          Preview Prototype
+        </Button>
+      </div>
+    </div>
+
     {#if !isDev}
-      <p class="dev-notice">The app is in development. Check again soon.</p>
+      <p class="dev-notice">
+        Public release is not yet available. Use Preview to explore the prototype safely.
+      </p>
     {/if}
 
     <form class="form" onsubmit={handleSubmit}>
@@ -277,6 +301,22 @@
 
   .dev-notice {
     @apply mt-4 rounded-md border border-white/10 bg-white/5 px-3 py-2 text-sm text-white/70;
+  }
+
+  .prototype-preview {
+    @apply mt-4 rounded-lg border border-cyan-300/25 bg-cyan-400/5 px-4 py-3 space-y-2;
+  }
+
+  .prototype-preview-title {
+    @apply text-sm font-semibold tracking-wide uppercase text-cyan-200;
+  }
+
+  .prototype-preview-text {
+    @apply text-sm text-white/75;
+  }
+
+  .prototype-preview-actions {
+    @apply justify-start pt-1;
   }
 
   .form {

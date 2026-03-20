@@ -28,12 +28,6 @@ export const mockParticleViews: ParticleView[] = [
   { id: "image-jpeg", label: "Image JPEG", description: "Still frame output." },
 ];
 
-const titleize = (value: string) =>
-  value
-    .split("-")
-    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
-    .join(" ");
-
 const defaultAuthorId = mockUsers[0]?.id ?? "user-lyra";
 
 const particleMeta: Record<
@@ -207,8 +201,8 @@ export const mockExploreParticles: ExploreParticle[] = mockRegistrySnapshot.part
     const meta = particleMeta[particle.name];
     const createdAt = meta?.createdAt ?? Date.now() - index * 60 * 60 * 1000;
     const dependencies = particle.composites.filter(Boolean) as string[];
-    const fallbackName = titleize(particle.name);
-    const fallbackIngredients = [titleize(particle.featureName), ...dependencies.map(titleize)];
+    const fallbackName = particle.name;
+    const fallbackIngredients = [particle.featureName, ...dependencies];
     return {
       id: particle.name,
       name: meta?.name ?? fallbackName,

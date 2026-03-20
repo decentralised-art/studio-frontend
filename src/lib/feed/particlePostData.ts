@@ -60,13 +60,6 @@ type ParticlePostCache = {
   };
 };
 
-const titleize = (value: string) =>
-  value
-    .split(/[-_]/g)
-    .filter(Boolean)
-    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
-    .join(" ");
-
 const emptyCache = (): ParticlePostCache => ({
   loaded: false,
   events: [],
@@ -91,7 +84,7 @@ const rebuildEventsFromParticles = (particles: ParticleRecord[]): ConnectorPostE
       particleId: particle.id,
       particleLabel: particle.name,
       usedParticleIds: [...particle.dependencies],
-      usedParticleLabels: particle.dependencies.map((id) => labelById.get(id) ?? titleize(id)),
+      usedParticleLabels: particle.dependencies.map((id) => labelById.get(id) ?? id),
       createdNodeIds: [],
       reusedNodeIds: [],
       focusNodeIds: [],

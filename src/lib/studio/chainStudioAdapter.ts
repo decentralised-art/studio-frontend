@@ -275,12 +275,6 @@ const extractCreatedAtFromRecord = (record: Record<string, unknown>): number | n
 const extractConnectorCreatedAt = (payload: ChainConnectorResponse): number | null =>
   extractCreatedAtFromRecord(payload as Record<string, unknown>);
 
-const titleize = (value: string) =>
-  value
-    .split(/[-_]/g)
-    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
-    .join(" ");
-
 const connectorToFeature = (connector: StudioConnectorDef): MockFeatureDef => ({
   name: connector.name,
   dimensions: connector.dimensions.map((dimension, index) => ({
@@ -312,7 +306,7 @@ const normalizeConnector = (payload: ChainConnectorResponse): StudioConnectorDef
 
 const mapFeatureLibraryItem = (feature: MockFeatureDef, authorId: string): LibraryItem => ({
   id: `feature-${feature.name}`,
-  name: titleize(feature.name),
+  name: feature.name,
   kind: "feature",
   authorId,
   summary: "Synced from chain.",
@@ -340,7 +334,7 @@ const mapTransformationLibraryItem = (
   solSrc?: string,
 ): LibraryItem => ({
   id: `transform-${name}`,
-  name: titleize(name),
+  name,
   kind: "transformation",
   authorId,
   summary: "Synced from chain.",
@@ -349,7 +343,7 @@ const mapTransformationLibraryItem = (
 
 const mapConditionLibraryItem = (name: string, authorId: string, solSrc?: string): LibraryItem => ({
   id: `condition-${name}`,
-  name: titleize(name),
+  name,
   kind: "condition",
   authorId,
   summary: "Synced from chain.",
@@ -362,20 +356,20 @@ const mapExploreParticle = (
   createdAt: number,
 ): ExploreParticle => ({
   id: particle.name,
-  name: titleize(particle.name),
+  name: particle.name,
   summary: "Synced from chain.",
   authorId,
   viewId: "midi",
   createdAt,
   createdLabel: "just synced",
   ingredients: [
-    titleize(particle.featureName),
+    particle.featureName,
     ...particle.composites
       .filter((name): name is string => typeof name === "string" && name.length > 0)
-      .map(titleize),
+      .map((name) => name),
   ],
   complexity: 1 + particle.composites.filter(Boolean).length,
-  transactionName: `${titleize(particle.name)} PT`,
+  transactionName: `${particle.name} PT`,
   dependencies: particle.composites.filter(Boolean) as string[],
 });
 

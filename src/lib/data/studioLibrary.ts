@@ -15,12 +15,6 @@ export type LibraryItem = {
   dimensions?: number;
 };
 
-const titleize = (value: string) =>
-  value
-    .split("-")
-    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
-    .join(" ");
-
 const defaultAuthorId = mockUsers[0]?.id ?? "user-lyra";
 
 const featureMeta: Record<string, { name?: string; summary?: string; authorId?: string }> = {
@@ -102,7 +96,7 @@ export const mockFeatures: LibraryItem[] = mockRegistrySnapshot.features.map((fe
   const meta = featureMeta[feature.name];
   return {
     id: `feature-${feature.name}`,
-    name: meta?.name ?? titleize(feature.name),
+    name: feature.name,
     kind: "feature",
     authorId: meta?.authorId ?? defaultAuthorId,
     summary: meta?.summary,
@@ -115,7 +109,7 @@ export const mockTransformations: LibraryItem[] = mockRegistrySnapshot.transform
     const meta = transformationMeta[transformation.name];
     return {
       id: `transform-${transformation.name}`,
-      name: meta?.name ?? titleize(transformation.name),
+      name: transformation.name,
       kind: "transformation",
       authorId: meta?.authorId ?? defaultAuthorId,
       summary: meta?.summary ?? `Requires ${transformation.argc} arg(s).`,
@@ -127,7 +121,7 @@ export const mockConditions: LibraryItem[] = mockRegistrySnapshot.conditions.map
   const meta = conditionMeta[condition.name];
   return {
     id: `condition-${condition.name}`,
-    name: meta?.name ?? titleize(condition.name),
+    name: condition.name,
     kind: "condition",
     authorId: meta?.authorId ?? defaultAuthorId,
     summary: meta?.summary ?? `Requires ${condition.argc} arg(s).`,
