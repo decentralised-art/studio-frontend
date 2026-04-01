@@ -5,9 +5,9 @@
 
   import ParticlePostFeed from "$lib/components/feed/ParticlePostFeed.svelte";
   import {
-    listParticlePostsByAuthor,
+    listNetworkFeedEventsByAuthor,
     syncParticlePostDataFromChain,
-    type ParticlePostEvent,
+    type NetworkFeedEvent,
   } from "$lib/feed/particlePostData";
   import { networkNodeStudioKind } from "$lib/network/mockNetworkGraph";
   import Button from "$lib/components/ui/Button.svelte";
@@ -31,7 +31,7 @@
   let localToolboxParticles = $state<string[]>([
     ...(mockUsersById[mockCurrentUserId]?.toolbox ?? []),
   ]);
-  let accountFeedEvents = $state<ParticlePostEvent[]>([]);
+  let accountFeedEvents = $state<NetworkFeedEvent[]>([]);
 
   type Eip1193Provider = {
     request: (args: { method: string; params?: unknown[] | object }) => Promise<unknown>;
@@ -66,7 +66,7 @@
       ]);
       currentUser = normalizeProfileUser(data);
       localToolboxParticles = [...currentUser.toolbox];
-      accountFeedEvents = listParticlePostsByAuthor(currentUser.id);
+      accountFeedEvents = listNetworkFeedEventsByAuthor(currentUser.id);
     } catch (err) {
       error = err instanceof Error ? err.message : "Unable to load account.";
     } finally {
@@ -82,7 +82,7 @@
   const openParticleInStudio = (particleId: string) => {
     const base = resolve("/studio");
     const target = new URL(base, window.location.origin);
-    target.searchParams.set("network_kind", networkNodeStudioKind("particle"));
+    target.searchParams.set("network_kind", networkNodeStudioKind("connector"));
     target.searchParams.set("network_id", particleId);
     window.open(target.toString(), "_blank", "noopener,noreferrer");
   };
@@ -244,7 +244,7 @@
           onParticleOpen={openParticleInStudio}
           onAddToToolbox={addParticleToToolbox}
           {toolboxParticleIds}
-          emptyMessage="No particle posts by this user yet."
+          emptyMessage="No activity by this user yet."
         />
       </div>
     </div>

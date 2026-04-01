@@ -17,7 +17,7 @@
   } = $props();
 
   const author = $derived.by(() => displayUsersById[event.authorId] ?? null);
-  const usedParticles = $derived.by(() =>
+  const dependencies = $derived.by(() =>
     event.usedParticleIds.map((id, index) => ({
       id,
       label: event.usedParticleLabels[index] ?? id,
@@ -68,7 +68,7 @@
             </div>
             <span class="author-event-text">
               created a new connector:
-              <a class="event-particle-link" href={resolve("/p/[id]", { id: event.particleId })}>
+              <a class="event-connector-link" href={resolve("/c/[id]", { id: event.particleId })}>
                 {event.particleLabel}
               </a>
             </span>
@@ -83,15 +83,26 @@
 
     <div class="event-body">
       <div class="event-links" aria-label="Connector dependencies">
-        {#if usedParticles.length > 0}
+        {#if event.formatHash}
+          <p class="event-link-row">
+            <span class="event-link-label">Format:</span>
+            <a
+              class="event-dependency-link"
+              href={resolve("/f/[slug]", { slug: event.formatHash })}
+            >
+              {event.formatHash}
+            </a>
+          </p>
+        {/if}
+        {#if dependencies.length > 0}
           <p class="event-link-row">
             <span class="event-link-label">Dependencies:</span>
             <span class="event-dependency-links">
-              {#each usedParticles as particleRef, index (`${particleRef.id}-${index}`)}
-                <a class="event-dependency-link" href={resolve("/p/[id]", { id: particleRef.id })}>
-                  {particleRef.label}
+              {#each dependencies as connectorRef, index (`${connectorRef.id}-${index}`)}
+                <a class="event-dependency-link" href={resolve("/c/[id]", { id: connectorRef.id })}>
+                  {connectorRef.label}
                 </a>
-                {#if index < usedParticles.length - 1}
+                {#if index < dependencies.length - 1}
                   <span class="event-link-separator" aria-hidden="true">, </span>
                 {/if}
               {/each}
@@ -216,12 +227,12 @@
     @apply uppercase tracking-[0.14em] text-[0.62rem] text-white/40;
   }
 
-  .event-particle-link,
+  .event-connector-link,
   .event-dependency-link {
     @apply text-white/85 hover:text-white no-underline transition;
   }
 
-  .event-particle-link {
+  .event-connector-link {
     @apply font-medium;
   }
 

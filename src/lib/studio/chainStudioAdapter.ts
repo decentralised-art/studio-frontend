@@ -6,7 +6,9 @@ import {
   getChainAccount,
   getChainCondition,
   getChainConnector,
+  getChainFormat,
   getChainTransformation,
+  normalizeFormatHash,
   type ChainConnectorResponse,
 } from "$lib/chain/registryApi";
 import type { ExploreParticle } from "$lib/data/exploreParticles";
@@ -17,6 +19,13 @@ import {
   mockUsers,
   mockUsersById,
 } from "$lib/data/users";
+import {
+  getFreshCachedChainFormat,
+  mapChainFormatResponseToRecord,
+  mergeChainFormatRecords,
+  upsertChainFormatRecord,
+  type ChainFormatRecord,
+} from "$lib/formats/chainFormats";
 import type { MockFeatureDef, MockParticleDef } from "$lib/particles/mockPtNetwork";
 import type { StudioConnectorDef } from "$lib/studio/domain/connectorModel";
 
@@ -36,6 +45,12 @@ export type ChainStudioSyncResult = {
     conditions: LibraryItem[];
   };
   particles: ExploreParticle[];
+  formats: ChainFormatRecord[];
+  formatSync: {
+    requested: number;
+    hydrated: number;
+    failed: string[];
+  };
 };
 
 export type ChainStudioParticleFetchResult = {
@@ -45,6 +60,19 @@ export type ChainStudioParticleFetchResult = {
     particle?: MockParticleDef;
   };
   particleMeta?: ExploreParticle;
+};
+
+const CHAIN_FORMAT_PAGE_LIMIT = 200;
+const CHAIN_FORMAT_PAGE_FETCH_CONCURRENCY = 3;
+const CHAIN_FORMAT_HASH_FETCH_CONCURRENCY = 4;
+const CHAIN_FORMAT_FETCH_RETRIES = 3;
+const CHAIN_FORMAT_RETRY_BASE_DELAY_MS = 160;
+const CHAIN_FORMAT_CACHE_TTL_MS = 5 * 60 * 1000;
+
+type ChainFormatHydrationResult = {
+  records: ChainFormatRecord[];
+  failed: string[];
+  requested: number;
 };
 
 export type ChainOwnerSyncSource = {
@@ -354,6 +382,7 @@ const mapExploreParticle = (
   particle: MockParticleDef,
   authorId: string,
   createdAt: number,
+  formatHash?: string,
 ): ExploreParticle => ({
   id: particle.name,
   name: particle.name,
@@ -371,9 +400,161 @@ const mapExploreParticle = (
   complexity: 1 + particle.composites.filter(Boolean).length,
   transactionName: `${particle.name} PT`,
   dependencies: particle.composites.filter(Boolean) as string[],
+  ...(formatHash ? { formatHash } : {}),
 });
 
 const uniqueStrings = (values: string[]) => Array.from(new Set(values.filter(Boolean)));
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, Math.max(0, ms)));
+
+const withRetry = async <T>(
+  run: () => Promise<T>,
+  options: { attempts?: number; baseDelayMs?: number } = {},
+) => {
+  const attempts = Math.max(1, options.attempts ?? CHAIN_FORMAT_FETCH_RETRIES);
+  const baseDelayMs = Math.max(0, options.baseDelayMs ?? CHAIN_FORMAT_RETRY_BASE_DELAY_MS);
+  let lastError: unknown = null;
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await run();
+    } catch (error) {
+      lastError = error;
+      if (attempt >= attempts) break;
+      await sleep(baseDelayMs * attempt);
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error("Retry attempts exhausted.");
+};
+
+const mapWithConcurrency = async <T, R>(
+  items: T[],
+  limit: number,
+  mapper: (item: T, index: number) => Promise<R>,
+): Promise<R[]> => {
+  if (items.length === 0) return [];
+  const concurrency = Math.max(1, Math.min(limit, items.length));
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+
+  const worker = async () => {
+    while (true) {
+      const current = nextIndex;
+      if (current >= items.length) return;
+      nextIndex += 1;
+      results[current] = await mapper(items[current], current);
+    }
+  };
+
+  await Promise.all(Array.from({ length: concurrency }, () => worker()));
+  return results;
+};
+
+const fetchChainFormatRecord = async (formatHash: string): Promise<ChainFormatRecord> => {
+  const normalizedHash = normalizeFormatHash(formatHash);
+  const freshCached = getFreshCachedChainFormat(normalizedHash, {
+    ttlMs: CHAIN_FORMAT_CACHE_TTL_MS,
+  });
+  if (freshCached && freshCached.connectors.length >= freshCached.totalConnectors) {
+    return freshCached;
+  }
+
+  const firstPageResponse = await withRetry(
+    () =>
+      getChainFormat(normalizedHash, {
+        limit: CHAIN_FORMAT_PAGE_LIMIT,
+        page: 0,
+      }),
+    { attempts: CHAIN_FORMAT_FETCH_RETRIES },
+  );
+  const firstPageRecord = mapChainFormatResponseToRecord(firstPageResponse);
+  if (!firstPageRecord) {
+    throw new Error(`Invalid /format response for hash ${normalizedHash}`);
+  }
+
+  const totalConnectors = Math.max(
+    firstPageRecord.totalConnectors,
+    firstPageRecord.connectors.length,
+  );
+  const pageLimit = Math.max(1, firstPageRecord.limit || CHAIN_FORMAT_PAGE_LIMIT);
+  const totalPages = totalConnectors > 0 ? Math.ceil(totalConnectors / pageLimit) : 1;
+
+  if (totalPages <= 1) {
+    return upsertChainFormatRecord(firstPageRecord);
+  }
+
+  const remainingPages = Array.from({ length: totalPages - 1 }, (_, idx) => idx + 1);
+  const pageRecords = [firstPageRecord];
+  const otherPages = await mapWithConcurrency(
+    remainingPages,
+    CHAIN_FORMAT_PAGE_FETCH_CONCURRENCY,
+    async (page) => {
+      const response = await withRetry(
+        () => getChainFormat(normalizedHash, { limit: pageLimit, page }),
+        { attempts: CHAIN_FORMAT_FETCH_RETRIES },
+      );
+      return mapChainFormatResponseToRecord(response);
+    },
+  );
+
+  otherPages.forEach((record) => {
+    if (!record) return;
+    if (record.formatHash !== normalizedHash) return;
+    pageRecords.push(record);
+  });
+
+  const mergedRecord = mergeChainFormatRecords(pageRecords);
+  if (!mergedRecord) {
+    throw new Error(`Failed to merge paged /format responses for ${normalizedHash}`);
+  }
+
+  return upsertChainFormatRecord(mergedRecord);
+};
+
+const hydrateChainFormats = async (rawHashes: string[]): Promise<ChainFormatHydrationResult> => {
+  const normalizedHashes = uniqueStrings(
+    rawHashes
+      .map((hash) => {
+        try {
+          return normalizeFormatHash(hash);
+        } catch {
+          return "";
+        }
+      })
+      .filter(Boolean),
+  );
+
+  if (!normalizedHashes.length) {
+    return { records: [], failed: [], requested: 0 };
+  }
+
+  const settled = await mapWithConcurrency(
+    normalizedHashes,
+    CHAIN_FORMAT_HASH_FETCH_CONCURRENCY,
+    async (formatHash) => {
+      try {
+        const record = await fetchChainFormatRecord(formatHash);
+        return { formatHash, record, error: null as string | null };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Failed to hydrate format.";
+        return { formatHash, record: null as ChainFormatRecord | null, error: message };
+      }
+    },
+  );
+
+  const records: ChainFormatRecord[] = [];
+  const failed: string[] = [];
+  settled.forEach((item) => {
+    if (item.record) {
+      records.push(item.record);
+      return;
+    }
+    failed.push(`${item.formatHash}: ${item.error ?? "unknown error"}`);
+  });
+
+  return { records, failed, requested: normalizedHashes.length };
+};
 
 export const fetchChainOwnedStudioSnapshot = async (
   address: string,
@@ -430,12 +611,16 @@ export const fetchChainOwnedStudioSnapshot = async (
   const particles: Record<string, MockParticleDef> = {};
   const transformations: Record<string, { argc: number }> = {};
   const conditions: Record<string, { argc: number }> = {};
+  const formatHashes = new Set<string>();
 
   connectorPayloads.forEach(([, payload]) => {
     const connector = normalizeConnector(payload);
     if (!connector) return;
 
     connectors[connector.name] = connector;
+    if (connector.formatHash) {
+      formatHashes.add(connector.formatHash);
+    }
 
     const feature = connectorToFeature(connector);
     const particle = connectorToParticle(connector);
@@ -470,6 +655,7 @@ export const fetchChainOwnedStudioSnapshot = async (
   });
 
   const syncedAt = Date.now();
+  const hydratedFormats = await hydrateChainFormats(Array.from(formatHashes));
 
   return {
     registry: {
@@ -499,9 +685,16 @@ export const fetchChainOwnedStudioSnapshot = async (
           particle,
           options.authorId,
           extractConnectorCreatedAt(payload) ?? Math.max(1, syncedAt - index),
+          connector.formatHash,
         );
       })
       .filter((particle): particle is ExploreParticle => Boolean(particle)),
+    formats: hydratedFormats.records,
+    formatSync: {
+      requested: hydratedFormats.requested,
+      hydrated: hydratedFormats.records.length,
+      failed: hydratedFormats.failed,
+    },
   };
 };
 
@@ -545,6 +738,7 @@ export const fetchChainParticleForStudio = async (
       particle,
       authorId,
       extractConnectorCreatedAt(connectorPayload) ?? Date.now(),
+      connector.formatHash,
     ),
   };
 };

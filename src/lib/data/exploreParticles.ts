@@ -19,6 +19,7 @@ export type ExploreParticle = {
   complexity: number;
   transactionName: string;
   dependencies: string[];
+  formatHash?: string;
 };
 
 export const mockParticleViews: ParticleView[] = [

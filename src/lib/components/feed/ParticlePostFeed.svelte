@@ -1,5 +1,4 @@
 <script lang="ts">
-  import FormatEventCard from "$lib/components/social/FormatEventCard.svelte";
   import SocialCodeEventCard from "$lib/components/social/SocialCodeEventCard.svelte";
   import SocialEventCard from "$lib/components/social/SocialEventCard.svelte";
   import type { NetworkFeedEvent } from "$lib/feed/particlePostData";
@@ -46,9 +45,7 @@
   {:else}
     {#each events as event (event.id)}
       <div class="feed-card-shell">
-        {#if event.type === "format"}
-          <FormatEventCard {event} />
-        {:else if event.type === "connector"}
+        {#if event.type === "connector"}
           <SocialEventCard
             {event}
             {onParticleOpen}

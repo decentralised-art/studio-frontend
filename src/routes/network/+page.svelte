@@ -4,18 +4,12 @@
   import ParticlePostFeed from "$lib/components/feed/ParticlePostFeed.svelte";
   import { addParticleToCurrentUserToolbox, getCurrentUserToolboxLibrary } from "$lib/auth/api";
   import {
-    getParticleLabelMap,
-    listParticlePosts,
+    listNetworkFeedEvents,
     listParticleSearchEntities,
     syncParticlePostDataFromChain,
     type NetworkFeedEvent,
-    type ParticlePostEvent,
   } from "$lib/feed/particlePostData";
-  import {
-    buildFormatFeedEvents,
-    loadLocalFormats,
-    type ParticleFormat,
-  } from "$lib/formats/localFormats";
+  import { getChainFormatDisplayName } from "$lib/formats/chainFormats";
   import Button from "$lib/components/ui/Button.svelte";
   import Input from "$lib/components/ui/Input.svelte";
   import { networkNodeStudioKind } from "$lib/network/mockNetworkGraph";
@@ -29,9 +23,7 @@
   } from "$lib/data/users";
 
   let followSearch = $state("");
-  let feedEvents = $state<ParticlePostEvent[]>([]);
   let feedLoading = $state(true);
-  let formats = $state<ParticleFormat[]>([]);
   let networkFeedEvents = $state<NetworkFeedEvent[]>([]);
   let chainElements = $state(listParticleSearchEntities());
   let localFollowing = $state<User["id"][]>([...(mockFollowingByUserId[mockCurrentUserId] ?? [])]);
@@ -55,7 +47,7 @@
       .slice(0, 6);
   });
 
-  type SearchableEntityKind = "connector" | "transformation" | "condition";
+  type SearchableEntityKind = "connector" | "transformation" | "condition" | "format";
 
   type EntitySearchResult = {
     id: string;
@@ -76,6 +68,7 @@
           kind: "transformation" as const,
         })),
         ...chainElements.conditions.map((item) => ({ ...item, kind: "condition" as const })),
+        ...chainElements.formats.map((item) => ({ ...item, kind: "format" as const })),
       ] as Array<
         { kind: SearchableEntityKind } & {
           id: string;
@@ -90,7 +83,7 @@
       )
       .map((item) => ({
         id: `${item.kind}:${item.id}`,
-        label: item.label,
+        label: item.kind === "format" ? getChainFormatDisplayName(item.id) : item.label,
         kind: item.kind,
         entityId: item.id,
         summary: item.summary,
@@ -108,12 +101,8 @@
     } catch (error) {
       console.error("[Network feed] Failed to sync chain-backed particle posts.", error);
     } finally {
-      feedEvents = listParticlePosts();
+      networkFeedEvents = listNetworkFeedEvents();
       chainElements = listParticleSearchEntities();
-      const formatEvents = buildFormatFeedEvents(formats, getParticleLabelMap());
-      networkFeedEvents = [...feedEvents, ...formatEvents].sort(
-        (a, b) => b.createdAt - a.createdAt,
-      );
       feedLoading = false;
     }
   };
@@ -139,6 +128,12 @@
     window.open(target.toString(), "_blank", "noopener,noreferrer");
   };
 
+  const openFormatPage = (formatHash: string) => {
+    if (!formatHash) return;
+    const target = new URL(resolve("/f/[slug]", { slug: formatHash }), window.location.origin);
+    window.open(target.toString(), "_blank", "noopener,noreferrer");
+  };
+
   const followUser = (userId: User["id"]) => {
     if (localFollowing.includes(userId)) return;
     localFollowing = [...localFollowing, userId];
@@ -159,7 +154,6 @@
   };
 
   onMount(() => {
-    formats = loadLocalFormats();
     void getCurrentUserToolboxLibrary()
       .then((toolbox) => {
         localToolboxParticles = [...toolbox.particles];
@@ -178,7 +172,7 @@
         <div class="follow-search-field">
           <Input
             label=""
-            placeholder="Search users, connectors, transformations, conditions"
+            placeholder="Search users, connectors, format hashes, transformations, conditions"
             value={followSearch}
             oninput={(event) => {
               followSearch = event.currentTarget.value;
@@ -241,6 +235,14 @@
                     <Button
                       variant="ghost"
                       onclick={() => openConnectorInStudio(item.entityId)}
+                      className="follow-btn"
+                    >
+                      Open
+                    </Button>
+                  {:else if item.kind === "format"}
+                    <Button
+                      variant="ghost"
+                      onclick={() => openFormatPage(item.entityId)}
                       className="follow-btn"
                     >
                       Open
