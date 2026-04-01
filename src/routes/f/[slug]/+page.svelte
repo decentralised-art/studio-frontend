@@ -1,36 +1,85 @@
 <script lang="ts">
-  import { onMount } from "svelte";
   import { page } from "$app/stores";
   import { resolve } from "$app/paths";
+  import { getChainFormat, normalizeFormatHash } from "$lib/chain/registryApi";
   import Button from "$lib/components/ui/Button.svelte";
   import SectionShell from "$lib/components/ui/SectionShell.svelte";
   import ParticlePostFeed from "$lib/components/feed/ParticlePostFeed.svelte";
   import {
-    findParticlesByTerminalSet,
-    listParticlePosts,
+    getFormatRecordByHash,
+    listParticleRecordsByFormatHash,
+    listNetworkFeedEvents,
     syncParticlePostDataFromChain,
     type NetworkFeedEvent,
     type ParticleRecord,
   } from "$lib/feed/particlePostData";
   import {
-    getLocalFormatBySlug,
-    loadLocalFormats,
-    type ParticleFormat,
-  } from "$lib/formats/localFormats";
+    getChainFormatDisplayName,
+    mapChainFormatResponseToRecord,
+    mergeChainFormatRecords,
+    type ChainFormatRecord,
+  } from "$lib/formats/chainFormats";
   import { mockCurrentUserId, mockUsersById } from "$lib/data/users";
   import { networkNodeStudioKind } from "$lib/network/mockNetworkGraph";
 
-  let format = $state<ParticleFormat | null>(null);
+  const CHAIN_FORMAT_PAGE_LIMIT = 200;
+
+  const getConnectorIdFromScalar = (scalarId: string): string => {
+    const raw = `${scalarId ?? ""}`.trim();
+    if (!raw) return "";
+    const separatorIndex = raw.indexOf(":");
+    if (separatorIndex === -1) return raw;
+    const connectorId = raw.slice(0, separatorIndex).trim();
+    return connectorId || raw;
+  };
+
+  let formatRecord = $state<ChainFormatRecord | null>(null);
+  let formatAuthorId = $state<string>("");
   let loading = $state(true);
   let loadError = $state("");
-  let matchingParticles = $state<ParticleRecord[]>([]);
+  let formatDisplayName = $state("");
+  let matchingConnectors = $state<ParticleRecord[]>([]);
   let relatedPosts = $state<NetworkFeedEvent[]>([]);
-  let localToolboxParticles = $state<string[]>([
+  let loadedSlug = $state("");
+  let localToolboxConnectors = $state<string[]>([
     ...(mockUsersById[mockCurrentUserId]?.toolbox ?? []),
   ]);
 
-  const toolboxParticleIds = $derived.by(() => new Set(localToolboxParticles));
-  const author = $derived.by(() => (format ? (mockUsersById[format.authorId] ?? null) : null));
+  const toolboxConnectorIds = $derived.by(() => new Set(localToolboxConnectors));
+  const author = $derived.by(() =>
+    formatAuthorId ? (mockUsersById[formatAuthorId] ?? null) : null,
+  );
+
+  const loadChainFormatByHash = async (formatHash: string): Promise<ChainFormatRecord | null> => {
+    const firstPage = await getChainFormat(formatHash, { limit: CHAIN_FORMAT_PAGE_LIMIT, page: 0 });
+    const firstRecord = mapChainFormatResponseToRecord(firstPage);
+    if (!firstRecord) return null;
+
+    const totalConnectors = Math.max(firstRecord.totalConnectors, firstRecord.connectors.length);
+    const pageLimit = Math.max(1, firstRecord.limit || CHAIN_FORMAT_PAGE_LIMIT);
+    const totalPages = totalConnectors > 0 ? Math.ceil(totalConnectors / pageLimit) : 1;
+
+    if (totalPages <= 1) return firstRecord;
+
+    const remainingPages = Array.from({ length: totalPages - 1 }, (_, index) => index + 1);
+    const otherPages = await Promise.all(
+      remainingPages.map(async (pageIndex) => {
+        try {
+          const response = await getChainFormat(formatHash, { limit: pageLimit, page: pageIndex });
+          return mapChainFormatResponseToRecord(response);
+        } catch {
+          return null;
+        }
+      }),
+    );
+
+    return (
+      mergeChainFormatRecords([
+        firstRecord,
+        ...otherPages.filter((record): record is ChainFormatRecord => Boolean(record)),
+      ]) ?? firstRecord
+    );
+  };
 
   const loadFormatPage = async () => {
     loading = true;
@@ -38,18 +87,45 @@
     try {
       await syncParticlePostDataFromChain();
       const slug = ($page.params.slug ?? "").trim();
-      const nextFormat = getLocalFormatBySlug(slug, loadLocalFormats());
-      format = nextFormat;
-      if (!nextFormat) {
-        matchingParticles = [];
+      let formatHash = "";
+      try {
+        formatHash = normalizeFormatHash(slug);
+      } catch {
+        formatRecord = null;
+        formatDisplayName = "";
+        formatAuthorId = "";
+        matchingConnectors = [];
+        relatedPosts = [];
+        loadError = "Format hash is invalid.";
+        return;
+      }
+
+      const cached = getFormatRecordByHash(formatHash);
+      const record =
+        cached && cached.connectors.length >= cached.totalConnectors
+          ? cached
+          : await loadChainFormatByHash(formatHash);
+
+      formatRecord = record;
+      if (!record) {
+        formatDisplayName = "";
+        formatAuthorId = "";
+        matchingConnectors = [];
         relatedPosts = [];
         return;
       }
-      matchingParticles = findParticlesByTerminalSet(nextFormat.terminalParticleIds);
-      const matchingIds = new Set(matchingParticles.map((particle) => particle.id));
-      relatedPosts = listParticlePosts().filter(
+
+      formatDisplayName = getChainFormatDisplayName(record.formatHash);
+
+      matchingConnectors = listParticleRecordsByFormatHash(record.formatHash);
+      const matchingIds = new Set(matchingConnectors.map((connector) => connector.id));
+      const feed = listNetworkFeedEvents();
+      relatedPosts = feed.filter(
         (event) => event.type === "connector" && matchingIds.has(event.particleId),
       );
+      formatAuthorId =
+        matchingConnectors.find((connector) => connector.authorId.trim().length > 0)?.authorId ??
+        "";
     } catch (error) {
       loadError = error instanceof Error ? error.message : "Unable to load format page.";
     } finally {
@@ -57,24 +133,27 @@
     }
   };
 
-  const openParticleInStudio = (particleId: string) => {
+  const openConnectorInStudio = (connectorId: string) => {
     const base = resolve("/studio");
     const target = new URL(base, window.location.origin);
-    target.searchParams.set("network_kind", networkNodeStudioKind("particle"));
-    target.searchParams.set("network_id", particleId);
+    target.searchParams.set("network_kind", networkNodeStudioKind("connector"));
+    target.searchParams.set("network_id", connectorId);
     window.open(target.toString(), "_blank", "noopener,noreferrer");
   };
 
-  const addParticleToToolbox = (particleId: string) => {
-    if (toolboxParticleIds.has(particleId)) return;
-    localToolboxParticles = [...localToolboxParticles, particleId];
+  const addConnectorToToolbox = (connectorId: string) => {
+    if (toolboxConnectorIds.has(connectorId)) return;
+    localToolboxConnectors = [...localToolboxConnectors, connectorId];
     const currentUser = mockUsersById[mockCurrentUserId];
-    if (currentUser && !currentUser.toolbox.includes(particleId)) {
-      currentUser.toolbox = [...currentUser.toolbox, particleId];
+    if (currentUser && !currentUser.toolbox.includes(connectorId)) {
+      currentUser.toolbox = [...currentUser.toolbox, connectorId];
     }
   };
 
-  onMount(() => {
+  $effect(() => {
+    const slug = ($page.params.slug ?? "").trim();
+    if (!slug || slug === loadedSlug) return;
+    loadedSlug = slug;
     void loadFormatPage();
   });
 </script>
@@ -84,7 +163,7 @@
     <SectionShell className="page-card-shell">
       <div class="status">
         <p class="status-title">Loading format...</p>
-        <p class="status-subtitle">Fetching chain-backed particles and local format data.</p>
+        <p class="status-subtitle">Fetching chain-backed format and connector data.</p>
       </div>
     </SectionShell>
   {:else if loadError}
@@ -97,71 +176,44 @@
         <Button variant="primary" type="button" onclick={loadFormatPage}>Retry</Button>
       </div>
     </SectionShell>
-  {:else if !format}
+  {:else if !formatRecord}
     <SectionShell className="page-card-shell">
       <div class="status">
         <p class="status-title">Format not found</p>
-        <p class="status-subtitle">No local format matches this URL.</p>
+        <p class="status-subtitle">No chain format matches this hash.</p>
       </div>
     </SectionShell>
   {:else}
     <section class="format-overview page-card-shell" aria-label="Format overview">
       <p class="format-kicker">Format Page</p>
-      <h1 class="format-title">{format.name}</h1>
+      <h1 class="format-title">{formatDisplayName}</h1>
       <p class="format-meta">
-        <span>{author?.nickname ?? format.authorId}</span>
+        <span>{author?.nickname ?? "Unknown contributor"}</span>
         <span aria-hidden="true">•</span>
-        <span>{format.terminalParticleIds.length} terminal particles</span>
+        <span
+          >{formatRecord.scalars.length} scalar{formatRecord.scalars.length === 1 ? "" : "s"}</span
+        >
+        <span aria-hidden="true">•</span>
+        <span class="font-mono text-[0.66rem] tracking-[0.08em]">{formatRecord.formatHash}</span>
       </p>
-
-      <div class="terminal-particles" aria-label="Terminal particles">
-        <p class="terminal-label">Terminal particles</p>
+      <div class="terminal-connectors" aria-label="Terminal connectors">
+        <p class="terminal-label">Scalars</p>
         <div class="terminal-list">
-          {#each format.terminalParticleIds as particleId (particleId)}
-            <a class="terminal-pill" href={resolve("/p/[id]", { id: particleId })}>{particleId}</a>
+          {#each formatRecord.scalars as scalarId (scalarId)}
+            {@const connectorId = getConnectorIdFromScalar(scalarId)}
+            <a class="terminal-pill" href={resolve("/c/[id]", { id: connectorId })}>{scalarId}</a>
           {/each}
         </div>
       </div>
-    </section>
-
-    <section class="page-card-shell matches-section" aria-label="Matching particles">
-      <div class="matches-head">
-        <p class="matches-title">Matching particles</p>
-        <p class="matches-subtitle">{matchingParticles.length} particles match this terminal set</p>
-      </div>
-      {#if matchingParticles.length === 0}
-        <p class="matches-empty">No synced particles currently match this format.</p>
-      {:else}
-        <div class="matches-list">
-          {#each matchingParticles as particle (particle.id)}
-            <a class="match-row" href={resolve("/p/[id]", { id: particle.id })}>
-              <div class="match-meta">
-                <p class="match-name">{particle.name}</p>
-                <p class="match-summary">{particle.summary}</p>
-              </div>
-              <Button
-                variant="ghost"
-                type="button"
-                onclick={(event) => {
-                  event.preventDefault();
-                  openParticleInStudio(particle.id);
-                }}
-              >
-                Open in Studio
-              </Button>
-            </a>
-          {/each}
-        </div>
-      {/if}
     </section>
 
     <div class="page-card-shell">
       <ParticlePostFeed
         events={relatedPosts}
-        onParticleOpen={openParticleInStudio}
-        onAddToToolbox={addParticleToToolbox}
-        {toolboxParticleIds}
-        emptyMessage="No posts for particles in this format yet."
+        onParticleOpen={openConnectorInStudio}
+        onAddToToolbox={addConnectorToToolbox}
+        toolboxParticleIds={toolboxConnectorIds}
+        emptyMessage="No posts for connectors in this format yet."
       />
     </div>
   {/if}
@@ -181,8 +233,7 @@
     max-width: 100%;
   }
 
-  .format-overview,
-  .matches-section {
+  .format-overview {
     @apply rounded-3xl border border-white/10 bg-black/35 backdrop-blur-sm p-4 md:p-5;
   }
 
@@ -198,7 +249,7 @@
     @apply mt-2 flex flex-wrap items-center gap-2 text-sm text-white/60;
   }
 
-  .terminal-particles {
+  .terminal-connectors {
     @apply mt-4 grid gap-2;
   }
 
@@ -212,26 +263,6 @@
 
   .terminal-pill {
     @apply rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-white/80 no-underline hover:border-white/25 hover:text-white transition;
-  }
-
-  .matches-head {
-    @apply flex flex-wrap items-baseline justify-between gap-2;
-  }
-
-  .matches-title {
-    @apply text-base font-semibold text-white;
-  }
-
-  .matches-subtitle {
-    @apply text-xs text-white/50;
-  }
-
-  .matches-empty {
-    @apply mt-3 text-sm text-white/60;
-  }
-
-  .matches-list {
-    @apply mt-3 grid gap-2;
   }
 
   .match-row {

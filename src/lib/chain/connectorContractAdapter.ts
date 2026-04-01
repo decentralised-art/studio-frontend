@@ -3,6 +3,7 @@ import type {
   ChainConnectorResponse,
   ChainTransformationArg,
 } from "$lib/chain/registryApi";
+import { normalizeFormatHash } from "$lib/chain/registryApi";
 import type {
   StudioConnectorDef,
   StudioTransformationRef,
@@ -31,6 +32,17 @@ const normalizeOptionalName = (value: unknown): string | undefined => {
   if (typeof value !== "string") return undefined;
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
+};
+
+const normalizeOptionalFormatHash = (value: unknown): string | undefined => {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  try {
+    return normalizeFormatHash(trimmed);
+  } catch {
+    return undefined;
+  }
 };
 
 const toInt32 = (value: unknown, label: string): number => {
@@ -123,11 +135,19 @@ export function fromProtocolConnectorPayload(payload: ChainConnectorResponse): S
     throw new Error(`Connector ${name} has condition args without a condition name.`);
   }
 
+  const formatHash = normalizeOptionalFormatHash(payload.format_hash);
+  const localAddress =
+    typeof payload.local_address === "string" ? payload.local_address.trim().toLowerCase() : "";
+  const ownerAddress = typeof payload.owner === "string" ? payload.owner.trim().toLowerCase() : "";
+
   return {
     name,
     dimensions,
     conditionName,
     conditionArgs,
+    ...(formatHash ? { formatHash } : {}),
+    ...(localAddress ? { localAddress } : {}),
+    ...(ownerAddress ? { ownerAddress } : {}),
   };
 }
 

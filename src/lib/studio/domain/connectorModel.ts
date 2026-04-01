@@ -18,6 +18,9 @@ export type StudioConnectorDef = {
   dimensions: StudioConnectorDimension[];
   conditionName?: string;
   conditionArgs?: number[];
+  formatHash?: string;
+  localAddress?: string;
+  ownerAddress?: string;
 };
 
 export type StudioRegistry = {

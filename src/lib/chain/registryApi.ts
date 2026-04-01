@@ -53,6 +53,8 @@ export type ChainConnectorResponse = {
   condition_args?: number[];
   conditionArgs?: number[];
   address?: string;
+  local_address?: string;
+  format_hash?: string;
 };
 
 export type ChainTransformationResponse = {
@@ -79,6 +81,32 @@ export type ChainAccountResponse = {
   total_connectors?: number;
   total_transformations?: number;
   total_conditions?: number;
+};
+
+export type ChainFormatConnectorResponse = {
+  name?: string;
+  address?: string;
+  local_address?: string;
+};
+
+export type ChainFormatResponse = {
+  format_hash?: string;
+  page?: number;
+  limit?: number;
+  total_connectors?: number;
+  scalars?: string[];
+  connectors?: ChainFormatConnectorResponse[];
+};
+
+const FORMAT_HASH_HEX_RE = /^[0-9a-f]{64}$/i;
+
+export const normalizeFormatHash = (value: string): string => {
+  const trimmed = value.trim().toLowerCase();
+  const withoutPrefix = trimmed.startsWith("0x") ? trimmed.slice(2) : trimmed;
+  if (!FORMAT_HASH_HEX_RE.test(withoutPrefix)) {
+    throw new Error("Invalid format hash. Expected 32-byte hex value.");
+  }
+  return `0x${withoutPrefix}`;
 };
 
 const parseBody = async (response: Response) => {
@@ -141,9 +169,6 @@ export const getChainAccount = async (
       payload.owned_connectors,
       payload.owned_transformations,
       payload.owned_conditions,
-      // Legacy names (kept for mixed backend versions)
-      (payload as Record<string, unknown>).owned_features,
-      (payload as Record<string, unknown>).owned_particles,
     ];
     return lists.some((list) => Array.isArray(list) && list.length > 0);
   };
@@ -193,6 +218,18 @@ export const getChainCondition = async (name: string, version?: string) =>
   fetchJson<ChainConditionResponse>(
     `/condition/${encodeURIComponent(name)}${version ? `/${encodeURIComponent(version)}` : ""}`,
   );
+
+export const getChainFormat = async (
+  formatHash: string,
+  options: { limit?: number; page?: number } = {},
+) => {
+  const limit = options.limit ?? 200;
+  const page = options.page ?? 0;
+  const normalizedHash = normalizeFormatHash(formatHash);
+  return fetchJson<ChainFormatResponse>(
+    `/format/${encodeURIComponent(normalizedHash)}?limit=${encodeURIComponent(String(limit))}&page=${encodeURIComponent(String(page))}`,
+  );
+};
 
 export const postChainConnector = async (payload: ChainConnectorPayload) =>
   postJsonWithChainAuth<ChainConnectorResponse>("/connector", payload);

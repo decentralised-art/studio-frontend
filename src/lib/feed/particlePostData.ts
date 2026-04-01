@@ -1,5 +1,10 @@
+import { normalizeFormatHash } from "$lib/chain/registryApi";
 import type { ExploreParticle } from "$lib/data/exploreParticles";
-import type { FormatFeedEvent } from "$lib/formats/localFormats";
+import {
+  getChainFormatDisplayName,
+  mergeChainFormatRecords,
+  type ChainFormatRecord,
+} from "$lib/formats/chainFormats";
 import type { MockFeatureDef, MockParticleDef } from "$lib/particles/mockPtNetwork";
 import {
   fetchChainOwnedStudioSnapshot,
@@ -16,6 +21,7 @@ export type ConnectorPostEvent = {
   createdLabel: string;
   particleId: string;
   particleLabel: string;
+  formatHash?: string;
   usedParticleIds: string[];
   usedParticleLabels: string[];
   createdNodeIds: string[];
@@ -35,11 +41,19 @@ export type RuntimeCodePostEvent = {
 };
 
 export type ParticlePostEvent = ConnectorPostEvent | RuntimeCodePostEvent;
-export type NetworkFeedEvent = ParticlePostEvent | FormatFeedEvent;
+
+export type NetworkFeedEvent = ParticlePostEvent;
 
 export type ParticleRecord = Pick<
   ExploreParticle,
-  "id" | "name" | "summary" | "authorId" | "createdAt" | "createdLabel" | "dependencies"
+  | "id"
+  | "name"
+  | "summary"
+  | "authorId"
+  | "createdAt"
+  | "createdLabel"
+  | "dependencies"
+  | "formatHash"
 >;
 
 type ParticleDependencyRegistrySnapshot = {
@@ -48,24 +62,31 @@ type ParticleDependencyRegistrySnapshot = {
   features: Record<string, MockFeatureDef>;
 };
 
+type SearchableEntity = { id: string; label: string; summary: string; authorId: string };
+
 type ParticlePostCache = {
   loaded: boolean;
   events: ParticlePostEvent[];
+  networkEvents: NetworkFeedEvent[];
   particlesById: Map<string, ParticleRecord>;
+  formatsByHash: Map<string, ChainFormatRecord>;
   registry: ParticleDependencyRegistrySnapshot;
   searchable: {
-    connectors: Array<{ id: string; label: string; summary: string; authorId: string }>;
-    transformations: Array<{ id: string; label: string; summary: string; authorId: string }>;
-    conditions: Array<{ id: string; label: string; summary: string; authorId: string }>;
+    connectors: SearchableEntity[];
+    transformations: SearchableEntity[];
+    conditions: SearchableEntity[];
+    formats: SearchableEntity[];
   };
 };
 
 const emptyCache = (): ParticlePostCache => ({
   loaded: false,
   events: [],
+  networkEvents: [],
   particlesById: new Map(),
+  formatsByHash: new Map(),
   registry: { connectors: {}, particles: {}, features: {} },
-  searchable: { connectors: [], transformations: [], conditions: [] },
+  searchable: { connectors: [], transformations: [], conditions: [], formats: [] },
 });
 
 let cache: ParticlePostCache = emptyCache();
@@ -75,20 +96,24 @@ const terminalSetCache = new Map<string, string[]>();
 const rebuildEventsFromParticles = (particles: ParticleRecord[]): ConnectorPostEvent[] => {
   const labelById = new Map(particles.map((particle) => [particle.id, particle.name] as const));
   return particles
-    .map((particle) => ({
-      type: "connector",
-      id: `event-particle-created-${particle.id}`,
-      authorId: particle.authorId,
-      createdAt: particle.createdAt,
-      createdLabel: particle.createdLabel,
-      particleId: particle.id,
-      particleLabel: particle.name,
-      usedParticleIds: [...particle.dependencies],
-      usedParticleLabels: particle.dependencies.map((id) => labelById.get(id) ?? id),
-      createdNodeIds: [],
-      reusedNodeIds: [],
-      focusNodeIds: [],
-    }))
+    .map(
+      (particle) =>
+        ({
+          type: "connector",
+          id: `event-particle-created-${particle.id}`,
+          authorId: particle.authorId,
+          createdAt: particle.createdAt,
+          createdLabel: particle.createdLabel,
+          particleId: particle.id,
+          particleLabel: particle.name,
+          ...(particle.formatHash ? { formatHash: particle.formatHash } : {}),
+          usedParticleIds: [...particle.dependencies],
+          usedParticleLabels: particle.dependencies.map((id) => labelById.get(id) ?? id),
+          createdNodeIds: [],
+          reusedNodeIds: [],
+          focusNodeIds: [],
+        }) satisfies ConnectorPostEvent,
+    )
     .sort((a, b) => {
       const byCreatedAt = b.createdAt - a.createdAt;
       if (byCreatedAt !== 0) return byCreatedAt;
@@ -161,24 +186,36 @@ const mergeSnapshots = async (options?: { forceSources?: boolean }): Promise<Par
     features: {},
   };
   const searchByKind = {
-    connectors: new Map<string, { id: string; label: string; summary: string; authorId: string }>(),
-    transformations: new Map<
-      string,
-      { id: string; label: string; summary: string; authorId: string }
-    >(),
-    conditions: new Map<string, { id: string; label: string; summary: string; authorId: string }>(),
+    connectors: new Map<string, SearchableEntity>(),
+    transformations: new Map<string, SearchableEntity>(),
+    conditions: new Map<string, SearchableEntity>(),
+    formats: new Map<string, SearchableEntity>(),
   };
   const runtimeCodeRecordsById = new Map<string, RuntimeCodeRecord>();
+  const formatRecordsByHash = new Map<string, ChainFormatRecord>();
+  const formatAuthorByHash = new Map<string, string>();
 
   let particleCounter = 0;
 
-  for (const result of settled) {
+  for (const [sourceIndex, result] of settled.entries()) {
     if (result.status !== "fulfilled") continue;
     const snapshot = result.value;
+    const source = chainSources[sourceIndex];
 
     Object.assign(nextRegistry.features, snapshot.registry.features);
     Object.assign(nextRegistry.particles, snapshot.registry.particles);
     Object.assign(nextRegistry.connectors, snapshot.registry.connectors);
+
+    snapshot.formats.forEach((record) => {
+      const existing = formatRecordsByHash.get(record.formatHash);
+      const merged = existing ? mergeChainFormatRecords([existing, record]) : record;
+      if (merged) {
+        formatRecordsByHash.set(merged.formatHash, merged);
+      }
+      if (!formatAuthorByHash.has(record.formatHash)) {
+        formatAuthorByHash.set(record.formatHash, source?.authorId ?? "chain-source-unknown");
+      }
+    });
 
     snapshot.library.transformations.forEach((item) => {
       const transformationId = item.id.replace(/^transform-/, "").trim();
@@ -249,12 +286,13 @@ const mergeSnapshots = async (options?: { forceSources?: boolean }): Promise<Par
         createdAt,
         createdLabel: "",
         dependencies: [...particle.dependencies],
+        ...(particle.formatHash ? { formatHash: particle.formatHash } : {}),
       };
       mergeParticleRecordIntoStructures(record, nextParticlesById, searchByKind);
     });
   }
 
-  // Pull one-hop dependency connectors so /p/[id] links and search can resolve referenced connectors
+  // Pull one-hop dependency connectors so /c/[id] links and search can resolve referenced connectors
   // even when they are not owned by the currently synced user source set.
   const missingDependencyIds = Array.from(
     new Set(
@@ -290,6 +328,9 @@ const mergeSnapshots = async (options?: { forceSources?: boolean }): Promise<Par
           createdAt: Date.now() - particleCounter * 1000,
           createdLabel: "",
           dependencies: [...fetched.particleMeta.dependencies],
+          ...(fetched.particleMeta.formatHash
+            ? { formatHash: fetched.particleMeta.formatHash }
+            : {}),
         };
         particleCounter += 1;
         mergeParticleRecordIntoStructures(fallbackRecord, nextParticlesById, searchByKind);
@@ -304,6 +345,27 @@ const mergeSnapshots = async (options?: { forceSources?: boolean }): Promise<Par
   });
 
   const connectorEvents = rebuildEventsFromParticles(particles);
+  Array.from(formatRecordsByHash.values()).forEach((formatRecord) => {
+    const authorFromConnector = formatRecord.connectors
+      .map((ref) => nextParticlesById.get(ref.name)?.authorId)
+      .find((value): value is string => Boolean(value && value.trim().length > 0));
+    const authorId =
+      formatAuthorByHash.get(formatRecord.formatHash) ??
+      authorFromConnector ??
+      "chain-source-unknown";
+    const formatName = getChainFormatDisplayName(formatRecord.formatHash);
+    const summary = formatRecord.scalars.length
+      ? `Scalars: ${formatRecord.scalars.join(", ")}`
+      : `${formatRecord.connectors.length} connector${formatRecord.connectors.length === 1 ? "" : "s"} in format`;
+
+    searchByKind.formats.set(`format:${formatRecord.formatHash}`, {
+      id: formatRecord.formatHash,
+      label: formatName,
+      summary,
+      authorId,
+    });
+  });
+
   const runtimeCodeEvents = rebuildRuntimeCodeEvents(
     Array.from(runtimeCodeRecordsById.values()).sort((a, b) => {
       const byCreatedAt = b.createdAt - a.createdAt;
@@ -314,16 +376,20 @@ const mergeSnapshots = async (options?: { forceSources?: boolean }): Promise<Par
   const events = [...connectorEvents, ...runtimeCodeEvents].sort(
     (a, b) => b.createdAt - a.createdAt,
   );
+  const networkEvents = events;
 
   return {
     loaded: true,
     events,
+    networkEvents,
     particlesById: nextParticlesById,
+    formatsByHash: formatRecordsByHash,
     registry: nextRegistry,
     searchable: {
       connectors: Array.from(searchByKind.connectors.values()),
       transformations: Array.from(searchByKind.transformations.values()),
       conditions: Array.from(searchByKind.conditions.values()),
+      formats: Array.from(searchByKind.formats.values()),
     },
   };
 };
@@ -348,8 +414,13 @@ export const syncParticlePostDataFromChain = async (options?: { force?: boolean 
 
 export const listParticlePosts = (): ParticlePostEvent[] => cache.events;
 
+export const listNetworkFeedEvents = (): NetworkFeedEvent[] => cache.networkEvents;
+
 export const listParticlePostsByAuthor = (authorId: string): ParticlePostEvent[] =>
   cache.events.filter((event) => event.authorId === authorId);
+
+export const listNetworkFeedEventsByAuthor = (authorId: string): NetworkFeedEvent[] =>
+  cache.networkEvents.filter((event) => event.authorId === authorId);
 
 export const listParticlePostsReferencingParticle = (particleId: string): ParticlePostEvent[] =>
   cache.events.filter(
@@ -387,6 +458,7 @@ export const ensureParticleRecordLoadedById = async (
       createdAt: fetched.particleMeta.createdAt,
       createdLabel: fetched.particleMeta.createdLabel,
       dependencies: [...fetched.particleMeta.dependencies],
+      ...(fetched.particleMeta.formatHash ? { formatHash: fetched.particleMeta.formatHash } : {}),
     };
     cache.particlesById.set(record.id, record);
     cache.searchable.connectors = [
@@ -406,6 +478,24 @@ export const ensureParticleRecordLoadedById = async (
 };
 
 export const listParticleRecords = (): ParticleRecord[] => Array.from(cache.particlesById.values());
+
+export const getFormatRecordByHash = (formatHash: string): ChainFormatRecord | null =>
+  cache.formatsByHash.get(normalizeFormatHashSafe(formatHash) ?? formatHash) ?? null;
+
+export const listParticleRecordsByFormatHash = (formatHash: string): ParticleRecord[] => {
+  const normalizedTarget = normalizeFormatHashSafe(formatHash);
+  if (!normalizedTarget) return [];
+  return Array.from(cache.particlesById.values())
+    .filter((particle) => {
+      const normalizedParticleHash = normalizeFormatHashSafe(particle.formatHash);
+      return normalizedParticleHash === normalizedTarget;
+    })
+    .sort((a, b) => {
+      const byCreatedAt = b.createdAt - a.createdAt;
+      if (byCreatedAt !== 0) return byCreatedAt;
+      return a.id.localeCompare(b.id);
+    });
+};
 
 export const getParticleLabelMap = (): ReadonlyMap<string, string> =>
   new Map(
@@ -429,6 +519,15 @@ export const resetParticlePostDataCacheForDebug = () => {
 
 const sortUnique = (values: string[]) =>
   Array.from(new Set(values)).sort((a, b) => a.localeCompare(b));
+
+const normalizeFormatHashSafe = (value: string | undefined): string | null => {
+  if (!value) return null;
+  try {
+    return normalizeFormatHash(value);
+  } catch {
+    return null;
+  }
+};
 
 const computeTerminalSet = (particleId: string, seen = new Set<string>()): string[] => {
   if (terminalSetCache.has(particleId)) return terminalSetCache.get(particleId)!;

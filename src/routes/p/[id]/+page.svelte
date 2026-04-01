@@ -17,6 +17,7 @@
   import SectionShell from "$lib/components/ui/SectionShell.svelte";
   import { addParticleToCurrentUserToolbox, getCurrentUserToolboxLibrary } from "$lib/auth/api";
   import { displayUsersById, mockCurrentUserId, mockUsersById } from "$lib/data/users";
+  import { getChainFormatDisplayName } from "$lib/formats/chainFormats";
   import { networkNodeStudioKind } from "$lib/network/mockNetworkGraph";
 
   let localToolboxParticles = $state<string[]>([
@@ -31,11 +32,14 @@
   const author = $derived.by(() =>
     particle ? (displayUsersById[particle.authorId] ?? null) : null,
   );
+  const particleFormatName = $derived.by(() =>
+    particle?.formatHash ? getChainFormatDisplayName(particle.formatHash) : "",
+  );
 
   const openParticleInStudio = (targetParticleId: string) => {
     const base = resolve("/studio");
     const target = new URL(base, window.location.origin);
-    target.searchParams.set("network_kind", networkNodeStudioKind("particle"));
+    target.searchParams.set("network_kind", networkNodeStudioKind("connector"));
     target.searchParams.set("network_id", targetParticleId);
     window.open(target.toString(), "_blank", "noopener,noreferrer");
   };
@@ -110,6 +114,15 @@
               </a>
             {:else}
               <span>{particle.authorId}</span>
+            {/if}
+            {#if particle.formatHash}
+              <span aria-hidden="true">•</span>
+              <a
+                class="particle-author-link"
+                href={resolve("/f/[slug]", { slug: particle.formatHash })}
+              >
+                {particleFormatName}
+              </a>
             {/if}
           </p>
           <p class="particle-summary">{particle.summary}</p>

@@ -9,19 +9,6 @@ export type ParticleFormat = {
   createdAt: number;
 };
 
-export type FormatFeedEvent = {
-  type: "format";
-  id: string;
-  authorId: string;
-  createdAt: number;
-  createdLabel: string;
-  formatId: string;
-  formatSlug: string;
-  formatName: string;
-  terminalParticleIds: string[];
-  terminalParticleLabels: string[];
-};
-
 const STORAGE_KEY = "hypermusic_particle_formats_v1";
 
 const slugify = (value: string) =>
@@ -63,17 +50,6 @@ const parseStored = (raw: string | null): ParticleFormat[] => {
   } catch {
     return [];
   }
-};
-
-const formatRelativeTime = (createdAt: number) => {
-  const diffMs = Math.max(0, Date.now() - createdAt);
-  const mins = Math.floor(diffMs / 60000);
-  if (mins < 1) return "just now";
-  if (mins < 60) return `${mins}m ago`;
-  const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  return `${days}d ago`;
 };
 
 export const loadLocalFormats = (): ParticleFormat[] => {
@@ -123,27 +99,3 @@ export const createLocalFormat = (input: {
   saveLocalFormats(nextFormats);
   return { formats: nextFormats, created };
 };
-
-export const getLocalFormatBySlug = (slug: string, formats?: ParticleFormat[]) =>
-  (formats ?? loadLocalFormats()).find((format) => format.slug === slug) ?? null;
-
-export const buildFormatFeedEvents = (
-  formats: ParticleFormat[],
-  particleLabelById: ReadonlyMap<string, string>,
-): FormatFeedEvent[] =>
-  formats
-    .map((format) => ({
-      type: "format",
-      id: `event-format-created-${format.id}`,
-      authorId: format.authorId,
-      createdAt: format.createdAt,
-      createdLabel: formatRelativeTime(format.createdAt),
-      formatId: format.id,
-      formatSlug: format.slug,
-      formatName: format.name,
-      terminalParticleIds: [...format.terminalParticleIds],
-      terminalParticleLabels: format.terminalParticleIds.map(
-        (id) => particleLabelById.get(id) ?? id,
-      ),
-    }))
-    .sort((a, b) => b.createdAt - a.createdAt);
