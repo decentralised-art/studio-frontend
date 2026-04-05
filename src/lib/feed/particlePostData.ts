@@ -44,17 +44,16 @@ export type ParticlePostEvent = ConnectorPostEvent | RuntimeCodePostEvent;
 
 export type NetworkFeedEvent = ParticlePostEvent;
 
-export type ParticleRecord = Pick<
-  ExploreParticle,
-  | "id"
-  | "name"
-  | "summary"
-  | "authorId"
-  | "createdAt"
-  | "createdLabel"
-  | "dependencies"
-  | "formatHash"
->;
+export type ParticleRecord = {
+  id: ExploreParticle["id"];
+  name: ExploreParticle["name"];
+  summary: ExploreParticle["summary"];
+  authorId: ExploreParticle["authorId"];
+  createdAt: ExploreParticle["createdAt"];
+  createdLabel: ExploreParticle["createdLabel"];
+  dependencies: ExploreParticle["dependencies"];
+  formatHash?: ExploreParticle["formatHash"];
+};
 
 type ParticleDependencyRegistrySnapshot = {
   connectors: Record<string, StudioConnectorDef>;
@@ -178,6 +177,14 @@ const mergeSnapshots = async (options?: { forceSources?: boolean }): Promise<Par
       }),
     ),
   );
+
+  const succeededCount = settled.reduce(
+    (count, result) => count + (result.status === "fulfilled" ? 1 : 0),
+    0,
+  );
+  if (succeededCount === 0) {
+    throw new Error("Chain API is temporarily unavailable.");
+  }
 
   const nextParticlesById = new Map<string, ParticleRecord>();
   const nextRegistry: ParticleDependencyRegistrySnapshot = {
@@ -347,7 +354,7 @@ const mergeSnapshots = async (options?: { forceSources?: boolean }): Promise<Par
   const connectorEvents = rebuildEventsFromParticles(particles);
   Array.from(formatRecordsByHash.values()).forEach((formatRecord) => {
     const authorFromConnector = formatRecord.connectors
-      .map((ref) => nextParticlesById.get(ref.name)?.authorId)
+      .map((connectorName) => nextParticlesById.get(connectorName)?.authorId)
       .find((value): value is string => Boolean(value && value.trim().length > 0));
     const authorId =
       formatAuthorByHash.get(formatRecord.formatHash) ??

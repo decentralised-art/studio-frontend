@@ -1,3 +1,4 @@
+import { beforeEach, describe, expect, it } from "vitest";
 import { normalizeFormatHash } from "../src/lib/chain/registryApi";
 import {
   getCachedChainFormat,
@@ -21,16 +22,10 @@ describe("chainFormats", () => {
     const record = mapChainFormatResponseToRecord(
       {
         format_hash: rawHash,
-        page: 0,
         limit: 2,
         total_connectors: 1,
         scalars: [" time ", "pitch", "pitch", "duration"],
-        connectors: [
-          { name: "b", local_address: "0xBB" },
-          { name: "a", local_address: "0xaa" },
-          { name: "a", local_address: "0xAA" }, // duplicate (case-insensitive local_address)
-          { name: "", local_address: "" }, // invalid
-        ],
+        connectors: ["b", "a", "a", " "],
       },
       { fetchedAt: 1000 },
     );
@@ -38,10 +33,7 @@ describe("chainFormats", () => {
     expect(record).not.toBeNull();
     expect(record?.formatHash).toBe(normalizedHash);
     expect(record?.scalars).toEqual(["duration", "pitch", "time"]);
-    expect(record?.connectors).toEqual([
-      { name: "a", address: "", localAddress: "0xaa" },
-      { name: "b", address: "", localAddress: "0xbb" },
-    ]);
+    expect(record?.connectors).toEqual(["a", "b"]);
     // total_connectors should never be less than deduped connectors count
     expect(record?.totalConnectors).toBe(2);
     expect(record?.fetchedAt).toBe(1000);
@@ -51,11 +43,7 @@ describe("chainFormats", () => {
     const sameHashA = {
       formatHash: normalizedHash,
       scalars: ["pitch", "time"],
-      connectors: [
-        { name: "c2", address: "0x0", localAddress: "0x22" },
-        { name: "c1", address: "0x0", localAddress: "0x11" },
-      ],
-      page: 0,
+      connectors: ["c2", "c1"],
       limit: 100,
       totalConnectors: 5,
       fetchedAt: 101,
@@ -63,11 +51,7 @@ describe("chainFormats", () => {
     const sameHashB = {
       formatHash: normalizedHash,
       scalars: ["duration", "pitch"],
-      connectors: [
-        { name: "c1", address: "0x0", localAddress: "0x11" },
-        { name: "c3", address: "0x0", localAddress: "0x33" },
-      ],
-      page: 1,
+      connectors: ["c1", "c3"],
       limit: 100,
       totalConnectors: 3,
       fetchedAt: 202,
@@ -77,8 +61,7 @@ describe("chainFormats", () => {
         "1111111111111111111111111111111111111111111111111111111111111111",
       ),
       scalars: ["x"],
-      connectors: [{ name: "x", address: "0x0", localAddress: "0x99" }],
-      page: 0,
+      connectors: ["x"],
       limit: 100,
       totalConnectors: 1,
       fetchedAt: 303,
@@ -88,20 +71,18 @@ describe("chainFormats", () => {
 
     expect(merged).not.toBeNull();
     expect(merged?.formatHash).toBe(normalizedHash);
-    expect(merged?.page).toBe(0);
     expect(merged?.limit).toBe(100);
     expect(merged?.fetchedAt).toBe(202);
     expect(merged?.totalConnectors).toBe(5);
     expect(merged?.scalars).toEqual(["duration", "pitch", "time"]);
-    expect(merged?.connectors.map((c) => c.name)).toEqual(["c1", "c2", "c3"]);
+    expect(merged?.connectors).toEqual(["c1", "c2", "c3"]);
   });
 
   it("upserts and resolves cached records by normalized hash", () => {
     const record = {
       formatHash: normalizedHash,
       scalars: ["pitch", "time"],
-      connectors: [{ name: "c1", address: "0x0", localAddress: "0x11" }],
-      page: 0,
+      connectors: ["c1"],
       limit: 50,
       totalConnectors: 1,
       fetchedAt: 1000,
@@ -118,7 +99,6 @@ describe("chainFormats", () => {
       formatHash: normalizedHash,
       scalars: [],
       connectors: [],
-      page: 0,
       limit: 0,
       totalConnectors: 0,
       fetchedAt: 1_000,

@@ -37,10 +37,9 @@
   import {
     type MockFeatureDef,
     type MockParticleDef,
-    type MockRunConfig,
     type MockRunningInstance,
   } from "$lib/particles/mockPtNetwork";
-  import { buildStudioRuntime, runStudioParticle } from "$lib/studio/studioRuntime";
+  import { buildStudioRuntime } from "$lib/studio/studioRuntime";
   import {
     fetchChainOwnedStudioSnapshot,
     fetchChainParticleForStudio,
@@ -59,6 +58,7 @@
     type ChainApiPostResult,
     postChainConnectorDetailed,
     postChainConditionDetailed,
+    postChainExecuteDetailed,
     postChainTransformationDetailed,
   } from "$lib/chain/registryApi";
   import { mockPlugins, type LibraryItem } from "$lib/data/studioLibrary";
@@ -238,7 +238,6 @@
   let runSamplesCount = $state(12);
   let transformationEditorOpen = $state(false);
   let transformationEditorDimensionId = $state<string | null>(null);
-  let transformationEditorId = $state<string | null>(null);
   let transformationEditorStatus = $state<TransformationInstance["status"]>("draft");
   let transformationEditorLocked = $state(false);
   let transformationEditorDeployBusy = $state(false);
@@ -336,9 +335,6 @@
       .replace(/[^a-z0-9_]+/g, "-")
       .replace(/^-+|-+$/g, "");
   const touchDeps = (..._deps: unknown[]) => _deps.length;
-
-  const uniqueStrings = (values: string[]) =>
-    Array.from(new Set(values.map((value) => value.trim()).filter((value) => value.length > 0)));
 
   const formatTransformationPreviewLabel = (name: string, args: number[] = []) => {
     const trimmed = name.trim() || "Transformation";
@@ -863,7 +859,7 @@
     if (fromParticles) return fromParticles;
 
     const fromFormatRecords = syncedChainFormats.find((record) =>
-      record.connectors.some((connector) => connector.name.trim().toLowerCase() === normalized),
+      record.connectors.some((connectorName) => connectorName.trim().toLowerCase() === normalized),
     );
     return fromFormatRecords?.formatHash ?? "";
   };
@@ -1634,7 +1630,6 @@
     const targetDimensionId = getPreferredDraftDimensionId();
     transformationEditorOpen = true;
     transformationEditorDimensionId = targetDimensionId;
-    transformationEditorId = null;
     transformationEditorStatus = "draft";
     transformationEditorLocked = false;
     transformationDraftName = createUniqueName("transformation", "new_transformation");
@@ -2030,16 +2025,28 @@
       const conditionIds = new SvelteSet<string>();
       const formatHashes = new SvelteSet<string>();
       let syncedSources = 0;
+      let failedSources = 0;
+      let firstFailureMessage: string | null = null;
 
       for (const source of sources) {
         const address = source.address;
         if (!address) continue;
         chainSyncStatus = `Fetching chain registry for ${source.label}...`;
-        const snapshot = await withChainAuthRetry(() =>
-          fetchChainOwnedStudioSnapshot(address, {
-            authorId: source.authorId,
-          }),
-        );
+        let snapshot: ChainStudioSyncResult;
+        try {
+          snapshot = await withChainAuthRetry(() =>
+            fetchChainOwnedStudioSnapshot(address, {
+              authorId: source.authorId,
+            }),
+          );
+        } catch (error) {
+          failedSources += 1;
+          if (!firstFailureMessage) {
+            firstFailureMessage =
+              error instanceof Error ? error.message : "Chain API is temporarily unavailable.";
+          }
+          continue;
+        }
         mergeChainSyncSnapshot(snapshot);
         if (
           isConnectorTreeTab(activeTabId) &&
@@ -2055,9 +2062,20 @@
         snapshot.formats.forEach((item) => formatHashes.add(item.formatHash));
       }
 
+      if (syncedSources === 0 && failedSources > 0) {
+        chainSyncStatus = null;
+        chainSyncError = firstFailureMessage ?? "Failed to sync owned chain registry.";
+        return;
+      }
+
       refreshConnectorTreeTabs();
 
-      chainSyncStatus = `Synced ${syncedSources} sources · ${particleIds.size} particles · ${connectorNames.size} connectors · ${transformationIds.size} transformations · ${conditionIds.size} conditions · ${formatHashes.size} formats.`;
+      chainSyncStatus = `Synced ${syncedSources} sources · ${particleIds.size} particles · ${connectorNames.size} connectors · ${transformationIds.size} transformations · ${conditionIds.size} conditions · ${formatHashes.size} formats${failedSources > 0 ? ` · ${failedSources} failed` : ""}.`;
+      if (failedSources > 0) {
+        chainSyncError =
+          firstFailureMessage ??
+          `${failedSources} source${failedSources === 1 ? "" : "s"} failed during sync.`;
+      }
     } catch (error) {
       chainSyncError =
         error instanceof Error ? error.message : "Failed to sync owned chain registry.";
@@ -2066,8 +2084,6 @@
       chainSyncBusy = false;
     }
   };
-
-  const isNonNull = <T,>(value: T | null): value is T => value !== null;
 
   const collectDraftTransformationSources = (graphNodes: StudioNode[]) => {
     const sources = new SvelteMap<string, { code: string }>();
@@ -2167,7 +2183,7 @@
           name: conditionName,
           sol_src: getConditionCode(conditionNode.id),
         };
-        await traceChainPost("/chain/condition", requestBody, () =>
+        await traceChainPost("/condition", requestBody, () =>
           postChainConditionDetailed(requestBody),
         );
       }
@@ -2180,7 +2196,7 @@
       const source = draftSources.get(name);
       if (!source) continue;
       const requestBody = { name, sol_src: source.code };
-      await traceChainPost("/chain/transformation", requestBody, () =>
+      await traceChainPost("/transformation", requestBody, () =>
         postChainTransformationDetailed(requestBody),
       );
     }
@@ -2221,7 +2237,7 @@
         ...(def.conditionName ? { condition_name: def.conditionName } : {}),
         ...(def.conditionArgs?.length ? { condition_args: [...def.conditionArgs] } : {}),
       };
-      await traceChainPost("/chain/connector", requestBody, () =>
+      await traceChainPost("/connector", requestBody, () =>
         postChainConnectorDetailed(requestBody),
       );
     }
@@ -2370,25 +2386,73 @@
     return instances;
   };
 
-  const executeActiveGraph = () => {
+  const normalizeExecuteOutput = (raw: unknown): PtOutputFeature[] => {
+    const streams = Array.isArray(raw)
+      ? raw
+      : raw && typeof raw === "object"
+        ? Array.isArray((raw as Record<string, unknown>).streams)
+          ? ((raw as Record<string, unknown>).streams as unknown[])
+          : Array.isArray((raw as Record<string, unknown>).output)
+            ? ((raw as Record<string, unknown>).output as unknown[])
+            : []
+        : [];
+
+    return streams
+      .map((entry) => {
+        if (!entry || typeof entry !== "object") return null;
+        const rec = entry as Record<string, unknown>;
+        const featurePath =
+          typeof rec.feature_path === "string"
+            ? rec.feature_path.trim()
+            : typeof rec.path === "string"
+              ? rec.path.trim()
+              : "";
+        if (!featurePath) return null;
+        const data = Array.isArray(rec.data)
+          ? rec.data
+              .map((value) =>
+                typeof value === "number" && Number.isFinite(value) ? Math.trunc(value) : null,
+              )
+              .filter((value): value is number => value !== null)
+          : [];
+        return {
+          feature_path: featurePath,
+          data,
+        } satisfies PtOutputFeature;
+      })
+      .filter((item): item is PtOutputFeature => Boolean(item));
+  };
+
+  const executeActiveGraph = async () => {
     if (!activeTab) return;
     saveActiveGraph();
     let output: PtOutputFeature[] = [];
     let warnings: string[] = [];
 
     try {
-      const compiled = compileDraftTransformations(nodes);
+      if (!activeTab.particleId) {
+        throw new Error("Run requires a deployed connector. Deploy this tab first.");
+      }
+      await ensureChainAuthForStudio();
       const runtime = buildStudioRuntime(
         { nodes, edges },
         { rootLabel: activeTab.label, rootParticleId: activeTab.particleId },
-        buildRuntimeOverrides(compiled.registry),
+        buildRuntimeOverrides(),
       );
-      const config: MockRunConfig = {
-        samplesCount: Math.max(1, Math.trunc(runSamplesCount)),
-        runningInstances: buildRunningInstances(runtime),
+      warnings = [...runtime.warnings];
+      const requestBody = {
+        connector_name: runtime.rootConnector,
+        particles_count: Math.max(1, Math.trunc(runSamplesCount)),
+        running_instances: buildRunningInstances(runtime).map((instance) => ({
+          start_point: toInt(instance.startPoint),
+          transformation_shift: toInt(instance.transformShift),
+        })),
       };
-      warnings = [...compiled.warnings, ...runtime.warnings];
-      output = runStudioParticle(runtime.registry, runtime.rootParticle, config);
+      const result = await withChainAuthRetry(() => postChainExecuteDetailed(requestBody));
+      output = normalizeExecuteOutput(result.body);
+      if (output.length === 0 && warnings.length === 0) {
+        warnings = ["Execute returned no output streams."];
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : "Run failed.";
       warnings = [message];
@@ -2775,7 +2839,6 @@
   const closeTransformationEditor = () => {
     transformationEditorOpen = false;
     transformationEditorDimensionId = null;
-    transformationEditorId = null;
     transformationEditorStatus = "draft";
     transformationEditorLocked = false;
     transformationDraftError = null;
@@ -2873,7 +2936,7 @@
       const successEntry: DeployTraceEntry = {
         id: `deploy-trace-${crypto.randomUUID()}`,
         method: "POST",
-        path: "/chain/condition",
+        path: "/condition",
         requestBody,
         responseStatus: result.status,
         responseBody: result.body,
@@ -2921,7 +2984,7 @@
       const errorEntry: DeployTraceEntry = {
         id: `deploy-trace-${crypto.randomUUID()}`,
         method: "POST",
-        path: "/chain/condition",
+        path: "/condition",
         requestBody,
         responseStatus: error instanceof ChainApiRequestError ? error.status : null,
         responseBody:
@@ -3015,7 +3078,7 @@
       const successEntry: DeployTraceEntry = {
         id: `deploy-trace-${crypto.randomUUID()}`,
         method: "POST",
-        path: "/chain/transformation",
+        path: "/transformation",
         requestBody,
         responseStatus: result.status,
         responseBody: result.body,
@@ -3064,7 +3127,7 @@
       const errorEntry: DeployTraceEntry = {
         id: `deploy-trace-${crypto.randomUUID()}`,
         method: "POST",
-        path: "/chain/transformation",
+        path: "/transformation",
         requestBody,
         responseStatus: error instanceof ChainApiRequestError ? error.status : null,
         responseBody:
@@ -3237,113 +3300,6 @@
       activeTabId = nextActive.id;
       loadTabGraph(nextActive.id);
     }
-  };
-
-  const buildParticleGraph = (particleName: string) => {
-    const particle = deployedRegistry.particles[particleName];
-    if (!particle) return { nodes: [], edges: [] };
-
-    const feature = deployedRegistry.features[particle.featureName];
-    if (!feature) return { nodes: [], edges: [] };
-
-    const graphNodes: StudioNode[] = [];
-    const graphEdges: Edge[] = [];
-
-    const featureItem = networkLibrary.feature.find(
-      (item) => getLibraryRegistryName(item) === feature.name,
-    );
-    const featureLabel = featureItem?.name ?? feature.name;
-    const featureId = `feature-${feature.name}-${crypto.randomUUID()}`;
-    const featureX = 360;
-    const featureY = 80;
-    graphNodes.push({
-      id: featureId,
-      type: "connector",
-      draggable: false,
-      position: { x: featureX, y: featureY },
-      data: {
-        label: featureLabel,
-        kind: "connector",
-        dimensions: feature.dimensions.length,
-        connectorRows: feature.dimensions.map((dimension, dimIndex) => ({
-          dimension: dimIndex + 1,
-          transformations: dimension.transformations.map((transformation) =>
-            formatTransformationPreviewLabel(transformation.name, transformation.args),
-          ),
-        })),
-        conditionLabel: particle.conditionName ? particle.conditionName : null,
-        sourceId: feature.name,
-        networkId: feature.name,
-        fromNetwork: true,
-      },
-    });
-
-    const dimensionSpacingX = 200;
-    const dimensionRowY = featureY + 160;
-    const dimensionStartX = featureX - ((feature.dimensions.length - 1) * dimensionSpacingX) / 2;
-    const compositeRowY = dimensionRowY + 160;
-
-    feature.dimensions.forEach((dimension, dimIndex) => {
-      const dimensionId = `dimension-${feature.name}-${dimIndex}-${crypto.randomUUID()}`;
-      const columnX = dimensionStartX + dimIndex * dimensionSpacingX;
-      const riConfig = deployedParticleRIs[particleName]?.[dimIndex];
-      graphNodes.push({
-        id: dimensionId,
-        type: "dimension",
-        hidden: true,
-        draggable: false,
-        position: { x: columnX, y: dimensionRowY },
-        data: {
-          label: `#${dimIndex + 1}`,
-          kind: "dimension",
-          parentFeatureId: featureId,
-          dimensionIndex: dimIndex,
-          transformations: dimension.transformations.map((transformation) =>
-            createTransformationInstance(transformation.name, transformation.args, "network"),
-          ),
-          fromNetwork: true,
-          riStart: riConfig?.start ?? 0,
-          riShift: riConfig?.shift ?? 0,
-          riLocked: riConfig?.locked ?? false,
-        },
-      });
-
-      graphEdges.push({
-        id: `edge-${featureId}-${dimensionId}`,
-        source: featureId,
-        sourceHandle: `dim-${dimIndex}`,
-        target: dimensionId,
-        targetHandle: "in",
-      });
-
-      const compositeName = particle.composites[dimIndex];
-      if (compositeName) {
-        const compositeId = `particle-${compositeName}-${crypto.randomUUID()}`;
-        const compositeItem = networkParticles.find((item) => item.id === compositeName);
-        graphNodes.push({
-          id: compositeId,
-          type: "particle",
-          draggable: false,
-          position: { x: columnX, y: compositeRowY },
-          data: {
-            label: compositeItem?.name ?? compositeName,
-            kind: "particle",
-            particleId: compositeName,
-            networkId: compositeName,
-            fromNetwork: true,
-          },
-        });
-        graphEdges.push({
-          id: `edge-${featureId}-dim-${dimIndex}-${compositeId}`,
-          source: featureId,
-          sourceHandle: `dim-${dimIndex}`,
-          target: compositeId,
-          targetHandle: "in",
-        });
-      }
-    });
-
-    return { nodes: graphNodes, edges: graphEdges };
   };
 
   const getConnectorLibraryLabel = (connectorName: string) =>
@@ -4091,14 +4047,6 @@
     const unique = createUniqueName(kind, desiredName);
     updateNodeData(nodeId, { label: unique, networkId: undefined, fromNetwork: false });
     pendingNameCollision = null;
-  };
-
-  const addParticleToToolbox = (particle: ExploreParticle) => {
-    const id = normalizeToolboxId(particle.id);
-    if (toolboxLibrary.particles.includes(id)) return;
-    const next = { ...toolboxLibrary, particles: [...toolboxLibrary.particles, id] };
-    toolboxLibrary = next;
-    void persistToolboxLibrary(next);
   };
 
   const addLibraryToToolbox = (item: LibraryItem) => {
@@ -4888,12 +4836,6 @@
     if (kind === "feature" || kind === "connector") {
       applyDimensionChange(node.id, 1);
     }
-  };
-
-  const handleDragStart = (event: DragEvent, particle: ExploreParticle) => {
-    event.dataTransfer?.setData("application/x-hypermusic-particle", JSON.stringify(particle));
-    event.dataTransfer?.setData("text/plain", particle.name);
-    if (event.dataTransfer) event.dataTransfer.effectAllowed = "copyMove";
   };
 
   const handleLibraryDragStart = (event: DragEvent, item: LibraryItem) => {
@@ -5823,7 +5765,7 @@
         root_connector: fallbackRoot || null,
         deploy_requests: connectorBodies.map((body) => ({
           method: "POST",
-          path: "/chain/connector",
+          path: "/connector",
           body,
         })),
       },
@@ -5844,9 +5786,18 @@
     return raw.replace(/\/+$/, "");
   };
 
+  const toCanonicalApiPath = (path: string) => {
+    const normalized = normalizeApiRequestPath(path);
+    if (!normalized) return "";
+    return normalized.replace(/^\/chain(?=\/)/, "");
+  };
+
   const isApiPath = (path: string, expected: string) => {
     const normalized = normalizeApiRequestPath(path);
-    return normalized === expected || normalized.endsWith(expected);
+    if (normalized === expected || normalized.endsWith(expected)) return true;
+    const canonical = toCanonicalApiPath(path);
+    const expectedCanonical = toCanonicalApiPath(expected);
+    return canonical.length > 0 && canonical === expectedCanonical;
   };
 
   const normalizeDeployRequests = (
@@ -5911,7 +5862,7 @@
           deploy_requests: [
             {
               method: "POST",
-              path: "/chain/connector",
+              path: "/connector",
               body: parsedRaw as Record<string, unknown>,
             },
           ],
@@ -5928,7 +5879,7 @@
     }
 
     const connectorReqs = deployRequests.filter((request) =>
-      isApiPath(request.path ?? "", "/chain/connector"),
+      isApiPath(request.path ?? "", "/connector"),
     );
     const connectorBodies = connectorReqs
       .map((request) =>
@@ -5938,7 +5889,7 @@
       )
       .filter((body): body is Record<string, unknown> => Boolean(body));
     if (!connectorBodies.length) {
-      throw new Error("deploy_requests must include at least one POST /chain/connector body.");
+      throw new Error("deploy_requests must include at least one POST /connector body.");
     }
 
     const connectorBodyByName = new SvelteMap<string, Record<string, unknown>>();
@@ -5997,7 +5948,7 @@
     }
 
     const conditionReqs = deployRequests.filter((request) =>
-      isApiPath(request.path ?? "", "/chain/condition"),
+      isApiPath(request.path ?? "", "/condition"),
     );
     const conditionSourceByName = new SvelteMap<string, string>();
     conditionReqs.forEach((req) => {
@@ -6010,7 +5961,7 @@
     });
 
     const transformationReqs = deployRequests.filter((request) =>
-      isApiPath(request.path ?? "", "/chain/transformation"),
+      isApiPath(request.path ?? "", "/transformation"),
     );
     const transformationSourceByName = new SvelteMap<string, string>();
     transformationReqs.forEach((req) => {

@@ -224,7 +224,7 @@ const resolveNodeName = (node: StudioNode) => {
 
 const isConnectorKind = (kind: StudioNodeKind) => kind === "feature" || kind === "connector";
 
-const isCompositeTargetNode = (node: StudioNode | null) =>
+const isCompositeTargetNode = (node: StudioNode | null | undefined): node is StudioNode =>
   Boolean(node && (isConnectorKind(node.data.kind) || node.data.kind === "particle"));
 
 const getDimensionNodesForFeature = (featureId: string, graph: StudioGraph) => {
@@ -239,30 +239,6 @@ const getDimensionIndex = (dimension: StudioNode, graph: StudioGraph) => {
   const edge = graph.edges.find((item) => item.target === dimension.id);
   if (!edge) return null;
   return parseDimensionHandle(edge.sourceHandle);
-};
-
-const getDirectCompositeTargetsForConnectorDimension = (
-  connectorId: string,
-  dimensionIndex: number,
-  graph: StudioGraph,
-) => {
-  const sourceHandle = `dim-${dimensionIndex}`;
-  const targets: StudioNode[] = [];
-  const seen = new Set<string>();
-
-  graph.edges.forEach((edge) => {
-    if (edge.source !== connectorId) return;
-    if ((edge.sourceHandle ?? "") !== sourceHandle) return;
-    if ((edge.targetHandle ?? "") !== "in") return;
-    if (!edge.target) return;
-    const target = graph.nodes.find((node) => node.id === edge.target) ?? null;
-    if (!isCompositeTargetNode(target)) return;
-    if (seen.has(target.id)) return;
-    seen.add(target.id);
-    targets.push(target);
-  });
-
-  return targets;
 };
 
 const parseBindingSlotFromLabel = (label: unknown): number | null => {
@@ -317,11 +293,11 @@ const resolveConnectorDimensionLinks = (
         (edge.targetHandle ?? "") === "in" &&
         Boolean(edge.target),
     )
-    .map((edge) => {
+    .flatMap((edge) => {
       const target = graph.nodes.find((node) => node.id === edge.target) ?? null;
-      return { edge, target };
-    })
-    .filter((item) => isCompositeTargetNode(item.target));
+      if (!isCompositeTargetNode(target)) return [];
+      return [{ edge, target }];
+    });
 
   if (connectorEdges.length) {
     const compositeEntry =
@@ -377,7 +353,7 @@ const buildConnectorFromGraph = (
 
   const dimensions: StudioConnectorDef["dimensions"] = Array.from(
     { length: dimensionCount },
-    (_, i) => ({
+    () => ({
       transformations: [],
       composite: undefined,
       bindings: {},

@@ -9,9 +9,9 @@ export type ApiDimension = {
 };
 
 export type ApiFeature = {
-  address: string;
-  local_address: string;
+  address?: string;
+  local_address?: string;
   name: string;
-  owner: string;
+  owner?: string;
   dimensions?: ApiDimension[];
 };

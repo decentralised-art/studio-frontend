@@ -53,7 +53,6 @@ export type ChainConnectorResponse = {
   condition_args?: number[];
   conditionArgs?: number[];
   address?: string;
-  local_address?: string;
   format_hash?: string;
 };
 
@@ -71,34 +70,72 @@ export type ChainConditionResponse = {
   address?: string;
 };
 
+export type ChainExecuteRunningInstancePayload = {
+  start_point: number;
+  transformation_shift: number;
+};
+
+export type ChainExecutePayload = {
+  connector_name: string;
+  particles_count: number;
+  running_instances: ChainExecuteRunningInstancePayload[];
+};
+
+export type ChainExecuteStreamResponse = {
+  path?: string;
+  feature_path?: string;
+  data?: number[];
+};
+
+export type ChainExecuteResponse = ChainExecuteStreamResponse[];
+
+export type ChainCursorResponse = {
+  has_more?: boolean;
+  next_after?: string | null;
+};
+
 export type ChainAccountResponse = {
   address?: string;
   limit?: number;
-  page?: number;
   owned_connectors?: string[];
   owned_transformations?: string[];
   owned_conditions?: string[];
-  total_connectors?: number;
-  total_transformations?: number;
-  total_conditions?: number;
-};
-
-export type ChainFormatConnectorResponse = {
-  name?: string;
-  address?: string;
-  local_address?: string;
+  // Cursor shape (current backend contract)
+  cursor_connectors?: ChainCursorResponse;
+  cursor_transformations?: ChainCursorResponse;
+  cursor_conditions?: ChainCursorResponse;
+  // Legacy fields (still accepted by frontend for compatibility)
+  connectors_has_more?: boolean;
+  transformations_has_more?: boolean;
+  conditions_has_more?: boolean;
+  next_after_connectors?: string | null;
+  next_after_transformations?: string | null;
+  next_after_conditions?: string | null;
 };
 
 export type ChainFormatResponse = {
   format_hash?: string;
-  page?: number;
   limit?: number;
   total_connectors?: number;
+  // Cursor shape (current backend contract)
+  cursor?: ChainCursorResponse;
+  // Legacy fields (still accepted by frontend for compatibility)
+  has_more?: boolean;
+  next_after?: string | null;
   scalars?: string[];
-  connectors?: ChainFormatConnectorResponse[];
+  connectors?: string[];
 };
 
 const FORMAT_HASH_HEX_RE = /^[0-9a-f]{64}$/i;
+const CHAIN_CURSOR_PAGE_LIMIT_MAX = 256;
+
+const normalizeCursorLimit = (value: unknown, fallback = CHAIN_CURSOR_PAGE_LIMIT_MAX) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  const int = Math.trunc(parsed);
+  if (int <= 0) return 1;
+  return Math.min(int, CHAIN_CURSOR_PAGE_LIMIT_MAX);
+};
 
 export const normalizeFormatHash = (value: string): string => {
   const trimmed = value.trim().toLowerCase();
@@ -115,21 +152,113 @@ const parseBody = async (response: Response) => {
   return response.text();
 };
 
-const errorMessage = (payload: unknown) => {
-  if (typeof payload === "string") return payload || "Request failed.";
+const normalizeCursorToken = (value: unknown): string | null => {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+};
+
+export type ChainResolvedCursor = {
+  hasMore: boolean;
+  nextAfter: string | null;
+};
+
+const resolveCursorFromObject = (cursor: unknown): ChainResolvedCursor | null => {
+  if (!cursor || typeof cursor !== "object") return null;
+  const rec = cursor as Record<string, unknown>;
+  return {
+    hasMore: Boolean(rec.has_more),
+    nextAfter: normalizeCursorToken(rec.next_after),
+  };
+};
+
+export const resolveChainAccountCursor = (
+  payload: ChainAccountResponse,
+  kind: "connectors" | "transformations" | "conditions",
+): ChainResolvedCursor => {
+  const cursorField =
+    kind === "connectors"
+      ? payload.cursor_connectors
+      : kind === "transformations"
+        ? payload.cursor_transformations
+        : payload.cursor_conditions;
+
+  const fromObject = resolveCursorFromObject(cursorField);
+  if (fromObject) return fromObject;
+
+  if (kind === "connectors") {
+    return {
+      hasMore: Boolean(payload.connectors_has_more),
+      nextAfter: normalizeCursorToken(payload.next_after_connectors),
+    };
+  }
+  if (kind === "transformations") {
+    return {
+      hasMore: Boolean(payload.transformations_has_more),
+      nextAfter: normalizeCursorToken(payload.next_after_transformations),
+    };
+  }
+  return {
+    hasMore: Boolean(payload.conditions_has_more),
+    nextAfter: normalizeCursorToken(payload.next_after_conditions),
+  };
+};
+
+export const resolveChainFormatCursor = (payload: ChainFormatResponse): ChainResolvedCursor => {
+  const fromObject = resolveCursorFromObject(payload.cursor);
+  if (fromObject) return fromObject;
+  return {
+    hasMore: Boolean(payload.has_more),
+    nextAfter: normalizeCursorToken(payload.next_after),
+  };
+};
+
+const looksLikeHtmlPayload = (value: string) =>
+  /<\s*html[\s>]/i.test(value) || /<!doctype html>/i.test(value);
+
+const gatewayErrorMessage = (status?: number) => {
+  if (status === 502) return "Chain API is temporarily unavailable (502 Bad Gateway).";
+  if (status === 503) return "Chain API is temporarily unavailable (503 Service Unavailable).";
+  if (status === 504) return "Chain API timed out (504 Gateway Timeout).";
+  return null;
+};
+
+const errorMessage = (payload: unknown, status?: number) => {
+  if (typeof payload === "string") {
+    const trimmed = payload.trim();
+    if (!trimmed) return status ? `Request failed (HTTP ${status}).` : "Request failed.";
+
+    if (looksLikeHtmlPayload(trimmed)) {
+      const explicitGateway = gatewayErrorMessage(status);
+      if (explicitGateway) return explicitGateway;
+      if (/502\s+bad gateway/i.test(trimmed)) {
+        return "Chain API is temporarily unavailable (502 Bad Gateway).";
+      }
+      if (/503\s+service unavailable/i.test(trimmed)) {
+        return "Chain API is temporarily unavailable (503 Service Unavailable).";
+      }
+      if (/504\s+gateway timeout/i.test(trimmed)) {
+        return "Chain API timed out (504 Gateway Timeout).";
+      }
+      return status ? `Chain API request failed (HTTP ${status}).` : "Chain API request failed.";
+    }
+
+    return trimmed;
+  }
+
   if (payload && typeof payload === "object") {
     const rec = payload as Record<string, unknown>;
     const message = rec.message ?? rec.error ?? rec.detail ?? rec.reason;
     if (typeof message === "string") return message;
   }
-  return "Request failed.";
+  return status ? `Request failed (HTTP ${status}).` : "Request failed.";
 };
 
 const fetchJson = async <T>(path: string): Promise<T> => {
   const response = await fetch(buildChainApiUrl(path), { method: "GET", cache: "no-store" });
   const payload = await parseBody(response);
   if (!response.ok) {
-    throw new Error(errorMessage(payload));
+    throw new Error(errorMessage(payload, response.status));
   }
   return payload as T;
 };
@@ -150,84 +279,62 @@ const postJsonWithChainAuthDetailed = async <T>(
   });
   const payload = await parseBody(response);
   if (!response.ok) {
-    throw new ChainApiRequestError(errorMessage(payload), response.status, payload);
+    throw new ChainApiRequestError(
+      errorMessage(payload, response.status),
+      response.status,
+      payload,
+    );
   }
   return { status: response.status, body: payload as T };
 };
 
 export const getChainAccount = async (
   address: string,
-  options: { limit?: number; page?: number } = {},
+  options: {
+    limit?: number;
+    after_connectors?: string | null;
+    after_transformations?: string | null;
+    after_conditions?: string | null;
+  } = {},
 ) => {
-  const limit = options.limit ?? 200;
-  const page = options.page ?? 0;
-  const pathFor = (params: { limit: number; page: number }) =>
-    `/account/${encodeURIComponent(address)}?limit=${encodeURIComponent(String(params.limit))}&page=${encodeURIComponent(String(params.page))}`;
+  const limit = normalizeCursorLimit(options.limit);
+  const query = new URLSearchParams({
+    limit: String(limit),
+  });
+  const afterConnectors = options.after_connectors?.trim();
+  if (afterConnectors) query.set("after_connectors", afterConnectors);
+  const afterTransformations = options.after_transformations?.trim();
+  if (afterTransformations) query.set("after_transformations", afterTransformations);
+  const afterConditions = options.after_conditions?.trim();
+  if (afterConditions) query.set("after_conditions", afterConditions);
 
-  const hasOwnedEntries = (payload: ChainAccountResponse) => {
-    const lists: unknown[] = [
-      payload.owned_connectors,
-      payload.owned_transformations,
-      payload.owned_conditions,
-    ];
-    return lists.some((list) => Array.isArray(list) && list.length > 0);
-  };
-
-  const attempts: Array<{ limit: number; page: number }> = [{ limit, page }];
-  const fallbackLimit = Math.min(limit, 200);
-  const fallbackPage = page <= 0 ? 1 : page;
-  if (fallbackLimit !== limit || fallbackPage !== page) {
-    attempts.push({ limit: fallbackLimit, page: fallbackPage });
-  }
-
-  let lastError: unknown = null;
-  let lastPayload: ChainAccountResponse | null = null;
-
-  for (let index = 0; index < attempts.length; index += 1) {
-    const attempt = attempts[index];
-    try {
-      const payload = await fetchJson<ChainAccountResponse>(pathFor(attempt));
-      lastPayload = payload;
-      const isLastAttempt = index === attempts.length - 1;
-      if (hasOwnedEntries(payload) || isLastAttempt) {
-        return payload;
-      }
-    } catch (error) {
-      lastError = error;
-      const isLastAttempt = index === attempts.length - 1;
-      if (isLastAttempt) throw error;
-    }
-  }
-
-  if (lastPayload) return lastPayload;
-  if (lastError) throw lastError;
-  throw new Error("Failed to load chain account.");
+  return fetchJson<ChainAccountResponse>(
+    `/account/${encodeURIComponent(address)}?${query.toString()}`,
+  );
 };
 
-export const getChainConnector = async (name: string, version?: string) =>
-  fetchJson<ChainConnectorResponse>(
-    `/connector/${encodeURIComponent(name)}${version ? `/${encodeURIComponent(version)}` : ""}`,
-  );
+export const getChainConnector = async (name: string) =>
+  fetchJson<ChainConnectorResponse>(`/connector/${encodeURIComponent(name)}`);
 
-export const getChainTransformation = async (name: string, version?: string) =>
-  fetchJson<ChainTransformationResponse>(
-    `/transformation/${encodeURIComponent(name)}${version ? `/${encodeURIComponent(version)}` : ""}`,
-  );
+export const getChainTransformation = async (name: string) =>
+  fetchJson<ChainTransformationResponse>(`/transformation/${encodeURIComponent(name)}`);
 
-export const getChainCondition = async (name: string, version?: string) =>
-  fetchJson<ChainConditionResponse>(
-    `/condition/${encodeURIComponent(name)}${version ? `/${encodeURIComponent(version)}` : ""}`,
-  );
+export const getChainCondition = async (name: string) =>
+  fetchJson<ChainConditionResponse>(`/condition/${encodeURIComponent(name)}`);
 
 export const getChainFormat = async (
   formatHash: string,
-  options: { limit?: number; page?: number } = {},
+  options: { limit?: number; after?: string | null } = {},
 ) => {
-  const limit = options.limit ?? 200;
-  const page = options.page ?? 0;
+  const limit = normalizeCursorLimit(options.limit);
   const normalizedHash = normalizeFormatHash(formatHash);
+  const query = new URLSearchParams({
+    limit: String(limit),
+  });
+  const after = options.after?.trim();
+  if (after) query.set("after", after);
   return fetchJson<ChainFormatResponse>(
-    `/format/${encodeURIComponent(normalizedHash)}?limit=${encodeURIComponent(String(limit))}&page=${encodeURIComponent(String(page))}`,
+    `/format/${encodeURIComponent(normalizedHash)}?${query.toString()}`,
   );
 };
 
@@ -248,3 +355,9 @@ export const postChainCondition = async (payload: { name: string; sol_src: strin
 
 export const postChainConditionDetailed = async (payload: { name: string; sol_src: string }) =>
   postJsonWithChainAuthDetailed<ChainConditionResponse>("/condition", payload);
+
+export const postChainExecute = async (payload: ChainExecutePayload) =>
+  postJsonWithChainAuth<ChainExecuteResponse>("/execute", payload);
+
+export const postChainExecuteDetailed = async (payload: ChainExecutePayload) =>
+  postJsonWithChainAuthDetailed<ChainExecuteResponse>("/execute", payload);

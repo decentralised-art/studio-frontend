@@ -240,10 +240,7 @@ const buildConnectorTreeFromRegistry = (
       ...(options?.label ? { label: options.label } : {}),
       ...(isBinding
         ? {
-            style: {
-              stroke: "#c97500",
-              strokeDasharray: "8 5",
-            },
+            style: "stroke:#c97500;stroke-dasharray:8 5;",
           }
         : {}),
     });
