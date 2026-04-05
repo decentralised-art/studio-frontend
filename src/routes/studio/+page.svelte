@@ -238,7 +238,6 @@
   let runSamplesCount = $state(12);
   let transformationEditorOpen = $state(false);
   let transformationEditorDimensionId = $state<string | null>(null);
-  let transformationEditorId = $state<string | null>(null);
   let transformationEditorStatus = $state<TransformationInstance["status"]>("draft");
   let transformationEditorLocked = $state(false);
   let transformationEditorDeployBusy = $state(false);
@@ -336,9 +335,6 @@
       .replace(/[^a-z0-9_]+/g, "-")
       .replace(/^-+|-+$/g, "");
   const touchDeps = (..._deps: unknown[]) => _deps.length;
-
-  const uniqueStrings = (values: string[]) =>
-    Array.from(new Set(values.map((value) => value.trim()).filter((value) => value.length > 0)));
 
   const formatTransformationPreviewLabel = (name: string, args: number[] = []) => {
     const trimmed = name.trim() || "Transformation";
@@ -1634,7 +1630,6 @@
     const targetDimensionId = getPreferredDraftDimensionId();
     transformationEditorOpen = true;
     transformationEditorDimensionId = targetDimensionId;
-    transformationEditorId = null;
     transformationEditorStatus = "draft";
     transformationEditorLocked = false;
     transformationDraftName = createUniqueName("transformation", "new_transformation");
@@ -2089,8 +2084,6 @@
       chainSyncBusy = false;
     }
   };
-
-  const isNonNull = <T,>(value: T | null): value is T => value !== null;
 
   const collectDraftTransformationSources = (graphNodes: StudioNode[]) => {
     const sources = new SvelteMap<string, { code: string }>();
@@ -2846,7 +2839,6 @@
   const closeTransformationEditor = () => {
     transformationEditorOpen = false;
     transformationEditorDimensionId = null;
-    transformationEditorId = null;
     transformationEditorStatus = "draft";
     transformationEditorLocked = false;
     transformationDraftError = null;
@@ -3308,113 +3300,6 @@
       activeTabId = nextActive.id;
       loadTabGraph(nextActive.id);
     }
-  };
-
-  const buildParticleGraph = (particleName: string) => {
-    const particle = deployedRegistry.particles[particleName];
-    if (!particle) return { nodes: [], edges: [] };
-
-    const feature = deployedRegistry.features[particle.featureName];
-    if (!feature) return { nodes: [], edges: [] };
-
-    const graphNodes: StudioNode[] = [];
-    const graphEdges: Edge[] = [];
-
-    const featureItem = networkLibrary.feature.find(
-      (item) => getLibraryRegistryName(item) === feature.name,
-    );
-    const featureLabel = featureItem?.name ?? feature.name;
-    const featureId = `feature-${feature.name}-${crypto.randomUUID()}`;
-    const featureX = 360;
-    const featureY = 80;
-    graphNodes.push({
-      id: featureId,
-      type: "connector",
-      draggable: false,
-      position: { x: featureX, y: featureY },
-      data: {
-        label: featureLabel,
-        kind: "connector",
-        dimensions: feature.dimensions.length,
-        connectorRows: feature.dimensions.map((dimension, dimIndex) => ({
-          dimension: dimIndex + 1,
-          transformations: dimension.transformations.map((transformation) =>
-            formatTransformationPreviewLabel(transformation.name, transformation.args),
-          ),
-        })),
-        conditionLabel: particle.conditionName ? particle.conditionName : null,
-        sourceId: feature.name,
-        networkId: feature.name,
-        fromNetwork: true,
-      },
-    });
-
-    const dimensionSpacingX = 200;
-    const dimensionRowY = featureY + 160;
-    const dimensionStartX = featureX - ((feature.dimensions.length - 1) * dimensionSpacingX) / 2;
-    const compositeRowY = dimensionRowY + 160;
-
-    feature.dimensions.forEach((dimension, dimIndex) => {
-      const dimensionId = `dimension-${feature.name}-${dimIndex}-${crypto.randomUUID()}`;
-      const columnX = dimensionStartX + dimIndex * dimensionSpacingX;
-      const riConfig = deployedParticleRIs[particleName]?.[dimIndex];
-      graphNodes.push({
-        id: dimensionId,
-        type: "dimension",
-        hidden: true,
-        draggable: false,
-        position: { x: columnX, y: dimensionRowY },
-        data: {
-          label: `#${dimIndex + 1}`,
-          kind: "dimension",
-          parentFeatureId: featureId,
-          dimensionIndex: dimIndex,
-          transformations: dimension.transformations.map((transformation) =>
-            createTransformationInstance(transformation.name, transformation.args, "network"),
-          ),
-          fromNetwork: true,
-          riStart: riConfig?.start ?? 0,
-          riShift: riConfig?.shift ?? 0,
-          riLocked: riConfig?.locked ?? false,
-        },
-      });
-
-      graphEdges.push({
-        id: `edge-${featureId}-${dimensionId}`,
-        source: featureId,
-        sourceHandle: `dim-${dimIndex}`,
-        target: dimensionId,
-        targetHandle: "in",
-      });
-
-      const compositeName = particle.composites[dimIndex];
-      if (compositeName) {
-        const compositeId = `particle-${compositeName}-${crypto.randomUUID()}`;
-        const compositeItem = networkParticles.find((item) => item.id === compositeName);
-        graphNodes.push({
-          id: compositeId,
-          type: "particle",
-          draggable: false,
-          position: { x: columnX, y: compositeRowY },
-          data: {
-            label: compositeItem?.name ?? compositeName,
-            kind: "particle",
-            particleId: compositeName,
-            networkId: compositeName,
-            fromNetwork: true,
-          },
-        });
-        graphEdges.push({
-          id: `edge-${featureId}-dim-${dimIndex}-${compositeId}`,
-          source: featureId,
-          sourceHandle: `dim-${dimIndex}`,
-          target: compositeId,
-          targetHandle: "in",
-        });
-      }
-    });
-
-    return { nodes: graphNodes, edges: graphEdges };
   };
 
   const getConnectorLibraryLabel = (connectorName: string) =>
@@ -4162,14 +4047,6 @@
     const unique = createUniqueName(kind, desiredName);
     updateNodeData(nodeId, { label: unique, networkId: undefined, fromNetwork: false });
     pendingNameCollision = null;
-  };
-
-  const addParticleToToolbox = (particle: ExploreParticle) => {
-    const id = normalizeToolboxId(particle.id);
-    if (toolboxLibrary.particles.includes(id)) return;
-    const next = { ...toolboxLibrary, particles: [...toolboxLibrary.particles, id] };
-    toolboxLibrary = next;
-    void persistToolboxLibrary(next);
   };
 
   const addLibraryToToolbox = (item: LibraryItem) => {
@@ -4959,12 +4836,6 @@
     if (kind === "feature" || kind === "connector") {
       applyDimensionChange(node.id, 1);
     }
-  };
-
-  const handleDragStart = (event: DragEvent, particle: ExploreParticle) => {
-    event.dataTransfer?.setData("application/x-hypermusic-particle", JSON.stringify(particle));
-    event.dataTransfer?.setData("text/plain", particle.name);
-    if (event.dataTransfer) event.dataTransfer.effectAllowed = "copyMove";
   };
 
   const handleLibraryDragStart = (event: DragEvent, item: LibraryItem) => {

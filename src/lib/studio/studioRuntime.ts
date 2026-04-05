@@ -241,30 +241,6 @@ const getDimensionIndex = (dimension: StudioNode, graph: StudioGraph) => {
   return parseDimensionHandle(edge.sourceHandle);
 };
 
-const getDirectCompositeTargetsForConnectorDimension = (
-  connectorId: string,
-  dimensionIndex: number,
-  graph: StudioGraph,
-) => {
-  const sourceHandle = `dim-${dimensionIndex}`;
-  const targets: StudioNode[] = [];
-  const seen = new Set<string>();
-
-  graph.edges.forEach((edge) => {
-    if (edge.source !== connectorId) return;
-    if ((edge.sourceHandle ?? "") !== sourceHandle) return;
-    if ((edge.targetHandle ?? "") !== "in") return;
-    if (!edge.target) return;
-    const target = graph.nodes.find((node) => node.id === edge.target);
-    if (!isCompositeTargetNode(target)) return;
-    if (seen.has(target.id)) return;
-    seen.add(target.id);
-    targets.push(target);
-  });
-
-  return targets;
-};
-
 const parseBindingSlotFromLabel = (label: unknown): number | null => {
   if (typeof label !== "string") return null;
   const match = label.match(/slot\s+(\d+)/i);
@@ -377,7 +353,7 @@ const buildConnectorFromGraph = (
 
   const dimensions: StudioConnectorDef["dimensions"] = Array.from(
     { length: dimensionCount },
-    (_, i) => ({
+    () => ({
       transformations: [],
       composite: undefined,
       bindings: {},

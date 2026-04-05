@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { SvelteSet } from "svelte/reactivity";
   import { page } from "$app/stores";
   import { resolve } from "$app/paths";
   import {
@@ -49,14 +50,14 @@
     ...(mockUsersById[mockCurrentUserId]?.toolbox ?? []),
   ]);
 
-  const toolboxConnectorIds = $derived.by(() => new Set(localToolboxConnectors));
+  const toolboxConnectorIds = $derived.by(() => new SvelteSet(localToolboxConnectors));
   const author = $derived.by(() =>
     formatAuthorId ? (mockUsersById[formatAuthorId] ?? null) : null,
   );
 
   const loadChainFormatByHash = async (formatHash: string): Promise<ChainFormatRecord | null> => {
     const records: ChainFormatRecord[] = [];
-    const seenAfter = new Set<string>();
+    const seenAfter = new SvelteSet<string>();
     let after: string | null = null;
 
     for (let pageIndex = 0; pageIndex < 2048; pageIndex += 1) {
