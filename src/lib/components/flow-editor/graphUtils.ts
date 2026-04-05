@@ -1,4 +1,4 @@
-import type { DimensionEdgeType, FlowEdge, FlowNode } from "./flowEditorTypes";
+import type { DimensionEdgeType, FlowEdge, FlowNode } from "./FlowEditorTypes";
 
 /**
  * Build adjacency list: nodeId -> [neighbourId, ...]

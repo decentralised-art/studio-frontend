@@ -1,6 +1,7 @@
 // tests/Input.test.ts
 import "@testing-library/jest-dom/vitest";
 import { fireEvent, render } from "@testing-library/svelte";
+import { describe, expect, it } from "vitest";
 import Input from "../src/lib/components/ui/Input.svelte";
 
 describe("Input component", () => {

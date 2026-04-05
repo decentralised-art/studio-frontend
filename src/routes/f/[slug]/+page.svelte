@@ -1,7 +1,11 @@
 <script lang="ts">
   import { page } from "$app/stores";
   import { resolve } from "$app/paths";
-  import { getChainFormat, normalizeFormatHash } from "$lib/chain/registryApi";
+  import {
+    getChainFormat,
+    normalizeFormatHash,
+    resolveChainFormatCursor,
+  } from "$lib/chain/registryApi";
   import Button from "$lib/components/ui/Button.svelte";
   import SectionShell from "$lib/components/ui/SectionShell.svelte";
   import ParticlePostFeed from "$lib/components/feed/ParticlePostFeed.svelte";
@@ -22,7 +26,7 @@
   import { mockCurrentUserId, mockUsersById } from "$lib/data/users";
   import { networkNodeStudioKind } from "$lib/network/mockNetworkGraph";
 
-  const CHAIN_FORMAT_PAGE_LIMIT = 200;
+  const CHAIN_FORMAT_PAGE_LIMIT = 256;
 
   const getConnectorIdFromScalar = (scalarId: string): string => {
     const raw = `${scalarId ?? ""}`.trim();
@@ -51,34 +55,40 @@
   );
 
   const loadChainFormatByHash = async (formatHash: string): Promise<ChainFormatRecord | null> => {
-    const firstPage = await getChainFormat(formatHash, { limit: CHAIN_FORMAT_PAGE_LIMIT, page: 0 });
-    const firstRecord = mapChainFormatResponseToRecord(firstPage);
-    if (!firstRecord) return null;
+    const records: ChainFormatRecord[] = [];
+    const seenAfter = new Set<string>();
+    let after: string | null = null;
 
-    const totalConnectors = Math.max(firstRecord.totalConnectors, firstRecord.connectors.length);
-    const pageLimit = Math.max(1, firstRecord.limit || CHAIN_FORMAT_PAGE_LIMIT);
-    const totalPages = totalConnectors > 0 ? Math.ceil(totalConnectors / pageLimit) : 1;
+    for (let pageIndex = 0; pageIndex < 2048; pageIndex += 1) {
+      const response = await getChainFormat(formatHash, { limit: CHAIN_FORMAT_PAGE_LIMIT, after });
+      const record = mapChainFormatResponseToRecord(response);
+      if (!record) return null;
+      records.push(record);
 
-    if (totalPages <= 1) return firstRecord;
+      const cursor = resolveChainFormatCursor(response);
+      if (!cursor.hasMore) break;
 
-    const remainingPages = Array.from({ length: totalPages - 1 }, (_, index) => index + 1);
-    const otherPages = await Promise.all(
-      remainingPages.map(async (pageIndex) => {
-        try {
-          const response = await getChainFormat(formatHash, { limit: pageLimit, page: pageIndex });
-          return mapChainFormatResponseToRecord(response);
-        } catch {
-          return null;
-        }
-      }),
-    );
+      const explicitAfter = cursor.nextAfter;
+      const fallbackAfter =
+        Array.isArray(response.connectors) && response.connectors.length > 0
+          ? (() => {
+              for (let i = response.connectors.length - 1; i >= 0; i -= 1) {
+                const candidate = response.connectors[i];
+                if (typeof candidate !== "string") continue;
+                const trimmed = candidate.trim();
+                if (trimmed.length > 0) return trimmed;
+              }
+              return null;
+            })()
+          : null;
 
-    return (
-      mergeChainFormatRecords([
-        firstRecord,
-        ...otherPages.filter((record): record is ChainFormatRecord => Boolean(record)),
-      ]) ?? firstRecord
-    );
+      const nextAfter = explicitAfter ?? fallbackAfter;
+      if (!nextAfter || nextAfter === after || seenAfter.has(nextAfter)) break;
+      seenAfter.add(nextAfter);
+      after = nextAfter;
+    }
+
+    return mergeChainFormatRecords(records);
   };
 
   const loadFormatPage = async () => {

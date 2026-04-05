@@ -136,8 +136,6 @@ export function fromProtocolConnectorPayload(payload: ChainConnectorResponse): S
   }
 
   const formatHash = normalizeOptionalFormatHash(payload.format_hash);
-  const localAddress =
-    typeof payload.local_address === "string" ? payload.local_address.trim().toLowerCase() : "";
   const ownerAddress = typeof payload.owner === "string" ? payload.owner.trim().toLowerCase() : "";
 
   return {
@@ -146,7 +144,6 @@ export function fromProtocolConnectorPayload(payload: ChainConnectorResponse): S
     conditionName,
     conditionArgs,
     ...(formatHash ? { formatHash } : {}),
-    ...(localAddress ? { localAddress } : {}),
     ...(ownerAddress ? { ownerAddress } : {}),
   };
 }

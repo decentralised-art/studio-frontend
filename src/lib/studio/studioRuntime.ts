@@ -224,7 +224,7 @@ const resolveNodeName = (node: StudioNode) => {
 
 const isConnectorKind = (kind: StudioNodeKind) => kind === "feature" || kind === "connector";
 
-const isCompositeTargetNode = (node: StudioNode | null) =>
+const isCompositeTargetNode = (node: StudioNode | null | undefined): node is StudioNode =>
   Boolean(node && (isConnectorKind(node.data.kind) || node.data.kind === "particle"));
 
 const getDimensionNodesForFeature = (featureId: string, graph: StudioGraph) => {
@@ -255,7 +255,7 @@ const getDirectCompositeTargetsForConnectorDimension = (
     if ((edge.sourceHandle ?? "") !== sourceHandle) return;
     if ((edge.targetHandle ?? "") !== "in") return;
     if (!edge.target) return;
-    const target = graph.nodes.find((node) => node.id === edge.target) ?? null;
+    const target = graph.nodes.find((node) => node.id === edge.target);
     if (!isCompositeTargetNode(target)) return;
     if (seen.has(target.id)) return;
     seen.add(target.id);
@@ -317,11 +317,11 @@ const resolveConnectorDimensionLinks = (
         (edge.targetHandle ?? "") === "in" &&
         Boolean(edge.target),
     )
-    .map((edge) => {
+    .flatMap((edge) => {
       const target = graph.nodes.find((node) => node.id === edge.target) ?? null;
-      return { edge, target };
-    })
-    .filter((item) => isCompositeTargetNode(item.target));
+      if (!isCompositeTargetNode(target)) return [];
+      return [{ edge, target }];
+    });
 
   if (connectorEdges.length) {
     const compositeEntry =

@@ -9,6 +9,8 @@ import {
   getChainFormat,
   getChainTransformation,
   normalizeFormatHash,
+  resolveChainAccountCursor,
+  resolveChainFormatCursor,
   type ChainConnectorResponse,
 } from "$lib/chain/registryApi";
 import type { ExploreParticle } from "$lib/data/exploreParticles";
@@ -62,8 +64,7 @@ export type ChainStudioParticleFetchResult = {
   particleMeta?: ExploreParticle;
 };
 
-const CHAIN_FORMAT_PAGE_LIMIT = 200;
-const CHAIN_FORMAT_PAGE_FETCH_CONCURRENCY = 3;
+const CHAIN_FORMAT_PAGE_LIMIT = 256;
 const CHAIN_FORMAT_HASH_FETCH_CONCURRENCY = 4;
 const CHAIN_FORMAT_FETCH_RETRIES = 3;
 const CHAIN_FORMAT_RETRY_BASE_DELAY_MS = 160;
@@ -405,6 +406,33 @@ const mapExploreParticle = (
 
 const uniqueStrings = (values: string[]) => Array.from(new Set(values.filter(Boolean)));
 
+const normalizeCursorToken = (value: unknown): string | null => {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+};
+
+const findLastOwnedResourceEntry = (entries: unknown): string | null => {
+  if (!Array.isArray(entries)) return null;
+  for (let i = entries.length - 1; i >= 0; i -= 1) {
+    const normalized = normalizeCursorToken(entries[i]);
+    if (normalized) return normalized;
+  }
+  return null;
+};
+
+const resolveNextAccountCursor = (
+  currentCursor: string | null,
+  nextAfter: unknown,
+  entries: unknown,
+): string | null => {
+  const explicitCursor = normalizeCursorToken(nextAfter);
+  if (explicitCursor) return explicitCursor;
+  const terminalCursor = findLastOwnedResourceEntry(entries);
+  if (terminalCursor) return terminalCursor;
+  return normalizeCursorToken(currentCursor);
+};
+
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, Math.max(0, ms)));
 
 const withRetry = async <T>(
@@ -460,53 +488,37 @@ const fetchChainFormatRecord = async (formatHash: string): Promise<ChainFormatRe
     return freshCached;
   }
 
-  const firstPageResponse = await withRetry(
-    () =>
-      getChainFormat(normalizedHash, {
-        limit: CHAIN_FORMAT_PAGE_LIMIT,
-        page: 0,
-      }),
-    { attempts: CHAIN_FORMAT_FETCH_RETRIES },
-  );
-  const firstPageRecord = mapChainFormatResponseToRecord(firstPageResponse);
-  if (!firstPageRecord) {
-    throw new Error(`Invalid /format response for hash ${normalizedHash}`);
-  }
+  const pageRecords: ChainFormatRecord[] = [];
+  const seenAfter = new Set<string>();
+  let after: string | null = null;
 
-  const totalConnectors = Math.max(
-    firstPageRecord.totalConnectors,
-    firstPageRecord.connectors.length,
-  );
-  const pageLimit = Math.max(1, firstPageRecord.limit || CHAIN_FORMAT_PAGE_LIMIT);
-  const totalPages = totalConnectors > 0 ? Math.ceil(totalConnectors / pageLimit) : 1;
-
-  if (totalPages <= 1) {
-    return upsertChainFormatRecord(firstPageRecord);
-  }
-
-  const remainingPages = Array.from({ length: totalPages - 1 }, (_, idx) => idx + 1);
-  const pageRecords = [firstPageRecord];
-  const otherPages = await mapWithConcurrency(
-    remainingPages,
-    CHAIN_FORMAT_PAGE_FETCH_CONCURRENCY,
-    async (page) => {
-      const response = await withRetry(
-        () => getChainFormat(normalizedHash, { limit: pageLimit, page }),
-        { attempts: CHAIN_FORMAT_FETCH_RETRIES },
-      );
-      return mapChainFormatResponseToRecord(response);
-    },
-  );
-
-  otherPages.forEach((record) => {
-    if (!record) return;
-    if (record.formatHash !== normalizedHash) return;
+  for (let pageIndex = 0; pageIndex < 2048; pageIndex += 1) {
+    const response = await withRetry(
+      () =>
+        getChainFormat(normalizedHash, {
+          limit: CHAIN_FORMAT_PAGE_LIMIT,
+          after,
+        }),
+      { attempts: CHAIN_FORMAT_FETCH_RETRIES },
+    );
+    const record = mapChainFormatResponseToRecord(response);
+    if (!record) {
+      throw new Error(`Invalid /format response for hash ${normalizedHash}`);
+    }
     pageRecords.push(record);
-  });
+
+    const cursor = resolveChainFormatCursor(response);
+    if (!cursor.hasMore) break;
+
+    const nextAfter = cursor.nextAfter ?? findLastOwnedResourceEntry(response.connectors);
+    if (!nextAfter || nextAfter === after || seenAfter.has(nextAfter)) break;
+    seenAfter.add(nextAfter);
+    after = nextAfter;
+  }
 
   const mergedRecord = mergeChainFormatRecords(pageRecords);
   if (!mergedRecord) {
-    throw new Error(`Failed to merge paged /format responses for ${normalizedHash}`);
+    throw new Error(`Failed to merge /format cursor responses for ${normalizedHash}`);
   }
 
   return upsertChainFormatRecord(mergedRecord);
@@ -556,18 +568,99 @@ const hydrateChainFormats = async (rawHashes: string[]): Promise<ChainFormatHydr
   return { records, failed, requested: normalizedHashes.length };
 };
 
+type OwnedNameSnapshot = {
+  ownedConnectors: string[];
+  ownedTransformations: string[];
+  ownedConditions: string[];
+};
+
+const fetchAllOwnedNamesForAddress = async (
+  address: string,
+  limit = 256,
+): Promise<OwnedNameSnapshot> => {
+  const ownedConnectors = new Set<string>();
+  const ownedTransformations = new Set<string>();
+  const ownedConditions = new Set<string>();
+
+  let cursorConnectors: string | null = null;
+  let cursorTransformations: string | null = null;
+  let cursorConditions: string | null = null;
+
+  for (let pageIndex = 0; pageIndex < 2048; pageIndex += 1) {
+    const account = await getChainAccount(address, {
+      limit,
+      after_connectors: cursorConnectors,
+      after_transformations: cursorTransformations,
+      after_conditions: cursorConditions,
+    });
+
+    (Array.isArray(account.owned_connectors) ? account.owned_connectors : []).forEach((name) => {
+      const trimmed = `${name ?? ""}`.trim();
+      if (trimmed) ownedConnectors.add(trimmed);
+    });
+    (Array.isArray(account.owned_transformations) ? account.owned_transformations : []).forEach(
+      (name) => {
+        const trimmed = `${name ?? ""}`.trim();
+        if (trimmed) ownedTransformations.add(trimmed);
+      },
+    );
+    (Array.isArray(account.owned_conditions) ? account.owned_conditions : []).forEach((name) => {
+      const trimmed = `${name ?? ""}`.trim();
+      if (trimmed) ownedConditions.add(trimmed);
+    });
+
+    const connectorsCursor = resolveChainAccountCursor(account, "connectors");
+    const transformationsCursor = resolveChainAccountCursor(account, "transformations");
+    const conditionsCursor = resolveChainAccountCursor(account, "conditions");
+
+    if (!connectorsCursor.hasMore && !transformationsCursor.hasMore && !conditionsCursor.hasMore) {
+      break;
+    }
+
+    const nextCursorConnectors = resolveNextAccountCursor(
+      cursorConnectors,
+      connectorsCursor.nextAfter,
+      account.owned_connectors,
+    );
+    const nextCursorTransformations = resolveNextAccountCursor(
+      cursorTransformations,
+      transformationsCursor.nextAfter,
+      account.owned_transformations,
+    );
+    const nextCursorConditions = resolveNextAccountCursor(
+      cursorConditions,
+      conditionsCursor.nextAfter,
+      account.owned_conditions,
+    );
+
+    const advancedConnectors =
+      connectorsCursor.hasMore && nextCursorConnectors !== cursorConnectors;
+    const advancedTransformations =
+      transformationsCursor.hasMore && nextCursorTransformations !== cursorTransformations;
+    const advancedConditions =
+      conditionsCursor.hasMore && nextCursorConditions !== cursorConditions;
+    if (!advancedConnectors && !advancedTransformations && !advancedConditions) break;
+
+    cursorConnectors = nextCursorConnectors;
+    cursorTransformations = nextCursorTransformations;
+    cursorConditions = nextCursorConditions;
+  }
+
+  return {
+    ownedConnectors: Array.from(ownedConnectors.values()),
+    ownedTransformations: Array.from(ownedTransformations.values()),
+    ownedConditions: Array.from(ownedConditions.values()),
+  };
+};
+
 export const fetchChainOwnedStudioSnapshot = async (
   address: string,
-  options: { authorId: string; limit?: number; page?: number } = { authorId: "user-lyra" },
+  options: { authorId: string; limit?: number } = { authorId: "user-lyra" },
 ): Promise<ChainStudioSyncResult> => {
-  const account = await getChainAccount(address, {
-    limit: options.limit ?? 200,
-    page: options.page ?? 0,
-  });
-
-  const ownedConnectors = uniqueStrings(account.owned_connectors ?? []);
-  const ownedTransformations = uniqueStrings(account.owned_transformations ?? []);
-  const ownedConditions = uniqueStrings(account.owned_conditions ?? []);
+  const allOwnedNames = await fetchAllOwnedNamesForAddress(address, options.limit ?? 256);
+  const ownedConnectors = uniqueStrings(allOwnedNames.ownedConnectors);
+  const ownedTransformations = uniqueStrings(allOwnedNames.ownedTransformations);
+  const ownedConditions = uniqueStrings(allOwnedNames.ownedConditions);
 
   const connectorPayloads = (
     await Promise.allSettled(

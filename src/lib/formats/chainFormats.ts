@@ -1,20 +1,9 @@
-import {
-  normalizeFormatHash,
-  type ChainFormatConnectorResponse,
-  type ChainFormatResponse,
-} from "$lib/chain/registryApi";
-
-export type ChainFormatConnectorRef = {
-  name: string;
-  address: string;
-  localAddress: string;
-};
+import { normalizeFormatHash, type ChainFormatResponse } from "$lib/chain/registryApi";
 
 export type ChainFormatRecord = {
   formatHash: string;
   scalars: string[];
-  connectors: ChainFormatConnectorRef[];
-  page: number;
+  connectors: string[];
   limit: number;
   totalConnectors: number;
   fetchedAt: number;
@@ -35,38 +24,6 @@ const sortUniqueStrings = (values: string[]) =>
     (a, b) => a.localeCompare(b),
   );
 
-const normalizeConnectorRef = (
-  connector: ChainFormatConnectorResponse,
-): ChainFormatConnectorRef | null => {
-  const name = `${connector.name ?? ""}`.trim();
-  const address = `${connector.address ?? ""}`.trim();
-  const localAddress = `${connector.local_address ?? ""}`.trim().toLowerCase();
-  if (!name && !localAddress) return null;
-  return {
-    name,
-    address,
-    localAddress,
-  };
-};
-
-const dedupeConnectorRefs = (connectors: ChainFormatConnectorRef[]) => {
-  const seen = new Set<string>();
-  const deduped: ChainFormatConnectorRef[] = [];
-
-  connectors.forEach((connector) => {
-    const key = `${connector.localAddress}|${connector.name}`;
-    if (seen.has(key)) return;
-    seen.add(key);
-    deduped.push(connector);
-  });
-
-  return deduped.sort((a, b) => {
-    const nameCmp = a.name.localeCompare(b.name);
-    if (nameCmp !== 0) return nameCmp;
-    return a.localAddress.localeCompare(b.localAddress);
-  });
-};
-
 export const mapChainFormatResponseToRecord = (
   response: ChainFormatResponse,
   options: { fetchedAt?: number } = {},
@@ -82,14 +39,12 @@ export const mapChainFormatResponseToRecord = (
   }
 
   const fetchedAt = options.fetchedAt ?? Date.now();
-  const page = Number.isInteger(response.page) && (response.page ?? -1) >= 0 ? response.page! : 0;
   const limit =
     Number.isInteger(response.limit) && (response.limit ?? -1) >= 0 ? response.limit! : 0;
-  const connectorsRaw = Array.isArray(response.connectors) ? response.connectors : [];
-  const connectors = dedupeConnectorRefs(
-    connectorsRaw
-      .map((connector) => normalizeConnectorRef(connector))
-      .filter((connector): connector is ChainFormatConnectorRef => Boolean(connector)),
+  const connectors = sortUniqueStrings(
+    (Array.isArray(response.connectors) ? response.connectors : []).filter(
+      (value): value is string => typeof value === "string",
+    ),
   );
   const totalFromResponse =
     Number.isInteger(response.total_connectors) && (response.total_connectors ?? -1) >= 0
@@ -105,7 +60,6 @@ export const mapChainFormatResponseToRecord = (
     formatHash,
     scalars,
     connectors,
-    page,
     limit,
     totalConnectors,
     fetchedAt,
@@ -118,7 +72,7 @@ export const mergeChainFormatRecords = (records: ChainFormatRecord[]): ChainForm
   const sameHashRecords = records.filter((record) => record.formatHash === normalizedHash);
   if (!sameHashRecords.length) return null;
 
-  const connectors = dedupeConnectorRefs(sameHashRecords.flatMap((record) => record.connectors));
+  const connectors = sortUniqueStrings(sameHashRecords.flatMap((record) => record.connectors));
   const scalars = sortUniqueStrings(sameHashRecords.flatMap((record) => record.scalars));
   const totalConnectors = sameHashRecords.reduce(
     (max, record) => Math.max(max, record.totalConnectors, record.connectors.length),
@@ -131,7 +85,6 @@ export const mergeChainFormatRecords = (records: ChainFormatRecord[]): ChainForm
     formatHash: normalizedHash,
     connectors,
     scalars,
-    page: 0,
     limit,
     totalConnectors,
     fetchedAt,
