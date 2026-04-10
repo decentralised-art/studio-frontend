@@ -1,7 +1,7 @@
+import { normalizeFormatHash } from "$lib/chain/registryApi";
 import type { ExploreParticle } from "$lib/data/exploreParticles";
 import type { FormatFeedEvent } from "$lib/formats/localFormats";
 import type { MockFeatureDef, MockParticleDef } from "$lib/particles/mockPtNetwork";
-import { normalizeFormatHash } from "$lib/chain/registryApi";
 import {
   fetchChainOwnedStudioSnapshot,
   fetchChainParticleForStudio,
