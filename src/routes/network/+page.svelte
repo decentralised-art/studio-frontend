@@ -190,6 +190,32 @@
       feedLoading = false;
     }
 
+    // Fast path can miss active sources if first source window has no events.
+    // Auto-expand sources until at least one event is found or max window is reached.
+    if (feedEvents.length === 0 && sourceSyncLimit < CHAIN_SOURCE_LIMIT_MAX) {
+      let nextLimit = sourceSyncLimit;
+      while (feedEvents.length === 0 && nextLimit < CHAIN_SOURCE_LIMIT_MAX) {
+        nextLimit = Math.min(CHAIN_SOURCE_LIMIT_MAX, nextLimit + CHAIN_SOURCE_LIMIT_STEP);
+        sourceSyncLimit = nextLimit;
+        try {
+          await syncParticlePostDataFromChain({
+            force: true,
+            maxSources: sourceSyncLimit,
+            maxOwnedPerSource: CHAIN_OWNED_PER_SOURCE_LIMIT,
+            includeRuntimeCode: false,
+            includeDependencyExpansion: false,
+          });
+        } catch (error) {
+          console.warn("[Network feed] Auto-expand source sync failed.", error);
+          break;
+        }
+        feedEvents = listParticlePosts();
+        chainElements = listParticleSearchEntities();
+      }
+    }
+
+    canFetchMoreFromChain = sourceSyncLimit < CHAIN_SOURCE_LIMIT_MAX;
+
     if (hasCachedData) {
       void syncParticlePostDataFromChain({
         force: true,
