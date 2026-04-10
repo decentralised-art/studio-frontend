@@ -80,6 +80,7 @@ const emptyCache = (): ParticlePostCache => ({
 let cache: ParticlePostCache = emptyCache();
 let loadPromise: Promise<ParticlePostCache> | null = null;
 let cachedMaxOwnedPerSource: number | null = null;
+let cachedMaxSources: number | null = null;
 let cachedIncludesRuntimeCode = false;
 let cachedIncludesDependencyExpansion = false;
 const terminalSetCache = new Map<string, string[]>();
@@ -220,10 +221,15 @@ const rebuildRuntimeCodeEvents = (records: RuntimeCodeRecord[]): Array<RuntimeCo
 const mergeSnapshots = async (options?: {
   forceSources?: boolean;
   maxOwnedPerSource?: number;
+  maxSources?: number;
   includeRuntimeCode?: boolean;
   includeDependencyExpansion?: boolean;
 }): Promise<ParticlePostCache> => {
-  const chainSources = await listChainSyncSourcesForApp({ force: options?.forceSources });
+  const allSources = await listChainSyncSourcesForApp({ force: options?.forceSources });
+  const chainSources =
+    typeof options?.maxSources === "number" && Number.isFinite(options.maxSources)
+      ? allSources.slice(0, Math.max(1, Math.trunc(options.maxSources)))
+      : allSources;
   const includeRuntimeCode = options?.includeRuntimeCode !== false;
   const includeDependencyExpansion = options?.includeDependencyExpansion !== false;
 
@@ -429,6 +435,7 @@ export const syncParticlePostDataFromChain = async (options?: {
   force?: boolean;
   forceSources?: boolean;
   maxOwnedPerSource?: number;
+  maxSources?: number;
   includeRuntimeCode?: boolean;
   includeDependencyExpansion?: boolean;
 }) => {
@@ -438,11 +445,20 @@ export const syncParticlePostDataFromChain = async (options?: {
     typeof options?.maxOwnedPerSource === "number" && Number.isFinite(options.maxOwnedPerSource)
       ? Math.max(1, Math.trunc(options.maxOwnedPerSource))
       : null;
+  const requestedMaxSources =
+    typeof options?.maxSources === "number" && Number.isFinite(options.maxSources)
+      ? Math.max(1, Math.trunc(options.maxSources))
+      : null;
 
   const cacheSatisfiesRequest = (() => {
     if (!cache.loaded) return false;
     if (requestedIncludesRuntimeCode && !cachedIncludesRuntimeCode) return false;
     if (requestedIncludesDependencyExpansion && !cachedIncludesDependencyExpansion) return false;
+    if (requestedMaxSources === null) {
+      if (cachedMaxSources !== null) return false;
+    } else if (cachedMaxSources === null || cachedMaxSources < requestedMaxSources) {
+      return false;
+    }
     if (requestedMaxOwnedPerSource === null) {
       return cachedMaxOwnedPerSource === null;
     }
@@ -457,6 +473,7 @@ export const syncParticlePostDataFromChain = async (options?: {
       forceSources: Boolean(options?.forceSources),
       includeRuntimeCode: requestedIncludesRuntimeCode,
       includeDependencyExpansion: requestedIncludesDependencyExpansion,
+      ...(requestedMaxSources !== null ? { maxSources: requestedMaxSources } : {}),
       ...(requestedMaxOwnedPerSource !== null
         ? { maxOwnedPerSource: requestedMaxOwnedPerSource }
         : {}),
@@ -464,6 +481,7 @@ export const syncParticlePostDataFromChain = async (options?: {
       .then((next) => {
         cache = next;
         cachedMaxOwnedPerSource = requestedMaxOwnedPerSource;
+        cachedMaxSources = requestedMaxSources;
         cachedIncludesRuntimeCode = requestedIncludesRuntimeCode;
         cachedIncludesDependencyExpansion = requestedIncludesDependencyExpansion;
         terminalSetCache.clear();
@@ -573,6 +591,7 @@ export const resetParticlePostDataCacheForDebug = () => {
   cache = emptyCache();
   loadPromise = null;
   cachedMaxOwnedPerSource = null;
+  cachedMaxSources = null;
   cachedIncludesRuntimeCode = false;
   cachedIncludesDependencyExpansion = false;
   terminalSetCache.clear();

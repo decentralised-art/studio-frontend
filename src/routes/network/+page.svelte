@@ -36,8 +36,9 @@
   } from "$lib/data/users";
 
   const FEED_PAGE_SIZE = 10;
-  const CHAIN_SOURCE_LIMIT_STEP = 5;
-  const CHAIN_SOURCE_LIMIT_MAX = 256;
+  const CHAIN_SOURCE_LIMIT_STEP = 4;
+  const CHAIN_SOURCE_LIMIT_MAX = 64;
+  const CHAIN_OWNED_PER_SOURCE_LIMIT = 4;
 
   let followSearch = $state("");
   let feedEvents = $state<ParticlePostEvent[]>([]);
@@ -176,7 +177,8 @@
     try {
       await syncParticlePostDataFromChain({
         force: !hasCachedData,
-        maxOwnedPerSource: sourceSyncLimit,
+        maxSources: sourceSyncLimit,
+        maxOwnedPerSource: CHAIN_OWNED_PER_SOURCE_LIMIT,
         includeRuntimeCode: false,
         includeDependencyExpansion: false,
       });
@@ -191,7 +193,8 @@
     if (hasCachedData) {
       void syncParticlePostDataFromChain({
         force: true,
-        maxOwnedPerSource: sourceSyncLimit,
+        maxSources: sourceSyncLimit,
+        maxOwnedPerSource: CHAIN_OWNED_PER_SOURCE_LIMIT,
         includeRuntimeCode: false,
         includeDependencyExpansion: false,
       })
@@ -227,7 +230,8 @@
     try {
       await syncParticlePostDataFromChain({
         force: true,
-        maxOwnedPerSource: sourceSyncLimit,
+        maxSources: sourceSyncLimit,
+        maxOwnedPerSource: CHAIN_OWNED_PER_SOURCE_LIMIT,
         includeRuntimeCode: false,
         includeDependencyExpansion: false,
       });
@@ -235,10 +239,7 @@
       feedEvents = listParticlePosts();
       chainElements = listParticleSearchEntities();
       visibleEventCount += FEED_PAGE_SIZE;
-
-      if (afterCount <= beforeCount) {
-        canFetchMoreFromChain = false;
-      }
+      canFetchMoreFromChain = sourceSyncLimit < CHAIN_SOURCE_LIMIT_MAX || afterCount > beforeCount;
     } catch (error) {
       console.error("[Network feed] Failed to load more events.", error);
     } finally {
@@ -257,7 +258,8 @@
     runtimeSearchHydrationBusy = true;
     void syncParticlePostDataFromChain({
       force: true,
-      maxOwnedPerSource: sourceSyncLimit,
+      maxSources: sourceSyncLimit,
+      maxOwnedPerSource: CHAIN_OWNED_PER_SOURCE_LIMIT,
       includeRuntimeCode: true,
     })
       .then(() => {
