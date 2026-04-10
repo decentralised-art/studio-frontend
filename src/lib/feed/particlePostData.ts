@@ -1,6 +1,7 @@
 import type { ExploreParticle } from "$lib/data/exploreParticles";
 import type { FormatFeedEvent } from "$lib/formats/localFormats";
 import type { MockFeatureDef, MockParticleDef } from "$lib/particles/mockPtNetwork";
+import { normalizeFormatHash } from "$lib/chain/registryApi";
 import {
   fetchChainOwnedStudioSnapshot,
   fetchChainParticleForStudio,
@@ -39,7 +40,14 @@ export type NetworkFeedEvent = ParticlePostEvent | FormatFeedEvent;
 
 export type ParticleRecord = Pick<
   ExploreParticle,
-  "id" | "name" | "summary" | "authorId" | "createdAt" | "createdLabel" | "dependencies"
+  | "id"
+  | "name"
+  | "summary"
+  | "authorId"
+  | "createdAt"
+  | "createdLabel"
+  | "dependencies"
+  | "formatHash"
 >;
 
 type ParticleDependencyRegistrySnapshot = {
@@ -161,6 +169,17 @@ const mergeParticleRecordIntoStructures = (
     summary: particle.summary,
     authorId: particle.authorId,
   });
+};
+
+const normalizeOptionalFormatHash = (value: unknown): string | undefined => {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  try {
+    return normalizeFormatHash(trimmed);
+  } catch {
+    return undefined;
+  }
 };
 
 type RuntimeCodeRecord = {
@@ -310,6 +329,7 @@ const mergeSnapshots = async (options?: {
         createdAt,
         createdLabel: "",
         dependencies: [...particle.dependencies],
+        formatHash: normalizeOptionalFormatHash(particle.formatHash),
       };
       mergeParticleRecordIntoStructures(record, nextParticlesById, searchByKind);
     });
@@ -360,6 +380,7 @@ const mergeSnapshots = async (options?: {
             : 0,
           createdLabel: "",
           dependencies: [...fetched.particleMeta.dependencies],
+          formatHash: normalizeOptionalFormatHash(fetched.particleMeta.formatHash),
         };
         mergeParticleRecordIntoStructures(fallbackRecord, nextParticlesById, searchByKind);
       }
@@ -493,6 +514,7 @@ export const ensureParticleRecordLoadedById = async (
       createdAt: fetched.particleMeta.createdAt,
       createdLabel: fetched.particleMeta.createdLabel,
       dependencies: [...fetched.particleMeta.dependencies],
+      formatHash: normalizeOptionalFormatHash(fetched.particleMeta.formatHash),
     };
     cache.particlesById.set(record.id, record);
     cache.searchable.connectors = [
@@ -512,6 +534,16 @@ export const ensureParticleRecordLoadedById = async (
 };
 
 export const listParticleRecords = (): ParticleRecord[] => Array.from(cache.particlesById.values());
+
+export const listParticleRecordsByFormatHash = (formatHash: string): ParticleRecord[] => {
+  let normalizedHash = "";
+  try {
+    normalizedHash = normalizeFormatHash(formatHash);
+  } catch {
+    return [];
+  }
+  return listParticleRecords().filter((particle) => particle.formatHash === normalizedHash);
+};
 
 export const getParticleLabelMap = (): ReadonlyMap<string, string> =>
   new Map(
