@@ -1,7 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { SvelteMap, SvelteSet } from "svelte/reactivity";
-  import { resolve } from "$app/paths";
 
   import {
     Background,
@@ -37,9 +36,10 @@
   import {
     type MockFeatureDef,
     type MockParticleDef,
+    type MockRunConfig,
     type MockRunningInstance,
   } from "$lib/particles/mockPtNetwork";
-  import { buildStudioRuntime } from "$lib/studio/studioRuntime";
+  import { buildStudioRuntime, runStudioParticle } from "$lib/studio/studioRuntime";
   import {
     fetchChainOwnedStudioSnapshot,
     fetchChainParticleForStudio,
@@ -58,17 +58,11 @@
     type ChainApiPostResult,
     postChainConnectorDetailed,
     postChainConditionDetailed,
-    postChainExecuteDetailed,
     postChainTransformationDetailed,
   } from "$lib/chain/registryApi";
   import { mockPlugins, type LibraryItem } from "$lib/data/studioLibrary";
   import { mockCurrentUserId, mockUsersById } from "$lib/data/users";
   import type { StudioConnectorDef } from "$lib/studio/domain/connectorModel";
-  import {
-    getChainFormatDisplayName,
-    mergeChainFormatRecords,
-    type ChainFormatRecord,
-  } from "$lib/formats/chainFormats";
 
   type PanelMode = "open" | "hidden";
   type RightPanelMode = "assistant" | "inspector" | "both" | "hidden";
@@ -186,7 +180,7 @@
     | null;
   let connectorDropTarget = $state<ConnectorDropTarget>(null);
   let explorerSource = $state<"network" | "toolbox">("network");
-  let libraryTab = $state<"connectors" | "transformations" | "conditions" | "formats">(
+  let libraryTab = $state<"connectors" | "transformations" | "conditions" | "plugins">(
     "connectors",
   );
   let tooltipX = $state(0);
@@ -212,8 +206,6 @@
   let chainDeployBusy = $state(false);
   let chainDeployStatus = $state<string | null>(null);
   let chainDeployError = $state<string | null>(null);
-  let chainFormatsByHash = $state<Record<string, ChainFormatRecord>>({});
-  let formatLookupQuery = $state("");
   type DeployTraceEntry = {
     id: string;
     method: "POST";
@@ -256,13 +248,6 @@
   let libraryCreateActionError = $state<string | null>(null);
   let standaloneDraftTransformations = $state<StandaloneTransformationDraft[]>([]);
   const conditionCodeById = new SvelteMap<string, string>();
-  const syncedChainFormats = $derived.by(() =>
-    Object.values(chainFormatsByHash).sort((a, b) => {
-      const byFetched = b.fetchedAt - a.fetchedAt;
-      if (byFetched !== 0) return byFetched;
-      return a.formatHash.localeCompare(b.formatHash);
-    }),
-  );
 
   const transformationEditorReadOnly = $derived.by(
     () => transformationEditorStatus === "network" || transformationEditorLocked,
@@ -306,11 +291,9 @@
   const connectorTreeModelsByTab = new SvelteMap<string, { nodes: StudioNode[]; edges: Edge[] }>();
 
   type ToolboxLibrary = {
-    particles: string[];
-    feature: string[];
+    connector: string[];
     transformation: string[];
     condition: string[];
-    plugin: string[];
   };
 
   type QuickNodeKind =
@@ -662,17 +645,6 @@
       return;
     }
 
-    if (rawKind === "connector" || rawKind === "feature") {
-      const connectorId = rawId.replace(/^feature-/, "").trim();
-      if (!connectorId) {
-        clearNetworkIntentQuery();
-        return;
-      }
-      void openParticleTab(connectorId);
-      clearNetworkIntentQuery();
-      return;
-    }
-
     const kind =
       rawKind === "output"
         ? "plugin"
@@ -778,28 +750,58 @@
     };
   });
 
-  const normalizeToolboxId = (id: string) => id.replace(/^particle-/, "");
+  const normalizeConnectorToolboxId = (id: string) =>
+    id
+      .trim()
+      .replace(/^particle-/, "")
+      .replace(/^feature-/, "");
+  const normalizeTransformationToolboxId = (id: string) => id.trim().replace(/^transform-/, "");
+  const normalizeConditionToolboxId = (id: string) => id.trim().replace(/^condition-/, "");
+  const normalizeToolboxIdByKind = (kind: keyof ToolboxLibrary, id: string) => {
+    if (kind === "connector") return normalizeConnectorToolboxId(id);
+    if (kind === "transformation") return normalizeTransformationToolboxId(id);
+    return normalizeConditionToolboxId(id);
+  };
+  const normalizeToolboxListByKind = (kind: keyof ToolboxLibrary, ids: string[]) =>
+    Array.from(
+      new Set(ids.map((id) => normalizeToolboxIdByKind(kind, id)).filter((id) => id.length > 0)),
+    );
+  const toolboxEntryForLibraryItem = (
+    item: LibraryItem,
+  ): { kind: keyof ToolboxLibrary; id: string } | null => {
+    if (item.kind === "feature") {
+      return { kind: "connector", id: normalizeConnectorToolboxId(item.id) };
+    }
+    if (item.kind === "transformation") {
+      return { kind: "transformation", id: normalizeTransformationToolboxId(item.id) };
+    }
+    if (item.kind === "condition") {
+      return { kind: "condition", id: normalizeConditionToolboxId(item.id) };
+    }
+    return null;
+  };
+  const isLibraryItemSavedInToolbox = (item: LibraryItem): boolean => {
+    const entry = toolboxEntryForLibraryItem(item);
+    if (!entry) return false;
+    return toolboxLibrary[entry.kind].includes(entry.id);
+  };
 
   const initialParticleToolbox = (mockUsersById[mockCurrentUserId]?.toolbox ?? []).map(
-    normalizeToolboxId,
+    normalizeConnectorToolboxId,
   );
 
   let toolboxLibrary = $state<ToolboxLibrary>({
-    particles: initialParticleToolbox,
-    feature: [],
+    connector: initialParticleToolbox,
     transformation: [],
     condition: [],
-    plugin: [],
   });
 
   const persistToolboxLibrary = async (nextToolboxLibrary: ToolboxLibrary) => {
     try {
       await saveCurrentUserToolboxLibrary({
-        particles: [...nextToolboxLibrary.particles],
-        feature: [...nextToolboxLibrary.feature],
+        connector: [...nextToolboxLibrary.connector],
         transformation: [...nextToolboxLibrary.transformation],
         condition: [...nextToolboxLibrary.condition],
-        plugin: [...nextToolboxLibrary.plugin],
       });
     } catch (error) {
       console.warn("[Studio] Failed to persist toolbox library.", error);
@@ -811,11 +813,9 @@
     try {
       const saved = await getCurrentUserToolboxLibrary();
       toolboxLibrary = {
-        particles: saved.particles.map(normalizeToolboxId),
-        feature: [...saved.feature],
-        transformation: [...saved.transformation],
-        condition: [...saved.condition],
-        plugin: [...saved.plugin],
+        connector: normalizeToolboxListByKind("connector", saved.connector),
+        transformation: normalizeToolboxListByKind("transformation", saved.transformation),
+        condition: normalizeToolboxListByKind("condition", saved.condition),
       };
     } catch (error) {
       console.warn("[Studio] Failed to load toolbox library from profile.", error);
@@ -843,84 +843,7 @@
     condition: [...deployedLibrary.conditions],
     plugin: [...mockPlugins, ...deployedLibrary.plugins],
   }));
-
-  const resolveNodeNameForFormatPanel = (node: StudioNode): string =>
-    `${node.data.networkId ?? node.data.particleId ?? node.data.sourceId ?? node.data.label ?? ""}`
-      .trim()
-      .toLowerCase();
-
-  const getFormatHashForConnectorName = (connectorName: string): string => {
-    const normalized = connectorName.trim().toLowerCase();
-    if (!normalized) return "";
-
-    const fromParticles =
-      networkParticles.find((particle) => particle.id.trim().toLowerCase() === normalized)
-        ?.formatHash ?? "";
-    if (fromParticles) return fromParticles;
-
-    const fromFormatRecords = syncedChainFormats.find((record) =>
-      record.connectors.some((connectorName) => connectorName.trim().toLowerCase() === normalized),
-    );
-    return fromFormatRecords?.formatHash ?? "";
-  };
-
   const selectedNode = $derived.by(() => nodes.find((node) => node.id === selectedNodeId) ?? null);
-  const selectedOrRootConnectorName = $derived.by(() => {
-    const selected = selectedNode;
-    if (selected && isConnectorKind(selected.data.kind)) {
-      return resolveNodeNameForFormatPanel(selected);
-    }
-
-    if (!activeTab) return "";
-    const connectorNodes = nodes.filter((node) => isConnectorKind(node.data.kind));
-    if (!connectorNodes.length) return "";
-
-    const rootNode =
-      connectorNodes.find((node) => Boolean(node.data.tabRoot)) ??
-      connectorNodes.find(
-        (node) =>
-          activeTab.particleId &&
-          resolveNodeNameForFormatPanel(node) === activeTab.particleId.trim().toLowerCase(),
-      ) ??
-      connectorNodes.find((node) => node.data.definitionRole === "root") ??
-      connectorNodes[0];
-
-    return resolveNodeNameForFormatPanel(rootNode);
-  });
-
-  const inspectorConnectorName = $derived.by(() => {
-    const selected = selectedNode;
-    if (selected && isConnectorKind(selected.data.kind)) {
-      return resolveNodeNameForFormatPanel(selected);
-    }
-    if (selected && selected.data.kind === "dimension" && selected.data.parentFeatureId) {
-      const parent = nodes.find((node) => node.id === selected.data.parentFeatureId) ?? null;
-      if (parent && isConnectorKind(parent.data.kind)) {
-        return resolveNodeNameForFormatPanel(parent);
-      }
-    }
-    return selectedOrRootConnectorName;
-  });
-
-  const inspectorFormatHash = $derived.by(() =>
-    getFormatHashForConnectorName(inspectorConnectorName),
-  );
-  const inspectorFormatRecord = $derived.by(() =>
-    inspectorFormatHash ? (chainFormatsByHash[inspectorFormatHash] ?? null) : null,
-  );
-
-  const filteredSyncedFormats = $derived.by(() => {
-    const query = formatLookupQuery.trim().toLowerCase();
-    if (!query) return syncedChainFormats.slice(0, 24);
-    return syncedChainFormats
-      .filter((format) => {
-        const scalars = format.scalars.join(" ").toLowerCase();
-        const hash = format.formatHash.toLowerCase();
-        return `${hash} ${scalars}`.includes(query);
-      })
-      .slice(0, 24);
-  });
-
   const inspectorNode = $derived.by(() => {
     if (selectedNode) return selectedNode;
     if (!activeTab) return null;
@@ -1822,17 +1745,6 @@
       if (items.some((item) => item.id === next.id)) return items;
       return [...items, next];
     }, deployedParticles);
-
-    if (snapshot.formats.length > 0) {
-      const nextFormats: Record<string, ChainFormatRecord> = { ...chainFormatsByHash };
-      snapshot.formats.forEach((record) => {
-        const existing = nextFormats[record.formatHash];
-        nextFormats[record.formatHash] = existing
-          ? (mergeChainFormatRecords([existing, record]) ?? record)
-          : record;
-      });
-      chainFormatsByHash = nextFormats;
-    }
   };
 
   const resolveCurrentMockChainUserId = async () => {
@@ -2023,30 +1935,17 @@
       const connectorNames = new SvelteSet<string>();
       const transformationIds = new SvelteSet<string>();
       const conditionIds = new SvelteSet<string>();
-      const formatHashes = new SvelteSet<string>();
       let syncedSources = 0;
-      let failedSources = 0;
-      let firstFailureMessage: string | null = null;
 
       for (const source of sources) {
         const address = source.address;
         if (!address) continue;
         chainSyncStatus = `Fetching chain registry for ${source.label}...`;
-        let snapshot: ChainStudioSyncResult;
-        try {
-          snapshot = await withChainAuthRetry(() =>
-            fetchChainOwnedStudioSnapshot(address, {
-              authorId: source.authorId,
-            }),
-          );
-        } catch (error) {
-          failedSources += 1;
-          if (!firstFailureMessage) {
-            firstFailureMessage =
-              error instanceof Error ? error.message : "Chain API is temporarily unavailable.";
-          }
-          continue;
-        }
+        const snapshot = await withChainAuthRetry(() =>
+          fetchChainOwnedStudioSnapshot(address, {
+            authorId: source.authorId,
+          }),
+        );
         mergeChainSyncSnapshot(snapshot);
         if (
           isConnectorTreeTab(activeTabId) &&
@@ -2059,23 +1958,11 @@
         Object.keys(snapshot.registry.connectors).forEach((name) => connectorNames.add(name));
         snapshot.library.transformations.forEach((item) => transformationIds.add(item.id));
         snapshot.library.conditions.forEach((item) => conditionIds.add(item.id));
-        snapshot.formats.forEach((item) => formatHashes.add(item.formatHash));
-      }
-
-      if (syncedSources === 0 && failedSources > 0) {
-        chainSyncStatus = null;
-        chainSyncError = firstFailureMessage ?? "Failed to sync owned chain registry.";
-        return;
       }
 
       refreshConnectorTreeTabs();
 
-      chainSyncStatus = `Synced ${syncedSources} sources · ${particleIds.size} particles · ${connectorNames.size} connectors · ${transformationIds.size} transformations · ${conditionIds.size} conditions · ${formatHashes.size} formats${failedSources > 0 ? ` · ${failedSources} failed` : ""}.`;
-      if (failedSources > 0) {
-        chainSyncError =
-          firstFailureMessage ??
-          `${failedSources} source${failedSources === 1 ? "" : "s"} failed during sync.`;
-      }
+      chainSyncStatus = `Synced ${syncedSources} sources · ${particleIds.size} particles · ${connectorNames.size} connectors · ${transformationIds.size} transformations · ${conditionIds.size} conditions.`;
     } catch (error) {
       chainSyncError =
         error instanceof Error ? error.message : "Failed to sync owned chain registry.";
@@ -2183,7 +2070,7 @@
           name: conditionName,
           sol_src: getConditionCode(conditionNode.id),
         };
-        await traceChainPost("/condition", requestBody, () =>
+        await traceChainPost("/chain/condition", requestBody, () =>
           postChainConditionDetailed(requestBody),
         );
       }
@@ -2196,7 +2083,7 @@
       const source = draftSources.get(name);
       if (!source) continue;
       const requestBody = { name, sol_src: source.code };
-      await traceChainPost("/transformation", requestBody, () =>
+      await traceChainPost("/chain/transformation", requestBody, () =>
         postChainTransformationDetailed(requestBody),
       );
     }
@@ -2237,7 +2124,7 @@
         ...(def.conditionName ? { condition_name: def.conditionName } : {}),
         ...(def.conditionArgs?.length ? { condition_args: [...def.conditionArgs] } : {}),
       };
-      await traceChainPost("/connector", requestBody, () =>
+      await traceChainPost("/chain/connector", requestBody, () =>
         postChainConnectorDetailed(requestBody),
       );
     }
@@ -2386,73 +2273,25 @@
     return instances;
   };
 
-  const normalizeExecuteOutput = (raw: unknown): PtOutputFeature[] => {
-    const streams = Array.isArray(raw)
-      ? raw
-      : raw && typeof raw === "object"
-        ? Array.isArray((raw as Record<string, unknown>).streams)
-          ? ((raw as Record<string, unknown>).streams as unknown[])
-          : Array.isArray((raw as Record<string, unknown>).output)
-            ? ((raw as Record<string, unknown>).output as unknown[])
-            : []
-        : [];
-
-    return streams
-      .map((entry) => {
-        if (!entry || typeof entry !== "object") return null;
-        const rec = entry as Record<string, unknown>;
-        const featurePath =
-          typeof rec.feature_path === "string"
-            ? rec.feature_path.trim()
-            : typeof rec.path === "string"
-              ? rec.path.trim()
-              : "";
-        if (!featurePath) return null;
-        const data = Array.isArray(rec.data)
-          ? rec.data
-              .map((value) =>
-                typeof value === "number" && Number.isFinite(value) ? Math.trunc(value) : null,
-              )
-              .filter((value): value is number => value !== null)
-          : [];
-        return {
-          feature_path: featurePath,
-          data,
-        } satisfies PtOutputFeature;
-      })
-      .filter((item): item is PtOutputFeature => Boolean(item));
-  };
-
-  const executeActiveGraph = async () => {
+  const executeActiveGraph = () => {
     if (!activeTab) return;
     saveActiveGraph();
     let output: PtOutputFeature[] = [];
     let warnings: string[] = [];
 
     try {
-      if (!activeTab.particleId) {
-        throw new Error("Run requires a deployed connector. Deploy this tab first.");
-      }
-      await ensureChainAuthForStudio();
+      const compiled = compileDraftTransformations(nodes);
       const runtime = buildStudioRuntime(
         { nodes, edges },
         { rootLabel: activeTab.label, rootParticleId: activeTab.particleId },
-        buildRuntimeOverrides(),
+        buildRuntimeOverrides(compiled.registry),
       );
-      warnings = [...runtime.warnings];
-      const requestBody = {
-        connector_name: runtime.rootConnector,
-        particles_count: Math.max(1, Math.trunc(runSamplesCount)),
-        running_instances: buildRunningInstances(runtime).map((instance) => ({
-          start_point: toInt(instance.startPoint),
-          transformation_shift: toInt(instance.transformShift),
-        })),
+      const config: MockRunConfig = {
+        samplesCount: Math.max(1, Math.trunc(runSamplesCount)),
+        runningInstances: buildRunningInstances(runtime),
       };
-      const result = await withChainAuthRetry(() => postChainExecuteDetailed(requestBody));
-      output = normalizeExecuteOutput(result.body);
-      if (output.length === 0 && warnings.length === 0) {
-        warnings = ["Execute returned no output streams."];
-      }
+      warnings = [...compiled.warnings, ...runtime.warnings];
+      output = runStudioParticle(runtime.registry, runtime.rootParticle, config);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Run failed.";
       warnings = [message];
@@ -2936,7 +2775,7 @@
       const successEntry: DeployTraceEntry = {
         id: `deploy-trace-${crypto.randomUUID()}`,
         method: "POST",
-        path: "/condition",
+        path: "/chain/condition",
         requestBody,
         responseStatus: result.status,
         responseBody: result.body,
@@ -2984,7 +2823,7 @@
       const errorEntry: DeployTraceEntry = {
         id: `deploy-trace-${crypto.randomUUID()}`,
         method: "POST",
-        path: "/condition",
+        path: "/chain/condition",
         requestBody,
         responseStatus: error instanceof ChainApiRequestError ? error.status : null,
         responseBody:
@@ -3078,7 +2917,7 @@
       const successEntry: DeployTraceEntry = {
         id: `deploy-trace-${crypto.randomUUID()}`,
         method: "POST",
-        path: "/transformation",
+        path: "/chain/transformation",
         requestBody,
         responseStatus: result.status,
         responseBody: result.body,
@@ -3127,7 +2966,7 @@
       const errorEntry: DeployTraceEntry = {
         id: `deploy-trace-${crypto.randomUUID()}`,
         method: "POST",
-        path: "/transformation",
+        path: "/chain/transformation",
         requestBody,
         responseStatus: error instanceof ChainApiRequestError ? error.status : null,
         responseBody:
@@ -3300,6 +3139,114 @@
       activeTabId = nextActive.id;
       loadTabGraph(nextActive.id);
     }
+  };
+
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const buildParticleGraph = (particleName: string) => {
+    const particle = deployedRegistry.particles[particleName];
+    if (!particle) return { nodes: [], edges: [] };
+
+    const feature = deployedRegistry.features[particle.featureName];
+    if (!feature) return { nodes: [], edges: [] };
+
+    const graphNodes: StudioNode[] = [];
+    const graphEdges: Edge[] = [];
+
+    const featureItem = networkLibrary.feature.find(
+      (item) => getLibraryRegistryName(item) === feature.name,
+    );
+    const featureLabel = featureItem?.name ?? feature.name;
+    const featureId = `feature-${feature.name}-${crypto.randomUUID()}`;
+    const featureX = 360;
+    const featureY = 80;
+    graphNodes.push({
+      id: featureId,
+      type: "connector",
+      draggable: false,
+      position: { x: featureX, y: featureY },
+      data: {
+        label: featureLabel,
+        kind: "connector",
+        dimensions: feature.dimensions.length,
+        connectorRows: feature.dimensions.map((dimension, dimIndex) => ({
+          dimension: dimIndex + 1,
+          transformations: dimension.transformations.map((transformation) =>
+            formatTransformationPreviewLabel(transformation.name, transformation.args),
+          ),
+        })),
+        conditionLabel: particle.conditionName ? particle.conditionName : null,
+        sourceId: feature.name,
+        networkId: feature.name,
+        fromNetwork: true,
+      },
+    });
+
+    const dimensionSpacingX = 200;
+    const dimensionRowY = featureY + 160;
+    const dimensionStartX = featureX - ((feature.dimensions.length - 1) * dimensionSpacingX) / 2;
+    const compositeRowY = dimensionRowY + 160;
+
+    feature.dimensions.forEach((dimension, dimIndex) => {
+      const dimensionId = `dimension-${feature.name}-${dimIndex}-${crypto.randomUUID()}`;
+      const columnX = dimensionStartX + dimIndex * dimensionSpacingX;
+      const riConfig = deployedParticleRIs[particleName]?.[dimIndex];
+      graphNodes.push({
+        id: dimensionId,
+        type: "dimension",
+        hidden: true,
+        draggable: false,
+        position: { x: columnX, y: dimensionRowY },
+        data: {
+          label: `#${dimIndex + 1}`,
+          kind: "dimension",
+          parentFeatureId: featureId,
+          dimensionIndex: dimIndex,
+          transformations: dimension.transformations.map((transformation) =>
+            createTransformationInstance(transformation.name, transformation.args, "network"),
+          ),
+          fromNetwork: true,
+          riStart: riConfig?.start ?? 0,
+          riShift: riConfig?.shift ?? 0,
+          riLocked: riConfig?.locked ?? false,
+        },
+      });
+
+      graphEdges.push({
+        id: `edge-${featureId}-${dimensionId}`,
+        source: featureId,
+        sourceHandle: `dim-${dimIndex}`,
+        target: dimensionId,
+        targetHandle: "in",
+      });
+
+      const compositeName = particle.composites[dimIndex];
+      if (compositeName) {
+        const compositeId = `particle-${compositeName}-${crypto.randomUUID()}`;
+        const compositeItem = networkParticles.find((item) => item.id === compositeName);
+        graphNodes.push({
+          id: compositeId,
+          type: "particle",
+          draggable: false,
+          position: { x: columnX, y: compositeRowY },
+          data: {
+            label: compositeItem?.name ?? compositeName,
+            kind: "particle",
+            particleId: compositeName,
+            networkId: compositeName,
+            fromNetwork: true,
+          },
+        });
+        graphEdges.push({
+          id: `edge-${featureId}-dim-${dimIndex}-${compositeId}`,
+          source: featureId,
+          sourceHandle: `dim-${dimIndex}`,
+          target: compositeId,
+          targetHandle: "in",
+        });
+      }
+    });
+
+    return { nodes: graphNodes, edges: graphEdges };
   };
 
   const getConnectorLibraryLabel = (connectorName: string) =>
@@ -4049,19 +3996,18 @@
     pendingNameCollision = null;
   };
 
-  const addLibraryToToolbox = (item: LibraryItem) => {
-    const kind = item.kind;
-    if (toolboxLibrary[kind].includes(item.id)) return;
-    const next = { ...toolboxLibrary, [kind]: [...toolboxLibrary[kind], item.id] };
+  const toggleLibraryToolbox = (item: LibraryItem) => {
+    const entry = toolboxEntryForLibraryItem(item);
+    if (!entry) return;
+    const isSaved = toolboxLibrary[entry.kind].includes(entry.id);
+    const next = {
+      ...toolboxLibrary,
+      [entry.kind]: isSaved
+        ? toolboxLibrary[entry.kind].filter((id) => id !== entry.id)
+        : [...toolboxLibrary[entry.kind], entry.id],
+    };
     toolboxLibrary = next;
     void persistToolboxLibrary(next);
-  };
-
-  const openFormatPage = (formatHash: string) => {
-    const normalized = formatHash.trim();
-    if (!normalized) return;
-    const target = new URL(resolve("/f/[slug]", { slug: normalized }), window.location.origin);
-    window.open(target.toString(), "_blank", "noopener,noreferrer");
   };
 
   const getDimensionNodesForFeature = (featureId: string) =>
@@ -4517,8 +4463,8 @@
         return "transformation";
       case "conditions":
         return "condition";
-      case "formats":
-        return null;
+      case "plugins":
+        return "plugin";
       default:
         return null;
     }
@@ -4531,11 +4477,19 @@
     const source = networkLibrary[kind] ?? [];
 
     if (explorerSource === "toolbox") {
-      const saved = toolboxLibrary[kind];
-      return source.filter((item) => saved.includes(item.id));
+      return source.filter((item) => isLibraryItemSavedInToolbox(item));
     }
 
     return source;
+  });
+
+  const savedToolboxIdsForLibraryTab = $derived.by(() => {
+    const kind = libraryKindForTab(libraryTab);
+    if (!kind) return new Set<string>();
+    const source = networkLibrary[kind] ?? [];
+    return new Set(
+      source.filter((item) => isLibraryItemSavedInToolbox(item)).map((item) => item.id),
+    );
   });
 
   const listTitle = $derived.by(() => {
@@ -4546,8 +4500,8 @@
         return "Transformations";
       case "conditions":
         return "Conditions";
-      case "formats":
-        return "Formats";
+      case "plugins":
+        return "Plugins";
       default:
         return "Library";
     }
@@ -4556,13 +4510,13 @@
   const listTooltip = $derived.by(() => {
     switch (libraryTab) {
       case "connectors":
-        return "A connector defines dimensions and the transformation chains on those dimensions; each dimension can connect to another connector (or a terminal particle) as a composite input.";
+        return "A connector defines dimensions and the transformation chains on those dimensions; each dimension can connect to another connector as a composite input, and can expose bindings.";
       case "transformations":
-        return "Transformations live on dimensions of a connector. Each dimension has its own list of transformations that specify how values are selected from the particle attached at that dimension.";
+        return "Transformations live on connector dimensions. Each dimension has its own ordered list of transformations that shape the values flowing through that dimension.";
       case "conditions":
         return "A connector only outputs values if its condition is met. Conditions can be financial (e.g., send funds to an address) or non-financial (artistic, contextual, etc.).";
-      case "formats":
-        return "Formats are derived from connector definitions on chain and let you browse connectors by scalar terminal sets.";
+      case "plugins":
+        return "A plugin consumes the runner’s output streams and renders or sonifies them (MIDI, score, audio, image, etc.).";
       default:
         return "";
     }
@@ -5765,7 +5719,7 @@
         root_connector: fallbackRoot || null,
         deploy_requests: connectorBodies.map((body) => ({
           method: "POST",
-          path: "/connector",
+          path: "/chain/connector",
           body,
         })),
       },
@@ -5786,18 +5740,9 @@
     return raw.replace(/\/+$/, "");
   };
 
-  const toCanonicalApiPath = (path: string) => {
-    const normalized = normalizeApiRequestPath(path);
-    if (!normalized) return "";
-    return normalized.replace(/^\/chain(?=\/)/, "");
-  };
-
   const isApiPath = (path: string, expected: string) => {
     const normalized = normalizeApiRequestPath(path);
-    if (normalized === expected || normalized.endsWith(expected)) return true;
-    const canonical = toCanonicalApiPath(path);
-    const expectedCanonical = toCanonicalApiPath(expected);
-    return canonical.length > 0 && canonical === expectedCanonical;
+    return normalized === expected || normalized.endsWith(expected);
   };
 
   const normalizeDeployRequests = (
@@ -5862,7 +5807,7 @@
           deploy_requests: [
             {
               method: "POST",
-              path: "/connector",
+              path: "/chain/connector",
               body: parsedRaw as Record<string, unknown>,
             },
           ],
@@ -5879,7 +5824,7 @@
     }
 
     const connectorReqs = deployRequests.filter((request) =>
-      isApiPath(request.path ?? "", "/connector"),
+      isApiPath(request.path ?? "", "/chain/connector"),
     );
     const connectorBodies = connectorReqs
       .map((request) =>
@@ -5889,7 +5834,7 @@
       )
       .filter((body): body is Record<string, unknown> => Boolean(body));
     if (!connectorBodies.length) {
-      throw new Error("deploy_requests must include at least one POST /connector body.");
+      throw new Error("deploy_requests must include at least one POST /chain/connector body.");
     }
 
     const connectorBodyByName = new SvelteMap<string, Record<string, unknown>>();
@@ -5948,7 +5893,7 @@
     }
 
     const conditionReqs = deployRequests.filter((request) =>
-      isApiPath(request.path ?? "", "/condition"),
+      isApiPath(request.path ?? "", "/chain/condition"),
     );
     const conditionSourceByName = new SvelteMap<string, string>();
     conditionReqs.forEach((req) => {
@@ -5961,7 +5906,7 @@
     });
 
     const transformationReqs = deployRequests.filter((request) =>
-      isApiPath(request.path ?? "", "/transformation"),
+      isApiPath(request.path ?? "", "/chain/transformation"),
     );
     const transformationSourceByName = new SvelteMap<string, string>();
     transformationReqs.forEach((req) => {
@@ -6699,10 +6644,10 @@
             </Button>
             <Button
               variant="subtle"
-              selected={libraryTab === "formats"}
-              onclick={() => (libraryTab = "formats")}
+              selected={libraryTab === "plugins"}
+              onclick={() => (libraryTab = "plugins")}
             >
-              Formats
+              Plugins
             </Button>
           </div>
           <button
@@ -6730,60 +6675,16 @@
             ?
           </button>
         </div>
-        {#if libraryTab === "formats"}
-          <section class="format-panel" aria-label="Derived formats">
-            <div class="format-panel-head">
-              <p class="format-panel-title">Derived formats</p>
-              <span class="format-panel-count">{syncedChainFormats.length} synced</span>
-            </div>
-            <p class="format-panel-copy">
-              Formats are derived from connector definitions on chain and are used for browsing and
-              grouping.
-            </p>
-            {#if explorerSource !== "network"}
-              <p class="format-panel-empty">
-                Switch to Network source to browse chain-derived formats.
-              </p>
-            {:else}
-              <input
-                class="format-panel-input format-panel-input--compact"
-                type="text"
-                placeholder="Filter formats by hash or scalar"
-                bind:value={formatLookupQuery}
-              />
-              {#if filteredSyncedFormats.length > 0}
-                <div class="format-panel-list">
-                  <p class="format-panel-subtitle">Chain formats</p>
-                  <div class="format-panel-list-items">
-                    {#each filteredSyncedFormats as format (format.formatHash)}
-                      <a
-                        class="format-panel-link"
-                        href={resolve("/f/[slug]", { slug: format.formatHash })}
-                      >
-                        <span>{getChainFormatDisplayName(format.formatHash)}</span>
-                        <small
-                          >{format.scalars.length} scalars · {format.connectors
-                            .length}/{format.totalConnectors} connectors</small
-                        >
-                      </a>
-                    {/each}
-                  </div>
-                </div>
-              {:else}
-                <p class="format-panel-empty">No chain formats match this filter.</p>
-              {/if}
-            {/if}
-          </section>
-        {/if}
         {#if libraryTab === "connectors"}
           <StudioLibraryList
             title="Connectors"
             items={libraryItems}
+            toolboxIds={savedToolboxIdsForLibraryTab}
             loading={(explorerSource === "network" && chainSyncBusy) ||
               (explorerSource === "toolbox" && toolboxLoadBusy)}
             usersById={mockUsersById}
             onAdd={(item) => addLibraryNode(item, null)}
-            onToolbox={addLibraryToToolbox}
+            onToolbox={toggleLibraryToolbox}
             onDragStart={handleLibraryDragStart}
             draggable
             showHeader={false}
@@ -6805,11 +6706,12 @@
           <StudioLibraryList
             title="Transformations"
             items={libraryItems}
+            toolboxIds={savedToolboxIdsForLibraryTab}
             loading={(explorerSource === "network" && chainSyncBusy) ||
               (explorerSource === "toolbox" && toolboxLoadBusy)}
             usersById={mockUsersById}
             onAdd={(item) => addLibraryNode(item, null)}
-            onToolbox={addLibraryToToolbox}
+            onToolbox={toggleLibraryToolbox}
             onDragStart={handleLibraryDragStart}
             draggable
             showHeader={false}
@@ -6831,11 +6733,26 @@
           <StudioLibraryList
             title="Conditions"
             items={libraryItems}
+            toolboxIds={savedToolboxIdsForLibraryTab}
             loading={(explorerSource === "network" && chainSyncBusy) ||
               (explorerSource === "toolbox" && toolboxLoadBusy)}
             usersById={mockUsersById}
             onAdd={(item) => addLibraryNode(item, null)}
-            onToolbox={addLibraryToToolbox}
+            onToolbox={toggleLibraryToolbox}
+            onDragStart={handleLibraryDragStart}
+            draggable
+            showHeader={false}
+          />
+        {:else}
+          <StudioLibraryList
+            title="Plugins"
+            items={libraryItems}
+            toolboxIds={savedToolboxIdsForLibraryTab}
+            loading={(explorerSource === "network" && chainSyncBusy) ||
+              (explorerSource === "toolbox" && toolboxLoadBusy)}
+            usersById={mockUsersById}
+            onAdd={(item) => addLibraryNode(item, null)}
+            onToolbox={toggleLibraryToolbox}
             onDragStart={handleLibraryDragStart}
             draggable
             showHeader={false}
@@ -7389,51 +7306,6 @@
                 <span>Name</span>
                 <span>{inspectorNode.data.label}</span>
               </div>
-              {#if inspectorFormatHash}
-                <div class="inspector-row">
-                  <span>Current connector format</span>
-                  <a
-                    class="inspector-link"
-                    href={resolve("/f/[slug]", { slug: inspectorFormatHash })}
-                  >
-                    {getChainFormatDisplayName(inspectorFormatHash)}
-                  </a>
-                </div>
-                <div class="inspector-row">
-                  <span>Format hash</span>
-                  <span class="font-mono text-[0.62rem] tracking-[0.08em]"
-                    >{inspectorFormatHash}</span
-                  >
-                </div>
-                {#if inspectorFormatRecord && inspectorFormatRecord.scalars.length > 0}
-                  <div class="inspector-row">
-                    <span>Scalars</span>
-                    <span>{inspectorFormatRecord.scalars.join(", ")}</span>
-                  </div>
-                {/if}
-                <div class="inspector-actions-inline">
-                  <button
-                    type="button"
-                    class="inspector-action"
-                    onclick={() => openFormatPage(inspectorFormatHash)}
-                  >
-                    Open format page
-                  </button>
-                  <button
-                    type="button"
-                    class="inspector-action"
-                    onclick={async () => {
-                      try {
-                        await navigator.clipboard.writeText(inspectorFormatHash);
-                      } catch (error) {
-                        console.warn("[Studio] Failed to copy format hash.", error);
-                      }
-                    }}
-                  >
-                    Copy hash
-                  </button>
-                </div>
-              {/if}
               {#if inspectorNode.data.particleId}
                 <div class="inspector-row">
                   <span>Particle</span>
@@ -8110,51 +7982,6 @@
                       <span>Name</span>
                       <span>{inspectorNode.data.label}</span>
                     </div>
-                    {#if inspectorFormatHash}
-                      <div class="inspector-row">
-                        <span>Current connector format</span>
-                        <a
-                          class="inspector-link"
-                          href={resolve("/f/[slug]", { slug: inspectorFormatHash })}
-                        >
-                          {getChainFormatDisplayName(inspectorFormatHash)}
-                        </a>
-                      </div>
-                      <div class="inspector-row">
-                        <span>Format hash</span>
-                        <span class="font-mono text-[0.62rem] tracking-[0.08em]"
-                          >{inspectorFormatHash}</span
-                        >
-                      </div>
-                      {#if inspectorFormatRecord && inspectorFormatRecord.scalars.length > 0}
-                        <div class="inspector-row">
-                          <span>Scalars</span>
-                          <span>{inspectorFormatRecord.scalars.join(", ")}</span>
-                        </div>
-                      {/if}
-                      <div class="inspector-actions-inline">
-                        <button
-                          type="button"
-                          class="inspector-action"
-                          onclick={() => openFormatPage(inspectorFormatHash)}
-                        >
-                          Open format page
-                        </button>
-                        <button
-                          type="button"
-                          class="inspector-action"
-                          onclick={async () => {
-                            try {
-                              await navigator.clipboard.writeText(inspectorFormatHash);
-                            } catch (error) {
-                              console.warn("[Studio] Failed to copy format hash.", error);
-                            }
-                          }}
-                        >
-                          Copy hash
-                        </button>
-                      </div>
-                    {/if}
                     {#if inspectorNode.data.particleId}
                       <div class="inspector-row">
                         <span>Particle</span>
@@ -8818,113 +8645,6 @@
     @apply text-[0.7rem] uppercase tracking-[0.28em] text-white/70;
   }
 
-  .format-panel {
-    @apply grid gap-2 rounded-md border border-white/10 bg-black/40 p-2 min-h-0;
-  }
-
-  .format-panel-head {
-    @apply flex items-center justify-between gap-2;
-  }
-
-  .format-panel-title {
-    @apply text-[0.6rem] uppercase tracking-[0.22em] text-white/70;
-  }
-
-  .format-panel-count {
-    @apply text-[0.55rem] uppercase tracking-[0.16em] text-white/40;
-  }
-
-  .format-panel-copy {
-    @apply text-[0.65rem] text-white/50 leading-snug;
-  }
-
-  .format-panel-input {
-    @apply w-full rounded-md border border-white/10 bg-black/60 px-2 py-1.5 text-[0.75rem]
-      text-white/85 outline-none focus:border-emerald-400/60;
-  }
-
-  .format-panel-input--compact {
-    @apply text-[0.7rem] py-1.5;
-  }
-
-  .format-panel-empty {
-    @apply rounded-md border border-white/10 bg-white/5 px-2 py-1.5 text-[0.65rem] text-white/55;
-  }
-
-  .format-selected-list {
-    @apply flex flex-wrap items-baseline gap-x-1 text-[0.65rem] text-white/65;
-  }
-
-  .format-selected-label {
-    @apply uppercase tracking-[0.14em] text-[0.55rem] text-white/40;
-  }
-
-  .format-selected-values {
-    @apply flex flex-wrap items-baseline;
-  }
-
-  .format-selected-item {
-    @apply text-[0.68rem] text-white/80 hover:text-white underline decoration-white/20 underline-offset-2;
-  }
-
-  .format-selected-separator {
-    @apply text-white/35;
-  }
-
-  .format-search-results {
-    @apply grid gap-1 max-h-40 overflow-y-auto pr-1;
-  }
-
-  .format-search-result {
-    @apply flex items-center justify-between gap-2 rounded-md border border-white/10 bg-white/5
-      px-2 py-1.5 text-left transition;
-  }
-
-  .format-search-result:hover {
-    @apply border-white/25 bg-white/10;
-  }
-
-  .format-search-result-name {
-    @apply text-[0.7rem] text-white/80 truncate;
-  }
-
-  .format-search-result-id {
-    @apply text-[0.55rem] uppercase tracking-[0.14em] text-white/40 shrink-0;
-  }
-
-  .format-panel-status {
-    @apply text-[0.65rem] text-emerald-200;
-  }
-
-  .format-panel-error {
-    @apply text-[0.65rem] text-red-300;
-  }
-
-  .format-panel-list {
-    @apply mt-1 grid gap-1.5 border-t border-white/10 pt-2;
-  }
-
-  .format-panel-subtitle {
-    @apply text-[0.55rem] uppercase tracking-[0.18em] text-white/45;
-  }
-
-  .format-panel-list-items {
-    @apply grid gap-1;
-  }
-
-  .format-panel-link {
-    @apply flex items-center justify-between gap-2 rounded-md border border-white/10 bg-white/5
-      px-2 py-1.5 text-[0.65rem] text-white/75 no-underline transition;
-  }
-
-  .format-panel-link:hover {
-    @apply border-white/25 text-white;
-  }
-
-  .format-panel-link small {
-    @apply text-[0.55rem] uppercase tracking-[0.14em] text-white/45;
-  }
-
   .studio :global(.svelte-flow__node) {
     @apply rounded-md border border-white/15 bg-black/80 text-white/80;
     box-shadow: 0 12px 24px rgba(0, 0, 0, 0.45);
@@ -9147,23 +8867,9 @@
     @apply text-white/90;
   }
 
-  .inspector-link {
-    @apply text-white/90 hover:text-white no-underline;
-  }
-
   .inspector-action {
     @apply mt-2 w-full rounded-md border border-white/10 bg-white/5 px-2 py-1 text-[0.6rem]
       uppercase tracking-[0.18em] text-white/70 hover:border-white/30 hover:text-white;
-  }
-
-  .inspector-actions-inline {
-    @apply mt-2 flex items-center gap-2;
-  }
-
-  .inspector-actions-inline .inspector-action {
-    @apply mt-0;
-    width: auto;
-    flex: 1 1 0;
   }
 
   .inspector-code-preview {

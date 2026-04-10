@@ -14,7 +14,7 @@
   import SectionShell from "$lib/components/ui/SectionShell.svelte";
   import UserProfilePage from "$lib/components/user/UserProfilePage.svelte";
 
-  import { addParticleToCurrentUserToolbox, getMe, logout, updateUserById } from "$lib/auth/api";
+  import { addConnectorToCurrentUserToolbox, getMe, logout, updateUserById } from "$lib/auth/api";
   import { getToken } from "$lib/auth/session";
   import { mockCurrentUserId, mockUsersById } from "$lib/data/users";
   import type { ProfileViewUser } from "$lib/user/profileModel";
@@ -95,7 +95,7 @@
     if (currentUser && !currentUser.toolbox.includes(particleId)) {
       currentUser.toolbox = [...currentUser.toolbox, particleId];
     }
-    void addParticleToCurrentUserToolbox(particleId).catch((err) => {
+    void addConnectorToCurrentUserToolbox(particleId).catch((err) => {
       console.error("[Account] Failed to persist toolbox update.", err);
       localToolboxParticles = previous;
     });

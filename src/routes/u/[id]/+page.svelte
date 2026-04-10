@@ -15,17 +15,17 @@
   import Button from "$lib/components/ui/Button.svelte";
   import UserProfilePage from "$lib/components/user/UserProfilePage.svelte";
   import {
-    addParticleToCurrentUserToolbox,
-    followUserById,
-    getFollowersIds,
-    getFollowingIds,
+    addConnectorToCurrentUserToolbox,
+    followUserInProfile,
+    getCurrentUserSocialPreferences,
     getCurrentUserToolboxLibrary,
+    getUserSocialConnections,
     getMe,
     getUserById,
-    unfollowUserById,
+    unfollowUserInProfile,
   } from "$lib/auth/api";
   import { getToken } from "$lib/auth/session";
-  import { mockCurrentUserId, mockFollowingByUserId, mockUsersById } from "$lib/data/users";
+  import { mockCurrentUserId, mockUsersById } from "$lib/data/users";
   import type { ProfileViewUser } from "$lib/user/profileModel";
   import { normalizeProfileUser } from "$lib/user/profileModel";
 
@@ -44,6 +44,17 @@
     ...(mockUsersById[mockCurrentUserId]?.toolbox ?? []),
   ]);
   let userFeedEvents = $state<NetworkFeedEvent[]>([]);
+
+  const refreshFollowState = async (targetUserId: string) => {
+    const [social, targetSocial] = await Promise.all([
+      getCurrentUserSocialPreferences({ bootstrapPrototypeIfEmpty: true }),
+      getUserSocialConnections(targetUserId),
+    ]);
+    viewerFollowingIds = [...social.followedUserIds];
+    displayedFollowingIds = [...targetSocial.followingIds];
+    displayedFollowerIds = [...targetSocial.followerIds];
+    socialListsUnavailable = false;
+  };
 
   const loadUser = async () => {
     const userId = $page.params.id?.trim() ?? "";
@@ -71,40 +82,28 @@
       user = normalizeProfileUser(userPayload);
       userFeedEvents = listNetworkFeedEventsByAuthor(user.id);
       viewerUserId = mePayload?.id ?? null;
-      socialListsUnavailable = false;
 
       if (!getToken()) {
         viewerFollowingIds = [];
         displayedFollowingIds = [];
         displayedFollowerIds = [];
-      } else if (viewerUserId && user.id === viewerUserId) {
-        const [followers, following] = await Promise.all([
-          getFollowersIds().catch(() => [] as string[]),
-          getFollowingIds().catch(() => [] as string[]),
-        ]);
-        viewerFollowingIds = following;
-        displayedFollowerIds = followers;
-        displayedFollowingIds = following;
-      } else if (mockUsersById[user.id]) {
-        const targetId = user.id;
-        const targetFollowing = [...(mockFollowingByUserId[targetId] ?? [])];
-        const followers = Object.entries(mockFollowingByUserId)
-          .filter(([, ids]) => (ids ?? []).includes(targetId))
-          .map(([id]) => id);
-        viewerFollowingIds = viewerUserId ? [...(mockFollowingByUserId[viewerUserId] ?? [])] : [];
-        displayedFollowingIds = targetFollowing;
-        displayedFollowerIds = followers;
+        socialListsUnavailable = false;
       } else {
-        viewerFollowingIds = [];
-        displayedFollowingIds = [];
-        displayedFollowerIds = [];
-        socialListsUnavailable = true;
+        try {
+          await refreshFollowState(user.id);
+        } catch (socialError) {
+          console.warn("[User page] Failed to load social follow graph.", socialError);
+          viewerFollowingIds = [];
+          displayedFollowingIds = [];
+          displayedFollowerIds = [];
+          socialListsUnavailable = true;
+        }
       }
 
       if (getToken()) {
         try {
           const toolbox = await getCurrentUserToolboxLibrary();
-          localToolboxParticles = [...toolbox.particles];
+          localToolboxParticles = [...toolbox.connector];
         } catch (toolboxError) {
           console.warn("[User page] Failed to load toolbox from profile.", toolboxError);
         }
@@ -124,20 +123,11 @@
     try {
       const isFollowing = viewerFollowingIds.includes(user.id);
       if (isFollowing) {
-        await unfollowUserById(user.id);
-        viewerFollowingIds = viewerFollowingIds.filter((id) => id !== user.id);
-        displayedFollowerIds = displayedFollowerIds.filter((id) => id !== viewerUserId);
+        await unfollowUserInProfile(user.id);
       } else {
-        await followUserById(user.id);
-        viewerFollowingIds = [...viewerFollowingIds, user.id];
-        if (viewerUserId && !displayedFollowerIds.includes(viewerUserId)) {
-          displayedFollowerIds = [...displayedFollowerIds, viewerUserId];
-        }
+        await followUserInProfile(user.id);
       }
-
-      if (viewerUserId === user.id) {
-        displayedFollowerIds = await getFollowersIds().catch(() => displayedFollowerIds);
-      }
+      await refreshFollowState(user.id);
     } catch (err) {
       actionError = err instanceof Error ? err.message : "Failed to update follow state.";
     } finally {
@@ -201,7 +191,7 @@
     if (currentUser && !currentUser.toolbox.includes(particleId)) {
       currentUser.toolbox = [...currentUser.toolbox, particleId];
     }
-    void addParticleToCurrentUserToolbox(particleId).catch((err) => {
+    void addConnectorToCurrentUserToolbox(particleId).catch((err) => {
       console.error("[User page] Failed to persist toolbox update.", err);
       localToolboxParticles = previous;
     });

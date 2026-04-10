@@ -6,6 +6,9 @@
   const {
     events,
     loading = false,
+    loadingMore = false,
+    hasMore = false,
+    onLoadMore,
     onParticleOpen,
     onAddToToolbox,
     toolboxParticleIds = new Set<string>(),
@@ -13,14 +16,39 @@
   }: {
     events: NetworkFeedEvent[];
     loading?: boolean;
+    loadingMore?: boolean;
+    hasMore?: boolean;
+    onLoadMore?: (() => void | Promise<void>) | undefined;
     onParticleOpen?: ((particleId: string) => void) | undefined;
     onAddToToolbox?: ((particleId: string) => void) | undefined;
     toolboxParticleIds?: ReadonlySet<string>;
     emptyMessage?: string;
   } = $props();
+
+  let loadMorePending = false;
+  const loadMoreThresholdPx = 160;
+
+  const requestLoadMore = async () => {
+    if (!onLoadMore || loadMorePending || loading || loadingMore || !hasMore) return;
+    loadMorePending = true;
+    try {
+      await onLoadMore();
+    } finally {
+      loadMorePending = false;
+    }
+  };
+
+  const handleFeedScroll = (event: Event) => {
+    const container = event.currentTarget as HTMLElement | null;
+    if (!container) return;
+    const remaining = container.scrollHeight - (container.scrollTop + container.clientHeight);
+    if (remaining <= loadMoreThresholdPx) {
+      void requestLoadMore();
+    }
+  };
 </script>
 
-<section class="social-feed" aria-label="Activity feed">
+<section class="social-feed" aria-label="Activity feed" onscroll={handleFeedScroll}>
   {#if loading && events.length === 0}
     {#each Array.from({ length: 3 }) as _, index (`skeleton-${index}`)}
       <div class="feed-card-shell">
@@ -57,6 +85,13 @@
         {/if}
       </div>
     {/each}
+    {#if loadingMore}
+      <div class="feed-load-more">Loading more…</div>
+    {:else if hasMore}
+      <button type="button" class="feed-load-more-btn" onclick={() => void requestLoadMore()}>
+        Load more
+      </button>
+    {/if}
   {/if}
 </section>
 
@@ -78,6 +113,19 @@
     @apply rounded-3xl border border-white/10 bg-black/40 p-6 text-center text-white/70 mx-auto;
     width: var(--social-feed-card-width, min(50vw, 56rem));
     max-width: 100%;
+  }
+
+  .feed-load-more {
+    @apply text-xs uppercase tracking-[0.18em] text-white/45 py-1;
+  }
+
+  .feed-load-more-btn {
+    @apply rounded-xl border border-white/12 bg-white/5 px-4 py-2 text-xs uppercase tracking-[0.18em]
+      text-white/70 transition;
+  }
+
+  .feed-load-more-btn:hover {
+    @apply border-white/30 bg-white/10 text-white;
   }
 
   .feed-skeleton {

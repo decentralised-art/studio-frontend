@@ -8,6 +8,7 @@
     items = [],
     loading = false,
     usersById = {},
+    toolboxIds = new Set<string>(),
     selectedId,
     draggable = false,
     showHeader = true,
@@ -20,6 +21,7 @@
     items?: LibraryItem[];
     loading?: boolean;
     usersById?: Record<User["id"], User>;
+    toolboxIds?: ReadonlySet<string>;
     selectedId?: LibraryItem["id"];
     draggable?: boolean;
     showHeader?: boolean;
@@ -72,6 +74,7 @@
         <StudioLibraryCard
           {item}
           author={getAuthor(item.authorId)}
+          inToolbox={toolboxIds.has(item.id)}
           selected={item.id === selectedId}
           {draggable}
           {onSelect}

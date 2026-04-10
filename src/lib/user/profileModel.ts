@@ -78,6 +78,7 @@ export const normalizeProfileUser = (payload: unknown): ProfileViewUser => {
 
   const profileJson = asRecord(nested.profile_json ?? nested.profileJson);
   const profilePublic = asRecord(profileJson.public ?? profileJson.profile ?? profileJson);
+  const toolboxLibrary = asRecord(profilePublic.toolbox_library ?? profilePublic.toolboxLibrary);
 
   const nickname = pickFirst(
     coerceString(nested.display_name),
@@ -108,9 +109,13 @@ export const normalizeProfileUser = (payload: unknown): ProfileViewUser => {
   const authored = parseAuthored(profilePublic.authored ?? nested.authored);
   const toolbox = Array.isArray(profilePublic.toolbox)
     ? profilePublic.toolbox.filter((item): item is string => typeof item === "string")
-    : Array.isArray(nested.toolbox)
-      ? nested.toolbox.filter((item): item is string => typeof item === "string")
-      : [];
+    : Array.isArray(toolboxLibrary.connector)
+      ? toolboxLibrary.connector.filter((item): item is string => typeof item === "string")
+      : Array.isArray(toolboxLibrary.feature)
+        ? toolboxLibrary.feature.filter((item): item is string => typeof item === "string")
+        : Array.isArray(nested.toolbox)
+          ? nested.toolbox.filter((item): item is string => typeof item === "string")
+          : [];
 
   return {
     ...fallbackUser,

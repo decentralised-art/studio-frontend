@@ -6,11 +6,7 @@ import {
   getChainAccount,
   getChainCondition,
   getChainConnector,
-  getChainFormat,
   getChainTransformation,
-  normalizeFormatHash,
-  resolveChainAccountCursor,
-  resolveChainFormatCursor,
   type ChainConnectorResponse,
 } from "$lib/chain/registryApi";
 import type { ExploreParticle } from "$lib/data/exploreParticles";
@@ -21,13 +17,6 @@ import {
   mockUsers,
   mockUsersById,
 } from "$lib/data/users";
-import {
-  getFreshCachedChainFormat,
-  mapChainFormatResponseToRecord,
-  mergeChainFormatRecords,
-  upsertChainFormatRecord,
-  type ChainFormatRecord,
-} from "$lib/formats/chainFormats";
 import type { MockFeatureDef, MockParticleDef } from "$lib/particles/mockPtNetwork";
 import type { StudioConnectorDef } from "$lib/studio/domain/connectorModel";
 
@@ -47,12 +36,6 @@ export type ChainStudioSyncResult = {
     conditions: LibraryItem[];
   };
   particles: ExploreParticle[];
-  formats: ChainFormatRecord[];
-  formatSync: {
-    requested: number;
-    hydrated: number;
-    failed: string[];
-  };
 };
 
 export type ChainStudioParticleFetchResult = {
@@ -62,18 +45,6 @@ export type ChainStudioParticleFetchResult = {
     particle?: MockParticleDef;
   };
   particleMeta?: ExploreParticle;
-};
-
-const CHAIN_FORMAT_PAGE_LIMIT = 256;
-const CHAIN_FORMAT_HASH_FETCH_CONCURRENCY = 4;
-const CHAIN_FORMAT_FETCH_RETRIES = 3;
-const CHAIN_FORMAT_RETRY_BASE_DELAY_MS = 160;
-const CHAIN_FORMAT_CACHE_TTL_MS = 5 * 60 * 1000;
-
-type ChainFormatHydrationResult = {
-  records: ChainFormatRecord[];
-  failed: string[];
-  requested: number;
 };
 
 export type ChainOwnerSyncSource = {
@@ -383,7 +354,6 @@ const mapExploreParticle = (
   particle: MockParticleDef,
   authorId: string,
   createdAt: number,
-  formatHash?: string,
 ): ExploreParticle => ({
   id: particle.name,
   name: particle.name,
@@ -401,266 +371,25 @@ const mapExploreParticle = (
   complexity: 1 + particle.composites.filter(Boolean).length,
   transactionName: `${particle.name} PT`,
   dependencies: particle.composites.filter(Boolean) as string[],
-  ...(formatHash ? { formatHash } : {}),
 });
 
 const uniqueStrings = (values: string[]) => Array.from(new Set(values.filter(Boolean)));
 
-const normalizeCursorToken = (value: unknown): string | null => {
-  if (typeof value !== "string") return null;
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : null;
-};
-
-const findLastOwnedResourceEntry = (entries: unknown): string | null => {
-  if (!Array.isArray(entries)) return null;
-  for (let i = entries.length - 1; i >= 0; i -= 1) {
-    const normalized = normalizeCursorToken(entries[i]);
-    if (normalized) return normalized;
-  }
-  return null;
-};
-
-const resolveNextAccountCursor = (
-  currentCursor: string | null,
-  nextAfter: unknown,
-  entries: unknown,
-): string | null => {
-  const explicitCursor = normalizeCursorToken(nextAfter);
-  if (explicitCursor) return explicitCursor;
-  const terminalCursor = findLastOwnedResourceEntry(entries);
-  if (terminalCursor) return terminalCursor;
-  return normalizeCursorToken(currentCursor);
-};
-
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, Math.max(0, ms)));
-
-const withRetry = async <T>(
-  run: () => Promise<T>,
-  options: { attempts?: number; baseDelayMs?: number } = {},
-) => {
-  const attempts = Math.max(1, options.attempts ?? CHAIN_FORMAT_FETCH_RETRIES);
-  const baseDelayMs = Math.max(0, options.baseDelayMs ?? CHAIN_FORMAT_RETRY_BASE_DELAY_MS);
-  let lastError: unknown = null;
-
-  for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    try {
-      return await run();
-    } catch (error) {
-      lastError = error;
-      if (attempt >= attempts) break;
-      await sleep(baseDelayMs * attempt);
-    }
-  }
-
-  throw lastError instanceof Error ? lastError : new Error("Retry attempts exhausted.");
-};
-
-const mapWithConcurrency = async <T, R>(
-  items: T[],
-  limit: number,
-  mapper: (item: T, index: number) => Promise<R>,
-): Promise<R[]> => {
-  if (items.length === 0) return [];
-  const concurrency = Math.max(1, Math.min(limit, items.length));
-  const results = new Array<R>(items.length);
-  let nextIndex = 0;
-
-  const worker = async () => {
-    while (true) {
-      const current = nextIndex;
-      if (current >= items.length) return;
-      nextIndex += 1;
-      results[current] = await mapper(items[current], current);
-    }
-  };
-
-  await Promise.all(Array.from({ length: concurrency }, () => worker()));
-  return results;
-};
-
-const fetchChainFormatRecord = async (formatHash: string): Promise<ChainFormatRecord> => {
-  const normalizedHash = normalizeFormatHash(formatHash);
-  const freshCached = getFreshCachedChainFormat(normalizedHash, {
-    ttlMs: CHAIN_FORMAT_CACHE_TTL_MS,
-  });
-  if (freshCached && freshCached.connectors.length >= freshCached.totalConnectors) {
-    return freshCached;
-  }
-
-  const pageRecords: ChainFormatRecord[] = [];
-  const seenAfter = new Set<string>();
-  let after: string | null = null;
-
-  for (let pageIndex = 0; pageIndex < 2048; pageIndex += 1) {
-    const response = await withRetry(
-      () =>
-        getChainFormat(normalizedHash, {
-          limit: CHAIN_FORMAT_PAGE_LIMIT,
-          after,
-        }),
-      { attempts: CHAIN_FORMAT_FETCH_RETRIES },
-    );
-    const record = mapChainFormatResponseToRecord(response);
-    if (!record) {
-      throw new Error(`Invalid /format response for hash ${normalizedHash}`);
-    }
-    pageRecords.push(record);
-
-    const cursor = resolveChainFormatCursor(response);
-    if (!cursor.hasMore) break;
-
-    const nextAfter = cursor.nextAfter ?? findLastOwnedResourceEntry(response.connectors);
-    if (!nextAfter || nextAfter === after || seenAfter.has(nextAfter)) break;
-    seenAfter.add(nextAfter);
-    after = nextAfter;
-  }
-
-  const mergedRecord = mergeChainFormatRecords(pageRecords);
-  if (!mergedRecord) {
-    throw new Error(`Failed to merge /format cursor responses for ${normalizedHash}`);
-  }
-
-  return upsertChainFormatRecord(mergedRecord);
-};
-
-const hydrateChainFormats = async (rawHashes: string[]): Promise<ChainFormatHydrationResult> => {
-  const normalizedHashes = uniqueStrings(
-    rawHashes
-      .map((hash) => {
-        try {
-          return normalizeFormatHash(hash);
-        } catch {
-          return "";
-        }
-      })
-      .filter(Boolean),
-  );
-
-  if (!normalizedHashes.length) {
-    return { records: [], failed: [], requested: 0 };
-  }
-
-  const settled = await mapWithConcurrency(
-    normalizedHashes,
-    CHAIN_FORMAT_HASH_FETCH_CONCURRENCY,
-    async (formatHash) => {
-      try {
-        const record = await fetchChainFormatRecord(formatHash);
-        return { formatHash, record, error: null as string | null };
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "Failed to hydrate format.";
-        return { formatHash, record: null as ChainFormatRecord | null, error: message };
-      }
-    },
-  );
-
-  const records: ChainFormatRecord[] = [];
-  const failed: string[] = [];
-  settled.forEach((item) => {
-    if (item.record) {
-      records.push(item.record);
-      return;
-    }
-    failed.push(`${item.formatHash}: ${item.error ?? "unknown error"}`);
-  });
-
-  return { records, failed, requested: normalizedHashes.length };
-};
-
-type OwnedNameSnapshot = {
-  ownedConnectors: string[];
-  ownedTransformations: string[];
-  ownedConditions: string[];
-};
-
-const fetchAllOwnedNamesForAddress = async (
-  address: string,
-  limit = 256,
-): Promise<OwnedNameSnapshot> => {
-  const ownedConnectors = new Set<string>();
-  const ownedTransformations = new Set<string>();
-  const ownedConditions = new Set<string>();
-
-  let cursorConnectors: string | null = null;
-  let cursorTransformations: string | null = null;
-  let cursorConditions: string | null = null;
-
-  for (let pageIndex = 0; pageIndex < 2048; pageIndex += 1) {
-    const account = await getChainAccount(address, {
-      limit,
-      after_connectors: cursorConnectors,
-      after_transformations: cursorTransformations,
-      after_conditions: cursorConditions,
-    });
-
-    (Array.isArray(account.owned_connectors) ? account.owned_connectors : []).forEach((name) => {
-      const trimmed = `${name ?? ""}`.trim();
-      if (trimmed) ownedConnectors.add(trimmed);
-    });
-    (Array.isArray(account.owned_transformations) ? account.owned_transformations : []).forEach(
-      (name) => {
-        const trimmed = `${name ?? ""}`.trim();
-        if (trimmed) ownedTransformations.add(trimmed);
-      },
-    );
-    (Array.isArray(account.owned_conditions) ? account.owned_conditions : []).forEach((name) => {
-      const trimmed = `${name ?? ""}`.trim();
-      if (trimmed) ownedConditions.add(trimmed);
-    });
-
-    const connectorsCursor = resolveChainAccountCursor(account, "connectors");
-    const transformationsCursor = resolveChainAccountCursor(account, "transformations");
-    const conditionsCursor = resolveChainAccountCursor(account, "conditions");
-
-    if (!connectorsCursor.hasMore && !transformationsCursor.hasMore && !conditionsCursor.hasMore) {
-      break;
-    }
-
-    const nextCursorConnectors = resolveNextAccountCursor(
-      cursorConnectors,
-      connectorsCursor.nextAfter,
-      account.owned_connectors,
-    );
-    const nextCursorTransformations = resolveNextAccountCursor(
-      cursorTransformations,
-      transformationsCursor.nextAfter,
-      account.owned_transformations,
-    );
-    const nextCursorConditions = resolveNextAccountCursor(
-      cursorConditions,
-      conditionsCursor.nextAfter,
-      account.owned_conditions,
-    );
-
-    const advancedConnectors =
-      connectorsCursor.hasMore && nextCursorConnectors !== cursorConnectors;
-    const advancedTransformations =
-      transformationsCursor.hasMore && nextCursorTransformations !== cursorTransformations;
-    const advancedConditions =
-      conditionsCursor.hasMore && nextCursorConditions !== cursorConditions;
-    if (!advancedConnectors && !advancedTransformations && !advancedConditions) break;
-
-    cursorConnectors = nextCursorConnectors;
-    cursorTransformations = nextCursorTransformations;
-    cursorConditions = nextCursorConditions;
-  }
-
-  return {
-    ownedConnectors: Array.from(ownedConnectors.values()),
-    ownedTransformations: Array.from(ownedTransformations.values()),
-    ownedConditions: Array.from(ownedConditions.values()),
-  };
-};
-
 export const fetchChainOwnedStudioSnapshot = async (
   address: string,
-  options: { authorId: string; limit?: number } = { authorId: "user-lyra" },
+  options: { authorId: string; limit?: number; page?: number; includeRuntimeCode?: boolean } = {
+    authorId: "user-lyra",
+    includeRuntimeCode: true,
+  },
 ): Promise<ChainStudioSyncResult> => {
-  const allOwnedNames = await fetchAllOwnedNamesForAddress(address, options.limit ?? 256);
-  const ownedConnectors = uniqueStrings(allOwnedNames.ownedConnectors);
-  const ownedTransformations = uniqueStrings(allOwnedNames.ownedTransformations);
-  const ownedConditions = uniqueStrings(allOwnedNames.ownedConditions);
+  const account = await getChainAccount(address, {
+    limit: options.limit ?? 200,
+    page: options.page ?? 0,
+  });
+
+  const ownedConnectors = uniqueStrings(account.owned_connectors ?? []);
+  const ownedTransformations = uniqueStrings(account.owned_transformations ?? []);
+  const ownedConditions = uniqueStrings(account.owned_conditions ?? []);
 
   const connectorPayloads = (
     await Promise.allSettled(
@@ -672,48 +401,51 @@ export const fetchChainOwnedStudioSnapshot = async (
         result.status === "fulfilled",
     )
     .map((result) => result.value);
-  const transformationPayloads = (
-    await Promise.allSettled(
-      ownedTransformations.map(async (name) => [name, await getChainTransformation(name)] as const),
-    )
-  )
-    .filter(
-      (
-        result,
-      ): result is PromiseFulfilledResult<
-        readonly [string, Awaited<ReturnType<typeof getChainTransformation>>]
-      > => result.status === "fulfilled",
-    )
-    .map((result) => result.value);
-  const conditionPayloads = (
-    await Promise.allSettled(
-      ownedConditions.map(async (name) => [name, await getChainCondition(name)] as const),
-    )
-  )
-    .filter(
-      (
-        result,
-      ): result is PromiseFulfilledResult<
-        readonly [string, Awaited<ReturnType<typeof getChainCondition>>]
-      > => result.status === "fulfilled",
-    )
-    .map((result) => result.value);
+  const includeRuntimeCode = options.includeRuntimeCode !== false;
+  const transformationPayloads = includeRuntimeCode
+    ? (
+        await Promise.allSettled(
+          ownedTransformations.map(
+            async (name) => [name, await getChainTransformation(name)] as const,
+          ),
+        )
+      )
+        .filter(
+          (
+            result,
+          ): result is PromiseFulfilledResult<
+            readonly [string, Awaited<ReturnType<typeof getChainTransformation>>]
+          > => result.status === "fulfilled",
+        )
+        .map((result) => result.value)
+    : [];
+  const conditionPayloads = includeRuntimeCode
+    ? (
+        await Promise.allSettled(
+          ownedConditions.map(async (name) => [name, await getChainCondition(name)] as const),
+        )
+      )
+        .filter(
+          (
+            result,
+          ): result is PromiseFulfilledResult<
+            readonly [string, Awaited<ReturnType<typeof getChainCondition>>]
+          > => result.status === "fulfilled",
+        )
+        .map((result) => result.value)
+    : [];
 
   const connectors: Record<string, StudioConnectorDef> = {};
   const features: Record<string, MockFeatureDef> = {};
   const particles: Record<string, MockParticleDef> = {};
   const transformations: Record<string, { argc: number }> = {};
   const conditions: Record<string, { argc: number }> = {};
-  const formatHashes = new Set<string>();
 
   connectorPayloads.forEach(([, payload]) => {
     const connector = normalizeConnector(payload);
     if (!connector) return;
 
     connectors[connector.name] = connector;
-    if (connector.formatHash) {
-      formatHashes.add(connector.formatHash);
-    }
 
     const feature = connectorToFeature(connector);
     const particle = connectorToParticle(connector);
@@ -740,15 +472,14 @@ export const fetchChainOwnedStudioSnapshot = async (
     }
   });
 
-  // Backfill explicit owned condition names even if no particle references them.
-  conditionPayloads.forEach(([name]) => {
-    const key = name.trim();
-    if (!key) return;
-    conditions[key] ??= { argc: 0 };
-  });
-
-  const syncedAt = Date.now();
-  const hydratedFormats = await hydrateChainFormats(Array.from(formatHashes));
+  if (includeRuntimeCode) {
+    // Backfill explicit owned condition names even if no particle references them.
+    conditionPayloads.forEach(([name]) => {
+      const key = name.trim();
+      if (!key) return;
+      conditions[key] ??= { argc: 0 };
+    });
+  }
 
   return {
     registry: {
@@ -770,24 +501,17 @@ export const fetchChainOwnedStudioSnapshot = async (
       ),
     },
     particles: connectorPayloads
-      .map(([, payload], index) => {
+      .map(([, payload]) => {
         const connector = normalizeConnector(payload);
         if (!connector) return null;
         const particle = connectorToParticle(connector);
         return mapExploreParticle(
           particle,
           options.authorId,
-          extractConnectorCreatedAt(payload) ?? Math.max(1, syncedAt - index),
-          connector.formatHash,
+          extractConnectorCreatedAt(payload) ?? 0,
         );
       })
       .filter((particle): particle is ExploreParticle => Boolean(particle)),
-    formats: hydratedFormats.records,
-    formatSync: {
-      requested: hydratedFormats.requested,
-      hydrated: hydratedFormats.records.length,
-      failed: hydratedFormats.failed,
-    },
   };
 };
 
@@ -831,7 +555,6 @@ export const fetchChainParticleForStudio = async (
       particle,
       authorId,
       extractConnectorCreatedAt(connectorPayload) ?? Date.now(),
-      connector.formatHash,
     ),
   };
 };

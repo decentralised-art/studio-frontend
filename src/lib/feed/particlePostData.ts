@@ -1,10 +1,5 @@
-import { normalizeFormatHash } from "$lib/chain/registryApi";
 import type { ExploreParticle } from "$lib/data/exploreParticles";
-import {
-  getChainFormatDisplayName,
-  mergeChainFormatRecords,
-  type ChainFormatRecord,
-} from "$lib/formats/chainFormats";
+import type { FormatFeedEvent } from "$lib/formats/localFormats";
 import type { MockFeatureDef, MockParticleDef } from "$lib/particles/mockPtNetwork";
 import {
   fetchChainOwnedStudioSnapshot,
@@ -21,7 +16,6 @@ export type ConnectorPostEvent = {
   createdLabel: string;
   particleId: string;
   particleLabel: string;
-  formatHash?: string;
   usedParticleIds: string[];
   usedParticleLabels: string[];
   createdNodeIds: string[];
@@ -41,19 +35,12 @@ export type RuntimeCodePostEvent = {
 };
 
 export type ParticlePostEvent = ConnectorPostEvent | RuntimeCodePostEvent;
+export type NetworkFeedEvent = ParticlePostEvent | FormatFeedEvent;
 
-export type NetworkFeedEvent = ParticlePostEvent;
-
-export type ParticleRecord = {
-  id: ExploreParticle["id"];
-  name: ExploreParticle["name"];
-  summary: ExploreParticle["summary"];
-  authorId: ExploreParticle["authorId"];
-  createdAt: ExploreParticle["createdAt"];
-  createdLabel: ExploreParticle["createdLabel"];
-  dependencies: ExploreParticle["dependencies"];
-  formatHash?: ExploreParticle["formatHash"];
-};
+export type ParticleRecord = Pick<
+  ExploreParticle,
+  "id" | "name" | "summary" | "authorId" | "createdAt" | "createdLabel" | "dependencies"
+>;
 
 type ParticleDependencyRegistrySnapshot = {
   connectors: Record<string, StudioConnectorDef>;
@@ -61,58 +48,97 @@ type ParticleDependencyRegistrySnapshot = {
   features: Record<string, MockFeatureDef>;
 };
 
-type SearchableEntity = { id: string; label: string; summary: string; authorId: string };
-
 type ParticlePostCache = {
   loaded: boolean;
   events: ParticlePostEvent[];
-  networkEvents: NetworkFeedEvent[];
   particlesById: Map<string, ParticleRecord>;
-  formatsByHash: Map<string, ChainFormatRecord>;
   registry: ParticleDependencyRegistrySnapshot;
   searchable: {
-    connectors: SearchableEntity[];
-    transformations: SearchableEntity[];
-    conditions: SearchableEntity[];
-    formats: SearchableEntity[];
+    connectors: Array<{ id: string; label: string; summary: string; authorId: string }>;
+    transformations: Array<{ id: string; label: string; summary: string; authorId: string }>;
+    conditions: Array<{ id: string; label: string; summary: string; authorId: string }>;
   };
 };
 
 const emptyCache = (): ParticlePostCache => ({
   loaded: false,
   events: [],
-  networkEvents: [],
   particlesById: new Map(),
-  formatsByHash: new Map(),
   registry: { connectors: {}, particles: {}, features: {} },
-  searchable: { connectors: [], transformations: [], conditions: [], formats: [] },
+  searchable: { connectors: [], transformations: [], conditions: [] },
 });
 
 let cache: ParticlePostCache = emptyCache();
 let loadPromise: Promise<ParticlePostCache> | null = null;
+let cachedMaxOwnedPerSource: number | null = null;
+let cachedIncludesRuntimeCode = false;
+let cachedIncludesDependencyExpansion = false;
 const terminalSetCache = new Map<string, string[]>();
+const SOURCE_SNAPSHOT_CONCURRENCY = 6;
+const SOURCE_SNAPSHOT_TIMEOUT_MS = 3500;
+const DEPENDENCY_FETCH_CONCURRENCY = 8;
+const DEPENDENCY_FETCH_TIMEOUT_MS = 3500;
+
+const withTimeout = async <T>(promise: Promise<T>, timeoutMs: number, context: string) => {
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(() => {
+      reject(new Error(`${context} timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+  });
+
+  try {
+    return await Promise.race([promise, timeoutPromise]);
+  } finally {
+    if (timeoutId !== null) clearTimeout(timeoutId);
+  }
+};
+
+const runSettledWithConcurrency = async <T, R>(
+  items: readonly T[],
+  concurrency: number,
+  task: (item: T, index: number) => Promise<R>,
+): Promise<Array<PromiseSettledResult<R>>> => {
+  if (items.length === 0) return [];
+  const safeConcurrency = Math.max(1, Math.min(concurrency, items.length));
+  const results: Array<PromiseSettledResult<R>> = new Array(items.length);
+  let cursor = 0;
+
+  const worker = async () => {
+    while (true) {
+      const index = cursor;
+      cursor += 1;
+      if (index >= items.length) return;
+      try {
+        const value = await task(items[index], index);
+        results[index] = { status: "fulfilled", value };
+      } catch (reason) {
+        results[index] = { status: "rejected", reason };
+      }
+    }
+  };
+
+  await Promise.all(Array.from({ length: safeConcurrency }, () => worker()));
+  return results;
+};
 
 const rebuildEventsFromParticles = (particles: ParticleRecord[]): ConnectorPostEvent[] => {
   const labelById = new Map(particles.map((particle) => [particle.id, particle.name] as const));
   return particles
-    .map(
-      (particle) =>
-        ({
-          type: "connector",
-          id: `event-particle-created-${particle.id}`,
-          authorId: particle.authorId,
-          createdAt: particle.createdAt,
-          createdLabel: particle.createdLabel,
-          particleId: particle.id,
-          particleLabel: particle.name,
-          ...(particle.formatHash ? { formatHash: particle.formatHash } : {}),
-          usedParticleIds: [...particle.dependencies],
-          usedParticleLabels: particle.dependencies.map((id) => labelById.get(id) ?? id),
-          createdNodeIds: [],
-          reusedNodeIds: [],
-          focusNodeIds: [],
-        }) satisfies ConnectorPostEvent,
-    )
+    .map((particle) => ({
+      type: "connector",
+      id: `event-particle-created-${particle.id}`,
+      authorId: particle.authorId,
+      createdAt: particle.createdAt,
+      createdLabel: particle.createdLabel,
+      particleId: particle.id,
+      particleLabel: particle.name,
+      usedParticleIds: [...particle.dependencies],
+      usedParticleLabels: particle.dependencies.map((id) => labelById.get(id) ?? id),
+      createdNodeIds: [],
+      reusedNodeIds: [],
+      focusNodeIds: [],
+    }))
     .sort((a, b) => {
       const byCreatedAt = b.createdAt - a.createdAt;
       if (byCreatedAt !== 0) return byCreatedAt;
@@ -167,24 +193,32 @@ const rebuildRuntimeCodeEvents = (records: RuntimeCodeRecord[]): Array<RuntimeCo
     runtimeSnippet: record.runtimeSnippet,
   }));
 
-const mergeSnapshots = async (options?: { forceSources?: boolean }): Promise<ParticlePostCache> => {
+const mergeSnapshots = async (options?: {
+  forceSources?: boolean;
+  maxOwnedPerSource?: number;
+  includeRuntimeCode?: boolean;
+  includeDependencyExpansion?: boolean;
+}): Promise<ParticlePostCache> => {
   const chainSources = await listChainSyncSourcesForApp({ force: options?.forceSources });
+  const includeRuntimeCode = options?.includeRuntimeCode !== false;
+  const includeDependencyExpansion = options?.includeDependencyExpansion !== false;
 
-  const settled = await Promise.allSettled(
-    chainSources.map((source) =>
-      fetchChainOwnedStudioSnapshot(source.address, {
-        authorId: source.authorId,
-      }),
-    ),
+  const settled = await runSettledWithConcurrency(
+    chainSources,
+    SOURCE_SNAPSHOT_CONCURRENCY,
+    (source) =>
+      withTimeout(
+        fetchChainOwnedStudioSnapshot(source.address, {
+          authorId: source.authorId,
+          ...(typeof options?.maxOwnedPerSource === "number"
+            ? { limit: options.maxOwnedPerSource }
+            : {}),
+          includeRuntimeCode,
+        }),
+        SOURCE_SNAPSHOT_TIMEOUT_MS,
+        `snapshot ${source.address}`,
+      ),
   );
-
-  const succeededCount = settled.reduce(
-    (count, result) => count + (result.status === "fulfilled" ? 1 : 0),
-    0,
-  );
-  if (succeededCount === 0) {
-    throw new Error("Chain API is temporarily unavailable.");
-  }
 
   const nextParticlesById = new Map<string, ParticleRecord>();
   const nextRegistry: ParticleDependencyRegistrySnapshot = {
@@ -193,36 +227,22 @@ const mergeSnapshots = async (options?: { forceSources?: boolean }): Promise<Par
     features: {},
   };
   const searchByKind = {
-    connectors: new Map<string, SearchableEntity>(),
-    transformations: new Map<string, SearchableEntity>(),
-    conditions: new Map<string, SearchableEntity>(),
-    formats: new Map<string, SearchableEntity>(),
+    connectors: new Map<string, { id: string; label: string; summary: string; authorId: string }>(),
+    transformations: new Map<
+      string,
+      { id: string; label: string; summary: string; authorId: string }
+    >(),
+    conditions: new Map<string, { id: string; label: string; summary: string; authorId: string }>(),
   };
   const runtimeCodeRecordsById = new Map<string, RuntimeCodeRecord>();
-  const formatRecordsByHash = new Map<string, ChainFormatRecord>();
-  const formatAuthorByHash = new Map<string, string>();
 
-  let particleCounter = 0;
-
-  for (const [sourceIndex, result] of settled.entries()) {
+  for (const result of settled) {
     if (result.status !== "fulfilled") continue;
     const snapshot = result.value;
-    const source = chainSources[sourceIndex];
 
     Object.assign(nextRegistry.features, snapshot.registry.features);
     Object.assign(nextRegistry.particles, snapshot.registry.particles);
     Object.assign(nextRegistry.connectors, snapshot.registry.connectors);
-
-    snapshot.formats.forEach((record) => {
-      const existing = formatRecordsByHash.get(record.formatHash);
-      const merged = existing ? mergeChainFormatRecords([existing, record]) : record;
-      if (merged) {
-        formatRecordsByHash.set(merged.formatHash, merged);
-      }
-      if (!formatAuthorByHash.has(record.formatHash)) {
-        formatAuthorByHash.set(record.formatHash, source?.authorId ?? "chain-source-unknown");
-      }
-    });
 
     snapshot.library.transformations.forEach((item) => {
       const transformationId = item.id.replace(/^transform-/, "").trim();
@@ -247,9 +267,8 @@ const mergeSnapshots = async (options?: { forceSources?: boolean }): Promise<Par
         summary: item.summary ?? "Synced from chain.",
         runtimeSnippet,
         authorId: item.authorId,
-        createdAt: Date.now() - particleCounter * 1000,
+        createdAt: 0,
       });
-      particleCounter += 1;
     });
     snapshot.library.conditions.forEach((item) => {
       const conditionId = item.id.replace(/^condition-/, "").trim();
@@ -274,14 +293,12 @@ const mergeSnapshots = async (options?: { forceSources?: boolean }): Promise<Par
         summary: item.summary ?? "Synced from chain.",
         runtimeSnippet,
         authorId: item.authorId,
-        createdAt: Date.now() - particleCounter * 1000,
+        createdAt: 0,
       });
-      particleCounter += 1;
     });
 
     snapshot.particles.forEach((particle) => {
-      const createdAt = Date.now() - particleCounter * 1000;
-      particleCounter += 1;
+      const createdAt = Number.isFinite(particle.createdAt) ? particle.createdAt : 0;
       const record: ParticleRecord = {
         id: particle.id,
         name: particle.name,
@@ -293,13 +310,12 @@ const mergeSnapshots = async (options?: { forceSources?: boolean }): Promise<Par
         createdAt,
         createdLabel: "",
         dependencies: [...particle.dependencies],
-        ...(particle.formatHash ? { formatHash: particle.formatHash } : {}),
       };
       mergeParticleRecordIntoStructures(record, nextParticlesById, searchByKind);
     });
   }
 
-  // Pull one-hop dependency connectors so /c/[id] links and search can resolve referenced connectors
+  // Pull one-hop dependency connectors so /p/[id] links and search can resolve referenced connectors
   // even when they are not owned by the currently synced user source set.
   const missingDependencyIds = Array.from(
     new Set(
@@ -309,9 +325,16 @@ const mergeSnapshots = async (options?: { forceSources?: boolean }): Promise<Par
     ),
   );
 
-  if (missingDependencyIds.length > 0) {
-    const dependencyFetches = await Promise.allSettled(
-      missingDependencyIds.map((id) => fetchChainParticleForStudio(id)),
+  if (includeDependencyExpansion && missingDependencyIds.length > 0) {
+    const dependencyFetches = await runSettledWithConcurrency(
+      missingDependencyIds,
+      DEPENDENCY_FETCH_CONCURRENCY,
+      (id) =>
+        withTimeout(
+          fetchChainParticleForStudio(id),
+          DEPENDENCY_FETCH_TIMEOUT_MS,
+          `dependency ${id}`,
+        ),
     );
 
     for (const result of dependencyFetches) {
@@ -332,14 +355,12 @@ const mergeSnapshots = async (options?: { forceSources?: boolean }): Promise<Par
           name: fetched.particleMeta.name,
           summary: fetched.particleMeta.summary,
           authorId: fetched.particleMeta.authorId,
-          createdAt: Date.now() - particleCounter * 1000,
+          createdAt: Number.isFinite(fetched.particleMeta.createdAt)
+            ? fetched.particleMeta.createdAt
+            : 0,
           createdLabel: "",
           dependencies: [...fetched.particleMeta.dependencies],
-          ...(fetched.particleMeta.formatHash
-            ? { formatHash: fetched.particleMeta.formatHash }
-            : {}),
         };
-        particleCounter += 1;
         mergeParticleRecordIntoStructures(fallbackRecord, nextParticlesById, searchByKind);
       }
     }
@@ -352,61 +373,73 @@ const mergeSnapshots = async (options?: { forceSources?: boolean }): Promise<Par
   });
 
   const connectorEvents = rebuildEventsFromParticles(particles);
-  Array.from(formatRecordsByHash.values()).forEach((formatRecord) => {
-    const authorFromConnector = formatRecord.connectors
-      .map((connectorName) => nextParticlesById.get(connectorName)?.authorId)
-      .find((value): value is string => Boolean(value && value.trim().length > 0));
-    const authorId =
-      formatAuthorByHash.get(formatRecord.formatHash) ??
-      authorFromConnector ??
-      "chain-source-unknown";
-    const formatName = getChainFormatDisplayName(formatRecord.formatHash);
-    const summary = formatRecord.scalars.length
-      ? `Scalars: ${formatRecord.scalars.join(", ")}`
-      : `${formatRecord.connectors.length} connector${formatRecord.connectors.length === 1 ? "" : "s"} in format`;
-
-    searchByKind.formats.set(`format:${formatRecord.formatHash}`, {
-      id: formatRecord.formatHash,
-      label: formatName,
-      summary,
-      authorId,
-    });
-  });
-
-  const runtimeCodeEvents = rebuildRuntimeCodeEvents(
-    Array.from(runtimeCodeRecordsById.values()).sort((a, b) => {
-      const byCreatedAt = b.createdAt - a.createdAt;
-      if (byCreatedAt !== 0) return byCreatedAt;
-      return a.id.localeCompare(b.id);
-    }),
-  );
+  const runtimeCodeEvents = includeRuntimeCode
+    ? rebuildRuntimeCodeEvents(
+        Array.from(runtimeCodeRecordsById.values()).sort((a, b) => {
+          const byCreatedAt = b.createdAt - a.createdAt;
+          if (byCreatedAt !== 0) return byCreatedAt;
+          return a.id.localeCompare(b.id);
+        }),
+      )
+    : [];
   const events = [...connectorEvents, ...runtimeCodeEvents].sort(
     (a, b) => b.createdAt - a.createdAt,
   );
-  const networkEvents = events;
 
   return {
     loaded: true,
     events,
-    networkEvents,
     particlesById: nextParticlesById,
-    formatsByHash: formatRecordsByHash,
     registry: nextRegistry,
     searchable: {
       connectors: Array.from(searchByKind.connectors.values()),
       transformations: Array.from(searchByKind.transformations.values()),
       conditions: Array.from(searchByKind.conditions.values()),
-      formats: Array.from(searchByKind.formats.values()),
     },
   };
 };
 
-export const syncParticlePostDataFromChain = async (options?: { force?: boolean }) => {
-  if (cache.loaded && !options?.force) return cache;
+export const syncParticlePostDataFromChain = async (options?: {
+  force?: boolean;
+  forceSources?: boolean;
+  maxOwnedPerSource?: number;
+  includeRuntimeCode?: boolean;
+  includeDependencyExpansion?: boolean;
+}) => {
+  const requestedIncludesRuntimeCode = options?.includeRuntimeCode !== false;
+  const requestedIncludesDependencyExpansion = options?.includeDependencyExpansion !== false;
+  const requestedMaxOwnedPerSource =
+    typeof options?.maxOwnedPerSource === "number" && Number.isFinite(options.maxOwnedPerSource)
+      ? Math.max(1, Math.trunc(options.maxOwnedPerSource))
+      : null;
+
+  const cacheSatisfiesRequest = (() => {
+    if (!cache.loaded) return false;
+    if (requestedIncludesRuntimeCode && !cachedIncludesRuntimeCode) return false;
+    if (requestedIncludesDependencyExpansion && !cachedIncludesDependencyExpansion) return false;
+    if (requestedMaxOwnedPerSource === null) {
+      return cachedMaxOwnedPerSource === null;
+    }
+    if (cachedMaxOwnedPerSource === null) return true;
+    return cachedMaxOwnedPerSource >= requestedMaxOwnedPerSource;
+  })();
+
+  if (cacheSatisfiesRequest && !options?.force) return cache;
+
   if (!loadPromise || options?.force) {
-    loadPromise = mergeSnapshots({ forceSources: Boolean(options?.force) })
+    loadPromise = mergeSnapshots({
+      forceSources: Boolean(options?.forceSources),
+      includeRuntimeCode: requestedIncludesRuntimeCode,
+      includeDependencyExpansion: requestedIncludesDependencyExpansion,
+      ...(requestedMaxOwnedPerSource !== null
+        ? { maxOwnedPerSource: requestedMaxOwnedPerSource }
+        : {}),
+    })
       .then((next) => {
         cache = next;
+        cachedMaxOwnedPerSource = requestedMaxOwnedPerSource;
+        cachedIncludesRuntimeCode = requestedIncludesRuntimeCode;
+        cachedIncludesDependencyExpansion = requestedIncludesDependencyExpansion;
         terminalSetCache.clear();
         return cache;
       })
@@ -421,13 +454,8 @@ export const syncParticlePostDataFromChain = async (options?: { force?: boolean 
 
 export const listParticlePosts = (): ParticlePostEvent[] => cache.events;
 
-export const listNetworkFeedEvents = (): NetworkFeedEvent[] => cache.networkEvents;
-
 export const listParticlePostsByAuthor = (authorId: string): ParticlePostEvent[] =>
   cache.events.filter((event) => event.authorId === authorId);
-
-export const listNetworkFeedEventsByAuthor = (authorId: string): NetworkFeedEvent[] =>
-  cache.networkEvents.filter((event) => event.authorId === authorId);
 
 export const listParticlePostsReferencingParticle = (particleId: string): ParticlePostEvent[] =>
   cache.events.filter(
@@ -465,7 +493,6 @@ export const ensureParticleRecordLoadedById = async (
       createdAt: fetched.particleMeta.createdAt,
       createdLabel: fetched.particleMeta.createdLabel,
       dependencies: [...fetched.particleMeta.dependencies],
-      ...(fetched.particleMeta.formatHash ? { formatHash: fetched.particleMeta.formatHash } : {}),
     };
     cache.particlesById.set(record.id, record);
     cache.searchable.connectors = [
@@ -486,24 +513,6 @@ export const ensureParticleRecordLoadedById = async (
 
 export const listParticleRecords = (): ParticleRecord[] => Array.from(cache.particlesById.values());
 
-export const getFormatRecordByHash = (formatHash: string): ChainFormatRecord | null =>
-  cache.formatsByHash.get(normalizeFormatHashSafe(formatHash) ?? formatHash) ?? null;
-
-export const listParticleRecordsByFormatHash = (formatHash: string): ParticleRecord[] => {
-  const normalizedTarget = normalizeFormatHashSafe(formatHash);
-  if (!normalizedTarget) return [];
-  return Array.from(cache.particlesById.values())
-    .filter((particle) => {
-      const normalizedParticleHash = normalizeFormatHashSafe(particle.formatHash);
-      return normalizedParticleHash === normalizedTarget;
-    })
-    .sort((a, b) => {
-      const byCreatedAt = b.createdAt - a.createdAt;
-      if (byCreatedAt !== 0) return byCreatedAt;
-      return a.id.localeCompare(b.id);
-    });
-};
-
 export const getParticleLabelMap = (): ReadonlyMap<string, string> =>
   new Map(
     Array.from(cache.particlesById.values()).map(
@@ -521,20 +530,14 @@ export const isParticlePostDataLoaded = () => cache.loaded;
 export const resetParticlePostDataCacheForDebug = () => {
   cache = emptyCache();
   loadPromise = null;
+  cachedMaxOwnedPerSource = null;
+  cachedIncludesRuntimeCode = false;
+  cachedIncludesDependencyExpansion = false;
   terminalSetCache.clear();
 };
 
 const sortUnique = (values: string[]) =>
   Array.from(new Set(values)).sort((a, b) => a.localeCompare(b));
-
-const normalizeFormatHashSafe = (value: string | undefined): string | null => {
-  if (!value) return null;
-  try {
-    return normalizeFormatHash(value);
-  } catch {
-    return null;
-  }
-};
 
 const computeTerminalSet = (particleId: string, seen = new Set<string>()): string[] => {
   if (terminalSetCache.has(particleId)) return terminalSetCache.get(particleId)!;

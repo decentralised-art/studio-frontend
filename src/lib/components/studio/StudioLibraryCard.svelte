@@ -6,6 +6,7 @@
   const {
     item,
     author,
+    inToolbox = false,
     selected = false,
     draggable = false,
     onSelect,
@@ -15,6 +16,7 @@
   }: {
     item: LibraryItem;
     author: User;
+    inToolbox?: boolean;
     selected?: boolean;
     draggable?: boolean;
     onSelect?: (id: LibraryItem["id"]) => void;
@@ -67,7 +69,12 @@
     </div>
 
     <div class="card-actions">
-      <button class="icon-button" type="button" title="Add to toolbox" onclick={handleToolbox}>
+      <button
+        class={`icon-button ${inToolbox ? "is-saved" : ""}`}
+        type="button"
+        title={inToolbox ? "Remove from toolbox" : "Add to toolbox"}
+        onclick={handleToolbox}
+      >
         <svg viewBox="0 0 24 24" aria-hidden="true">
           <path
             d="M19.5 12.572 12 20l-7.5-7.428a4.5 4.5 0 0 1 6.364-6.364L12 7.5l1.136-1.292a4.5 4.5 0 0 1 6.364 6.364Z"
@@ -123,5 +130,9 @@
     fill: none;
     stroke-linecap: round;
     stroke-linejoin: round;
+  }
+
+  .icon-button.is-saved {
+    @apply text-cyan-200 border-cyan-300/50 bg-cyan-500/10;
   }
 </style>

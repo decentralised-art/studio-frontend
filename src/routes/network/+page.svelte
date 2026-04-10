@@ -1,39 +1,109 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { SvelteSet } from "svelte/reactivity";
   import { resolve } from "$app/paths";
   import ParticlePostFeed from "$lib/components/feed/ParticlePostFeed.svelte";
-  import { addParticleToCurrentUserToolbox, getCurrentUserToolboxLibrary } from "$lib/auth/api";
   import {
-    listNetworkFeedEvents,
+    addConnectorToCurrentUserToolbox,
+    followUserInProfile,
+    getCurrentUserSocialPreferences,
+    getCurrentUserToolboxLibrary,
+  } from "$lib/auth/api";
+  import {
+    findParticlesByTerminalSet,
+    getParticleLabelMap,
+    isParticlePostDataLoaded,
+    listParticlePosts,
     listParticleSearchEntities,
     syncParticlePostDataFromChain,
     type NetworkFeedEvent,
+    type ParticlePostEvent,
   } from "$lib/feed/particlePostData";
-  import { getChainFormatDisplayName } from "$lib/formats/chainFormats";
+  import {
+    buildFormatFeedEvents,
+    loadLocalFormats,
+    type ParticleFormat,
+  } from "$lib/formats/localFormats";
   import Button from "$lib/components/ui/Button.svelte";
   import Input from "$lib/components/ui/Input.svelte";
   import { networkNodeStudioKind } from "$lib/network/mockNetworkGraph";
   import {
     displayUsersById,
     mockCurrentUserId,
-    mockFollowingByUserId,
     mockUsers,
     mockUsersById,
     type User,
   } from "$lib/data/users";
 
+  const FEED_PAGE_SIZE = 10;
+  const CHAIN_SOURCE_LIMIT_STEP = 5;
+  const CHAIN_SOURCE_LIMIT_MAX = 256;
+
   let followSearch = $state("");
+  let feedEvents = $state<ParticlePostEvent[]>([]);
   let feedLoading = $state(true);
-  let networkFeedEvents = $state<NetworkFeedEvent[]>([]);
+  let feedLoadMoreBusy = $state(false);
+  let profileLoading = $state(true);
+  let formats = $state<ParticleFormat[]>([]);
   let chainElements = $state(listParticleSearchEntities());
-  let localFollowing = $state<User["id"][]>([...(mockFollowingByUserId[mockCurrentUserId] ?? [])]);
+  let visibleEventCount = $state(FEED_PAGE_SIZE);
+  let sourceSyncLimit = $state(CHAIN_SOURCE_LIMIT_STEP);
+  let canFetchMoreFromChain = $state(true);
+  let runtimeSearchHydrationBusy = $state(false);
+  let runtimeSearchHydrated = $state(false);
+  let localFollowing = $state<string[]>([]);
+  let localFollowedFormats = $state<string[]>([]);
   let localToolboxParticles = $state<string[]>([
     ...(mockUsersById[mockCurrentUserId]?.toolbox ?? []),
   ]);
 
-  const followedAuthorIds = $derived.by(() => new Set(localFollowing));
-  const toolboxParticleIds = $derived.by(() => new Set(localToolboxParticles));
+  const followedAuthorIds = $derived.by(() => new SvelteSet(localFollowing));
+  const followedFormatKeys = $derived.by(() => new SvelteSet(localFollowedFormats));
+  const toolboxParticleIds = $derived.by(() => new SvelteSet(localToolboxParticles));
+  const feedUiLoading = $derived.by(() => feedLoading || profileLoading);
   const searchQuery = $derived.by(() => followSearch.trim().toLowerCase());
+  const formatFeedEvents = $derived.by(() => buildFormatFeedEvents(formats, getParticleLabelMap()));
+  const followedFormatParticleIds = $derived.by(() => {
+    const selectedFormats = formatFeedEvents.filter(
+      (event) =>
+        followedFormatKeys.has(event.formatId) ||
+        followedFormatKeys.has(event.formatSlug) ||
+        followedFormatKeys.has(event.formatName),
+    );
+    const ids = new SvelteSet<string>();
+    selectedFormats.forEach((event) => {
+      event.terminalParticleIds.forEach((id) => ids.add(id));
+      findParticlesByTerminalSet(event.terminalParticleIds).forEach((particle) => {
+        ids.add(particle.id);
+      });
+    });
+    return ids;
+  });
+  const networkFeedEvents = $derived.by(() =>
+    ([...feedEvents, ...formatFeedEvents] as NetworkFeedEvent[])
+      .filter((event) => {
+        if (event.type === "format") {
+          return (
+            followedAuthorIds.has(event.authorId) ||
+            followedFormatKeys.has(event.formatId) ||
+            followedFormatKeys.has(event.formatSlug) ||
+            followedFormatKeys.has(event.formatName)
+          );
+        }
+        if (event.type === "connector") {
+          return (
+            followedAuthorIds.has(event.authorId) || followedFormatParticleIds.has(event.particleId)
+          );
+        }
+        return followedAuthorIds.has(event.authorId);
+      })
+      .sort((a, b) => b.createdAt - a.createdAt),
+  );
+  const visibleNetworkFeedEvents = $derived.by(() =>
+    networkFeedEvents.slice(0, Math.max(0, visibleEventCount)),
+  );
+  const hasMoreVisibleEvents = $derived.by(() => networkFeedEvents.length > visibleEventCount);
+  const canLoadMoreEvents = $derived.by(() => hasMoreVisibleEvents || canFetchMoreFromChain);
 
   const userSearchResults = $derived.by(() => {
     if (!searchQuery) return [] as User[];
@@ -47,7 +117,7 @@
       .slice(0, 6);
   });
 
-  type SearchableEntityKind = "connector" | "transformation" | "condition" | "format";
+  type SearchableEntityKind = "connector" | "transformation" | "condition";
 
   type EntitySearchResult = {
     id: string;
@@ -68,7 +138,6 @@
           kind: "transformation" as const,
         })),
         ...chainElements.conditions.map((item) => ({ ...item, kind: "condition" as const })),
-        ...chainElements.formats.map((item) => ({ ...item, kind: "format" as const })),
       ] as Array<
         { kind: SearchableEntityKind } & {
           id: string;
@@ -83,7 +152,7 @@
       )
       .map((item) => ({
         id: `${item.kind}:${item.id}`,
-        label: item.kind === "format" ? getChainFormatDisplayName(item.id) : item.label,
+        label: item.label,
         kind: item.kind,
         entityId: item.id,
         summary: item.summary,
@@ -95,17 +164,114 @@
   const showSearchResults = $derived.by(() => searchQuery.length > 0);
 
   const loadChainFeed = async () => {
-    feedLoading = true;
+    const hasCachedData = isParticlePostDataLoaded();
+    if (hasCachedData) {
+      feedEvents = listParticlePosts();
+      chainElements = listParticleSearchEntities();
+      feedLoading = false;
+    } else {
+      feedLoading = true;
+    }
+
     try {
-      await syncParticlePostDataFromChain({ force: true });
+      await syncParticlePostDataFromChain({
+        force: !hasCachedData,
+        maxOwnedPerSource: sourceSyncLimit,
+        includeRuntimeCode: false,
+        includeDependencyExpansion: false,
+      });
     } catch (error) {
       console.error("[Network feed] Failed to sync chain-backed particle posts.", error);
     } finally {
-      networkFeedEvents = listNetworkFeedEvents();
+      feedEvents = listParticlePosts();
       chainElements = listParticleSearchEntities();
       feedLoading = false;
     }
+
+    if (hasCachedData) {
+      void syncParticlePostDataFromChain({
+        force: true,
+        maxOwnedPerSource: sourceSyncLimit,
+        includeRuntimeCode: false,
+        includeDependencyExpansion: false,
+      })
+        .then(() => {
+          feedEvents = listParticlePosts();
+          chainElements = listParticleSearchEntities();
+        })
+        .catch((error) => {
+          console.warn("[Network feed] Background refresh failed.", error);
+        });
+    }
   };
+
+  const loadMoreFeedEvents = async () => {
+    if (feedLoadMoreBusy) return;
+
+    if (hasMoreVisibleEvents) {
+      visibleEventCount += FEED_PAGE_SIZE;
+      return;
+    }
+
+    if (!canFetchMoreFromChain) return;
+
+    const beforeCount = listParticlePosts().length;
+    const nextLimit = Math.min(CHAIN_SOURCE_LIMIT_MAX, sourceSyncLimit + CHAIN_SOURCE_LIMIT_STEP);
+    if (nextLimit <= sourceSyncLimit) {
+      canFetchMoreFromChain = false;
+      return;
+    }
+
+    feedLoadMoreBusy = true;
+    sourceSyncLimit = nextLimit;
+    try {
+      await syncParticlePostDataFromChain({
+        force: true,
+        maxOwnedPerSource: sourceSyncLimit,
+        includeRuntimeCode: false,
+        includeDependencyExpansion: false,
+      });
+      const afterCount = listParticlePosts().length;
+      feedEvents = listParticlePosts();
+      chainElements = listParticleSearchEntities();
+      visibleEventCount += FEED_PAGE_SIZE;
+
+      if (afterCount <= beforeCount) {
+        canFetchMoreFromChain = false;
+      }
+    } catch (error) {
+      console.error("[Network feed] Failed to load more events.", error);
+    } finally {
+      feedLoadMoreBusy = false;
+    }
+  };
+
+  $effect(() => {
+    if (runtimeSearchHydrated || runtimeSearchHydrationBusy) return;
+    if (searchQuery.length === 0) return;
+    if (chainElements.transformations.length > 0 || chainElements.conditions.length > 0) {
+      runtimeSearchHydrated = true;
+      return;
+    }
+
+    runtimeSearchHydrationBusy = true;
+    void syncParticlePostDataFromChain({
+      force: true,
+      maxOwnedPerSource: sourceSyncLimit,
+      includeRuntimeCode: true,
+    })
+      .then(() => {
+        feedEvents = listParticlePosts();
+        chainElements = listParticleSearchEntities();
+        runtimeSearchHydrated = true;
+      })
+      .catch((error) => {
+        console.warn("[Network feed] Runtime code hydration failed.", error);
+      })
+      .finally(() => {
+        runtimeSearchHydrationBusy = false;
+      });
+  });
 
   const openConnectorInStudio = (connectorId: string) => {
     if (!connectorId) return;
@@ -128,15 +294,16 @@
     window.open(target.toString(), "_blank", "noopener,noreferrer");
   };
 
-  const openFormatPage = (formatHash: string) => {
-    if (!formatHash) return;
-    const target = new URL(resolve("/f/[slug]", { slug: formatHash }), window.location.origin);
-    window.open(target.toString(), "_blank", "noopener,noreferrer");
-  };
-
-  const followUser = (userId: User["id"]) => {
+  const followUser = async (userId: User["id"]) => {
     if (localFollowing.includes(userId)) return;
+    const previous = [...localFollowing];
     localFollowing = [...localFollowing, userId];
+    try {
+      await followUserInProfile(userId);
+    } catch (error) {
+      console.error("[Network feed] Failed to persist following state.", error);
+      localFollowing = previous;
+    }
   };
 
   const addParticleToToolbox = (particleId: string) => {
@@ -147,19 +314,41 @@
     if (currentUser && !currentUser.toolbox.includes(particleId)) {
       currentUser.toolbox = [...currentUser.toolbox, particleId];
     }
-    void addParticleToCurrentUserToolbox(particleId).catch((error) => {
+    void addConnectorToCurrentUserToolbox(particleId).catch((error) => {
       console.error("[Network feed] Failed to persist toolbox update.", error);
       localToolboxParticles = previous;
     });
   };
 
   onMount(() => {
-    void getCurrentUserToolboxLibrary()
-      .then((toolbox) => {
-        localToolboxParticles = [...toolbox.particles];
+    formats = loadLocalFormats();
+    void Promise.allSettled([
+      getCurrentUserToolboxLibrary(),
+      getCurrentUserSocialPreferences({ bootstrapPrototypeIfEmpty: true }),
+    ])
+      .then((results) => {
+        const [toolboxResult, socialResult] = results;
+
+        if (toolboxResult.status === "fulfilled") {
+          localToolboxParticles = [...toolboxResult.value.connector];
+        } else {
+          console.warn(
+            "[Network feed] Failed to load toolbox preferences from profile.",
+            toolboxResult.reason,
+          );
+        }
+
+        if (socialResult.status === "fulfilled") {
+          localFollowing = [...socialResult.value.followedUserIds];
+          localFollowedFormats = [...socialResult.value.followedFormatIds];
+        } else {
+          console.warn("[Network feed] Failed to load social preferences.", socialResult.reason);
+          localFollowing = Object.keys(displayUsersById).filter((id) => id !== mockCurrentUserId);
+          localFollowedFormats = [];
+        }
       })
-      .catch((error) => {
-        console.warn("[Network feed] Failed to load toolbox from profile.", error);
+      .finally(() => {
+        profileLoading = false;
       });
     void loadChainFeed();
   });
@@ -172,7 +361,7 @@
         <div class="follow-search-field">
           <Input
             label=""
-            placeholder="Search users, connectors, format hashes, transformations, conditions"
+            placeholder="Search users, connectors, transformations, conditions"
             value={followSearch}
             oninput={(event) => {
               followSearch = event.currentTarget.value;
@@ -204,7 +393,9 @@
                   {:else}
                     <Button
                       variant="ghost"
-                      onclick={() => followUser(user.id)}
+                      onclick={() => {
+                        void followUser(user.id);
+                      }}
                       className="follow-btn"
                     >
                       Follow
@@ -239,14 +430,6 @@
                     >
                       Open
                     </Button>
-                  {:else if item.kind === "format"}
-                    <Button
-                      variant="ghost"
-                      onclick={() => openFormatPage(item.entityId)}
-                      className="follow-btn"
-                    >
-                      Open
-                    </Button>
                   {:else}
                     <Button
                       variant="ghost"
@@ -270,8 +453,11 @@
   </div>
 
   <ParticlePostFeed
-    loading={feedLoading}
-    events={networkFeedEvents}
+    loading={feedUiLoading}
+    loadingMore={feedLoadMoreBusy}
+    hasMore={canLoadMoreEvents}
+    events={visibleNetworkFeedEvents}
+    onLoadMore={loadMoreFeedEvents}
     onParticleOpen={openConnectorInStudio}
     onAddToToolbox={addParticleToToolbox}
     {toolboxParticleIds}

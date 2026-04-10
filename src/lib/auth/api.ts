@@ -620,12 +620,17 @@ export const updateUserById = async (
   return payload;
 };
 
-type ToolboxLibraryProfile = {
-  particles: string[];
-  feature: string[];
+export type ToolboxLibraryProfile = {
+  connector: string[];
   transformation: string[];
   condition: string[];
-  plugin: string[];
+};
+
+export type ToolboxItemKind = keyof ToolboxLibraryProfile;
+
+export type SocialPreferencesProfile = {
+  followedUserIds: string[];
+  followedFormatIds: string[];
 };
 
 const asRecord = (value: unknown): Record<string, unknown> =>
@@ -639,26 +644,101 @@ const asStringArray = (value: unknown): string[] =>
 const uniqueStrings = (values: string[]) =>
   Array.from(new Set(values.map((v) => v.trim()).filter(Boolean)));
 
+const normalizeConnectorToolboxId = (value: string) =>
+  value
+    .trim()
+    .replace(/^particle-/, "")
+    .replace(/^feature-/, "");
+
 const defaultToolboxLibrary = (): ToolboxLibraryProfile => ({
-  particles: [],
-  feature: [],
+  connector: [],
   transformation: [],
   condition: [],
-  plugin: [],
 });
+
+const defaultSocialPreferences = (): SocialPreferencesProfile => ({
+  followedUserIds: [],
+  followedFormatIds: [],
+});
+
+const deriveMockUserIdFromRecord = (userRecordRaw: unknown): string | null => {
+  const userRecord = asRecord(userRecordRaw);
+
+  const id = typeof userRecord.id === "string" ? userRecord.id.trim() : "";
+  if (id && mockUsers.some((entry) => entry.id === id)) return id;
+
+  const email = typeof userRecord.email === "string" ? userRecord.email.trim().toLowerCase() : "";
+  if (email.endsWith("@mock.decentralised.art")) {
+    const candidate = email.replace(/@mock\.decentralised\.art$/i, "");
+    if (mockUsers.some((entry) => entry.id === candidate)) return candidate;
+  }
+
+  const displayName =
+    typeof userRecord.display_name === "string"
+      ? userRecord.display_name.trim()
+      : typeof userRecord.displayName === "string"
+        ? userRecord.displayName.trim()
+        : "";
+  if (displayName) {
+    const matched = mockUsers.find((entry) => entry.nickname === displayName);
+    if (matched) return matched.id;
+  }
+
+  return null;
+};
+
+const resolveSocialUserIdFromRecord = (userRecordRaw: unknown): string => {
+  const userRecord = asRecord(userRecordRaw);
+  const alias = deriveMockUserIdFromRecord(userRecord);
+  if (alias) return alias;
+  const id = typeof userRecord.id === "string" ? userRecord.id.trim() : "";
+  return id;
+};
 
 const parseToolboxLibraryFromProfileJson = (profileJsonRaw: unknown): ToolboxLibraryProfile => {
   const profileJson = asRecord(profileJsonRaw);
   const profilePublic = asRecord(profileJson.public ?? profileJson.profile ?? profileJson);
   const toolboxLibrary = asRecord(profilePublic.toolbox_library ?? profilePublic.toolboxLibrary);
-  const legacyParticles = asStringArray(profilePublic.toolbox);
+  const legacyConnectors = asStringArray(profilePublic.toolbox);
 
   return {
-    particles: uniqueStrings([...asStringArray(toolboxLibrary.particles), ...legacyParticles]),
-    feature: uniqueStrings(asStringArray(toolboxLibrary.feature)),
+    connector: uniqueStrings(
+      [
+        ...asStringArray(toolboxLibrary.connector),
+        ...asStringArray(toolboxLibrary.feature),
+        ...legacyConnectors,
+      ]
+        .map(normalizeConnectorToolboxId)
+        .filter((value) => value.length > 0),
+    ),
     transformation: uniqueStrings(asStringArray(toolboxLibrary.transformation)),
     condition: uniqueStrings(asStringArray(toolboxLibrary.condition)),
-    plugin: uniqueStrings(asStringArray(toolboxLibrary.plugin)),
+  };
+};
+
+const parseSocialPreferencesFromProfileJson = (
+  profileJsonRaw: unknown,
+): SocialPreferencesProfile => {
+  const profileJson = asRecord(profileJsonRaw);
+  const profilePublic = asRecord(profileJson.public ?? profileJson.profile ?? profileJson);
+  const social = asRecord(profilePublic.social_preferences ?? profilePublic.socialPreferences);
+
+  return {
+    followedUserIds: uniqueStrings([
+      ...asStringArray(social.followed_user_ids),
+      ...asStringArray(social.followedUserIds),
+      ...asStringArray(profilePublic.followed_user_ids),
+      ...asStringArray(profilePublic.followedUserIds),
+      ...asStringArray(profilePublic.following_users),
+    ]),
+    followedFormatIds: uniqueStrings([
+      ...asStringArray(social.followed_format_ids),
+      ...asStringArray(social.followedFormatIds),
+      ...asStringArray(social.followed_format_hashes),
+      ...asStringArray(profilePublic.followed_format_ids),
+      ...asStringArray(profilePublic.followedFormatIds),
+      ...asStringArray(profilePublic.followed_format_hashes),
+    ]),
   };
 };
 
@@ -690,13 +770,40 @@ const mergeToolboxIntoProfileJson = (
     ...existingProfileJson,
     public: {
       ...profilePublic,
-      toolbox: [...toolboxLibrary.particles],
+      toolbox: [...toolboxLibrary.connector],
       toolbox_library: {
-        particles: [...toolboxLibrary.particles],
-        feature: [...toolboxLibrary.feature],
+        connector: [...toolboxLibrary.connector],
         transformation: [...toolboxLibrary.transformation],
         condition: [...toolboxLibrary.condition],
-        plugin: [...toolboxLibrary.plugin],
+      },
+    },
+  };
+};
+
+const mergeSocialPreferencesIntoProfileJson = (
+  existingProfileJsonRaw: unknown,
+  socialPreferences: SocialPreferencesProfile,
+): Record<string, unknown> => {
+  const existingProfileJson = asRecord(existingProfileJsonRaw);
+  const profilePublic = asRecord(
+    existingProfileJson.public ?? existingProfileJson.profile ?? existingProfileJson,
+  );
+  const existingSocial = asRecord(
+    profilePublic.social_preferences ?? profilePublic.socialPreferences,
+  );
+
+  return {
+    ...existingProfileJson,
+    public: {
+      ...profilePublic,
+      followed_user_ids: [...socialPreferences.followedUserIds],
+      followed_format_ids: [...socialPreferences.followedFormatIds],
+      followed_format_hashes: [...socialPreferences.followedFormatIds],
+      social_preferences: {
+        ...existingSocial,
+        followed_user_ids: [...socialPreferences.followedUserIds],
+        followed_format_ids: [...socialPreferences.followedFormatIds],
+        followed_format_hashes: [...socialPreferences.followedFormatIds],
       },
     },
   };
@@ -721,26 +828,204 @@ export const saveCurrentUserToolboxLibrary = async (
   }
 
   const normalized: ToolboxLibraryProfile = {
-    particles: uniqueStrings(toolboxLibrary.particles),
-    feature: uniqueStrings(toolboxLibrary.feature),
+    connector: uniqueStrings(toolboxLibrary.connector),
     transformation: uniqueStrings(toolboxLibrary.transformation),
     condition: uniqueStrings(toolboxLibrary.condition),
-    plugin: uniqueStrings(toolboxLibrary.plugin),
   };
 
   const nextProfileJson = mergeToolboxIntoProfileJson(envelope.profileJson, normalized);
   await updateUserById(envelope.userId, { profile_json: nextProfileJson });
 };
 
-export const addParticleToCurrentUserToolbox = async (particleId: string): Promise<void> => {
+export const addItemToCurrentUserToolbox = async (
+  kind: ToolboxItemKind,
+  itemId: string,
+): Promise<void> => {
+  const normalizedId = itemId.trim();
+  if (!normalizedId) return;
   const toolbox = await getCurrentUserToolboxLibrary();
-  if (toolbox.particles.includes(particleId)) return;
+  if (toolbox[kind].includes(normalizedId)) return;
   await saveCurrentUserToolboxLibrary({
     ...toolbox,
-    particles: [...toolbox.particles, particleId],
+    [kind]: [...toolbox[kind], normalizedId],
   });
 };
 
+export const addConnectorToCurrentUserToolbox = async (connectorId: string): Promise<void> =>
+  addItemToCurrentUserToolbox("connector", normalizeConnectorToolboxId(connectorId));
+
+export const addTransformationToCurrentUserToolbox = async (
+  transformationId: string,
+): Promise<void> => addItemToCurrentUserToolbox("transformation", transformationId);
+
+export const addConditionToCurrentUserToolbox = async (conditionId: string): Promise<void> =>
+  addItemToCurrentUserToolbox("condition", conditionId);
+
+// Backward-compatible alias used by legacy call sites; "particle" IDs are connector IDs.
+export const addParticleToCurrentUserToolbox = async (particleId: string): Promise<void> =>
+  addConnectorToCurrentUserToolbox(particleId);
+
+const getPrototypeDefaultFollowedUserIds = async (
+  currentSocialUserId: string,
+): Promise<string[]> => {
+  const followed = new Set<string>();
+
+  mockUsers.forEach((entry) => {
+    if (entry.id !== currentSocialUserId) followed.add(entry.id);
+  });
+  extraChainSourceProfiles.forEach((entry) => {
+    if (entry.id !== currentSocialUserId) followed.add(entry.id);
+  });
+
+  try {
+    const users = await listServicesUsers();
+    users.forEach((entry) => {
+      const rawId = typeof entry.id === "string" ? entry.id.trim() : "";
+      if (rawId && rawId !== currentSocialUserId) followed.add(rawId);
+      const socialId = resolveSocialUserIdFromRecord(entry);
+      if (socialId && socialId !== currentSocialUserId) followed.add(socialId);
+    });
+  } catch (error) {
+    console.warn("[Auth] Failed to load services users for prototype follow bootstrap.", error);
+  }
+
+  return uniqueStrings(Array.from(followed));
+};
+
+export const getCurrentUserSocialPreferences = async (options?: {
+  bootstrapPrototypeIfEmpty?: boolean;
+}): Promise<SocialPreferencesProfile> => {
+  const me = await getMe();
+  const envelope = extractUserEnvelope(me);
+  if (!envelope) {
+    return defaultSocialPreferences();
+  }
+
+  const socialUserId = resolveSocialUserIdFromRecord(envelope.rootUser) || envelope.userId;
+  let preferences = parseSocialPreferencesFromProfileJson(envelope.profileJson);
+  if (options?.bootstrapPrototypeIfEmpty && preferences.followedUserIds.length === 0) {
+    const defaults = await getPrototypeDefaultFollowedUserIds(socialUserId);
+    if (defaults.length > 0) {
+      preferences = {
+        ...preferences,
+        followedUserIds: defaults,
+      };
+      try {
+        const nextProfileJson = mergeSocialPreferencesIntoProfileJson(
+          envelope.profileJson,
+          preferences,
+        );
+        await updateUserById(envelope.userId, { profile_json: nextProfileJson });
+      } catch (error) {
+        console.warn("[Auth] Failed to persist prototype follow bootstrap.", error);
+      }
+    }
+  }
+
+  return preferences;
+};
+
+export const saveCurrentUserSocialPreferences = async (
+  preferences: SocialPreferencesProfile,
+): Promise<void> => {
+  const me = await getMe();
+  const envelope = extractUserEnvelope(me);
+  if (!envelope) {
+    throw new Error("Unable to resolve current user for social preferences save.");
+  }
+
+  const normalized: SocialPreferencesProfile = {
+    followedUserIds: uniqueStrings(preferences.followedUserIds),
+    followedFormatIds: uniqueStrings(preferences.followedFormatIds),
+  };
+
+  const nextProfileJson = mergeSocialPreferencesIntoProfileJson(envelope.profileJson, normalized);
+  await updateUserById(envelope.userId, { profile_json: nextProfileJson });
+};
+
+export const followUserInProfile = async (userId: string): Promise<void> => {
+  const normalizedId = userId.trim();
+  if (!normalizedId) return;
+  const preferences = await getCurrentUserSocialPreferences();
+  if (preferences.followedUserIds.includes(normalizedId)) return;
+  await saveCurrentUserSocialPreferences({
+    ...preferences,
+    followedUserIds: [...preferences.followedUserIds, normalizedId],
+  });
+};
+
+export const unfollowUserInProfile = async (userId: string): Promise<void> => {
+  const normalizedId = userId.trim();
+  if (!normalizedId) return;
+  const preferences = await getCurrentUserSocialPreferences();
+  if (!preferences.followedUserIds.includes(normalizedId)) return;
+  await saveCurrentUserSocialPreferences({
+    ...preferences,
+    followedUserIds: preferences.followedUserIds.filter((id) => id !== normalizedId),
+  });
+};
+
+export const followFormatInProfile = async (formatIdOrSlug: string): Promise<void> => {
+  const normalizedId = formatIdOrSlug.trim();
+  if (!normalizedId) return;
+  const preferences = await getCurrentUserSocialPreferences();
+  if (preferences.followedFormatIds.includes(normalizedId)) return;
+  await saveCurrentUserSocialPreferences({
+    ...preferences,
+    followedFormatIds: [...preferences.followedFormatIds, normalizedId],
+  });
+};
+
+export const unfollowFormatInProfile = async (formatIdOrSlug: string): Promise<void> => {
+  const normalizedId = formatIdOrSlug.trim();
+  if (!normalizedId) return;
+  const preferences = await getCurrentUserSocialPreferences();
+  if (!preferences.followedFormatIds.includes(normalizedId)) return;
+  await saveCurrentUserSocialPreferences({
+    ...preferences,
+    followedFormatIds: preferences.followedFormatIds.filter((id) => id !== normalizedId),
+  });
+};
+
+export const getUserSocialConnections = async (
+  targetUserId: string,
+): Promise<{ followingIds: string[]; followerIds: string[] }> => {
+  const normalizedTarget = targetUserId.trim();
+  if (!normalizedTarget) return { followingIds: [], followerIds: [] };
+
+  const users = await listServicesUsers();
+  const graph = users.map((entry) => {
+    const rawId = typeof entry.id === "string" ? entry.id.trim() : "";
+    const socialId = resolveSocialUserIdFromRecord(entry);
+    const profileJson = entry.profile_json;
+    const preferences = parseSocialPreferencesFromProfileJson(profileJson);
+    return {
+      rawId,
+      socialId,
+      followedUserIds: preferences.followedUserIds,
+    };
+  });
+
+  const targetEntry =
+    graph.find((entry) => entry.socialId === normalizedTarget) ??
+    graph.find((entry) => entry.rawId === normalizedTarget);
+
+  if (!targetEntry) return { followingIds: [], followerIds: [] };
+
+  const targetAliases = new Set([targetEntry.socialId, targetEntry.rawId, normalizedTarget]);
+  const followerIds = graph
+    .filter((entry) => entry.socialId && entry.socialId !== targetEntry.socialId)
+    .filter((entry) => entry.followedUserIds.some((followed) => targetAliases.has(followed)))
+    .map((entry) => entry.socialId || entry.rawId)
+    .filter((id): id is string => Boolean(id));
+
+  return {
+    followingIds: uniqueStrings(targetEntry.followedUserIds),
+    followerIds: uniqueStrings(followerIds),
+  };
+};
+
+// Kept for compatibility with existing non-profile follow integrations.
 export const getFollowingIds = async (): Promise<string[]> => {
   const response = await authFetch("/social/following");
   const payload = await parseResponseBody(response);

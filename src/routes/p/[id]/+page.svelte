@@ -15,7 +15,7 @@
   import SocialParticleDependencyFlow from "$lib/components/social/SocialParticleDependencyFlow.svelte";
   import Button from "$lib/components/ui/Button.svelte";
   import SectionShell from "$lib/components/ui/SectionShell.svelte";
-  import { addParticleToCurrentUserToolbox, getCurrentUserToolboxLibrary } from "$lib/auth/api";
+  import { addConnectorToCurrentUserToolbox, getCurrentUserToolboxLibrary } from "$lib/auth/api";
   import { displayUsersById, mockCurrentUserId, mockUsersById } from "$lib/data/users";
   import { getChainFormatDisplayName } from "$lib/formats/chainFormats";
   import { networkNodeStudioKind } from "$lib/network/mockNetworkGraph";
@@ -52,7 +52,7 @@
     if (currentUser && !currentUser.toolbox.includes(targetParticleId)) {
       currentUser.toolbox = [...currentUser.toolbox, targetParticleId];
     }
-    void addParticleToCurrentUserToolbox(targetParticleId).catch((err) => {
+    void addConnectorToCurrentUserToolbox(targetParticleId).catch((err) => {
       console.error("[Particle page] Failed to persist toolbox update.", err);
       localToolboxParticles = previous;
     });
@@ -75,7 +75,7 @@
   onMount(() => {
     void getCurrentUserToolboxLibrary()
       .then((toolbox) => {
-        localToolboxParticles = [...toolbox.particles];
+        localToolboxParticles = [...toolbox.connector];
       })
       .catch((error) => {
         console.warn("[Particle page] Failed to load toolbox from profile.", error);

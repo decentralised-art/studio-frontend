@@ -15,17 +15,15 @@
   <div class="header">
     <div class="header-text">
       <p class="title">Toolbox</p>
-      <p class="subtitle">
-        Stored particles tied to {user.nickname}'s address.
-      </p>
+      <p class="subtitle">Stored connectors tied to {user.nickname}'s address.</p>
     </div>
 
-    <Tag variant="outline">{user.toolbox.length} particles</Tag>
+    <Tag variant="outline">{user.toolbox.length} connectors</Tag>
   </div>
 
   <div class="content">
     {#if toolboxParticles.length === 0}
-      <Tag variant="outline">No saved particles yet</Tag>
+      <Tag variant="outline">No saved connectors yet</Tag>
     {:else}
       {#each toolboxParticles as particle (particle.id)}
         <Tag variant="outline">{particle.name}</Tag>
