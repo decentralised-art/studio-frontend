@@ -536,20 +536,8 @@
     @apply text-[0.62rem] uppercase tracking-[0.14em] text-white/45;
   }
 
-  .follow-btn {
-    @apply text-xs px-2.5 py-1.5;
-  }
-
   .candidate-state {
     @apply text-[0.62rem] uppercase tracking-[0.14em] text-white/45 px-1;
-  }
-
-  .candidate-link-btn {
-    @apply text-xs px-2.5 py-1.5 rounded-lg border border-white/10 bg-white/5 text-white/75 no-underline transition;
-  }
-
-  .candidate-link-btn:hover {
-    @apply border-white/25 text-white bg-white/10;
   }
 
   .search-empty {

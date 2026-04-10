@@ -377,14 +377,13 @@ const uniqueStrings = (values: string[]) => Array.from(new Set(values.filter(Boo
 
 export const fetchChainOwnedStudioSnapshot = async (
   address: string,
-  options: { authorId: string; limit?: number; page?: number; includeRuntimeCode?: boolean } = {
+  options: { authorId: string; limit?: number; includeRuntimeCode?: boolean } = {
     authorId: "user-lyra",
     includeRuntimeCode: true,
   },
 ): Promise<ChainStudioSyncResult> => {
   const account = await getChainAccount(address, {
     limit: options.limit ?? 200,
-    page: options.page ?? 0,
   });
 
   const ownedConnectors = uniqueStrings(account.owned_connectors ?? []);

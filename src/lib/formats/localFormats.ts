@@ -9,6 +9,19 @@ export type ParticleFormat = {
   createdAt: number;
 };
 
+export type FormatFeedEvent = {
+  type: "format";
+  id: string;
+  authorId: string;
+  createdAt: number;
+  createdLabel: string;
+  formatId: string;
+  formatSlug: string;
+  formatName: string;
+  terminalParticleIds: string[];
+  terminalParticleLabels: string[];
+};
+
 const STORAGE_KEY = "hypermusic_particle_formats_v1";
 
 const slugify = (value: string) =>
@@ -59,6 +72,15 @@ export const loadLocalFormats = (): ParticleFormat[] => {
   );
 };
 
+export const getLocalFormatBySlug = (
+  slug: string,
+  formats: ParticleFormat[] = loadLocalFormats(),
+): ParticleFormat | null => {
+  const normalized = slug.trim().toLowerCase();
+  if (!normalized) return null;
+  return formats.find((format) => format.slug.trim().toLowerCase() === normalized) ?? null;
+};
+
 export const saveLocalFormats = (formats: ParticleFormat[]) => {
   if (!browser) return;
   window.localStorage.setItem(STORAGE_KEY, JSON.stringify(formats));
@@ -99,3 +121,31 @@ export const createLocalFormat = (input: {
   saveLocalFormats(nextFormats);
   return { formats: nextFormats, created };
 };
+
+export const buildFormatFeedEvents = (
+  formats: ParticleFormat[],
+  particleLabelMap: ReadonlyMap<string, string> = new Map(),
+): FormatFeedEvent[] =>
+  formats
+    .map(
+      (format) =>
+        ({
+          type: "format",
+          id: `event-format-created-${format.id}`,
+          authorId: format.authorId,
+          createdAt: format.createdAt,
+          createdLabel: "",
+          formatId: format.id,
+          formatSlug: format.slug,
+          formatName: format.name,
+          terminalParticleIds: [...format.terminalParticleIds],
+          terminalParticleLabels: format.terminalParticleIds.map(
+            (id) => particleLabelMap.get(id) ?? id,
+          ),
+        }) satisfies FormatFeedEvent,
+    )
+    .sort((a, b) => {
+      const byCreatedAt = b.createdAt - a.createdAt;
+      if (byCreatedAt !== 0) return byCreatedAt;
+      return a.id.localeCompare(b.id);
+    });

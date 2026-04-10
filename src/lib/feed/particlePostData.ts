@@ -17,6 +17,7 @@ export type ConnectorPostEvent = {
   createdLabel: string;
   particleId: string;
   particleLabel: string;
+  formatHash?: string;
   usedParticleIds: string[];
   usedParticleLabels: string[];
   createdNodeIds: string[];
@@ -133,20 +134,24 @@ const runSettledWithConcurrency = async <T, R>(
 const rebuildEventsFromParticles = (particles: ParticleRecord[]): ConnectorPostEvent[] => {
   const labelById = new Map(particles.map((particle) => [particle.id, particle.name] as const));
   return particles
-    .map((particle) => ({
-      type: "connector",
-      id: `event-particle-created-${particle.id}`,
-      authorId: particle.authorId,
-      createdAt: particle.createdAt,
-      createdLabel: particle.createdLabel,
-      particleId: particle.id,
-      particleLabel: particle.name,
-      usedParticleIds: [...particle.dependencies],
-      usedParticleLabels: particle.dependencies.map((id) => labelById.get(id) ?? id),
-      createdNodeIds: [],
-      reusedNodeIds: [],
-      focusNodeIds: [],
-    }))
+    .map(
+      (particle) =>
+        ({
+          type: "connector",
+          id: `event-particle-created-${particle.id}`,
+          authorId: particle.authorId,
+          createdAt: particle.createdAt,
+          createdLabel: particle.createdLabel,
+          particleId: particle.id,
+          particleLabel: particle.name,
+          ...(particle.formatHash ? { formatHash: particle.formatHash } : {}),
+          usedParticleIds: [...particle.dependencies],
+          usedParticleLabels: particle.dependencies.map((id) => labelById.get(id) ?? id),
+          createdNodeIds: [],
+          reusedNodeIds: [],
+          focusNodeIds: [],
+        }) satisfies ConnectorPostEvent,
+    )
     .sort((a, b) => {
       const byCreatedAt = b.createdAt - a.createdAt;
       if (byCreatedAt !== 0) return byCreatedAt;
@@ -475,8 +480,13 @@ export const syncParticlePostDataFromChain = async (options?: {
 
 export const listParticlePosts = (): ParticlePostEvent[] => cache.events;
 
+export const listNetworkFeedEvents = (): NetworkFeedEvent[] => cache.events;
+
 export const listParticlePostsByAuthor = (authorId: string): ParticlePostEvent[] =>
   cache.events.filter((event) => event.authorId === authorId);
+
+export const listNetworkFeedEventsByAuthor = (authorId: string): NetworkFeedEvent[] =>
+  listNetworkFeedEvents().filter((event) => event.authorId === authorId);
 
 export const listParticlePostsReferencingParticle = (particleId: string): ParticlePostEvent[] =>
   cache.events.filter(

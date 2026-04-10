@@ -1,6 +1,7 @@
 <script lang="ts">
   import SocialCodeEventCard from "$lib/components/social/SocialCodeEventCard.svelte";
   import SocialEventCard from "$lib/components/social/SocialEventCard.svelte";
+  import SocialFormatEventCard from "$lib/components/social/SocialFormatEventCard.svelte";
   import type { NetworkFeedEvent } from "$lib/feed/particlePostData";
 
   const {
@@ -80,6 +81,8 @@
             {onAddToToolbox}
             inToolbox={toolboxParticleIds.has(event.particleId)}
           />
+        {:else if event.type === "format"}
+          <SocialFormatEventCard {event} />
         {:else}
           <SocialCodeEventCard {event} />
         {/if}
