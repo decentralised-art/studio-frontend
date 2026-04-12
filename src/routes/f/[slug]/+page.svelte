@@ -39,6 +39,10 @@
   let loading = $state(true);
   let loadError = $state("");
   let relatedPosts = $state<NetworkFeedEvent[]>([]);
+  let formatCursorAfter = $state<string | null>(null);
+  let formatHasMore = $state(false);
+  let loadMorePending = $state(false);
+  let loadMoreError = $state("");
   let followPending = $state(false);
   let formatFollowError = $state("");
   let localFollowedFormats = $state<string[]>([]);
@@ -57,9 +61,41 @@
     return (head ?? "").trim();
   };
 
+  const recomputeRelatedPosts = (
+    normalizedHash: string,
+    formatRecord: ChainFormatRecord | null,
+  ) => {
+    if (!formatRecord) {
+      relatedPosts = [];
+      return;
+    }
+    const matchingConnectors = listParticleRecordsByFormatHash(normalizedHash);
+    const matchingIds = new SvelteSet(matchingConnectors.map((connector) => connector.id));
+    formatRecord.connectors.forEach((connectorName) => {
+      matchingIds.add(connectorName);
+    });
+
+    relatedPosts = listParticlePosts().filter(
+      (event) =>
+        event.type === "connector" &&
+        (event.formatHash === normalizedHash || matchingIds.has(event.particleId)),
+    );
+  };
+
+  const mergeFormatPageRecord = (nextPageRecord: ChainFormatRecord | null) => {
+    if (!nextPageRecord) return format;
+    const merged = mergeChainFormatRecords([...(format ? [format] : []), nextPageRecord]);
+    format = merged;
+    if (merged) upsertChainFormatRecord(merged);
+    return merged;
+  };
+
   const loadFormatPage = async () => {
     loading = true;
     loadError = "";
+    loadMoreError = "";
+    formatCursorAfter = null;
+    formatHasMore = false;
     try {
       const slug = ($page.params.slug ?? "").trim();
       if (!slug) {
@@ -84,41 +120,44 @@
 
       await syncParticlePostDataFromChain();
 
-      const pageRecords: ChainFormatRecord[] = [];
-      let after: string | null = null;
-      let guard = 0;
-      while (guard < 128) {
-        const response = await getChainFormat(normalizedHash, {
-          limit: 256,
-          ...(after ? { after } : {}),
-        });
-        const pageRecord = mapChainFormatResponseToRecord(response);
-        if (pageRecord) pageRecords.push(pageRecord);
-        const cursor = resolveChainFormatCursor(response);
-        if (!cursor.hasMore || !cursor.nextAfter) break;
-        after = cursor.nextAfter;
-        guard += 1;
-      }
-
-      const merged = mergeChainFormatRecords(pageRecords);
-      format = merged;
+      const response = await getChainFormat(normalizedHash, { limit: 256 });
+      const pageRecord = mapChainFormatResponseToRecord(response);
+      const merged = mergeFormatPageRecord(pageRecord);
+      const cursor = resolveChainFormatCursor(response);
+      formatCursorAfter = cursor.nextAfter;
+      formatHasMore = cursor.hasMore && Boolean(cursor.nextAfter);
       if (!merged) {
         relatedPosts = [];
         return;
       }
-      upsertChainFormatRecord(merged);
-
-      const matchingConnectors = listParticleRecordsByFormatHash(normalizedHash);
-      const matchingIds = new SvelteSet(matchingConnectors.map((connector) => connector.id));
-      relatedPosts = listParticlePosts().filter(
-        (event) =>
-          event.type === "connector" &&
-          (event.formatHash === normalizedHash || matchingIds.has(event.particleId)),
-      );
+      recomputeRelatedPosts(normalizedHash, merged);
     } catch (error) {
       loadError = error instanceof Error ? error.message : "Unable to load format page.";
     } finally {
       loading = false;
+    }
+  };
+
+  const loadMoreFormatConnectors = async () => {
+    if (loading || loadMorePending || !formatHash || !formatHasMore || !formatCursorAfter) return;
+    loadMorePending = true;
+    loadMoreError = "";
+    try {
+      const response = await getChainFormat(formatHash, {
+        limit: 256,
+        after: formatCursorAfter,
+      });
+      const pageRecord = mapChainFormatResponseToRecord(response);
+      const merged = mergeFormatPageRecord(pageRecord);
+      const cursor = resolveChainFormatCursor(response);
+      formatCursorAfter = cursor.nextAfter;
+      formatHasMore = cursor.hasMore && Boolean(cursor.nextAfter);
+      recomputeRelatedPosts(formatHash, merged);
+    } catch (error) {
+      loadMoreError =
+        error instanceof Error ? error.message : "Unable to load more connectors for this format.";
+    } finally {
+      loadMorePending = false;
     }
   };
 
@@ -250,6 +289,24 @@
         emptyMessage="No connector posts for this format yet."
       />
     </div>
+
+    {#if formatHasMore || loadMoreError}
+      <div class="page-card-shell load-more-panel">
+        {#if loadMoreError}
+          <p class="load-more-error">{loadMoreError}</p>
+        {/if}
+        {#if formatHasMore}
+          <Button
+            variant="ghost"
+            type="button"
+            disabled={loadMorePending}
+            onclick={loadMoreFormatConnectors}
+          >
+            {loadMorePending ? "Loading more..." : "Load more"}
+          </Button>
+        {/if}
+      </div>
+    {/if}
   {/if}
 </div>
 
@@ -321,6 +378,14 @@
 
   .status-actions {
     @apply mt-4 flex gap-2;
+  }
+
+  .load-more-panel {
+    @apply flex flex-col gap-2 items-start;
+  }
+
+  .load-more-error {
+    @apply text-xs text-rose-300;
   }
 
   @media (max-width: 1200px) {

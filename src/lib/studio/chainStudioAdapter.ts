@@ -172,6 +172,9 @@ export const listChainSyncSourcesForApp = async (options?: {
 
   chainSyncSourcesLoadPromise = (async () => {
     const fallback = fallbackChainSyncSources();
+    const fallbackByAddress = new Map<string, ChainOwnerSyncSource>(
+      fallback.map((entry) => [normalizeAddress(entry.address), entry]),
+    );
     try {
       const users = await listServicesUsers();
       const byAddress = new Map<string, ChainOwnerSyncSource>();
@@ -185,13 +188,17 @@ export const listChainSyncSourcesForApp = async (options?: {
         const address = normalizeAddress(addressRaw);
         if (!address) return;
         if (byAddress.has(address)) return;
+        const preferred = fallbackByAddress.get(address);
         const mockId = mockUserIdFromServicesUser(user);
         const authorId =
+          preferred?.authorId ??
           mockId ??
           (typeof user.id === "string" && user.id.trim().length > 0
             ? user.id.trim()
             : fallbackAuthorIdFromAddress(address));
-        const mockLabel = mockId ? (mockUsersById[mockId]?.nickname ?? "") : "";
+        const mockLabel = mockId
+          ? (mockUsersById[mockId]?.nickname ?? "")
+          : (preferred?.label ?? "");
         byAddress.set(address, {
           address,
           authorId,

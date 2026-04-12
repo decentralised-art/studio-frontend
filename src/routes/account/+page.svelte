@@ -14,7 +14,13 @@
   import SectionShell from "$lib/components/ui/SectionShell.svelte";
   import UserProfilePage from "$lib/components/user/UserProfilePage.svelte";
 
-  import { addConnectorToCurrentUserToolbox, getMe, logout, updateUserById } from "$lib/auth/api";
+  import {
+    addConnectorToCurrentUserToolbox,
+    getCachedMe,
+    getMe,
+    logout,
+    updateUserById,
+  } from "$lib/auth/api";
   import { getToken } from "$lib/auth/session";
   import { mockCurrentUserId, mockUsersById } from "$lib/data/users";
   import type { ProfileViewUser } from "$lib/user/profileModel";
@@ -60,13 +66,30 @@
     saveSuccess = "";
 
     try {
-      const [data] = await Promise.all([
-        getMe(),
-        syncParticlePostDataFromChain().catch(() => null),
-      ]);
+      const cachedMe = getCachedMe();
+      if (cachedMe) {
+        try {
+          const cachedUser = normalizeProfileUser(cachedMe);
+          currentUser = cachedUser;
+          localToolboxParticles = [...cachedUser.toolbox];
+          accountFeedEvents = listNetworkFeedEventsByAuthor(cachedUser.id);
+          isLoading = false;
+        } catch {
+          // ignore invalid local cache
+        }
+      }
+
+      const data = await getMe();
       currentUser = normalizeProfileUser(data);
       localToolboxParticles = [...currentUser.toolbox];
       accountFeedEvents = listNetworkFeedEventsByAuthor(currentUser.id);
+      const activeUserId = currentUser.id;
+      void syncParticlePostDataFromChain()
+        .then(() => {
+          if (currentUser?.id !== activeUserId) return;
+          accountFeedEvents = listNetworkFeedEventsByAuthor(activeUserId);
+        })
+        .catch(() => null);
     } catch (err) {
       error = err instanceof Error ? err.message : "Unable to load account.";
     } finally {

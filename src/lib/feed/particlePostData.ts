@@ -462,7 +462,7 @@ export const syncParticlePostDataFromChain = async (options?: {
     if (requestedIncludesDependencyExpansion && !cachedIncludesDependencyExpansion) return false;
     if (requestedMaxSources === null) {
       if (cachedMaxSources !== null) return false;
-    } else if (cachedMaxSources === null || cachedMaxSources < requestedMaxSources) {
+    } else if (cachedMaxSources !== null && cachedMaxSources < requestedMaxSources) {
       return false;
     }
     if (requestedMaxOwnedPerSource === null) {
