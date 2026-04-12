@@ -33,8 +33,13 @@
     resizable && (position === "left" || position === "right") && typeof onResize === "function",
   );
   const clampedScale = $derived(Math.max(0.6, Math.min(1.25, contentScale)));
+  const currentSize = $derived(
+    clampSize(typeof sizePx === "number" && Number.isFinite(sizePx) ? sizePx : minSizePx),
+  );
 
   const clampSize = (value: number) => Math.max(minSizePx, Math.min(maxSizePx, Math.round(value)));
+  const RESIZE_STEP_PX = 16;
+  const RESIZE_STEP_PX_FAST = 48;
 
   const updateSizeFromPointer = (event: PointerEvent) => {
     if (!canResize) return;
@@ -64,6 +69,35 @@
     window.addEventListener("pointerup", stopResize);
     window.addEventListener("pointercancel", stopResize);
     updateSizeFromPointer(event);
+  };
+
+  const applySizeDelta = (delta: number) => {
+    if (!canResize || !Number.isFinite(delta) || delta === 0) return;
+    onResize?.(clampSize(currentSize + delta));
+  };
+
+  const handleResizeKeydown = (event: KeyboardEvent) => {
+    if (!canResize) return;
+    const step = event.shiftKey ? RESIZE_STEP_PX_FAST : RESIZE_STEP_PX;
+
+    if (event.key === "Home") {
+      event.preventDefault();
+      onResize?.(minSizePx);
+      return;
+    }
+
+    if (event.key === "End") {
+      event.preventDefault();
+      onResize?.(maxSizePx);
+      return;
+    }
+
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    event.preventDefault();
+
+    const direction = event.key === "ArrowRight" ? 1 : -1;
+    const signedDirection = position === "right" ? -direction : direction;
+    applySizeDelta(step * signedDirection);
   };
 
   onDestroy(() => {
@@ -99,8 +133,12 @@
       role="separator"
       aria-orientation="vertical"
       aria-label={position === "left" ? "Resize left panel" : "Resize right panel"}
-      tabindex="-1"
+      aria-valuemin={minSizePx}
+      aria-valuemax={maxSizePx}
+      aria-valuenow={currentSize}
+      tabindex="0"
       onpointerdown={startResize}
+      onkeydown={handleResizeKeydown}
     ></div>
   {/if}
 </section>
@@ -166,6 +204,7 @@
   }
 
   .dock-resize-handle:hover::before,
+  .dock-resize-handle:focus-visible::before,
   .dock-resize-handle.is-active::before {
     background: rgba(52, 211, 153, 0.68);
   }
