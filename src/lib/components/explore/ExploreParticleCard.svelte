@@ -29,8 +29,8 @@
       .map((part) => part[0]?.toUpperCase() ?? "")
       .join("");
 
-  const visibleIngredients = particle.ingredients.slice(0, 3);
-  const extraCount = particle.ingredients.length - visibleIngredients.length;
+  const visibleIngredients = $derived(particle.ingredients.slice(0, 3));
+  const extraCount = $derived(particle.ingredients.length - visibleIngredients.length);
 
   const handleSelect = () => {
     onSelect?.(particle.id);

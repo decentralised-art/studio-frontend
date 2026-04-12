@@ -35,6 +35,7 @@
   } from "$lib/data/users";
 
   const FEED_PAGE_SIZE = 10;
+  const MIN_INITIAL_FEED_EVENTS = 3;
   const CHAIN_SOURCE_LIMIT_STEP = 4;
   const CHAIN_SOURCE_LIMIT_MAX = 64;
   const CHAIN_OWNED_PER_SOURCE_LIMIT = 4;
@@ -204,7 +205,6 @@
         maxSources: sourceSyncLimit,
         maxOwnedPerSource: CHAIN_OWNED_PER_SOURCE_LIMIT,
         includeRuntimeCode: false,
-        includeDependencyExpansion: false,
       });
     } catch (error) {
       console.error("[Network feed] Failed to sync chain-backed particle posts.", error);
@@ -212,11 +212,11 @@
     }
     refreshFeedStateFromCache();
 
-    // Fast path can miss active sources if first source window has no events.
-    // Auto-expand sources until at least one event is found or max window is reached.
-    if (feedEvents.length === 0 && sourceSyncLimit < CHAIN_SOURCE_LIMIT_MAX) {
+    // Fast path can miss active sources if early source windows are sparse.
+    // Auto-expand sources until we have a minimally useful feed window.
+    if (feedEvents.length < MIN_INITIAL_FEED_EVENTS && sourceSyncLimit < CHAIN_SOURCE_LIMIT_MAX) {
       let nextLimit = sourceSyncLimit;
-      while (feedEvents.length === 0 && nextLimit < CHAIN_SOURCE_LIMIT_MAX) {
+      while (feedEvents.length < MIN_INITIAL_FEED_EVENTS && nextLimit < CHAIN_SOURCE_LIMIT_MAX) {
         nextLimit = Math.min(CHAIN_SOURCE_LIMIT_MAX, nextLimit + CHAIN_SOURCE_LIMIT_STEP);
         sourceSyncLimit = nextLimit;
         try {
@@ -226,7 +226,6 @@
             maxSources: sourceSyncLimit,
             maxOwnedPerSource: CHAIN_OWNED_PER_SOURCE_LIMIT,
             includeRuntimeCode: false,
-            includeDependencyExpansion: false,
           });
         } catch (error) {
           console.warn("[Network feed] Auto-expand source sync failed.", error);
@@ -239,14 +238,13 @@
 
     // Final fallback: if capped scan found nothing, attempt one uncapped sync to avoid false-empty UI
     // when active sources are beyond the capped window.
-    if (feedEvents.length === 0 && sourceSyncLimit >= CHAIN_SOURCE_LIMIT_MAX) {
+    if (feedEvents.length < MIN_INITIAL_FEED_EVENTS && sourceSyncLimit >= CHAIN_SOURCE_LIMIT_MAX) {
       try {
         await syncParticlePostDataFromChain({
           force: true,
           forceSources: true,
           maxOwnedPerSource: CHAIN_OWNED_PER_SOURCE_LIMIT,
           includeRuntimeCode: false,
-          includeDependencyExpansion: false,
         });
       } catch (error) {
         console.warn("[Network feed] Uncapped source sync failed.", error);
@@ -286,7 +284,6 @@
         maxSources: sourceSyncLimit,
         maxOwnedPerSource: CHAIN_OWNED_PER_SOURCE_LIMIT,
         includeRuntimeCode: false,
-        includeDependencyExpansion: false,
       });
       const afterCount = listParticlePosts().length;
       feedEvents = listParticlePosts();
@@ -337,16 +334,17 @@
     if (!connectorId) return;
     const base = resolve("/studio");
     const target = new URL(base, window.location.origin);
-    target.searchParams.set("network_kind", networkNodeStudioKind("connector"));
+    target.searchParams.set("network_kind", networkNodeStudioKind("feature"));
     target.searchParams.set("network_id", connectorId);
     window.open(target.toString(), "_blank", "noopener,noreferrer");
   };
 
-  const openLibraryEntityInStudio = (
-    kind: Extract<SearchableEntityKind, "transformation" | "condition">,
-    id: string,
-  ) => {
+  const openLibraryEntityInStudio = (kind: SearchableEntityKind, id: string) => {
     if (!id) return;
+    if (kind === "connector") {
+      openConnectorInStudio(id);
+      return;
+    }
     const base = resolve("/studio");
     const target = new URL(base, window.location.origin);
     target.searchParams.set("network_kind", kind);

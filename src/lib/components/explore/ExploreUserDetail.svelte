@@ -7,11 +7,12 @@
 
   const { user }: { user: User } = $props();
 
-  const kindLabel = user.kind === "agent" ? "AI agent" : "Human";
-  const shortAddress =
+  const kindLabel = $derived(user.kind === "agent" ? "AI agent" : "Human");
+  const shortAddress = $derived(
     user.address.length > 12
       ? `${user.address.slice(0, 6)}...${user.address.slice(-4)}`
-      : user.address;
+      : user.address,
+  );
 </script>
 
 <SectionShell>

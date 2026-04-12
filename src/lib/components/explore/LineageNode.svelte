@@ -1,11 +1,13 @@
 <script lang="ts">
-  import { Handle, Position, type NodeProps } from "@xyflow/svelte";
+  import { Handle, Position, type Node, type NodeProps } from "@xyflow/svelte";
 
   type LineageNodeData = {
     label: string;
   };
 
-  const { data, selected }: NodeProps<LineageNodeData> = $props();
+  type LineageNode = Node<LineageNodeData, "lineage">;
+
+  const { data, selected }: NodeProps<LineageNode> = $props();
 </script>
 
 <div class={`lineage-node ${selected ? "is-selected" : ""}`}>

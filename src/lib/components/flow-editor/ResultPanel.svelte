@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { FlowNode, FlowEdge, TransformationDef } from "./flowEditorTypes";
+  import type { FlowNode, FlowEdge, TransformationDef } from "./FlowEditorTypes";
 
   let {
     nodes,

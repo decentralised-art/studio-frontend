@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Handle, Position, type NodeProps, useSvelteFlow } from "@xyflow/svelte";
+  import { Handle, Position, type Node, type NodeProps, useSvelteFlow } from "@xyflow/svelte";
 
   type DimensionNodeData = {
     label?: string;
@@ -18,8 +18,10 @@
     status: "draft" | "network";
   };
 
-  const { id, data, selected }: NodeProps<DimensionNodeData> = $props();
-  const { updateNodeData } = useSvelteFlow();
+  type DimensionNode = Node<DimensionNodeData, "dimension">;
+
+  const { id, data, selected }: NodeProps<DimensionNode> = $props();
+  const { updateNodeData } = useSvelteFlow<DimensionNode>();
 
   const title = $derived(
     typeof data.dimensionIndex === "number" ? `#${data.dimensionIndex + 1}` : "#",

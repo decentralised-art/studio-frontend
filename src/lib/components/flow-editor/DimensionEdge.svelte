@@ -1,7 +1,7 @@
 <script lang="ts">
   import { BaseEdge, EdgeLabel, getBezierPath, useEdges } from "@xyflow/svelte";
 
-  import type { DimensionEdgePropsType, DimensionData, TransformationDef } from "./flowEditorTypes";
+  import type { DimensionEdgePropsType, DimensionData, TransformationDef } from "./FlowEditorTypes";
 
   import TransformationDefComp from "./TransformationDef.svelte";
 

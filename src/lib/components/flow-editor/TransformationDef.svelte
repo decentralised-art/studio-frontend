@@ -5,7 +5,7 @@
     DimensionData,
     TransformationDef,
     TransformationDefPropsType,
-  } from "./flowEditorTypes";
+  } from "./FlowEditorTypes";
 
   import Input from "$lib/components/ui/Input.svelte";
 

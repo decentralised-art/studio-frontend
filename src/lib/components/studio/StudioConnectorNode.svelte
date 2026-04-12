@@ -1,5 +1,11 @@
 <script lang="ts">
-  import { Handle, Position, type NodeProps, useUpdateNodeInternals } from "@xyflow/svelte";
+  import {
+    Handle,
+    Position,
+    type Node,
+    type NodeProps,
+    useUpdateNodeInternals,
+  } from "@xyflow/svelte";
 
   type ConnectorRowPreview = {
     dimension: number;
@@ -29,9 +35,12 @@
     riShift?: number;
     riLocked?: boolean;
     riPosition?: number;
+    riLockToggleDisabled?: boolean;
   };
 
-  const { id, data, selected }: NodeProps<ConnectorNodeData> = $props();
+  type ConnectorNode = Node<ConnectorNodeData, "connector">;
+
+  const { id, data, selected }: NodeProps<ConnectorNode> = $props();
   const updateNodeInternals = useUpdateNodeInternals();
 
   const dimensionCount = $derived(Math.max(1, Math.round(data.dimensions ?? 1)));
@@ -53,12 +62,13 @@
   const connectorNameForTree = $derived((data.networkId ?? "").trim());
   const canOpenConnectorTree = $derived(!tabRoot && connectorNameForTree.length > 0);
   const showBottomOutlets = $derived(!data.hideOutlets);
-  const showRiControls = $derived(Boolean(data.showRiControls));
+  const showRiControls = $derived(data.showRiControls !== false);
   const staticRiCount = $derived(
     data.staticRi && typeof data.staticRi === "object" ? Object.keys(data.staticRi).length : 0,
   );
   const staticRiClass = $derived(staticRiCount > 0 ? "has-static-ri" : "");
   const riLocked = $derived(Boolean(data.riLocked));
+  const riLockToggleDisabled = $derived(Boolean(data.riLockToggleDisabled));
   const riStart = $derived(Number(data.riStart ?? 0));
   const riShift = $derived(Number(data.riShift ?? 0));
   const canEditRi = $derived(!riLocked);
@@ -199,7 +209,7 @@
         <button
           type="button"
           class={`connector-ri-toggle ${riLocked ? "is-locked" : ""}`}
-          disabled={readOnly}
+          disabled={riLockToggleDisabled}
           onclick={() => emitRiPatch({ riLocked: !riLocked })}
         >
           {riLocked ? "static" : "open"}

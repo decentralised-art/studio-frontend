@@ -148,21 +148,22 @@
   };
 
   const scheduleMidi = () => {
-    if (!toneModule || !midi) return;
+    const tone = toneModule;
+    if (!tone || !midi) return;
 
-    toneModule.Transport.stop();
-    toneModule.Transport.cancel(0);
-    toneModule.Transport.loop = false;
+    tone.Transport.stop();
+    tone.Transport.cancel(0);
+    tone.Transport.loop = false;
     disposeSynths();
 
     const channelCount = Math.max(1, midi.channels || 1);
     const tempo = midi.tempo || 120;
     const secondsPerBeat = 60 / tempo;
 
-    toneModule.Transport.bpm.value = tempo;
+    tone.Transport.bpm.value = tempo;
 
     for (let i = 0; i < channelCount; i += 1) {
-      const synth = new toneModule.PolySynth(toneModule.Synth, {
+      const synth = new tone.PolySynth(tone.Synth, {
         envelope: { attack: 0.01, decay: 0.1, sustain: 0.4, release: 0.4 },
       }).toDestination();
       synths.push(synth);
@@ -175,16 +176,16 @@
       const time = Math.max(0, note.time) * secondsPerBeat;
       const duration = Math.max(0.02, note.duration * secondsPerBeat);
       const velocity = Math.min(1, Math.max(0, note.velocity / 127));
-      const freq = toneModule.Frequency(note.pitch, "midi");
+      const freq = tone.Frequency(note.pitch, "midi").toFrequency();
 
-      toneModule.Transport.schedule((t) => {
+      tone.Transport.schedule((t) => {
         synth.triggerAttackRelease(freq, duration, t, velocity);
       }, time);
     });
 
     const totalSeconds = Math.max(0, midi.lengthBeats) * secondsPerBeat;
     if (totalSeconds > 0) {
-      toneModule.Transport.scheduleOnce(() => {
+      tone.Transport.scheduleOnce(() => {
         stop();
       }, totalSeconds + 0.05);
     }

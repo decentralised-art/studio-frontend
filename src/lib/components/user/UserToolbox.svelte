@@ -6,9 +6,11 @@
 
   const { user }: { user: User } = $props();
 
-  const toolboxParticles = user.toolbox
-    .map((id) => mockExploreParticles.find((p) => p.id === id))
-    .filter((p): p is (typeof mockExploreParticles)[number] => Boolean(p));
+  const toolboxParticles = $derived.by(() =>
+    user.toolbox
+      .map((id) => mockExploreParticles.find((p) => p.id === id))
+      .filter((p): p is (typeof mockExploreParticles)[number] => Boolean(p)),
+  );
 </script>
 
 <SectionShell>

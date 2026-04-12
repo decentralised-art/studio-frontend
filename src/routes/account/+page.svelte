@@ -105,7 +105,7 @@
   const openParticleInStudio = (particleId: string) => {
     const base = resolve("/studio");
     const target = new URL(base, window.location.origin);
-    target.searchParams.set("network_kind", networkNodeStudioKind("connector"));
+    target.searchParams.set("network_kind", networkNodeStudioKind("feature"));
     target.searchParams.set("network_id", particleId);
     window.open(target.toString(), "_blank", "noopener,noreferrer");
   };

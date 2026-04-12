@@ -1,11 +1,13 @@
 <script lang="ts">
-  import { Handle, Position, type NodeProps } from "@xyflow/svelte";
+  import { Handle, Position, type Node, type NodeProps } from "@xyflow/svelte";
 
   type TransformationNodeData = {
     label: string;
   };
 
-  const { data, selected }: NodeProps<TransformationNodeData> = $props();
+  type TransformationNode = Node<TransformationNodeData, "transformation">;
+
+  const { data, selected }: NodeProps<TransformationNode> = $props();
   const selectedClass = $derived(selected ? "is-selected" : "");
 </script>
 

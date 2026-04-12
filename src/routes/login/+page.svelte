@@ -82,7 +82,10 @@
     }
   };
 
-  const loginWithMockUser = async (userId: string, destination = "/account") => {
+  const loginWithMockUser = async (
+    userId: string,
+    destination: "/account" | "/studio" = "/account",
+  ) => {
     const user = mockUsers.find((entry) => entry.id === userId);
     if (!user) return;
 

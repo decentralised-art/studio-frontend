@@ -21,7 +21,7 @@
   import DimensionEdge from "./DimensionEdge.svelte";
 
   // Types
-  import type { FeatureNodeType, DimensionEdgeType, FlowNode, FlowEdge } from "./flowEditorTypes";
+  import type { FeatureNodeType, DimensionEdgeType, FlowNode, FlowEdge } from "./FlowEditorTypes";
 
   import { addingConnectionCreatesCycle } from "./graphUtils";
   import type { ApiFeature } from "$lib/dcn/dcnApi";

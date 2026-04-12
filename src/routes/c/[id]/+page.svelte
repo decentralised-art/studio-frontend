@@ -39,7 +39,7 @@
   const openConnectorInStudio = (targetConnectorId: string) => {
     const base = resolve("/studio");
     const target = new URL(base, window.location.origin);
-    target.searchParams.set("network_kind", networkNodeStudioKind("connector"));
+    target.searchParams.set("network_kind", networkNodeStudioKind("feature"));
     target.searchParams.set("network_id", targetConnectorId);
     window.open(target.toString(), "_blank", "noopener,noreferrer");
   };
@@ -75,7 +75,7 @@
   onMount(() => {
     void getCurrentUserToolboxLibrary()
       .then((toolbox) => {
-        localToolboxConnectors = [...toolbox.particles];
+        localToolboxConnectors = [...toolbox.connector];
       })
       .catch((error) => {
         console.warn("[Connector page] Failed to load toolbox from profile.", error);
@@ -130,14 +130,18 @@
 
         <div class="connector-head-actions">
           <Button
-            variant={toolboxConnectorIds.has(connector.id) ? "ghost" : "primary"}
+            variant={toolboxConnectorIds.has(connector!.id) ? "ghost" : "primary"}
             type="button"
-            disabled={toolboxConnectorIds.has(connector.id)}
-            onclick={() => addConnectorToToolbox(connector.id)}
+            disabled={toolboxConnectorIds.has(connector!.id)}
+            onclick={() => addConnectorToToolbox(connector!.id)}
           >
-            {toolboxConnectorIds.has(connector.id) ? "In toolbox" : "Add to toolbox"}
+            {toolboxConnectorIds.has(connector!.id) ? "In toolbox" : "Add to toolbox"}
           </Button>
-          <Button variant="ghost" type="button" onclick={() => openConnectorInStudio(connector.id)}>
+          <Button
+            variant="ghost"
+            type="button"
+            onclick={() => openConnectorInStudio(connector!.id)}
+          >
             Open in Studio
           </Button>
         </div>

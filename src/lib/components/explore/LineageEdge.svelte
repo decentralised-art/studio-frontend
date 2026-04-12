@@ -1,21 +1,18 @@
 <script lang="ts">
   import { BaseEdge, EdgeLabel, getBezierPath } from "@xyflow/svelte";
-  import type { EdgeProps } from "@xyflow/svelte";
+  import type { Edge as FlowEdge, EdgeProps } from "@xyflow/svelte";
 
   type LineageEdgeData = {
     label?: string;
     transformations?: string[];
   };
 
-  type LineageEdgeProps = EdgeProps<LineageEdgeData> & {
-    transformations?: string[];
-  };
+  type LineageEdge = FlowEdge<LineageEdgeData, "lineage">;
 
   const {
     id,
     data,
     label: edgeLabel,
-    transformations: edgeTransformations,
     sourceX,
     sourceY,
     sourcePosition,
@@ -25,7 +22,7 @@
     markerStart,
     markerEnd,
     interactionWidth,
-  }: LineageEdgeProps = $props();
+  }: EdgeProps<LineageEdge> = $props();
 
   const [edgePath, labelX, labelY] = $derived(
     getBezierPath({
@@ -39,7 +36,7 @@
   );
 
   const label = $derived(edgeLabel ?? data?.label ?? "composite");
-  const transformations = $derived(edgeTransformations ?? data?.transformations ?? []);
+  const transformations = $derived(data?.transformations ?? []);
 </script>
 
 <BaseEdge

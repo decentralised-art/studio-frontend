@@ -1,12 +1,14 @@
 <script lang="ts">
-  import { Handle, Position, type NodeProps } from "@xyflow/svelte";
+  import { Handle, Position, type Node, type NodeProps } from "@xyflow/svelte";
 
   type ConditionNodeData = {
     label: string;
     fromNetwork?: boolean;
   };
 
-  const { data, selected }: NodeProps<ConditionNodeData> = $props();
+  type ConditionNode = Node<ConditionNodeData, "condition">;
+
+  const { data, selected }: NodeProps<ConditionNode> = $props();
   const selectedClass = $derived(selected ? "is-selected" : "");
   const readOnly = $derived(Boolean(data.fromNetwork));
 </script>

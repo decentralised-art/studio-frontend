@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Handle, Position, type NodeProps } from "@xyflow/svelte";
+  import { Handle, Position, type Node, type NodeProps } from "@xyflow/svelte";
 
   type ParticleNodeData = {
     label: string;
@@ -8,7 +8,9 @@
     placeholderState?: "loading" | "warning";
   };
 
-  const { data, selected }: NodeProps<ParticleNodeData> = $props();
+  type ParticleNode = Node<ParticleNodeData, "particle">;
+
+  const { data, selected }: NodeProps<ParticleNode> = $props();
   const selectedClass = $derived(selected ? "is-selected" : "");
   const isPlaceholder = $derived(Boolean(data.placeholder));
   const placeholderDetail = $derived((data.placeholderDetail ?? "").trim());
