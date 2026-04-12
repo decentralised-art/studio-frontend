@@ -13,9 +13,7 @@
   const isPlaceholder = $derived(Boolean(data.placeholder));
   const placeholderDetail = $derived((data.placeholderDetail ?? "").trim());
   const placeholderState = $derived(data.placeholderState ?? "loading");
-  const displayLabel = $derived.by(() =>
-    isPlaceholder ? (data.label ?? "").trim() : (data.label ?? "").trim(),
-  );
+  const displayLabel = $derived((data.label ?? "").trim());
 </script>
 
 <div
