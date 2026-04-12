@@ -13,7 +13,7 @@ const servicesBase = normalizeBase(
 
 const chainBase = normalizeBase(
   import.meta.env.VITE_CHAIN_API_BASE_URL?.toString() ?? "",
-  `${defaultApiOrigin}/chain`,
+  isDev ? "/chain" : `${defaultApiOrigin}/chain`,
 );
 
 const joinUrl = (base: string, path: string): string =>
