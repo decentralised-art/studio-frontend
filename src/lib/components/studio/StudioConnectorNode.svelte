@@ -22,6 +22,13 @@
     connectorTreeCollapsed?: boolean;
     definitionRole?: "root" | "member" | null;
     tabRoot?: boolean;
+    hideOutlets?: boolean;
+    staticRi?: Record<string, { startPoint: number; transformationShift: number }>;
+    showRiControls?: boolean;
+    riStart?: number;
+    riShift?: number;
+    riLocked?: boolean;
+    riPosition?: number;
   };
 
   const { id, data, selected }: NodeProps<ConnectorNodeData> = $props();
@@ -44,7 +51,17 @@
   const showTopInlet = $derived(!tabRoot);
   const dimensionLabel = $derived(dimensionCount === 1 ? "dimension" : "dimensions");
   const connectorNameForTree = $derived((data.networkId ?? "").trim());
-  const canOpenConnectorTree = $derived(connectorNameForTree.length > 0);
+  const canOpenConnectorTree = $derived(!tabRoot && connectorNameForTree.length > 0);
+  const showBottomOutlets = $derived(!Boolean(data.hideOutlets));
+  const showRiControls = $derived(Boolean(data.showRiControls));
+  const staticRiCount = $derived(
+    data.staticRi && typeof data.staticRi === "object" ? Object.keys(data.staticRi).length : 0,
+  );
+  const staticRiClass = $derived(staticRiCount > 0 ? "has-static-ri" : "");
+  const riLocked = $derived(Boolean(data.riLocked));
+  const riStart = $derived(Number(data.riStart ?? 0));
+  const riShift = $derived(Number(data.riShift ?? 0));
+  const canEditRi = $derived(!riLocked);
   const connectorRows = $derived.by(() => {
     const rows = (data.connectorRows ?? []).slice().sort((a, b) => a.dimension - b.dimension);
     if (rows.length) return rows;
@@ -56,52 +73,66 @@
   const connectorRowsFingerprint = $derived(
     connectorRows.map((row) => `${row.dimension}:${row.transformations.join(",")}`).join("|"),
   );
+  const connectorTitle = $derived.by(() => (data.label ?? "").trim());
+  const boundOwnerDisplayName = $derived.by(() => boundOwnerName);
 
   const handleLeft = (index: number) => ((index + 1) / (dimensionCount + 1)) * 100;
   const touchDeps = (..._deps: unknown[]) => _deps.length;
+  const parseNumberInput = (value: string) => {
+    const next = Number(value);
+    if (!Number.isFinite(next)) return 0;
+    return Math.max(0, Math.trunc(next));
+  };
+  const emitRiPatch = (patch: { riStart?: number; riShift?: number; riLocked?: boolean }) => {
+    window.dispatchEvent(
+      new CustomEvent("studio-ri-update", {
+        detail: { nodeId: id, patch },
+      }),
+    );
+  };
 
   $effect(() => {
-    touchDeps(connectorRowsFingerprint, showTopInlet);
+    touchDeps(connectorRowsFingerprint, showTopInlet, showBottomOutlets);
     if (dimensionCount >= 0) {
       updateNodeInternals(id);
     }
   });
 </script>
 
-<div class="connector-node {selectedClass} {definitionClass}">
+<div class="connector-node {selectedClass} {definitionClass} {staticRiClass}">
   {#if showTopInlet}
     <Handle type="target" position={Position.Top} id="in" />
   {/if}
   <div class="connector-header">
     <div class="connector-title-row">
-      <div class="connector-title">{data.label}</div>
+      <div class="connector-title">{connectorTitle}</div>
       {#if readOnly}
         <span class="connector-readonly-chip">On-chain (read-only)</span>
       {/if}
+      {#if staticRiCount > 0}
+        <span class="connector-static-ri-chip">Static RI: {staticRiCount}</span>
+      {/if}
     </div>
     <div class="connector-actions">
-      <button
-        type="button"
-        class="connector-open-tree"
-        title={canOpenConnectorTree
-          ? "Open connector tree as a new tab"
-          : "Connector tree unavailable"}
-        aria-label="Open connector tree"
-        data-open-connector-tree
-        data-connector-name={connectorNameForTree}
-        disabled={!canOpenConnectorTree}
-      >
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M8 8h8v8"></path>
-          <path d="M16 8L8 16"></path>
-        </svg>
-      </button>
+      {#if !tabRoot}
+        <button
+          type="button"
+          class="connector-open-tree"
+          title={canOpenConnectorTree
+            ? "Open connector tree as a new tab"
+            : "Connector tree unavailable"}
+          aria-label="Open connector tree"
+          data-open-connector-tree
+          data-connector-name={connectorNameForTree}
+          disabled={!canOpenConnectorTree}
+        ></button>
+      {/if}
     </div>
   </div>
   <div class="connector-meta">{dimensionCount} {dimensionLabel}</div>
   {#if boundKind}
     <div class="connector-bound">
-      <span>binding of {boundOwnerName || "connector"}</span>
+      <span>binding of {boundOwnerDisplayName || "connector"}</span>
       {#if boundSlotLabel}
         <small>{boundSlotLabel}</small>
       {/if}
@@ -119,6 +150,63 @@
       <span class="condition-empty">drop condition</span>
     {/if}
   </div>
+  {#if showRiControls}
+    <div class="connector-ri-grid" aria-label="Running instances controls">
+      <div class="connector-ri-row">
+        <span class="connector-ri-dim">RI</span>
+        <input
+          class="connector-ri-input"
+          type="number"
+          inputmode="numeric"
+          min="0"
+          step="1"
+          placeholder="start"
+          value={riStart}
+          disabled={!canEditRi}
+          onwheel={(event) => {
+            event.preventDefault();
+            (event.currentTarget as HTMLInputElement).blur();
+          }}
+          onkeydown={(event) => {
+            if (["-", "+", "e", "E", "."].includes(event.key)) event.preventDefault();
+          }}
+          oninput={(event) => {
+            const target = event.target as HTMLInputElement | null;
+            emitRiPatch({ riStart: parseNumberInput(target?.value ?? "0") });
+          }}
+        />
+        <input
+          class="connector-ri-input"
+          type="number"
+          inputmode="numeric"
+          min="0"
+          step="1"
+          placeholder="shift"
+          value={riShift}
+          disabled={!canEditRi}
+          onwheel={(event) => {
+            event.preventDefault();
+            (event.currentTarget as HTMLInputElement).blur();
+          }}
+          onkeydown={(event) => {
+            if (["-", "+", "e", "E", "."].includes(event.key)) event.preventDefault();
+          }}
+          oninput={(event) => {
+            const target = event.target as HTMLInputElement | null;
+            emitRiPatch({ riShift: parseNumberInput(target?.value ?? "0") });
+          }}
+        />
+        <button
+          type="button"
+          class={`connector-ri-toggle ${riLocked ? "is-locked" : ""}`}
+          disabled={readOnly}
+          onclick={() => emitRiPatch({ riLocked: !riLocked })}
+        >
+          {riLocked ? "static" : "open"}
+        </button>
+      </div>
+    </div>
+  {/if}
   <div class="connector-grid">
     {#each connectorRows as row (row.dimension)}
       <div
@@ -140,14 +228,16 @@
       </div>
     {/each}
   </div>
-  {#each Array(dimensionCount) as _, index (index)}
-    <Handle
-      type="source"
-      position={Position.Bottom}
-      id={`dim-${index}`}
-      style={`left: ${handleLeft(index)}%;`}
-    />
-  {/each}
+  {#if showBottomOutlets}
+    {#each Array(dimensionCount) as _, index (index)}
+      <Handle
+        type="source"
+        position={Position.Bottom}
+        id={`dim-${index}`}
+        style={`left: ${handleLeft(index)}%;`}
+      />
+    {/each}
+  {/if}
 </div>
 
 <style lang="postcss">
@@ -206,8 +296,19 @@
       0 18px 34px rgba(0, 0, 0, 0.5);
   }
 
+  .connector-node.has-static-ri:not(.is-selected):not(.is-definition-root):not(
+      .is-definition-member
+    ) {
+    @apply border-violet-300/45 bg-violet-500/[0.06];
+  }
+
+  .connector-node.has-static-ri .connector-row,
+  .connector-node.has-static-ri .connector-condition-slot {
+    @apply border-violet-300/25 bg-violet-500/[0.05];
+  }
+
   .connector-title {
-    @apply text-[0.7rem] font-semibold uppercase tracking-[0.2em];
+    @apply text-[0.7rem] font-semibold tracking-[0.08em];
   }
 
   .connector-title-row {
@@ -224,10 +325,6 @@
 
   .connector-open-tree {
     @apply inline-flex h-5 w-5 items-center justify-center rounded border border-white/20 bg-transparent text-white/70 transition;
-  }
-
-  .connector-open-tree svg {
-    @apply h-3 w-3;
   }
 
   .connector-open-tree:hover:not(:disabled) {
@@ -252,6 +349,42 @@
 
   .connector-grid {
     @apply mt-2 flex flex-col gap-1;
+  }
+
+  .connector-ri-grid {
+    @apply mt-2 flex flex-col gap-1;
+  }
+
+  .connector-ri-row {
+    @apply grid grid-cols-[3.1rem_1fr_1fr_auto] items-center gap-1.5 rounded border border-white/10 bg-white/[0.03] px-2 py-1;
+  }
+
+  .connector-ri-dim {
+    @apply text-[0.54rem] font-semibold uppercase tracking-[0.2em] text-violet-100/85;
+  }
+
+  .connector-ri-input {
+    @apply h-6 w-full rounded border border-white/15 bg-black/45 px-1.5 text-[0.56rem] uppercase tracking-[0.12em] text-white/85 outline-none transition;
+  }
+
+  .connector-ri-input:focus {
+    @apply border-emerald-300/70 bg-black/55;
+  }
+
+  .connector-ri-input:disabled {
+    @apply cursor-not-allowed border-white/10 text-white/40;
+  }
+
+  .connector-ri-toggle {
+    @apply h-6 rounded border border-white/15 bg-white/[0.05] px-2 text-[0.5rem] uppercase tracking-[0.12em] text-white/70 transition;
+  }
+
+  .connector-ri-toggle.is-locked {
+    @apply border-violet-300/45 bg-violet-500/15 text-violet-100;
+  }
+
+  .connector-ri-toggle:disabled {
+    @apply cursor-not-allowed border-white/10 text-white/35;
   }
 
   .connector-condition-slot {
@@ -288,6 +421,10 @@
 
   .connector-readonly-chip {
     @apply inline-flex w-fit rounded border border-cyan-300/30 bg-cyan-400/10 px-2 py-0.5 text-[0.5rem] uppercase tracking-[0.16em] text-cyan-100/85;
+  }
+
+  .connector-static-ri-chip {
+    @apply inline-flex w-fit rounded border border-violet-300/35 bg-violet-400/12 px-2 py-0.5 text-[0.5rem] uppercase tracking-[0.16em] text-violet-100/90;
   }
 
   .dimension-transformations {

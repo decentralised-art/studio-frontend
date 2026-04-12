@@ -132,6 +132,18 @@ const runSettledWithConcurrency = async <T, R>(
   return results;
 };
 
+const normalizeEpochForSort = (value: unknown): number =>
+  typeof value === "number" && Number.isFinite(value) ? value : 0;
+
+const compareNewestFirst = (
+  a: { createdAt: number; id: string },
+  b: { createdAt: number; id: string },
+) => {
+  const byCreatedAt = normalizeEpochForSort(b.createdAt) - normalizeEpochForSort(a.createdAt);
+  if (byCreatedAt !== 0) return byCreatedAt;
+  return b.id.localeCompare(a.id);
+};
+
 const rebuildEventsFromParticles = (particles: ParticleRecord[]): ConnectorPostEvent[] => {
   const labelById = new Map(particles.map((particle) => [particle.id, particle.name] as const));
   return particles
@@ -153,11 +165,7 @@ const rebuildEventsFromParticles = (particles: ParticleRecord[]): ConnectorPostE
           focusNodeIds: [],
         }) satisfies ConnectorPostEvent,
     )
-    .sort((a, b) => {
-      const byCreatedAt = b.createdAt - a.createdAt;
-      if (byCreatedAt !== 0) return byCreatedAt;
-      return a.particleId.localeCompare(b.particleId);
-    });
+    .sort(compareNewestFirst);
 };
 
 const mergeParticleRecordIntoStructures = (
@@ -249,6 +257,10 @@ const mergeSnapshots = async (options?: {
         `snapshot ${source.address}`,
       ),
   );
+  const successfulSnapshots = settled.filter((result) => result.status === "fulfilled").length;
+  if (chainSources.length > 0 && successfulSnapshots === 0) {
+    throw new Error("Unable to load chain snapshots from available sources.");
+  }
 
   const nextParticlesById = new Map<string, ParticleRecord>();
   const nextRegistry: ParticleDependencyRegistrySnapshot = {
@@ -398,25 +410,13 @@ const mergeSnapshots = async (options?: {
     }
   }
 
-  const particles = Array.from(nextParticlesById.values()).sort((a, b) => {
-    const byCreatedAt = b.createdAt - a.createdAt;
-    if (byCreatedAt !== 0) return byCreatedAt;
-    return a.id.localeCompare(b.id);
-  });
+  const particles = Array.from(nextParticlesById.values()).sort(compareNewestFirst);
 
   const connectorEvents = rebuildEventsFromParticles(particles);
   const runtimeCodeEvents = includeRuntimeCode
-    ? rebuildRuntimeCodeEvents(
-        Array.from(runtimeCodeRecordsById.values()).sort((a, b) => {
-          const byCreatedAt = b.createdAt - a.createdAt;
-          if (byCreatedAt !== 0) return byCreatedAt;
-          return a.id.localeCompare(b.id);
-        }),
-      )
+    ? rebuildRuntimeCodeEvents(Array.from(runtimeCodeRecordsById.values()).sort(compareNewestFirst))
     : [];
-  const events = [...connectorEvents, ...runtimeCodeEvents].sort(
-    (a, b) => b.createdAt - a.createdAt,
-  );
+  const events = [...connectorEvents, ...runtimeCodeEvents].sort(compareNewestFirst);
 
   return {
     loaded: true,
@@ -496,15 +496,19 @@ export const syncParticlePostDataFromChain = async (options?: {
   return next;
 };
 
-export const listParticlePosts = (): ParticlePostEvent[] => cache.events;
+export const listParticlePosts = (): ParticlePostEvent[] =>
+  [...cache.events].sort(compareNewestFirst);
 
-export const listNetworkFeedEvents = (): NetworkFeedEvent[] => cache.events;
+export const listNetworkFeedEvents = (): NetworkFeedEvent[] =>
+  [...cache.events].sort(compareNewestFirst);
 
 export const listParticlePostsByAuthor = (authorId: string): ParticlePostEvent[] =>
-  cache.events.filter((event) => event.authorId === authorId);
+  cache.events.filter((event) => event.authorId === authorId).sort(compareNewestFirst);
 
 export const listNetworkFeedEventsByAuthor = (authorId: string): NetworkFeedEvent[] =>
-  listNetworkFeedEvents().filter((event) => event.authorId === authorId);
+  listNetworkFeedEvents()
+    .filter((event) => event.authorId === authorId)
+    .sort(compareNewestFirst);
 
 export const listParticlePostsReferencingParticle = (particleId: string): ParticlePostEvent[] =>
   cache.events.filter(

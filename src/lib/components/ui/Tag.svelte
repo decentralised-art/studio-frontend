@@ -5,9 +5,11 @@
 
   const {
     variant = "default",
+    preserveCase = false,
     children,
   }: {
     variant?: Variant;
+    preserveCase?: boolean;
     children?: Snippet;
   } = $props();
 
@@ -18,7 +20,7 @@
   };
 </script>
 
-<span class={`tag ${variants[variant]}`}>
+<span class={`tag ${variants[variant]} ${preserveCase ? "tag-preserve-case" : ""}`}>
   {@render children?.()}
 </span>
 
@@ -38,5 +40,10 @@
 
   .tag-outline {
     @apply border-white/30 bg-transparent text-white/70;
+  }
+
+  .tag-preserve-case {
+    text-transform: none;
+    letter-spacing: 0.02em;
   }
 </style>

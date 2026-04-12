@@ -7,7 +7,12 @@
   import Input from "$lib/components/ui/Input.svelte";
   import SectionShell from "$lib/components/ui/SectionShell.svelte";
 
-  import { authenticateAllMockAccountsInChain, login, registerUser } from "$lib/auth/api";
+  import {
+    authenticateAllMockAccountsInChain,
+    login,
+    loginWithMockChainAccount,
+    registerUser,
+  } from "$lib/auth/api";
   import type { MockChainAuthResult } from "$lib/auth/api";
   import { getToken } from "$lib/auth/session";
   import { mockUsers } from "$lib/data/users";
@@ -32,6 +37,13 @@
     password: MOCK_PASSWORD,
   });
 
+  const resolveMockUserIdFromEmail = (emailRaw: string): string | null => {
+    const email = emailRaw.trim().toLowerCase();
+    if (!email.endsWith("@mock.decentralised.art")) return null;
+    const userId = email.replace(/@mock\.decentralised\.art$/i, "");
+    return mockUsers.some((entry) => entry.id === userId) ? userId : null;
+  };
+
   const handleSubmit = async (event: SubmitEvent) => {
     event.preventDefault();
     loginError = "";
@@ -43,7 +55,12 @@
 
     isSubmitting = true;
     try {
-      await login(form.email.trim(), form.password);
+      const email = form.email.trim();
+      await login(email, form.password);
+      const mockUserId = resolveMockUserIdFromEmail(email);
+      if (mockUserId) {
+        await loginWithMockChainAccount(mockUserId);
+      }
       await goto(resolve("/account"));
     } catch (err) {
       loginError = err instanceof Error ? err.message : "Login failed.";
@@ -84,6 +101,7 @@
         await registerUser(credentials.email, user.nickname, credentials.password);
         await login(credentials.email, credentials.password);
       }
+      await loginWithMockChainAccount(user.id);
       await goto(resolve(destination));
     } catch (err) {
       mockLoginError = err instanceof Error ? err.message : "Mock login failed.";
@@ -104,10 +122,6 @@
     if (getToken()) {
       goto(resolve("/account"));
       return;
-    }
-
-    if (isDev) {
-      void handleAuthenticateAllMockAccounts();
     }
   });
 </script>

@@ -30,6 +30,10 @@ export type MockChainAuthResult = {
 };
 
 const MOCK_USER_PASSWORD = "mock-user-password";
+const servicesPatchCacheByMockUserId = new Map<
+  string,
+  { ethereumAddress: string; patchedUserId: string | null }
+>();
 
 const mockCredentialsForUser = (userId: string) => ({
   email: `${userId}@mock.decentralised.art`,
@@ -299,6 +303,15 @@ const ensureMockUserServicesEthereumAddress = async (
   ethereumAddressPatched: boolean;
   error: string | null;
 }> => {
+  const cached = servicesPatchCacheByMockUserId.get(userId);
+  if (cached && cached.ethereumAddress.toLowerCase() === ethereumAddress.trim().toLowerCase()) {
+    return {
+      patchedUserId: cached.patchedUserId,
+      ethereumAddressPatched: true,
+      error: null,
+    };
+  }
+
   const previousToken = getToken();
   const credentials = mockCredentialsForUser(userId);
 
@@ -317,6 +330,10 @@ const ensureMockUserServicesEthereumAddress = async (
     }
 
     await updateUserById(realUserId, { ethereum_address: ethereumAddress });
+    servicesPatchCacheByMockUserId.set(userId, {
+      ethereumAddress: ethereumAddress.trim(),
+      patchedUserId: realUserId,
+    });
     return {
       patchedUserId: realUserId,
       ethereumAddressPatched: true,

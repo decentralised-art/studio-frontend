@@ -296,9 +296,43 @@ const connectorToParticle = (connector: StudioConnectorDef): MockParticleDef => 
   conditionArgs: connector.conditionName ? [...(connector.conditionArgs ?? [])] : undefined,
 });
 
+const cloneStaticRi = (
+  staticRi: StudioConnectorDef["staticRi"],
+): StudioConnectorDef["staticRi"] => {
+  if (!staticRi) return undefined;
+  const out: NonNullable<StudioConnectorDef["staticRi"]> = {};
+  Object.entries(staticRi).forEach(([key, value]) => {
+    out[key] = {
+      startPoint: value.startPoint,
+      transformationShift: value.transformationShift,
+    };
+  });
+  return out;
+};
+
+const cloneConnectorDef = (connector: StudioConnectorDef): StudioConnectorDef => ({
+  name: connector.name,
+  dimensions: connector.dimensions.map((dimension) => ({
+    transformations: dimension.transformations.map((tx) => ({
+      name: tx.name,
+      args: [...tx.args],
+    })),
+    ...(dimension.composite ? { composite: dimension.composite } : {}),
+    bindings: { ...(dimension.bindings ?? {}) },
+    ...(typeof dimension.riStart === "number" ? { riStart: dimension.riStart } : {}),
+    ...(typeof dimension.riShift === "number" ? { riShift: dimension.riShift } : {}),
+  })),
+  ...(connector.conditionName ? { conditionName: connector.conditionName } : {}),
+  ...(connector.conditionArgs ? { conditionArgs: [...connector.conditionArgs] } : {}),
+  ...(connector.staticRi ? { staticRi: cloneStaticRi(connector.staticRi) } : {}),
+  ...(connector.formatHash ? { formatHash: connector.formatHash } : {}),
+  ...(connector.localAddress ? { localAddress: connector.localAddress } : {}),
+  ...(connector.ownerAddress ? { ownerAddress: connector.ownerAddress } : {}),
+});
+
 const normalizeConnector = (payload: ChainConnectorResponse): StudioConnectorDef | null => {
   try {
-    return fromProtocolConnectorPayload(payload);
+    return cloneConnectorDef(fromProtocolConnectorPayload(payload));
   } catch {
     return null;
   }
@@ -354,6 +388,7 @@ const mapExploreParticle = (
   particle: MockParticleDef,
   authorId: string,
   createdAt: number,
+  formatHash?: string,
 ): ExploreParticle => ({
   id: particle.name,
   name: particle.name,
@@ -371,6 +406,7 @@ const mapExploreParticle = (
   complexity: 1 + particle.composites.filter(Boolean).length,
   transactionName: `${particle.name} PT`,
   dependencies: particle.composites.filter(Boolean) as string[],
+  ...(formatHash ? { formatHash } : {}),
 });
 
 const uniqueStrings = (values: string[]) => Array.from(new Set(values.filter(Boolean)));
@@ -508,6 +544,7 @@ export const fetchChainOwnedStudioSnapshot = async (
           particle,
           options.authorId,
           extractConnectorCreatedAt(payload) ?? 0,
+          connector.formatHash,
         );
       })
       .filter((particle): particle is ExploreParticle => Boolean(particle)),
@@ -554,6 +591,7 @@ export const fetchChainParticleForStudio = async (
       particle,
       authorId,
       extractConnectorCreatedAt(connectorPayload) ?? Date.now(),
+      connector.formatHash,
     ),
   };
 };

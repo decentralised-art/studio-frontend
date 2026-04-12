@@ -44,6 +44,7 @@
   let feedEvents = $state<ParticlePostEvent[]>([]);
   let feedLoading = $state(true);
   let feedLoadMoreBusy = $state(false);
+  let feedLoadError = $state("");
   let profileLoading = $state(true);
   let formats = $state<ParticleFormat[]>([]);
   let chainElements = $state(listParticleSearchEntities());
@@ -98,13 +99,24 @@
         }
         return followedAuthorIds.has(event.authorId);
       })
-      .sort((a, b) => b.createdAt - a.createdAt),
+      .sort((a, b) => {
+        const byCreatedAt = b.createdAt - a.createdAt;
+        if (byCreatedAt !== 0) return byCreatedAt;
+        return b.id.localeCompare(a.id);
+      }),
   );
   const visibleNetworkFeedEvents = $derived.by(() =>
     networkFeedEvents.slice(0, Math.max(0, visibleEventCount)),
   );
   const hasMoreVisibleEvents = $derived.by(() => networkFeedEvents.length > visibleEventCount);
   const canLoadMoreEvents = $derived.by(() => hasMoreVisibleEvents || canFetchMoreFromChain);
+  const feedEmptyMessage = $derived.by(() => {
+    if (feedLoadError) return feedLoadError;
+    if (feedEvents.length > 0 && visibleNetworkFeedEvents.length === 0) {
+      return "No events from followed users or followed formats yet.";
+    }
+    return "No events to display yet.";
+  });
 
   const userSearchResults = $derived.by(() => {
     if (!searchQuery) return [] as User[];
@@ -165,6 +177,7 @@
   const showSearchResults = $derived.by(() => searchQuery.length > 0);
 
   const loadChainFeed = async () => {
+    feedLoadError = "";
     const hasCachedData = isParticlePostDataLoaded();
     if (hasCachedData) {
       feedEvents = listParticlePosts();
@@ -184,10 +197,14 @@
       });
     } catch (error) {
       console.error("[Network feed] Failed to sync chain-backed particle posts.", error);
+      feedLoadError = error instanceof Error ? error.message : "Unable to load network feed.";
     } finally {
       feedEvents = listParticlePosts();
       chainElements = listParticleSearchEntities();
       feedLoading = false;
+      if (feedEvents.length > 0) {
+        feedLoadError = "";
+      }
     }
 
     // Fast path can miss active sources if first source window has no events.
@@ -207,6 +224,7 @@
           });
         } catch (error) {
           console.warn("[Network feed] Auto-expand source sync failed.", error);
+          feedLoadError = error instanceof Error ? error.message : "Unable to load network feed.";
           break;
         }
         feedEvents = listParticlePosts();
@@ -266,8 +284,12 @@
       chainElements = listParticleSearchEntities();
       visibleEventCount += FEED_PAGE_SIZE;
       canFetchMoreFromChain = sourceSyncLimit < CHAIN_SOURCE_LIMIT_MAX || afterCount > beforeCount;
+      if (feedEvents.length > 0) {
+        feedLoadError = "";
+      }
     } catch (error) {
       console.error("[Network feed] Failed to load more events.", error);
+      feedLoadError = error instanceof Error ? error.message : "Unable to load more events.";
     } finally {
       feedLoadMoreBusy = false;
     }
@@ -485,6 +507,7 @@
     loadingMore={feedLoadMoreBusy}
     hasMore={canLoadMoreEvents}
     events={visibleNetworkFeedEvents}
+    emptyMessage={feedEmptyMessage}
     onLoadMore={loadMoreFeedEvents}
     onParticleOpen={openConnectorInStudio}
     onAddToToolbox={addParticleToToolbox}
