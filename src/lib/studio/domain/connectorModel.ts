@@ -3,6 +3,11 @@ export type StudioTransformationRef = {
   args: number[];
 };
 
+export type StudioRunningInstanceRef = {
+  startPoint: number;
+  transformationShift: number;
+};
+
 export type StudioConnectorDimension = {
   transformations: StudioTransformationRef[];
   composite?: string;
@@ -18,6 +23,9 @@ export type StudioConnectorDef = {
   dimensions: StudioConnectorDimension[];
   conditionName?: string;
   conditionArgs?: number[];
+  // Position-keyed static running instance map.
+  // Keys are canonical decimal integer strings: "0", "1", ...
+  staticRi?: Record<string, StudioRunningInstanceRef>;
   formatHash?: string;
   localAddress?: string;
   ownerAddress?: string;

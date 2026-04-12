@@ -34,7 +34,7 @@ PUBLIC_BASE_PATH=/app
 # Services API base URL (defaults to https://api.decentralised.art/services)
 VITE_SERVICES_API_BASE_URL=https://api.decentralised.art/services
 
-# Chain API base URL (defaults to https://api.decentralised.art/chain)
+# Chain API base URL (defaults to /chain in dev, https://api.decentralised.art/chain in prod)
 VITE_CHAIN_API_BASE_URL=https://api.decentralised.art/chain
 ```
 

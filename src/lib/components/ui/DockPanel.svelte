@@ -1,22 +1,114 @@
 <script lang="ts">
+  import { onDestroy } from "svelte";
   import type { Snippet } from "svelte";
 
   const {
     title = "",
     position = "left",
     inline = false,
+    resizable = false,
+    sizePx,
+    minSizePx = 180,
+    maxSizePx = 920,
+    contentScale = 1,
+    onResize,
     onHide,
     children,
   }: {
     title?: string;
     position?: "left" | "right" | "top" | "bottom";
     inline?: boolean;
+    resizable?: boolean;
+    sizePx?: number;
+    minSizePx?: number;
+    maxSizePx?: number;
+    contentScale?: number;
+    onResize?: (nextSize: number) => void;
     onHide?: () => void;
     children?: Snippet;
   } = $props();
+
+  let resizing = $state(false);
+  const canResize = $derived(
+    resizable && (position === "left" || position === "right") && typeof onResize === "function",
+  );
+  const clampedScale = $derived(Math.max(0.6, Math.min(1.25, contentScale)));
+  const currentSize = $derived(
+    clampSize(typeof sizePx === "number" && Number.isFinite(sizePx) ? sizePx : minSizePx),
+  );
+
+  const clampSize = (value: number) => Math.max(minSizePx, Math.min(maxSizePx, Math.round(value)));
+  const RESIZE_STEP_PX = 16;
+  const RESIZE_STEP_PX_FAST = 48;
+
+  const updateSizeFromPointer = (event: PointerEvent) => {
+    if (!canResize) return;
+    const viewport = window.innerWidth || 0;
+    const rawSize = position === "left" ? event.clientX : viewport - event.clientX;
+    onResize?.(clampSize(rawSize));
+  };
+
+  const stopResize = () => {
+    if (!resizing) return;
+    resizing = false;
+    window.removeEventListener("pointermove", updateSizeFromPointer);
+    window.removeEventListener("pointerup", stopResize);
+    window.removeEventListener("pointercancel", stopResize);
+    document.body.style.removeProperty("user-select");
+    document.body.style.removeProperty("cursor");
+  };
+
+  const startResize = (event: PointerEvent) => {
+    if (!canResize) return;
+    event.preventDefault();
+    event.stopPropagation();
+    resizing = true;
+    document.body.style.userSelect = "none";
+    document.body.style.cursor = "col-resize";
+    window.addEventListener("pointermove", updateSizeFromPointer);
+    window.addEventListener("pointerup", stopResize);
+    window.addEventListener("pointercancel", stopResize);
+    updateSizeFromPointer(event);
+  };
+
+  const applySizeDelta = (delta: number) => {
+    if (!canResize || !Number.isFinite(delta) || delta === 0) return;
+    onResize?.(clampSize(currentSize + delta));
+  };
+
+  const handleResizeKeydown = (event: KeyboardEvent) => {
+    if (!canResize) return;
+    const step = event.shiftKey ? RESIZE_STEP_PX_FAST : RESIZE_STEP_PX;
+
+    if (event.key === "Home") {
+      event.preventDefault();
+      onResize?.(minSizePx);
+      return;
+    }
+
+    if (event.key === "End") {
+      event.preventDefault();
+      onResize?.(maxSizePx);
+      return;
+    }
+
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    event.preventDefault();
+
+    const direction = event.key === "ArrowRight" ? 1 : -1;
+    const signedDirection = position === "right" ? -direction : direction;
+    applySizeDelta(step * signedDirection);
+  };
+
+  onDestroy(() => {
+    stopResize();
+  });
 </script>
 
-<section class={`dock dock--${position}`}>
+<section
+  class={`dock dock--${position} ${canResize ? "dock--resizable" : ""}`}
+  style={`--dock-size-px:${sizePx ?? 0}; --dock-content-scale:${clampedScale};`}
+>
   <header class="dock-head">
     <span class="dock-title">{title}</span>
     {#if inline}
@@ -29,8 +121,20 @@
 
   {#if !inline && children}
     <div class="dock-body">
-      {@render children?.()}
+      <div class="dock-body-scale">
+        {@render children?.()}
+      </div>
     </div>
+  {/if}
+
+  {#if canResize}
+    <button
+      class={`dock-resize-handle dock-resize-handle--${position} ${resizing ? "is-active" : ""}`}
+      aria-label={position === "left" ? "Resize left panel" : "Resize right panel"}
+      type="button"
+      onpointerdown={startResize}
+      onkeydown={handleResizeKeydown}
+    ></button>
   {/if}
 </section>
 
@@ -38,7 +142,7 @@
   @reference "$lib/styles/style.css";
 
   .dock {
-    @apply flex flex-col min-h-0 border border-white/10 bg-black/70;
+    @apply relative flex flex-col min-h-0 border border-white/10 bg-black/70;
   }
 
   .dock-head {
@@ -61,6 +165,14 @@
     @apply flex-1 min-h-0 overflow-auto p-2 text-sm text-white/70;
   }
 
+  .dock-body-scale {
+    --_scale: var(--dock-content-scale, 1);
+    transform-origin: top left;
+    transform: scale(var(--_scale));
+    width: calc(100% / var(--_scale));
+    min-height: calc(100% / var(--_scale));
+  }
+
   .dock--left,
   .dock--right {
     @apply h-full;
@@ -69,5 +181,37 @@
   .dock--top,
   .dock--bottom {
     @apply w-full;
+  }
+
+  .dock-resize-handle {
+    @apply absolute top-0 bottom-0 z-20;
+    width: 10px;
+    touch-action: none;
+    cursor: col-resize;
+    border: 0;
+    padding: 0;
+    background: transparent;
+  }
+
+  .dock-resize-handle::before {
+    content: "";
+    @apply absolute top-0 bottom-0 left-1/2 -translate-x-1/2;
+    width: 2px;
+    background: rgba(255, 255, 255, 0.12);
+    transition: background-color 140ms ease;
+  }
+
+  .dock-resize-handle:hover::before,
+  .dock-resize-handle:focus-visible::before,
+  .dock-resize-handle.is-active::before {
+    background: rgba(52, 211, 153, 0.68);
+  }
+
+  .dock-resize-handle--left {
+    right: -5px;
+  }
+
+  .dock-resize-handle--right {
+    left: -5px;
   }
 </style>

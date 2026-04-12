@@ -96,7 +96,7 @@
           <Tag variant="outline">Original composition</Tag>
         {:else}
           {#each visibleIngredients as ingredient (ingredient)}
-            <Tag variant="outline">{ingredient}</Tag>
+            <Tag variant="outline" preserveCase>{ingredient}</Tag>
           {/each}
           {#if extraCount > 0}
             <Tag variant="outline">+{extraCount} more</Tag>

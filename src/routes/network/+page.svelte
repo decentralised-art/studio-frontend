@@ -12,7 +12,6 @@
   import {
     findParticlesByTerminalSet,
     getParticleLabelMap,
-    isParticlePostDataLoaded,
     listParticlePosts,
     listParticleSearchEntities,
     syncParticlePostDataFromChain,
@@ -44,7 +43,7 @@
   let feedEvents = $state<ParticlePostEvent[]>([]);
   let feedLoading = $state(true);
   let feedLoadMoreBusy = $state(false);
-  let profileLoading = $state(true);
+  let feedLoadError = $state("");
   let formats = $state<ParticleFormat[]>([]);
   let chainElements = $state(listParticleSearchEntities());
   let visibleEventCount = $state(FEED_PAGE_SIZE);
@@ -61,7 +60,7 @@
   const followedAuthorIds = $derived.by(() => new SvelteSet(localFollowing));
   const followedFormatKeys = $derived.by(() => new SvelteSet(localFollowedFormats));
   const toolboxParticleIds = $derived.by(() => new SvelteSet(localToolboxParticles));
-  const feedUiLoading = $derived.by(() => feedLoading || profileLoading);
+  const feedUiLoading = $derived.by(() => feedLoading);
   const searchQuery = $derived.by(() => followSearch.trim().toLowerCase());
   const formatFeedEvents = $derived.by(() => buildFormatFeedEvents(formats, getParticleLabelMap()));
   const followedFormatParticleIds = $derived.by(() => {
@@ -80,31 +79,54 @@
     });
     return ids;
   });
-  const networkFeedEvents = $derived.by(() =>
-    ([...feedEvents, ...formatFeedEvents] as NetworkFeedEvent[])
-      .filter((event) => {
-        if (event.type === "format") {
-          return (
-            followedAuthorIds.has(event.authorId) ||
-            followedFormatKeys.has(event.formatId) ||
-            followedFormatKeys.has(event.formatSlug) ||
-            followedFormatKeys.has(event.formatName)
-          );
-        }
-        if (event.type === "connector") {
-          return (
-            followedAuthorIds.has(event.authorId) || followedFormatParticleIds.has(event.particleId)
-          );
-        }
-        return followedAuthorIds.has(event.authorId);
-      })
-      .sort((a, b) => b.createdAt - a.createdAt),
-  );
+  const networkFeedEvents = $derived.by(() => {
+    const combined = [...feedEvents, ...formatFeedEvents] as NetworkFeedEvent[];
+    const filtered = combined.filter((event) => {
+      if (event.type === "format") {
+        return (
+          followedAuthorIds.has(event.authorId) ||
+          followedFormatKeys.has(event.formatId) ||
+          followedFormatKeys.has(event.formatSlug) ||
+          followedFormatKeys.has(event.formatName)
+        );
+      }
+      if (event.type === "connector") {
+        return (
+          followedAuthorIds.has(event.authorId) || followedFormatParticleIds.has(event.particleId)
+        );
+      }
+      return followedAuthorIds.has(event.authorId);
+    });
+
+    const sorted = [...filtered].sort((a, b) => {
+      const byCreatedAt = b.createdAt - a.createdAt;
+      if (byCreatedAt !== 0) return byCreatedAt;
+      return b.id.localeCompare(a.id);
+    });
+
+    // Fallback for prototype mode: if follow mapping is temporarily out of sync
+    // (e.g. services UUIDs vs local aliases), avoid false "No events" empties.
+    if (sorted.length === 0 && combined.length > 0) {
+      return [...combined].sort((a, b) => {
+        const byCreatedAt = b.createdAt - a.createdAt;
+        if (byCreatedAt !== 0) return byCreatedAt;
+        return b.id.localeCompare(a.id);
+      });
+    }
+    return sorted;
+  });
   const visibleNetworkFeedEvents = $derived.by(() =>
     networkFeedEvents.slice(0, Math.max(0, visibleEventCount)),
   );
   const hasMoreVisibleEvents = $derived.by(() => networkFeedEvents.length > visibleEventCount);
   const canLoadMoreEvents = $derived.by(() => hasMoreVisibleEvents || canFetchMoreFromChain);
+  const feedEmptyMessage = $derived.by(() => {
+    if (feedLoadError) return feedLoadError;
+    if (feedEvents.length > 0 && visibleNetworkFeedEvents.length === 0) {
+      return "No events from followed users or followed formats yet.";
+    }
+    return "No events to display yet.";
+  });
 
   const userSearchResults = $derived.by(() => {
     if (!searchQuery) return [] as User[];
@@ -165,18 +187,20 @@
   const showSearchResults = $derived.by(() => searchQuery.length > 0);
 
   const loadChainFeed = async () => {
-    const hasCachedData = isParticlePostDataLoaded();
-    if (hasCachedData) {
+    feedLoadError = "";
+    feedLoading = true;
+    const refreshFeedStateFromCache = () => {
       feedEvents = listParticlePosts();
       chainElements = listParticleSearchEntities();
-      feedLoading = false;
-    } else {
-      feedLoading = true;
-    }
+      if (feedEvents.length > 0) {
+        feedLoadError = "";
+      }
+    };
 
     try {
       await syncParticlePostDataFromChain({
-        force: !hasCachedData,
+        force: true,
+        forceSources: true,
         maxSources: sourceSyncLimit,
         maxOwnedPerSource: CHAIN_OWNED_PER_SOURCE_LIMIT,
         includeRuntimeCode: false,
@@ -184,11 +208,9 @@
       });
     } catch (error) {
       console.error("[Network feed] Failed to sync chain-backed particle posts.", error);
-    } finally {
-      feedEvents = listParticlePosts();
-      chainElements = listParticleSearchEntities();
-      feedLoading = false;
+      feedLoadError = error instanceof Error ? error.message : "Unable to load network feed.";
     }
+    refreshFeedStateFromCache();
 
     // Fast path can miss active sources if first source window has no events.
     // Auto-expand sources until at least one event is found or max window is reached.
@@ -200,6 +222,7 @@
         try {
           await syncParticlePostDataFromChain({
             force: true,
+            forceSources: true,
             maxSources: sourceSyncLimit,
             maxOwnedPerSource: CHAIN_OWNED_PER_SOURCE_LIMIT,
             includeRuntimeCode: false,
@@ -207,31 +230,34 @@
           });
         } catch (error) {
           console.warn("[Network feed] Auto-expand source sync failed.", error);
+          feedLoadError = error instanceof Error ? error.message : "Unable to load network feed.";
           break;
         }
-        feedEvents = listParticlePosts();
-        chainElements = listParticleSearchEntities();
+        refreshFeedStateFromCache();
       }
+    }
+
+    // Final fallback: if capped scan found nothing, attempt one uncapped sync to avoid false-empty UI
+    // when active sources are beyond the capped window.
+    if (feedEvents.length === 0 && sourceSyncLimit >= CHAIN_SOURCE_LIMIT_MAX) {
+      try {
+        await syncParticlePostDataFromChain({
+          force: true,
+          forceSources: true,
+          maxOwnedPerSource: CHAIN_OWNED_PER_SOURCE_LIMIT,
+          includeRuntimeCode: false,
+          includeDependencyExpansion: false,
+        });
+      } catch (error) {
+        console.warn("[Network feed] Uncapped source sync failed.", error);
+        feedLoadError = error instanceof Error ? error.message : "Unable to load network feed.";
+      }
+      refreshFeedStateFromCache();
     }
 
     canFetchMoreFromChain = sourceSyncLimit < CHAIN_SOURCE_LIMIT_MAX;
 
-    if (hasCachedData) {
-      void syncParticlePostDataFromChain({
-        force: true,
-        maxSources: sourceSyncLimit,
-        maxOwnedPerSource: CHAIN_OWNED_PER_SOURCE_LIMIT,
-        includeRuntimeCode: false,
-        includeDependencyExpansion: false,
-      })
-        .then(() => {
-          feedEvents = listParticlePosts();
-          chainElements = listParticleSearchEntities();
-        })
-        .catch((error) => {
-          console.warn("[Network feed] Background refresh failed.", error);
-        });
-    }
+    feedLoading = false;
   };
 
   const loadMoreFeedEvents = async () => {
@@ -256,6 +282,7 @@
     try {
       await syncParticlePostDataFromChain({
         force: true,
+        forceSources: true,
         maxSources: sourceSyncLimit,
         maxOwnedPerSource: CHAIN_OWNED_PER_SOURCE_LIMIT,
         includeRuntimeCode: false,
@@ -266,8 +293,12 @@
       chainElements = listParticleSearchEntities();
       visibleEventCount += FEED_PAGE_SIZE;
       canFetchMoreFromChain = sourceSyncLimit < CHAIN_SOURCE_LIMIT_MAX || afterCount > beforeCount;
+      if (feedEvents.length > 0) {
+        feedLoadError = "";
+      }
     } catch (error) {
       console.error("[Network feed] Failed to load more events.", error);
+      feedLoadError = error instanceof Error ? error.message : "Unable to load more events.";
     } finally {
       feedLoadMoreBusy = false;
     }
@@ -284,6 +315,7 @@
     runtimeSearchHydrationBusy = true;
     void syncParticlePostDataFromChain({
       force: true,
+      forceSources: true,
       maxSources: sourceSyncLimit,
       maxOwnedPerSource: CHAIN_OWNED_PER_SOURCE_LIMIT,
       includeRuntimeCode: true,
@@ -352,32 +384,31 @@
     formats = loadLocalFormats();
     void Promise.allSettled([
       getCurrentUserToolboxLibrary(),
-      getCurrentUserSocialPreferences({ bootstrapPrototypeIfEmpty: true }),
-    ])
-      .then((results) => {
-        const [toolboxResult, socialResult] = results;
+      getCurrentUserSocialPreferences(),
+    ]).then((results) => {
+      const [toolboxResult, socialResult] = results;
 
-        if (toolboxResult.status === "fulfilled") {
-          localToolboxParticles = [...toolboxResult.value.connector];
-        } else {
-          console.warn(
-            "[Network feed] Failed to load toolbox preferences from profile.",
-            toolboxResult.reason,
-          );
-        }
+      if (toolboxResult.status === "fulfilled") {
+        localToolboxParticles = [...toolboxResult.value.connector];
+      } else {
+        console.warn(
+          "[Network feed] Failed to load toolbox preferences from profile.",
+          toolboxResult.reason,
+        );
+      }
 
-        if (socialResult.status === "fulfilled") {
-          localFollowing = [...socialResult.value.followedUserIds];
-          localFollowedFormats = [...socialResult.value.followedFormatIds];
-        } else {
-          console.warn("[Network feed] Failed to load social preferences.", socialResult.reason);
-          localFollowing = Object.keys(displayUsersById).filter((id) => id !== mockCurrentUserId);
-          localFollowedFormats = [];
-        }
-      })
-      .finally(() => {
-        profileLoading = false;
-      });
+      if (socialResult.status === "fulfilled") {
+        localFollowing =
+          socialResult.value.followedUserIds.length > 0
+            ? [...socialResult.value.followedUserIds]
+            : Object.keys(displayUsersById).filter((id) => id !== mockCurrentUserId);
+        localFollowedFormats = [...socialResult.value.followedFormatIds];
+      } else {
+        console.warn("[Network feed] Failed to load social preferences.", socialResult.reason);
+        localFollowing = Object.keys(displayUsersById).filter((id) => id !== mockCurrentUserId);
+        localFollowedFormats = [];
+      }
+    });
     void loadChainFeed();
   });
 </script>
@@ -485,6 +516,7 @@
     loadingMore={feedLoadMoreBusy}
     hasMore={canLoadMoreEvents}
     events={visibleNetworkFeedEvents}
+    emptyMessage={feedEmptyMessage}
     onLoadMore={loadMoreFeedEvents}
     onParticleOpen={openConnectorInStudio}
     onAddToToolbox={addParticleToToolbox}

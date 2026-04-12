@@ -152,7 +152,7 @@
       <p class="deps-title">Dependency snapshot</p>
       <div class="deps-tags">
         {#each particle.dependencies as dependency (dependency)}
-          <Tag variant="outline">{dependency}</Tag>
+          <Tag variant="outline" preserveCase>{dependency}</Tag>
         {/each}
       </div>
     {/if}

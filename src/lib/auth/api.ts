@@ -30,6 +30,12 @@ export type MockChainAuthResult = {
 };
 
 const MOCK_USER_PASSWORD = "mock-user-password";
+const SERVICES_ME_CACHE_KEY = "dcn_services_me_cache_v1";
+const servicesPatchCacheByMockUserId = new Map<
+  string,
+  { ethereumAddress: string; patchedUserId: string | null }
+>();
+let cachedMePayloadMemory: unknown | null = null;
 
 const mockCredentialsForUser = (userId: string) => ({
   email: `${userId}@mock.decentralised.art`,
@@ -141,6 +147,39 @@ const parseResponseBody = async (response: Response) => {
   return response.text();
 };
 
+const readCachedMePayload = (): unknown | null => {
+  if (!browser) return cachedMePayloadMemory;
+  if (cachedMePayloadMemory !== null) return cachedMePayloadMemory;
+  try {
+    const raw = window.localStorage.getItem(SERVICES_ME_CACHE_KEY);
+    if (!raw) return null;
+    cachedMePayloadMemory = JSON.parse(raw);
+    return cachedMePayloadMemory;
+  } catch {
+    return null;
+  }
+};
+
+const writeCachedMePayload = (payload: unknown) => {
+  cachedMePayloadMemory = payload;
+  if (!browser) return;
+  try {
+    window.localStorage.setItem(SERVICES_ME_CACHE_KEY, JSON.stringify(payload));
+  } catch {
+    // ignore cache write failures
+  }
+};
+
+const clearCachedMePayload = () => {
+  cachedMePayloadMemory = null;
+  if (!browser) return;
+  try {
+    window.localStorage.removeItem(SERVICES_ME_CACHE_KEY);
+  } catch {
+    // ignore cache clear failures
+  }
+};
+
 const shouldRetryWithAlternatePayload = (statusCode: number): boolean =>
   statusCode === 400 ||
   statusCode === 404 ||
@@ -217,6 +256,7 @@ const requestChainAuthToken = async (
 const authenticateMockUserInChain = async (
   userId: string,
   nickname: string,
+  options?: { patchServicesProfile?: boolean },
 ): Promise<MockChainAuthResult> => {
   const account = getOrCreateMockEthereumAccount(`mock-user:${userId}`);
   const mockUser = mockUsers.find((entry) => entry.id === userId);
@@ -237,11 +277,14 @@ const authenticateMockUserInChain = async (
       mockUser.address = account.address;
     }
 
-    const servicesPatch = await ensureMockUserServicesEthereumAddress(
-      userId,
-      nickname,
-      account.address,
-    );
+    const shouldPatchServicesProfile = options?.patchServicesProfile !== false;
+    const servicesPatch = shouldPatchServicesProfile
+      ? await ensureMockUserServicesEthereumAddress(userId, nickname, account.address)
+      : {
+          patchedUserId: null,
+          ethereumAddressPatched: false,
+          error: null,
+        };
     patchedUserId = servicesPatch.patchedUserId;
 
     return {
@@ -299,6 +342,15 @@ const ensureMockUserServicesEthereumAddress = async (
   ethereumAddressPatched: boolean;
   error: string | null;
 }> => {
+  const cached = servicesPatchCacheByMockUserId.get(userId);
+  if (cached && cached.ethereumAddress.toLowerCase() === ethereumAddress.trim().toLowerCase()) {
+    return {
+      patchedUserId: cached.patchedUserId,
+      ethereumAddressPatched: true,
+      error: null,
+    };
+  }
+
   const previousToken = getToken();
   const credentials = mockCredentialsForUser(userId);
 
@@ -317,6 +369,10 @@ const ensureMockUserServicesEthereumAddress = async (
     }
 
     await updateUserById(realUserId, { ethereum_address: ethereumAddress });
+    servicesPatchCacheByMockUserId.set(userId, {
+      ethereumAddress: ethereumAddress.trim(),
+      patchedUserId: realUserId,
+    });
     return {
       patchedUserId: realUserId,
       ethereumAddressPatched: true,
@@ -353,7 +409,11 @@ export const loginWithMockChainAccount = async (
     throw new Error(`Mock user not found: ${userId}`);
   }
 
-  const result = await authenticateMockUserInChain(user.id, user.nickname);
+  // Default login path should not perform services register/login side effects.
+  // This keeps chain auth fast and avoids noisy 500/409 errors when services is unstable.
+  const result = await authenticateMockUserInChain(user.id, user.nickname, {
+    patchServicesProfile: false,
+  });
   if (!result.success || !result.token) {
     throw new Error(result.error ?? "Mock chain login failed.");
   }
@@ -432,10 +492,20 @@ export const registerUser = async (email: string, displayName: string, password:
 };
 
 export const logout = async (): Promise<void> => {
-  await authFetch("/auth/logout", { method: "POST" });
+  const token = getToken();
   clearToken();
   clearChainToken();
+  clearCachedMePayload();
   redirectToLogin();
+  if (!token) return;
+
+  // Optimistic logout UX: user is redirected immediately; backend session invalidation runs in background.
+  void fetch(buildServicesApiUrl("/auth/logout"), {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+  }).catch(() => {
+    // Ignore background logout failures; local auth state is already cleared.
+  });
 };
 
 export const getMe = async () => {
@@ -443,8 +513,12 @@ export const getMe = async () => {
   if (!response.ok) {
     throw new Error("Failed to load account.");
   }
-  return response.json();
+  const payload = await response.json();
+  writeCachedMePayload(payload);
+  return payload;
 };
+
+export const getCachedMe = (): unknown | null => readCachedMePayload();
 
 export type ServicesUserRecord = {
   id: string;

@@ -31,15 +31,12 @@
   import { renderTransformationSolidity } from "$lib/components/solidity-editor/templates/transformationTemplate";
   import { renderConditionSolidity } from "$lib/components/solidity-editor/templates/conditionTemplate";
   import { inferArgsCountFromSnippet } from "$lib/components/solidity-editor/templates/inferArgsCount";
+  import { toProtocolConnectorPayload } from "$lib/chain/connectorContractAdapter";
   import { mockParticleViews, type ExploreParticle } from "$lib/data/exploreParticles";
   import type { PtOutputFeature } from "$lib/particles/ptMidiAdapter";
-  import {
-    type MockFeatureDef,
-    type MockParticleDef,
-    type MockRunConfig,
-    type MockRunningInstance,
-  } from "$lib/particles/mockPtNetwork";
-  import { buildStudioRuntime, runStudioParticle } from "$lib/studio/studioRuntime";
+  import { type MockFeatureDef, type MockParticleDef } from "$lib/particles/mockPtNetwork";
+  import { buildExecuteRiPlan, type ExecuteNodeOverrides } from "$lib/studio/executeRequestPlanner";
+  import { buildStudioRuntime } from "$lib/studio/studioRuntime";
   import {
     fetchChainOwnedStudioSnapshot,
     fetchChainParticleForStudio,
@@ -58,14 +55,18 @@
     type ChainApiPostResult,
     postChainConnectorDetailed,
     postChainConditionDetailed,
+    postChainExecuteDetailed,
     postChainTransformationDetailed,
   } from "$lib/chain/registryApi";
   import { mockPlugins, type LibraryItem } from "$lib/data/studioLibrary";
   import { mockCurrentUserId, mockUsersById } from "$lib/data/users";
-  import type { StudioConnectorDef } from "$lib/studio/domain/connectorModel";
+  import type {
+    StudioConnectorDef,
+    StudioRunningInstanceRef,
+  } from "$lib/studio/domain/connectorModel";
 
   type PanelMode = "open" | "hidden";
-  type RightPanelMode = "assistant" | "inspector" | "both" | "hidden";
+  type RightPanelMode = "assistant" | "inspector" | "runner" | "both" | "hidden";
   type InspectorTab = "node" | "api";
 
   let leftMode = $state<PanelMode>("open");
@@ -74,6 +75,11 @@
   let inspectorAuto = $state(true);
   let topMode = $state<PanelMode>("open");
   let bottomMode = $state<PanelMode>("open");
+  let viewportWidthPx = $state(1280);
+  let leftPanelWidthPx = $state(280);
+  let rightPanelWidthPx = $state(300);
+  let leftPanelUserSized = $state(false);
+  let rightPanelUserSized = $state(false);
   let savedModes = $state<{
     left: PanelMode;
     right: RightPanelMode;
@@ -137,11 +143,15 @@
     connectorTreeCollapsed?: boolean;
     definitionRole?: "root" | "member" | null;
     tabRoot?: boolean;
+    hideOutlets?: boolean;
     pluginOutput?: PtOutputFeature[];
     pluginTargets?: string[];
     riStart?: number;
     riShift?: number;
     riLocked?: boolean;
+    riPosition?: number;
+    staticRi?: Record<string, StudioRunningInstanceRef>;
+    showRiControls?: boolean;
   };
   type StudioNode = {
     id: string;
@@ -196,6 +206,9 @@
   let runOutputByTab = $state<Record<string, PtOutputFeature[]>>({});
   let runWarningsByTab = $state<Record<string, string[]>>({});
   let runTimestampByTab = $state<Record<string, number>>({});
+  let chainRunBusy = $state(false);
+  let chainRunMessageByTab = $state<Record<string, string>>({});
+  let chainRunTimestampByTab = $state<Record<string, number>>({});
   let compileWarningsByTab = $state<Record<string, string[]>>({});
   let compileTimestampByTab = $state<Record<string, number>>({});
   let deployTimestampByTab = $state<Record<string, number>>({});
@@ -287,8 +300,14 @@
     particleId?: string;
   };
 
+  type ConnectorTreeModel = {
+    rootConnectorName: string;
+    nodes: StudioNode[];
+    edges: Edge[];
+  };
+
   const tabGraphs = new SvelteMap<string, { nodes: StudioNode[]; edges: Edge[] }>();
-  const connectorTreeModelsByTab = new SvelteMap<string, { nodes: StudioNode[]; edges: Edge[] }>();
+  const connectorTreeModelsByTab = new SvelteMap<string, ConnectorTreeModel>();
 
   type ToolboxLibrary = {
     connector: string[];
@@ -337,6 +356,93 @@
     const num = Number(value);
     if (!Number.isFinite(num)) return undefined;
     return Math.max(0, Math.trunc(num));
+  };
+
+  const toCanonicalPositionKey = (value: number | string | null | undefined): string | null => {
+    if (value === null || value === undefined) return null;
+    const asNumber = typeof value === "number" ? value : Number(String(value).trim());
+    if (!Number.isInteger(asNumber) || asNumber < 0) return null;
+    return String(asNumber);
+  };
+
+  const cloneStaticRiMap = (
+    input: Record<string, StudioRunningInstanceRef> | null | undefined,
+  ): Record<string, StudioRunningInstanceRef> => {
+    if (!input || typeof input !== "object") return {};
+    const normalizedEntries = Object.entries(input)
+      .map(([rawKey, value]) => {
+        const key = toCanonicalPositionKey(rawKey);
+        if (!key || !value || typeof value !== "object") return null;
+        const startPoint = toInt(value.startPoint) ?? 0;
+        const transformationShift = toInt(value.transformationShift) ?? 0;
+        return [key, { startPoint, transformationShift }] as const;
+      })
+      .filter((entry): entry is readonly [string, StudioRunningInstanceRef] => Boolean(entry))
+      .sort((a, b) => Number(a[0]) - Number(b[0]));
+    return Object.fromEntries(normalizedEntries);
+  };
+
+  const getConnectorStaticRi = (
+    node: StudioNode | null | undefined,
+  ): Record<string, StudioRunningInstanceRef> => {
+    if (!node || !isConnectorKind(node.data.kind)) return {};
+    return cloneStaticRiMap(node.data.staticRi);
+  };
+
+  const parseStaticRiPayload = (input: unknown): Record<string, StudioRunningInstanceRef> => {
+    if (!input || typeof input !== "object" || Array.isArray(input)) return {};
+    const out: Record<string, StudioRunningInstanceRef> = {};
+    Object.entries(input as Record<string, unknown>).forEach(([rawKey, rawValue]) => {
+      const key = toCanonicalPositionKey(rawKey);
+      if (!key || !rawValue || typeof rawValue !== "object" || Array.isArray(rawValue)) return;
+      const value = rawValue as Record<string, unknown>;
+      const startPoint = toInt(value.start_point as number | string | null | undefined);
+      const transformationShift = toInt(
+        value.transformation_shift as number | string | null | undefined,
+      );
+      const startPointAlt = toInt(value.startPoint as number | string | null | undefined);
+      const transformationShiftAlt = toInt(
+        value.transformationShift as number | string | null | undefined,
+      );
+      out[key] = {
+        startPoint: startPoint ?? startPointAlt ?? 0,
+        transformationShift: transformationShift ?? transformationShiftAlt ?? 0,
+      };
+    });
+    return cloneStaticRiMap(out);
+  };
+
+  const resolveConnectorSelfStaticRi = (
+    staticRiInput: Record<string, StudioRunningInstanceRef> | null | undefined,
+    absolutePosition?: number | null,
+  ): StudioRunningInstanceRef | null => {
+    const staticRi = cloneStaticRiMap(staticRiInput);
+    if (!Object.keys(staticRi).length) return null;
+
+    if (staticRi["0"]) return staticRi["0"];
+    const absoluteKey = toCanonicalPositionKey(absolutePosition ?? null);
+    if (absoluteKey === "0" && staticRi[absoluteKey]) return staticRi[absoluteKey];
+    return null;
+  };
+
+  const listConnectorStaticRiEntries = (
+    connectorId: string,
+  ): Array<{ position: number; value: StudioRunningInstanceRef }> => {
+    const node = nodes.find((candidate) => candidate.id === connectorId) ?? null;
+    const map = getConnectorStaticRi(node);
+    return Object.entries(map)
+      .map(([key, value]) => ({ position: Number(key), value }))
+      .filter((entry) => Number.isInteger(entry.position) && entry.position >= 0)
+      .sort((a, b) => a.position - b.position);
+  };
+
+  const getNextConnectorStaticRiPosition = (connectorId: string): number => {
+    const entries = listConnectorStaticRiEntries(connectorId);
+    if (!entries.length) return 0;
+    let candidate = 0;
+    const used = new SvelteSet(entries.map((entry) => entry.position));
+    while (used.has(candidate)) candidate += 1;
+    return candidate;
   };
 
   const toContractName = (label: string) => {
@@ -460,28 +566,93 @@
   let tabs = $state<StudioTab[]>([initialTab]);
   let activeTabId = $state<string>(initialTab.id);
   const activeTab = $derived.by(() => tabs.find((tab) => tab.id === activeTabId) ?? null);
-  const activeTabReadOnly = $derived.by(() => Boolean(activeTab?.particleId));
+  const activeTabReadOnly = $derived.by(
+    () => Boolean(activeTab?.particleId) || Boolean(connectorTreeModelsByTab.get(activeTabId)),
+  );
   const activeRunOutput = $derived.by(() => runOutputByTab[activeTabId]);
   const activeRunWarnings = $derived.by(() => runWarningsByTab[activeTabId] ?? []);
   const activeRunTimestamp = $derived.by(() => runTimestampByTab[activeTabId] ?? null);
+  const activeChainRunMessage = $derived.by(() => chainRunMessageByTab[activeTabId] ?? "");
+  const activeChainRunTimestamp = $derived.by(() => chainRunTimestampByTab[activeTabId] ?? null);
   const activeCompileWarnings = $derived.by(() => compileWarningsByTab[activeTabId] ?? []);
   const activeCompileTimestamp = $derived.by(() => compileTimestampByTab[activeTabId] ?? null);
   const activeDeployTimestamp = $derived.by(() => deployTimestampByTab[activeTabId] ?? null);
 
   const panelSize = (mode: PanelMode, open: string) => (mode === "hidden" ? "0px" : open);
 
-  const getNodeStatusLabel = (node: StudioNode) => (node.data.fromNetwork ? "Network" : "Draft");
+  const getNodeStatusLabel = (node: StudioNode) =>
+    node.data.fromNetwork ? "Network (view-only)" : "Draft";
 
-  const leftSize = $derived.by(() => panelSize(leftMode, "280px"));
+  const getLeftPanelBounds = () => {
+    const compact = viewportWidthPx <= 900;
+    const min = compact ? 176 : 220;
+    const max = Math.max(min, Math.floor(viewportWidthPx * (compact ? 0.84 : 0.5)));
+    return { min, max };
+  };
+
+  const getRightPanelBounds = () => {
+    const compact = viewportWidthPx <= 900;
+    const min = compact ? 192 : 240;
+    const max = Math.max(min, Math.floor(viewportWidthPx * (compact ? 0.88 : 0.55)));
+    return { min, max };
+  };
+
+  const clampPanelWidth = (value: number, bounds: { min: number; max: number }) =>
+    Math.min(bounds.max, Math.max(bounds.min, Math.round(value)));
+
+  const clampLeftPanelWidth = (value: number) => clampPanelWidth(value, getLeftPanelBounds());
+  const clampRightPanelWidth = (value: number) => clampPanelWidth(value, getRightPanelBounds());
+
+  const applyResponsivePanelWidths = () => {
+    const defaultLeft = viewportWidthPx <= 900 ? 220 : 280;
+    const defaultRight = viewportWidthPx <= 900 ? 240 : 300;
+    leftPanelWidthPx = leftPanelUserSized
+      ? clampLeftPanelWidth(leftPanelWidthPx)
+      : clampLeftPanelWidth(defaultLeft);
+    rightPanelWidthPx = rightPanelUserSized
+      ? clampRightPanelWidth(rightPanelWidthPx)
+      : clampRightPanelWidth(defaultRight);
+  };
+
+  const leftPanelScale = $derived.by(() => {
+    const compact = viewportWidthPx <= 900;
+    const baseline = compact ? 240 : 280;
+    return Math.max(0.74, Math.min(1.08, leftPanelWidthPx / baseline));
+  });
+
+  const rightPanelScale = $derived.by(() => {
+    const compact = viewportWidthPx <= 900;
+    const baseline = compact ? 260 : 300;
+    return Math.max(0.74, Math.min(1.08, rightPanelWidthPx / baseline));
+  });
+
+  const leftSize = $derived.by(() =>
+    leftMode === "hidden" ? "0px" : `${clampLeftPanelWidth(leftPanelWidthPx)}px`,
+  );
   const hasSelection = $derived.by(() => selectedNodeId !== null || activeTab !== null);
   const inspectorCanShow = $derived.by(() => inspectorTab === "api" || hasSelection);
   const assistantVisible = $derived.by(() => rightMode === "assistant" || rightMode === "both");
   const inspectorVisible = $derived.by(
     () => inspectorCanShow && (rightMode === "inspector" || rightMode === "both"),
   );
-  const rightSize = $derived.by(() => (assistantVisible || inspectorVisible ? "300px" : "0px"));
+  const runnerVisible = $derived.by(() => rightMode === "runner");
+  const rightSize = $derived.by(() =>
+    assistantVisible || inspectorVisible || runnerVisible
+      ? `${clampRightPanelWidth(rightPanelWidthPx)}px`
+      : "0px",
+  );
   const topSize = $derived.by(() => "auto");
   const bottomSize = $derived.by(() => panelSize(bottomMode, "max-content"));
+
+  const handleLeftPanelResize = (nextSize: number) => {
+    leftPanelUserSized = true;
+    leftPanelWidthPx = clampLeftPanelWidth(nextSize);
+  };
+
+  const handleRightPanelResize = (nextSize: number) => {
+    rightPanelUserSized = true;
+    rightPanelWidthPx = clampRightPanelWidth(nextSize);
+  };
 
   const nodeTypes: NodeTypes = {
     feature: StudioConnectorNode,
@@ -524,8 +695,17 @@
     rightMode = assistantVisible ? "both" : "inspector";
   };
 
+  const toggleRunner = () => {
+    if (runnerVisible) {
+      rightMode = "hidden";
+      return;
+    }
+    inspectorAuto = false;
+    rightMode = "runner";
+  };
+
   const toggleRightPanel = () => {
-    if (assistantVisible || inspectorVisible) {
+    if (assistantVisible || inspectorVisible || runnerVisible) {
       inspectorAuto = false;
       rightMode = "hidden";
       return;
@@ -621,7 +801,7 @@
     );
   };
 
-  const loadNetworkSelectionFromQuery = () => {
+  const loadNetworkSelectionFromQuery = async () => {
     const params = new URLSearchParams(window.location.search);
     const rawKind = (params.get("network_kind") ?? "").toLowerCase();
     const rawId = params.get("network_id") ?? "";
@@ -660,6 +840,12 @@
       return;
     }
 
+    if (kind === "connector") {
+      await openConnectorTab(rawId);
+      clearNetworkIntentQuery();
+      return;
+    }
+
     const item = resolveNetworkLibraryItem(kind, rawId);
     if (!item) {
       clearNetworkIntentQuery();
@@ -674,6 +860,9 @@
   };
 
   onMount(() => {
+    viewportWidthPx = window.innerWidth;
+    applyResponsivePanelWidths();
+
     const handleDragOverCapture = (event: DragEvent) => {
       handleDragOver(event);
     };
@@ -708,7 +897,25 @@
       }
     };
 
+    const handleWindowResize = () => {
+      viewportWidthPx = window.innerWidth;
+      applyResponsivePanelWidths();
+    };
+
+    const handleStudioRiUpdate = (event: Event) => {
+      const custom = event as CustomEvent<{
+        nodeId?: string;
+        patch?: Partial<Pick<StudioNodeData, "riStart" | "riShift" | "riLocked">>;
+      }>;
+      const nodeId = custom.detail?.nodeId ?? "";
+      const patch = custom.detail?.patch;
+      if (!nodeId || !patch) return;
+      applyConnectorRiPatch(nodeId, patch);
+    };
+
     window.addEventListener("keydown", handleKey);
+    window.addEventListener("resize", handleWindowResize);
+    window.addEventListener("studio-ri-update", handleStudioRiUpdate as EventListener);
     if (canvasEl) {
       canvasEl.addEventListener("dragover", handleDragOverCapture, { capture: true });
       canvasEl.addEventListener("drop", handleDropCapture, { capture: true });
@@ -732,8 +939,11 @@
       mutationObserver.observe(canvasEl, { childList: true, subtree: true });
     }
 
-    loadNetworkSelectionFromQuery();
+    void loadNetworkSelectionFromQuery();
     void loadToolboxLibraryFromProfile();
+    void ensureChainAuthForStudio().catch(() => {
+      // Non-blocking warmup: run/deploy paths handle auth errors explicitly.
+    });
     if (!chainAutoSyncStarted) {
       chainAutoSyncStarted = true;
       void syncChainOwnedRegistry();
@@ -741,6 +951,8 @@
 
     return () => {
       window.removeEventListener("keydown", handleKey);
+      window.removeEventListener("resize", handleWindowResize);
+      window.removeEventListener("studio-ri-update", handleStudioRiUpdate as EventListener);
       if (canvasEl) {
         canvasEl.removeEventListener("dragover", handleDragOverCapture, { capture: true });
         canvasEl.removeEventListener("drop", handleDropCapture, { capture: true });
@@ -806,6 +1018,18 @@
     } catch (error) {
       console.warn("[Studio] Failed to persist toolbox library.", error);
     }
+  };
+
+  const addItemToToolboxLibrary = (kind: keyof ToolboxLibrary, id: string) => {
+    const normalizedId = normalizeToolboxIdByKind(kind, id);
+    if (!normalizedId) return;
+    if (toolboxLibrary[kind].includes(normalizedId)) return;
+    const next = {
+      ...toolboxLibrary,
+      [kind]: [...toolboxLibrary[kind], normalizedId],
+    };
+    toolboxLibrary = next;
+    void persistToolboxLibrary(next);
   };
 
   const loadToolboxLibraryFromProfile = async () => {
@@ -998,6 +1222,109 @@
       );
     }
     scheduleLayout();
+  };
+
+  const applyConnectorRiPatch = (
+    connectorId: string,
+    patch: Partial<Pick<StudioNodeData, "riStart" | "riShift" | "riLocked">>,
+  ) => {
+    const connector = nodes.find((node) => node.id === connectorId) ?? null;
+    if (!connector || !isConnectorKind(connector.data.kind)) return;
+    const isNetworkConnector = Boolean(connector.data.fromNetwork);
+
+    const nextStart = toInt(patch.riStart ?? connector.data.riStart) ?? 0;
+    const nextShift = toInt(patch.riShift ?? connector.data.riShift) ?? 0;
+    const nextLocked = isNetworkConnector
+      ? Boolean(connector.data.riLocked)
+      : Boolean(patch.riLocked ?? connector.data.riLocked);
+
+    updateNodeData(connectorId, {
+      riStart: nextStart,
+      riShift: nextShift,
+      riLocked: nextLocked,
+    });
+
+    // For network/view-only connectors, RI edits are runtime-only local overrides.
+    // Do not mutate connector static_ri definitions.
+    if (isNetworkConnector) return;
+
+    const nextStatic = getConnectorStaticRi(connector);
+    if (nextLocked) {
+      nextStatic["0"] = {
+        startPoint: nextStart,
+        transformationShift: nextShift,
+      };
+    } else {
+      delete nextStatic["0"];
+    }
+    setConnectorStaticRi(connectorId, nextStatic);
+  };
+
+  const setConnectorStaticRi = (
+    connectorId: string,
+    staticRi: Record<string, StudioRunningInstanceRef>,
+  ) => {
+    const connector = nodes.find((node) => node.id === connectorId) ?? null;
+    if (!connector || !isConnectorKind(connector.data.kind)) return;
+    updateNodeData(connectorId, { staticRi: cloneStaticRiMap(staticRi) });
+  };
+
+  const upsertConnectorStaticRiEntry = (
+    connectorId: string,
+    position: number,
+    patch: Partial<StudioRunningInstanceRef>,
+  ) => {
+    const connector = nodes.find((node) => node.id === connectorId) ?? null;
+    if (!connector || !isConnectorKind(connector.data.kind)) return;
+    const key = toCanonicalPositionKey(position);
+    if (!key) return;
+    const current = getConnectorStaticRi(connector);
+    const existing = current[key] ?? { startPoint: 0, transformationShift: 0 };
+    current[key] = {
+      startPoint: toInt(patch.startPoint ?? existing.startPoint) ?? 0,
+      transformationShift: toInt(patch.transformationShift ?? existing.transformationShift) ?? 0,
+    };
+    setConnectorStaticRi(connectorId, current);
+  };
+
+  const addConnectorStaticRiEntry = (connectorId: string) => {
+    const nextPosition = getNextConnectorStaticRiPosition(connectorId);
+    upsertConnectorStaticRiEntry(connectorId, nextPosition, {
+      startPoint: 0,
+      transformationShift: 0,
+    });
+  };
+
+  const moveConnectorStaticRiEntry = (
+    connectorId: string,
+    fromPosition: number,
+    toPosition: number,
+  ) => {
+    const connector = nodes.find((node) => node.id === connectorId) ?? null;
+    if (!connector || !isConnectorKind(connector.data.kind)) return;
+    const fromKey = toCanonicalPositionKey(fromPosition);
+    const toKey = toCanonicalPositionKey(toPosition);
+    if (!fromKey || !toKey || fromKey === toKey) return;
+    const current = getConnectorStaticRi(connector);
+    const existing = current[fromKey];
+    if (!existing || current[toKey]) return;
+    delete current[fromKey];
+    current[toKey] = {
+      startPoint: toInt(existing.startPoint) ?? 0,
+      transformationShift: toInt(existing.transformationShift) ?? 0,
+    };
+    setConnectorStaticRi(connectorId, current);
+  };
+
+  const removeConnectorStaticRiEntry = (connectorId: string, position: number) => {
+    const connector = nodes.find((node) => node.id === connectorId) ?? null;
+    if (!connector || !isConnectorKind(connector.data.kind)) return;
+    const key = toCanonicalPositionKey(position);
+    if (!key) return;
+    const current = getConnectorStaticRi(connector);
+    if (!(key in current)) return;
+    delete current[key];
+    setConnectorStaticRi(connectorId, current);
   };
 
   let layoutFrame: number | null = null;
@@ -1525,34 +1852,11 @@
     }
   });
 
-  const getPreferredDraftDimensionId = (): string | null => {
-    const selected = nodes.find((node) => node.id === selectedNodeId);
-    if (selected?.data.kind === "dimension" && !selected.data.fromNetwork) {
-      return selected.id;
-    }
-    const selectedConnector = getSelectedConnectorNode();
-    if (selectedConnector && !selectedConnector.data.fromNetwork) {
-      const selectedConnectorDimension = getSortedConnectorDimensions(selectedConnector.id).find(
-        (dimensionNode) => !dimensionNode.data.fromNetwork,
-      );
-      if (selectedConnectorDimension) return selectedConnectorDimension.id;
-    }
-    const firstLocalConnector = nodes.find(
-      (node) => isConnectorKind(node.data.kind) && !node.data.fromNetwork,
-    );
-    if (!firstLocalConnector) return null;
-    const firstLocalDimension = getSortedConnectorDimensions(firstLocalConnector.id).find(
-      (dimensionNode) => !dimensionNode.data.fromNetwork,
-    );
-    return firstLocalDimension?.id ?? null;
-  };
-
   const openNewTransformationEditor = () => {
     if (activeTabReadOnly) return;
     libraryCreateActionError = null;
-    const targetDimensionId = getPreferredDraftDimensionId();
     transformationEditorOpen = true;
-    transformationEditorDimensionId = targetDimensionId;
+    transformationEditorDimensionId = null;
     transformationEditorStatus = "draft";
     transformationEditorLocked = false;
     transformationDraftName = createUniqueName("transformation", "new_transformation");
@@ -1563,59 +1867,14 @@
   const openNewConditionEditor = () => {
     if (activeTabReadOnly) return;
     libraryCreateActionError = null;
-    const targetConnector = connectorDropTarget?.connectorId
-      ? (getFeatureNode(connectorDropTarget.connectorId) ?? null)
-      : null;
-    const attachedConnector =
-      targetConnector && isConnectorKind(targetConnector.data.kind)
-        ? targetConnector
-        : getSelectedConnectorNode();
-    const nodeId = `condition-quick-${crypto.randomUUID()}`;
-    const center = getCanvasCenter();
-    const node: StudioNode = {
-      id: nodeId,
-      selected: true,
-      type: "condition",
-      draggable: false,
-      position: attachedConnector
-        ? {
-            x: attachedConnector.position.x,
-            y: attachedConnector.position.y - 140,
-          }
-        : center,
-      data: {
-        label: createUniqueName("condition", "new_condition"),
-        kind: "condition",
-        fromNetwork: false,
-      },
-    };
-    nodes = nodes.map((existing) => ({ ...existing, selected: false }));
-    nodes = [...nodes, node];
-    if (
-      attachedConnector &&
-      !edges.some(
-        (edge) =>
-          edge.source === node.id &&
-          edge.target === attachedConnector.id &&
-          (edge.sourceHandle ?? "out") === "out" &&
-          ((edge.targetHandle ?? "in") === "in" || edge.targetHandle === "condition"),
-      )
-    ) {
-      edges = [
-        ...edges,
-        {
-          id: `edge-${node.id}-${attachedConnector.id}`,
-          source: node.id,
-          sourceHandle: "out",
-          target: attachedConnector.id,
-          targetHandle: "in",
-        },
-      ];
-    }
-    selectedNodeId = node.id;
-    conditionCodeById.set(node.id, defaultConditionDraftCode);
-    openConditionEditor(node);
-    scheduleLayout();
+    conditionEditorOpen = true;
+    conditionEditorNodeId = null;
+    conditionEditorStatus = "draft";
+    conditionEditorLocked = false;
+    conditionEditorDeployBusy = false;
+    conditionDraftName = createUniqueName("condition", "new_condition");
+    conditionDraftCode = defaultConditionDraftCode;
+    conditionDraftError = null;
   };
 
   const requestClearCanvas = () => {
@@ -2073,6 +2332,7 @@
         await traceChainPost("/chain/condition", requestBody, () =>
           postChainConditionDetailed(requestBody),
         );
+        addItemToToolboxLibrary("condition", conditionName);
       }
     }
 
@@ -2086,6 +2346,7 @@
       await traceChainPost("/chain/transformation", requestBody, () =>
         postChainTransformationDetailed(requestBody),
       );
+      addItemToToolboxLibrary("transformation", name);
     }
 
     const localConnectors = nodes.filter(
@@ -2109,24 +2370,11 @@
       const connectorName = resolveNodeName(connectorNode);
       const def = runtime.registry.connectors[connectorName];
       if (!def) continue;
-      const requestBody = {
-        name: connectorName,
-        dimensions: def.dimensions.map((dimension) => ({
-          transformations: dimension.transformations.map((tx) => ({
-            name: tx.name,
-            args: [...tx.args],
-          })),
-          ...(dimension.composite ? { composite: dimension.composite } : {}),
-          ...(Object.keys(dimension.bindings ?? {}).length
-            ? { bindings: { ...dimension.bindings } }
-            : {}),
-        })),
-        ...(def.conditionName ? { condition_name: def.conditionName } : {}),
-        ...(def.conditionArgs?.length ? { condition_args: [...def.conditionArgs] } : {}),
-      };
+      const requestBody = toProtocolConnectorPayload(def);
       await traceChainPost("/chain/connector", requestBody, () =>
         postChainConnectorDetailed(requestBody),
       );
+      addItemToToolboxLibrary("connector", connectorName);
     }
 
     if (!localConnectors.length) {
@@ -2138,15 +2386,62 @@
     return rootDef.name;
   };
 
+  const collectRuntimeConnectorClosure = (graphNodes: StudioNode[]) => {
+    const graphConnectorNames = graphNodes
+      .filter((node) => isConnectorKind(node.data.kind))
+      .map((node) => resolveNodeName(node).trim())
+      .filter((name) => Boolean(name));
+
+    const queue = [...graphConnectorNames];
+    const seen: Record<string, true> = {};
+    const scopedConnectors: Record<string, StudioConnectorDef> = {};
+
+    while (queue.length) {
+      const next = queue.pop();
+      if (!next) continue;
+      const key = normalizeKey(next);
+      if (seen[key]) continue;
+      seen[key] = true;
+
+      const connector = deployedRegistry.connectors[next];
+      if (!connector) continue;
+      scopedConnectors[next] = connector;
+
+      connector.dimensions.forEach((dimension) => {
+        const composite = dimension.composite?.trim();
+        if (composite) queue.push(composite);
+        Object.values(dimension.bindings ?? {}).forEach((targetRaw) => {
+          const target = `${targetRaw ?? ""}`.trim();
+          if (target) queue.push(target);
+        });
+      });
+    }
+
+    return scopedConnectors;
+  };
+
   const buildRuntimeOverrides = (
     compiledTransformations: Record<string, RuntimeTransformationDef> = {},
-  ) => ({
-    connectors: deployedRegistry.connectors,
-    features: deployedRegistry.features,
-    particles: deployedRegistry.particles,
-    transformations: { ...deployedRegistry.transformations, ...compiledTransformations },
-    conditions: { ...deployedRegistry.conditions, ...collectLocalConditionRuntime(nodes) },
-  });
+    graphNodes: StudioNode[] = nodes,
+  ) => {
+    const scopedConnectors = collectRuntimeConnectorClosure(graphNodes);
+    const scopedFeatures = Object.fromEntries(
+      Object.entries(deployedRegistry.features).filter(([name]) => Boolean(scopedConnectors[name])),
+    );
+    const scopedParticles = Object.fromEntries(
+      Object.entries(deployedRegistry.particles).filter(([name]) =>
+        Boolean(scopedConnectors[name]),
+      ),
+    );
+
+    return {
+      connectors: scopedConnectors,
+      features: scopedFeatures,
+      particles: scopedParticles,
+      transformations: { ...deployedRegistry.transformations, ...compiledTransformations },
+      conditions: { ...deployedRegistry.conditions, ...collectLocalConditionRuntime(graphNodes) },
+    };
+  };
 
   const collectDraftTransformations = (graphNodes: StudioNode[]) => {
     const draft: TransformationInstance[] = [];
@@ -2215,93 +2510,239 @@
     return { registry, warnings };
   };
 
-  const buildRunningInstances = (
-    runtime: ReturnType<typeof buildStudioRuntime>,
-    graphNodes: StudioNode[] = nodes,
-  ): MockRunningInstance[] => {
-    const featureNodesById: Record<string, StudioNode> = Object.fromEntries(
-      graphNodes
-        .filter((node) => isConnectorKind(node.data.kind))
-        .map((node) => [node.id, node] as const),
-    );
-    const dimensionByFeature = new SvelteMap<string, SvelteMap<number, StudioNode>>();
+  const collectExecuteNodeOverrides = (graphNodes: StudioNode[]): ExecuteNodeOverrides => {
+    const overrides: ExecuteNodeOverrides = {};
     graphNodes
-      .filter((node) => node.data.kind === "dimension")
-      .forEach((dimension) => {
-        const parentId = dimension.data.parentFeatureId;
-        if (!parentId) return;
-        const featureNode = featureNodesById[parentId];
-        if (!featureNode) return;
-        const featureName = resolveNodeName(featureNode);
-        const index = dimension.data.dimensionIndex;
-        if (typeof index !== "number") return;
-        if (!dimensionByFeature.has(featureName)) {
-          dimensionByFeature.set(featureName, new SvelteMap());
-        }
-        dimensionByFeature.get(featureName)!.set(index, dimension);
+      .filter((node) => isConnectorKind(node.data.kind))
+      .forEach((connectorNode) => {
+        if (connectorNode.data.riLocked) return;
+        const positionKey = toCanonicalPositionKey(connectorNode.data.riPosition);
+        if (!positionKey) return;
+        const startPoint = toInt(connectorNode.data.riStart) ?? 0;
+        const transformationShift = toInt(connectorNode.data.riShift) ?? 0;
+        if (startPoint === 0 && transformationShift === 0) return;
+        overrides[positionKey] = {
+          startPoint,
+          transformationShift,
+        };
       });
-
-    const instances: MockRunningInstance[] = [{ startPoint: 0, transformShift: 0 }];
-    const stack = new SvelteSet<string>();
-
-    const visit = (particleName: string) => {
-      if (stack.has(particleName)) return;
-      stack.add(particleName);
-      const particle = runtime.registry.particles[particleName];
-      if (!particle) {
-        stack.delete(particleName);
-        return;
-      }
-      const feature = runtime.registry.features[particle.featureName];
-      if (!feature) {
-        stack.delete(particleName);
-        return;
-      }
-      for (let dimIndex = 0; dimIndex < feature.dimensions.length; dimIndex += 1) {
-        const dimension = dimensionByFeature.get(particle.featureName)?.get(dimIndex);
-        const startPoint = toInt(dimension?.data.riStart);
-        const transformShift = toInt(dimension?.data.riShift);
-        instances.push({ startPoint, transformShift });
-
-        const composite = particle.composites[dimIndex];
-        if (composite) visit(composite);
-      }
-      stack.delete(particleName);
-    };
-
-    visit(runtime.rootParticle);
-    return instances;
+    return overrides;
   };
 
-  const executeActiveGraph = () => {
-    if (!activeTab) return;
-    saveActiveGraph();
-    let output: PtOutputFeature[] = [];
-    let warnings: string[] = [];
-
-    try {
-      const compiled = compileDraftTransformations(nodes);
-      const runtime = buildStudioRuntime(
-        { nodes, edges },
-        { rootLabel: activeTab.label, rootParticleId: activeTab.particleId },
-        buildRuntimeOverrides(compiled.registry),
-      );
-      const config: MockRunConfig = {
-        samplesCount: Math.max(1, Math.trunc(runSamplesCount)),
-        runningInstances: buildRunningInstances(runtime),
+  const extractExecuteErrorDetail = (error: unknown) => {
+    if (error instanceof ChainApiRequestError) {
+      let backendMessage = "";
+      const body = error.responseBody;
+      if (body && typeof body === "object" && !Array.isArray(body)) {
+        const candidate = (body as { message?: unknown }).message;
+        if (typeof candidate === "string" && candidate.trim().length) {
+          backendMessage = candidate.trim();
+        }
+      } else if (typeof body === "string" && body.trim().length) {
+        backendMessage = body.trim();
+      }
+      const responseDetails =
+        typeof body === "string" ? body : (JSON.stringify(body, null, 2) ?? String(body));
+      const headline = backendMessage
+        ? `POST /execute ${error.status} · ${backendMessage}`
+        : `POST /execute ${error.status} · ${error.message}`;
+      return {
+        headline,
+        details: responseDetails,
       };
-      warnings = [...compiled.warnings, ...runtime.warnings];
-      output = runStudioParticle(runtime.registry, runtime.rootParticle, config);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Run failed.";
-      warnings = [message];
-      output = [];
     }
 
-    runOutputByTab = { ...runOutputByTab, [activeTabId]: output };
-    runWarningsByTab = { ...runWarningsByTab, [activeTabId]: warnings };
-    runTimestampByTab = { ...runTimestampByTab, [activeTabId]: Date.now() };
-    refreshPluginOutputs(output);
+    const message = error instanceof Error ? error.message : "Run failed.";
+    return {
+      headline: `POST /execute failed · ${message}`,
+      details: "",
+    };
+  };
+
+  type ExecuteRequestPreview = {
+    connectorName: string;
+    requestBody: {
+      connector_name: string;
+      particles_count: string;
+      dynamic_ri: Record<
+        string,
+        {
+          start_point: number;
+          transformation_shift: number;
+        }
+      >;
+    };
+    error: string | null;
+  };
+
+  const resolveActiveExecuteConnectorName = (graphNodes: StudioNode[] = nodes): string => {
+    if (!activeTab) return "";
+    if (isConnectorTreeTab(activeTabId)) {
+      const treeRoot = connectorTreeModelsByTab.get(activeTabId)?.rootConnectorName?.trim();
+      if (treeRoot) return treeRoot;
+    }
+
+    const fromTab = activeTab.particleId?.trim();
+    if (fromTab) return fromTab;
+
+    const rootNode =
+      graphNodes.find(
+        (node) => isConnectorKind(node.data.kind) && node.data.definitionRole === "root",
+      ) ??
+      graphNodes.find((node) => isConnectorKind(node.data.kind) && Boolean(node.data.tabRoot)) ??
+      graphNodes.find((node) => isConnectorKind(node.data.kind));
+    return rootNode ? resolveNodeName(rootNode).trim() : "";
+  };
+
+  const buildExecuteRequestPreview = (graphNodes: StudioNode[] = nodes): ExecuteRequestPreview => {
+    const particlesCount = Math.max(1, Math.trunc(runSamplesCount));
+    const connectorName = resolveActiveExecuteConnectorName(graphNodes);
+    if (!connectorName) {
+      return {
+        connectorName: "",
+        requestBody: {
+          connector_name: "",
+          particles_count: String(particlesCount),
+          dynamic_ri: {},
+        },
+        error: "No connector selected to run.",
+      };
+    }
+
+    // Execute path intentionally does not run local runtime/planning/validation.
+    // Backend is the single source of truth for request validation and RI planning.
+    const dynamicOverrides = collectExecuteNodeOverrides(graphNodes);
+    const dynamicRi: Record<string, { start_point: number; transformation_shift: number }> = {};
+    Object.entries(dynamicOverrides).forEach(([position, value]) => {
+      if (!value) return;
+      dynamicRi[position] = {
+        start_point: toInt(value.startPoint) ?? 0,
+        transformation_shift: toInt(value.transformationShift) ?? 0,
+      };
+    });
+
+    return {
+      connectorName,
+      requestBody: {
+        connector_name: connectorName,
+        particles_count: String(particlesCount),
+        dynamic_ri: dynamicRi,
+      },
+      error: null,
+    };
+  };
+
+  const executeRequestPreview = $derived.by(() => buildExecuteRequestPreview());
+  const chainApiExecuteJson = $derived.by(() =>
+    JSON.stringify(executeRequestPreview.requestBody, null, 2),
+  );
+  const chainApiExecutePreviewError = $derived.by(() => executeRequestPreview.error);
+  const chainApiExecutePreviewWarnings = $derived.by(() => [] as string[]);
+  const chainApiExecutePreviewSummary = $derived.by(
+    () => "Execute preview: raw request body only (backend validates and computes RI plan).",
+  );
+
+  const executeActiveGraph = async () => {
+    if (!activeTab || chainRunBusy || chainDeployBusy) return;
+    saveActiveGraph();
+    chainRunBusy = true;
+    chainDeployError = null;
+    chainDeployStatus = "Running on chain...";
+    const runStartedAt = performance.now();
+    let output: PtOutputFeature[] = [];
+    let warnings: string[] = [];
+    const requestPreview = executeRequestPreview;
+    const requestPreparedAt = performance.now();
+    const connectorName = requestPreview.connectorName;
+    warnings = [];
+
+    if (!connectorName) {
+      const message = requestPreview.error ?? "No connector selected to run.";
+      chainRunMessageByTab = {
+        ...chainRunMessageByTab,
+        [activeTabId]: JSON.stringify({ message }, null, 2),
+      };
+      chainRunTimestampByTab = { ...chainRunTimestampByTab, [activeTabId]: Date.now() };
+      chainDeployStatus = null;
+      chainRunBusy = false;
+      return;
+    }
+    if (requestPreview.error) {
+      chainRunMessageByTab = {
+        ...chainRunMessageByTab,
+        [activeTabId]: JSON.stringify({ message: requestPreview.error }, null, 2),
+      };
+      chainRunTimestampByTab = { ...chainRunTimestampByTab, [activeTabId]: Date.now() };
+      chainDeployStatus = null;
+      chainRunBusy = false;
+      return;
+    }
+
+    try {
+      await ensureChainAuthForStudio();
+      const executeRequestStartedAt = performance.now();
+      const result = await withChainAuthRetry(() =>
+        postChainExecuteDetailed(requestPreview.requestBody),
+      );
+      output = result.body.map((stream) => ({
+        feature_path:
+          typeof stream.feature_path === "string"
+            ? stream.feature_path
+            : typeof stream.path === "string"
+              ? stream.path
+              : "",
+        data: Array.isArray(stream.data)
+          ? stream.data.filter((value): value is number => typeof value === "number")
+          : [],
+      }));
+
+      const responseJson = JSON.stringify(result.body, null, 2);
+      chainRunMessageByTab = {
+        ...chainRunMessageByTab,
+        [activeTabId]: responseJson || "[]",
+      };
+      chainRunTimestampByTab = { ...chainRunTimestampByTab, [activeTabId]: Date.now() };
+      chainDeployStatus = "Run completed.";
+      console.info(
+        `[Studio run timing] prepare ${Math.round(
+          requestPreparedAt - runStartedAt,
+        )}ms · execute ${Math.round(performance.now() - executeRequestStartedAt)}ms · total ${Math.round(
+          performance.now() - runStartedAt,
+        )}ms`,
+      );
+    } catch (error) {
+      const err = extractExecuteErrorDetail(error);
+      let responseOnly = "";
+      if (error instanceof ChainApiRequestError) {
+        const body = error.responseBody;
+        if (typeof body === "string") {
+          responseOnly = body.trim();
+        } else if (body !== undefined) {
+          responseOnly = JSON.stringify(body, null, 2) ?? "";
+        }
+      }
+      const fallbackErrorJson = JSON.stringify({ message: err.headline }, null, 2);
+      chainRunMessageByTab = {
+        ...chainRunMessageByTab,
+        [activeTabId]: responseOnly || fallbackErrorJson,
+      };
+      chainRunTimestampByTab = { ...chainRunTimestampByTab, [activeTabId]: Date.now() };
+      warnings = [...warnings, err.headline];
+      chainDeployStatus = null;
+      chainDeployError = err.headline;
+      output = [];
+      console.info(
+        `[Studio run timing] prepare ${Math.round(
+          requestPreparedAt - runStartedAt,
+        )}ms · total ${Math.round(performance.now() - runStartedAt)}ms (failed)`,
+      );
+    } finally {
+      runOutputByTab = { ...runOutputByTab, [activeTabId]: output };
+      runWarningsByTab = { ...runWarningsByTab, [activeTabId]: warnings };
+      runTimestampByTab = { ...runTimestampByTab, [activeTabId]: Date.now() };
+      refreshPluginOutputs(output);
+      chainRunBusy = false;
+    }
   };
 
   const compileActiveGraph = () => {
@@ -2683,17 +3124,6 @@
     transformationDraftError = null;
   };
 
-  const openConditionEditor = (conditionNode: StudioNode) => {
-    if (conditionNode.data.kind !== "condition") return;
-    conditionEditorOpen = true;
-    conditionEditorNodeId = conditionNode.id;
-    conditionEditorStatus = conditionNode.data.fromNetwork ? "network" : "draft";
-    conditionEditorLocked = Boolean(conditionNode.data.fromNetwork);
-    conditionDraftName = conditionNode.data.label || "New Condition";
-    conditionDraftCode = getConditionCode(conditionNode.id);
-    conditionDraftError = null;
-  };
-
   const closeConditionEditor = () => {
     conditionEditorOpen = false;
     conditionEditorNodeId = null;
@@ -2712,7 +3142,6 @@
       return;
     }
     const nodeId = conditionEditorNodeId;
-    if (!nodeId) return;
 
     const trimmedName = conditionDraftName.trim();
     if (!trimmedName) {
@@ -2789,12 +3218,14 @@
         0,
         inferArgsCountFromSnippet(snippetParsed.value).minArgsCount,
       );
-      conditionCodeById.set(nodeId, conditionDraftCode);
-      updateNodeData(nodeId, {
-        label: trimmedName,
-        fromNetwork: true,
-        networkId: trimmedName,
-      });
+      if (nodeId) {
+        conditionCodeById.set(nodeId, conditionDraftCode);
+        updateNodeData(nodeId, {
+          label: trimmedName,
+          fromNetwork: true,
+          networkId: trimmedName,
+        });
+      }
 
       deployedRegistry = {
         ...deployedRegistry,
@@ -2816,6 +3247,7 @@
           summary: "Deployed from Studio.",
         }),
       };
+      addItemToToolboxLibrary("condition", trimmedName);
 
       chainDeployStatus = `Deployed condition ${trimmedName}.`;
       closeConditionEditor();
@@ -2947,6 +3379,7 @@
           summary: "Deployed from Studio.",
         }),
       };
+      addItemToToolboxLibrary("transformation", trimmedName);
 
       const dimensionId = transformationEditorDimensionId;
       if (dimensionId) {
@@ -3010,7 +3443,7 @@
         ...node,
         position: { ...node.position },
         data: { ...node.data },
-        hidden: false,
+        hidden: Boolean(node.hidden),
       };
       if (isConnectorKind(next.data.kind)) {
         next.data.connectorTreeCollapsible = false;
@@ -3018,10 +3451,15 @@
       }
       return next;
     });
-    const projectedEdges: Edge[] = model.edges.map((edge) => ({
-      ...edge,
-      ...(edge.style ? { style: { ...edge.style } } : {}),
-    }));
+    const hiddenNodeIds = new SvelteSet(
+      projectedNodes.filter((node) => node.hidden).map((node) => node.id),
+    );
+    const projectedEdges: Edge[] = model.edges
+      .filter((edge) => !hiddenNodeIds.has(edge.source) && !hiddenNodeIds.has(edge.target))
+      .map((edge) => ({
+        ...edge,
+        ...(edge.style ? { style: { ...edge.style } } : {}),
+      }));
     return { nodes: projectedNodes, edges: projectedEdges };
   };
 
@@ -3095,6 +3533,20 @@
         ensureActiveDraftTabRootConnector();
       }
     }
+    nodes = nodes.map((node) =>
+      isConnectorKind(node.data.kind)
+        ? {
+            ...node,
+            data: {
+              ...node.data,
+              riStart: toInt(node.data.riStart) ?? 0,
+              riShift: toInt(node.data.riShift) ?? 0,
+              riLocked: Boolean(node.data.riLocked),
+              showRiControls: true,
+            },
+          }
+        : node,
+    );
     syncAllConnectorRowPreviews({ schedule: false });
     selectedNodeId = null;
     setConnectorDropTarget(null);
@@ -3325,17 +3777,28 @@
       .filter(([slotId, binding]) => Number.isInteger(slotId) && slotId >= 0 && Boolean(binding))
       .sort((lhs, rhs) => lhs[0] - rhs[0]);
 
-  const computeConnectorOpenSlots = (
+  type OpenSlotComputationOptions = {
+    tolerant?: boolean;
+  };
+
+  const computeConnectorOpenSlotsInRegistry = (
+    connectorRegistry: Record<string, StudioConnectorDef>,
     connectorName: string,
     cache = new SvelteMap<string, number>(),
     visiting = new SvelteSet<string>(),
+    options: OpenSlotComputationOptions = {},
   ): number => {
+    const tolerant = options.tolerant === true;
     if (cache.has(connectorName)) return cache.get(connectorName) ?? 0;
     if (visiting.has(connectorName)) {
+      if (tolerant) return 1;
       throw new Error(`Connector cycle detected at '${connectorName}'.`);
     }
-    const connector = deployedRegistry.connectors[connectorName];
-    if (!connector) return 0;
+    const connector = connectorRegistry[connectorName];
+    if (!connector) {
+      if (tolerant) return 1;
+      throw new Error(`Missing connector '${connectorName}'.`);
+    }
 
     visiting.add(connectorName);
     try {
@@ -3346,18 +3809,26 @@
           return;
         }
 
-        const childOpenSlots = computeConnectorOpenSlots(dimension.composite, cache, visiting);
+        const childOpenSlots = computeConnectorOpenSlotsInRegistry(
+          connectorRegistry,
+          dimension.composite,
+          cache,
+          visiting,
+          options,
+        );
         openSlots += childOpenSlots;
 
         const staticTargetsByChildSlot = new SvelteMap<number, string>();
         getSortedCanonicalBindingEntries(dimension.bindings ?? {}).forEach(
           ({ slotId, targetName }) => {
             if (slotId >= childOpenSlots) {
+              if (tolerant) return;
               throw new Error(
                 `Connector '${connectorName}' has out-of-range binding slot ${slotId} at dimension ${dimIndex} (child '${dimension.composite}' exports ${childOpenSlots} slots).`,
               );
             }
             if (staticTargetsByChildSlot.has(slotId)) {
+              if (tolerant) return;
               throw new Error(
                 `Connector '${connectorName}' has duplicate canonical binding slot ${slotId} at dimension ${dimIndex}.`,
               );
@@ -3367,7 +3838,13 @@
         );
 
         for (const targetName of staticTargetsByChildSlot.values()) {
-          openSlots += computeConnectorOpenSlots(targetName, cache, visiting);
+          openSlots += computeConnectorOpenSlotsInRegistry(
+            connectorRegistry,
+            targetName,
+            cache,
+            visiting,
+            options,
+          );
         }
 
         openSlots -= staticTargetsByChildSlot.size;
@@ -3380,12 +3857,63 @@
     }
   };
 
+  const computeConnectorOpenSlots = (
+    connectorName: string,
+    cache = new SvelteMap<string, number>(),
+    visiting = new SvelteSet<string>(),
+    options: OpenSlotComputationOptions = {},
+  ) =>
+    computeConnectorOpenSlotsInRegistry(
+      deployedRegistry.connectors,
+      connectorName,
+      cache,
+      visiting,
+      options,
+    );
+
+  const computeOpenSlotsForBindingTarget = (connectorName: string): number => {
+    const trimmed = connectorName.trim();
+    if (!trimmed) throw new Error("Connector name is required.");
+
+    try {
+      const compiled = compileDraftTransformations(nodes);
+      const runtime = buildStudioRuntime(
+        { nodes, edges },
+        {
+          rootLabel: activeTab?.label ?? "Connector",
+          rootParticleId: activeTab?.particleId ?? trimmed,
+        },
+        buildRuntimeOverrides(compiled.registry),
+      );
+      if (runtime.registry.connectors[trimmed]) {
+        return computeConnectorOpenSlotsInRegistry(runtime.registry.connectors, trimmed);
+      }
+    } catch {
+      // Fall through to deployed registry lookup.
+    }
+
+    return computeConnectorOpenSlots(trimmed);
+  };
+
   const buildConnectorTreeGraph = (
     rootConnectorName: string,
     origin: { x: number; y: number },
-  ): { nodes: StudioNode[]; edges: Edge[] } => {
+  ): ConnectorTreeModel => {
     const root = deployedRegistry.connectors[rootConnectorName];
-    if (!root) return { nodes: [], edges: [] };
+    if (!root) return { rootConnectorName, nodes: [], edges: [] };
+
+    const resolvedStaticByPosition = new SvelteMap<number, StudioRunningInstanceRef>();
+    try {
+      const staticPlan = buildExecuteRiPlan(deployedRegistry.connectors, rootConnectorName, {});
+      Object.values(staticPlan.staticRiByPosition).forEach((entry) => {
+        resolvedStaticByPosition.set(entry.position, {
+          startPoint: entry.startPoint,
+          transformationShift: entry.transformationShift,
+        });
+      });
+    } catch {
+      // Keep zero/open defaults when RI projection is unavailable.
+    }
 
     const graphNodes: StudioNode[] = [];
     const graphEdges: Edge[] = [];
@@ -3396,6 +3924,7 @@
     const horizontalSpacing = 380;
     const verticalSpacing = 340;
     let leafCursor = 0;
+    let riPositionCursor = 0;
 
     const pushEdge = (
       sourceId: string,
@@ -3515,6 +4044,10 @@
       }
 
       const connectorId = `connector-${connectorName}-${crypto.randomUUID()}`;
+      const connectorRiPosition = riPositionCursor;
+      riPositionCursor += 1;
+      const connectorStaticRi = cloneStaticRiMap(def.staticRi);
+      const connectorSelfStaticRi = resolvedStaticByPosition.get(connectorRiPosition) ?? null;
       const connectorNode: StudioNode = {
         id: connectorId,
         type: "connector",
@@ -3538,6 +4071,12 @@
           networkId: connectorName,
           fromNetwork: true,
           tabRoot: input.depth === 0,
+          hideOutlets: false,
+          riPosition: connectorRiPosition,
+          riStart: connectorSelfStaticRi?.startPoint ?? 0,
+          riShift: connectorSelfStaticRi?.transformationShift ?? 0,
+          riLocked: Boolean(connectorSelfStaticRi),
+          staticRi: connectorStaticRi,
         },
       };
       graphNodes.push(connectorNode);
@@ -3567,6 +4106,19 @@
 
       for (let dimId = 0; dimId < def.dimensions.length; dimId += 1) {
         const dimension = def.dimensions[dimId];
+        const dimNode = createDimensionNode(connectorNode, dimId, def.dimensions.length);
+        dimNode.data = {
+          ...dimNode.data,
+          transformations: dimension.transformations.map((transformation) =>
+            createTransformationInstance(
+              transformation.name,
+              transformation.args,
+              connectorNode.data.fromNetwork ? "network" : "draft",
+            ),
+          ),
+        };
+        graphNodes.push(dimNode);
+        pushEdge(connectorId, `dim-${dimId}`, dimNode.id, "in");
 
         if (!dimension.composite) {
           const replacement = input.incomingBindings.get(openSlotId) ?? null;
@@ -3595,6 +4147,9 @@
               bindingOwnerName: replacement.ownerConnectorName,
               bindingSlot: openSlotId,
             });
+          } else {
+            // Mirror backend DFS RI indexing: each unbound terminal slot consumes one position.
+            riPositionCursor += 1;
           }
 
           openSlotId += 1;
@@ -3605,6 +4160,7 @@
           dimension.composite,
           openSlotCache,
           new SvelteSet(nextVisiting),
+          { tolerant: true },
         );
         const staticTargetsByChildSlot = new SvelteMap<number, string>();
         getSortedCanonicalBindingEntries(dimension.bindings ?? {}).forEach(
@@ -3634,6 +4190,7 @@
               staticTarget,
               openSlotCache,
               new SvelteSet(nextVisiting),
+              { tolerant: true },
             );
             slotStaticTargets[childSlotId] = staticTarget;
             slotSelectedBindings[childSlotId] = {
@@ -3804,7 +4361,20 @@
       };
     });
 
-    return { nodes: graphNodes, edges: graphEdges };
+    const graphNodeById = new SvelteMap<string, StudioNode>();
+    graphNodes.forEach((node) => graphNodeById.set(node.id, node));
+    graphNodes.forEach((node) => {
+      if (!isConnectorKind(node.data.kind) || !node.data.fromNetwork) return;
+      const info = treeInfo.get(node.id);
+      if (!info) return;
+      const hasRenderableChild = info.children.some((childId) => graphNodeById.has(childId));
+      node.data = {
+        ...node.data,
+        hideOutlets: !hasRenderableChild,
+      };
+    });
+
+    return { rootConnectorName, nodes: graphNodes, edges: graphEdges };
   };
 
   const refreshConnectorTreeTab = (tabId: string) => {
@@ -4241,6 +4811,10 @@
       sourceId: `feature-${slugify(tab.label) || "untitled-connector"}`,
       fromNetwork: false,
       tabRoot: true,
+      riStart: 0,
+      riShift: 0,
+      riLocked: false,
+      staticRi: {},
     },
   });
 
@@ -4729,6 +5303,20 @@
           item.kind === "feature"
             ? createPlaceholderConnectorRows(item.dimensions ?? 1)
             : undefined,
+        ...(item.kind === "feature"
+          ? (() => {
+              const staticRi = cloneStaticRiMap(
+                deployedRegistry.connectors[registryName]?.staticRi,
+              );
+              const selfStatic = resolveConnectorSelfStaticRi(staticRi);
+              return {
+                riStart: selfStatic?.startPoint ?? 0,
+                riShift: selfStatic?.transformationShift ?? 0,
+                riLocked: Boolean(selfStatic),
+                staticRi,
+              };
+            })()
+          : {}),
       },
     };
     nodes = [...nodes, node];
@@ -4780,6 +5368,10 @@
             ? createPlaceholderConnectorRows(1)
             : undefined,
         fromNetwork: false,
+        riStart: kind === "feature" || kind === "connector" ? 0 : undefined,
+        riShift: kind === "feature" || kind === "connector" ? 0 : undefined,
+        riLocked: kind === "feature" || kind === "connector" ? false : undefined,
+        staticRi: kind === "feature" || kind === "connector" ? {} : undefined,
       },
     };
     nodes = nodes.map((existing) => ({ ...existing, selected: false }));
@@ -5160,9 +5752,15 @@
           const childConnectorName = resolveNodeName(targetNode);
           let childOpenSlots = 0;
           try {
-            childOpenSlots = computeConnectorOpenSlots(childConnectorName);
+            childOpenSlots = computeOpenSlotsForBindingTarget(childConnectorName);
           } catch {
-            childOpenSlots = 0;
+            chainDeployError = `Cannot create binding: failed to resolve open slots for '${childConnectorName}'.`;
+            return;
+          }
+
+          if (childOpenSlots <= 0) {
+            chainDeployError = `Cannot create binding: connector '${childConnectorName}' exposes no open slots.`;
+            return;
           }
           const usedSlots = new SvelteSet<number>();
           sameDimensionEdges
@@ -5171,11 +5769,20 @@
               const slot = parseEdgeBindingSlot(edge);
               if (slot !== null) usedSlots.add(slot);
             });
-          let slot = 0;
-          while (usedSlots.has(slot) && slot < childOpenSlots) slot += 1;
-          if (slot >= childOpenSlots) {
-            while (usedSlots.has(slot)) slot += 1;
+
+          let slot: number | null = null;
+          for (let candidate = 0; candidate < childOpenSlots; candidate += 1) {
+            if (!usedSlots.has(candidate)) {
+              slot = candidate;
+              break;
+            }
           }
+
+          if (slot === null) {
+            chainDeployError = `Cannot create binding: no free binding slots left for '${childConnectorName}'.`;
+            return;
+          }
+
           nextEdge.label = `binding · slot ${slot}`;
           nextEdge.data = {
             relation: "binding",
@@ -5295,26 +5902,7 @@
         null;
       if (!def) return {};
 
-      return {
-        name: connectorName,
-        dimensions: def.dimensions.map((dimension) => {
-          const base = {
-            transformations: dimension.transformations.map((tx) => ({
-              name: tx.name,
-              args: [...tx.args],
-            })),
-          };
-          return {
-            ...base,
-            ...(dimension.composite ? { composite: dimension.composite } : {}),
-            ...(Object.keys(dimension.bindings ?? {}).length
-              ? { bindings: { ...dimension.bindings } }
-              : {}),
-          };
-        }),
-        condition_name: def.conditionName ?? "",
-        condition_args: def.conditionArgs?.length ? [...def.conditionArgs] : [],
-      };
+      return toProtocolConnectorPayload(def);
     } catch {
       return {};
     }
@@ -5443,14 +6031,34 @@
       root_connector: rootConnectorName,
       root_connector_label: rootNode.data.label,
       connectors: connectorNodes.map((node) => ({
-        node_id: node.id,
-        name: resolveNodeName(node),
-        label: node.data.label,
-        dimensions: Math.max(1, Math.round(node.data.dimensions ?? 1)),
-        connector_rows: node.data.connectorRows ?? [],
-        condition: node.data.conditionLabel ?? "",
-        from_network: Boolean(node.data.fromNetwork),
-        definition_role: node.data.definitionRole ?? null,
+        ...(() => {
+          const staticRi = cloneStaticRiMap(node.data.staticRi);
+          const staticRiOut =
+            Object.keys(staticRi).length > 0
+              ? {
+                  static_ri: Object.fromEntries(
+                    Object.entries(staticRi).map(([key, value]) => [
+                      key,
+                      {
+                        start_point: toInt(value.startPoint) ?? 0,
+                        transformation_shift: toInt(value.transformationShift) ?? 0,
+                      },
+                    ]),
+                  ),
+                }
+              : {};
+          return {
+            node_id: node.id,
+            name: resolveNodeName(node),
+            label: node.data.label,
+            dimensions: Math.max(1, Math.round(node.data.dimensions ?? 1)),
+            connector_rows: node.data.connectorRows ?? [],
+            condition: node.data.conditionLabel ?? "",
+            from_network: Boolean(node.data.fromNetwork),
+            definition_role: node.data.definitionRole ?? null,
+            ...staticRiOut,
+          };
+        })(),
       })),
       links,
       terminals: visibleNodes
@@ -5481,6 +6089,7 @@
     dimensions?: Array<Record<string, unknown>>;
     condition_name?: string;
     condition_args?: number[];
+    static_ri?: Record<string, { start_point: number; transformation_shift: number }>;
   };
 
   type ApiDraftPreview = {
@@ -5505,6 +6114,7 @@
     }>;
     condition?: string;
     from_network?: boolean;
+    static_ri?: Record<string, { start_point?: number; transformation_shift?: number }>;
   };
 
   type ApiResolvedLinkPreview = {
@@ -5570,6 +6180,19 @@
     })),
     condition_name: connector.conditionName ?? "",
     condition_args: connector.conditionName ? [...(connector.conditionArgs ?? [])] : [],
+    ...(connector.staticRi && Object.keys(connector.staticRi).length
+      ? {
+          static_ri: Object.fromEntries(
+            Object.entries(connector.staticRi).map(([key, value]) => [
+              key,
+              {
+                start_point: toInt(value.startPoint) ?? 0,
+                transformation_shift: toInt(value.transformationShift) ?? 0,
+              },
+            ]),
+          ),
+        }
+      : {}),
   });
 
   const convertResolvedTreePreviewToDraft = (
@@ -5652,6 +6275,22 @@
         dimensions[dimIndex].transformations = parsed;
       });
 
+      const staticRi = parseStaticRiPayload(connector.static_ri);
+      const staticRiBody =
+        Object.keys(staticRi).length > 0
+          ? {
+              static_ri: Object.fromEntries(
+                Object.entries(staticRi).map(([key, value]) => [
+                  key,
+                  {
+                    start_point: toInt(value.startPoint) ?? 0,
+                    transformation_shift: toInt(value.transformationShift) ?? 0,
+                  },
+                ]),
+              ),
+            }
+          : {};
+
       connectorBodyByName.set(name, {
         name,
         dimensions: dimensions.map((dimension) => ({
@@ -5666,6 +6305,7 @@
         })),
         condition_name: `${connector.condition ?? ""}`.trim(),
         condition_args: [],
+        ...staticRiBody,
       });
     });
 
@@ -6016,6 +6656,10 @@
           };
         },
       );
+      const staticRiFromApi = parseStaticRiPayload(
+        (connectorBody as { static_ri?: unknown }).static_ri,
+      );
+      const selfStaticRiFromApi = resolveConnectorSelfStaticRi(staticRiFromApi);
 
       const connectorNode: StudioNode = {
         id: `feature-${crypto.randomUUID()}`,
@@ -6034,6 +6678,12 @@
           connectorRows: connectorRowsFromApi,
           fromNetwork: connectorIsReadOnly,
           tabRoot: connectorName === rootConnectorName,
+          hideOutlets: connectorIsReadOnly && (adjacency.get(connectorName)?.length ?? 0) === 0,
+          riStart: selfStaticRiFromApi?.startPoint ?? 0,
+          riShift: selfStaticRiFromApi?.transformationShift ?? 0,
+          riLocked: Boolean(selfStaticRiFromApi),
+          riPosition: undefined,
+          staticRi: staticRiFromApi,
         },
       };
       connectorNodeByName.set(connectorName, connectorNode);
@@ -6360,7 +7010,7 @@
             >
               <span class="tab-label">{tab.label}</span>
               <span class={`tab-status ${tab.particleId ? "is-network" : "is-draft"}`}>
-                {tab.particleId ? "network" : "in-progress"}
+                {tab.particleId ? "Network (view-only)" : "in-progress"}
               </span>
             </button>
           {/if}
@@ -6416,14 +7066,11 @@
             ariaLabel="New Transformation"
             title="New Transformation — Transformations live on connector dimensions and specify how values are selected from the attached particle."
             className="icon-btn"
-            draggable
             onclick={(event) => {
               event.preventDefault();
               event.stopPropagation();
-              addQuickNode("transformation", "New Transformation");
+              openNewTransformationEditor();
             }}
-            ondragstart={(event) =>
-              handleQuickDragStart(event, "transformation", "New Transformation")}
           >
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="M6 8h10l-3-3"></path>
@@ -6435,81 +7082,14 @@
             ariaLabel="New Condition"
             title="New Condition — A connector only outputs values if its condition is met."
             className="icon-btn"
-            draggable
             onclick={(event) => {
               event.preventDefault();
               event.stopPropagation();
-              addQuickNode("condition", "New Condition");
+              openNewConditionEditor();
             }}
-            ondragstart={(event) => handleQuickDragStart(event, "condition", "New Condition")}
           >
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="M4 6h16l-6 7v6l-4-2v-4z"></path>
-            </svg>
-          </Button>
-          <Button
-            variant="ghost"
-            ariaLabel="New Agent"
-            title="New Agent"
-            className="icon-btn"
-            draggable
-            onclick={(event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              addQuickNode("agent", "New Agent");
-            }}
-            ondragstart={(event) => handleQuickDragStart(event, "agent", "New Agent")}
-          >
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <circle cx="12" cy="8" r="3"></circle>
-              <path d="M5 20a7 7 0 0 1 14 0"></path>
-            </svg>
-          </Button>
-          <Button
-            variant="ghost"
-            ariaLabel="New Plugin"
-            title="New Plugin — A plugin consumes the runner’s output streams and renders or sonifies them."
-            className="icon-btn"
-            draggable
-            onclick={(event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              addQuickNode("plugin", "New Plugin");
-            }}
-            ondragstart={(event) => handleQuickDragStart(event, "plugin", "New Plugin")}
-          >
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M8 6v6M16 6v6"></path>
-              <path d="M6 12h12v3a6 6 0 0 1-12 0v-3z"></path>
-              <path d="M12 18v3"></path>
-            </svg>
-          </Button>
-        </div>
-        <div class="top-action-divider" aria-hidden="true"></div>
-        <div class="top-run-group">
-          <label class="run-label" for="run-samples">N</label>
-          <input
-            id="run-samples"
-            class="run-input"
-            type="number"
-            min="1"
-            inputmode="numeric"
-            value={runSamplesCount}
-            oninput={(event) => {
-              const target = event.target as HTMLInputElement | null;
-              const next = Number(target?.value ?? 1);
-              runSamplesCount = Number.isFinite(next) ? Math.max(1, Math.trunc(next)) : 1;
-            }}
-          />
-          <Button
-            variant="ghost"
-            ariaLabel="Run flow"
-            title="Run flow (mock runner)"
-            className="icon-btn"
-            onclick={executeActiveGraph}
-          >
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M7 5l12 7-12 7z"></path>
             </svg>
           </Button>
         </div>
@@ -6528,23 +7108,6 @@
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="M20 12a8 8 0 1 1-2.34-5.66"></path>
               <path d="M20 4v6h-6"></path>
-            </svg>
-          </Button>
-        </div>
-        <div class="top-action-divider" aria-hidden="true"></div>
-        <div class="top-deploy-group">
-          <Button
-            variant="ghost"
-            ariaLabel="Deploy draft elements"
-            title={chainDeployBusy ? "Deploying to chain..." : "Deploy drafts (compiles first)"}
-            className="icon-btn"
-            disabled={chainDeployBusy || chainSyncBusy}
-            onclick={deployActiveGraph}
-          >
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M12 4v10"></path>
-              <path d="M8 8l4-4 4 4"></path>
-              <path d="M4 20h16"></path>
             </svg>
           </Button>
         </div>
@@ -6572,6 +7135,12 @@
     <DockPanel
       title="Add element"
       position="left"
+      resizable
+      sizePx={leftPanelWidthPx}
+      minSizePx={getLeftPanelBounds().min}
+      maxSizePx={getLeftPanelBounds().max}
+      contentScale={leftPanelScale}
+      onResize={handleLeftPanelResize}
       onHide={() => hidePanel((mode) => (leftMode = mode))}
     >
       <div class="left-panel">
@@ -6809,7 +7378,17 @@
   </div>
 
   {#if rightMode === "assistant"}
-    <DockPanel title="Assistant" position="right" onHide={hideRightPanel}>
+    <DockPanel
+      title="Assistant"
+      position="right"
+      resizable
+      sizePx={rightPanelWidthPx}
+      minSizePx={getRightPanelBounds().min}
+      maxSizePx={getRightPanelBounds().max}
+      contentScale={rightPanelScale}
+      onResize={handleRightPanelResize}
+      onHide={hideRightPanel}
+    >
       <div class="right-panel-content">
         <div class="right-panel-controls">
           <button
@@ -6833,6 +7412,16 @@
               <circle cx="12" cy="12" r="7"></circle>
               <path d="M12 11v5"></path>
               <path d="M12 8h.01"></path>
+            </svg>
+          </button>
+          <button
+            type="button"
+            class={`right-panel-icon ${runnerVisible ? "is-active" : ""}`}
+            aria-label="Toggle run panel"
+            onclick={toggleRunner}
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M7 5l12 7-12 7z"></path>
             </svg>
           </button>
         </div>
@@ -6841,8 +7430,18 @@
     </DockPanel>
   {/if}
 
-  {#if rightMode === "inspector"}
-    <DockPanel title="Inspector" position="right" onHide={hideRightPanel}>
+  {#if rightMode === "runner"}
+    <DockPanel
+      title="Run + Deploy"
+      position="right"
+      resizable
+      sizePx={rightPanelWidthPx}
+      minSizePx={getRightPanelBounds().min}
+      maxSizePx={getRightPanelBounds().max}
+      contentScale={rightPanelScale}
+      onResize={handleRightPanelResize}
+      onHide={hideRightPanel}
+    >
       <div class="right-panel-content">
         <div class="right-panel-controls">
           <button
@@ -6866,6 +7465,118 @@
               <circle cx="12" cy="12" r="7"></circle>
               <path d="M12 11v5"></path>
               <path d="M12 8h.01"></path>
+            </svg>
+          </button>
+          <button
+            type="button"
+            class={`right-panel-icon ${runnerVisible ? "is-active" : ""}`}
+            aria-label="Toggle run panel"
+            onclick={toggleRunner}
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M7 5l12 7-12 7z"></path>
+            </svg>
+          </button>
+        </div>
+        <div class="runner-panel">
+          <div class="runner-controls">
+            <label class="run-label" for="run-samples-panel">N</label>
+            <input
+              id="run-samples-panel"
+              class="run-input"
+              type="number"
+              min="1"
+              inputmode="numeric"
+              value={runSamplesCount}
+              oninput={(event) => {
+                const target = event.target as HTMLInputElement | null;
+                const next = Number(target?.value ?? 1);
+                runSamplesCount = Number.isFinite(next) ? Math.max(1, Math.trunc(next)) : 1;
+              }}
+            />
+            <button
+              type="button"
+              class="runner-action"
+              disabled={chainRunBusy || chainDeployBusy}
+              onclick={executeActiveGraph}
+            >
+              {chainRunBusy ? "Running..." : "Run"}
+            </button>
+            <button
+              type="button"
+              class="runner-action"
+              disabled={chainDeployBusy || chainSyncBusy || chainRunBusy || activeTabReadOnly}
+              onclick={deployActiveGraph}
+            >
+              {chainDeployBusy ? "Deploying..." : "Deploy"}
+            </button>
+          </div>
+          {#if chainDeployStatus}
+            <div class="runner-status is-success">{chainDeployStatus}</div>
+          {/if}
+          {#if chainDeployError}
+            <div class="runner-status is-error">{chainDeployError}</div>
+          {/if}
+          <div class="inspector-section">
+            <div class="inspector-section-title">Network run output</div>
+            {#if activeChainRunTimestamp}
+              <div class="inspector-row">
+                <span>Last run</span>
+                <span>{new Date(activeChainRunTimestamp).toLocaleTimeString()}</span>
+              </div>
+            {/if}
+            <pre class="runner-output">{activeChainRunMessage || "No run result yet."}</pre>
+          </div>
+        </div>
+      </div>
+    </DockPanel>
+  {/if}
+
+  {#if rightMode === "inspector"}
+    <DockPanel
+      title="Inspector"
+      position="right"
+      resizable
+      sizePx={rightPanelWidthPx}
+      minSizePx={getRightPanelBounds().min}
+      maxSizePx={getRightPanelBounds().max}
+      contentScale={rightPanelScale}
+      onResize={handleRightPanelResize}
+      onHide={hideRightPanel}
+    >
+      <div class="right-panel-content">
+        <div class="right-panel-controls">
+          <button
+            type="button"
+            class={`right-panel-icon ${assistantVisible ? "is-active" : ""}`}
+            aria-label="Toggle assistant panel"
+            onclick={toggleAssistant}
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M4 6h16v10H8l-4 4z"></path>
+              <path d="M8 10h8M8 13h6"></path>
+            </svg>
+          </button>
+          <button
+            type="button"
+            class={`right-panel-icon ${inspectorVisible ? "is-active" : ""}`}
+            aria-label="Toggle inspector panel"
+            onclick={toggleInspector}
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="12" cy="12" r="7"></circle>
+              <path d="M12 11v5"></path>
+              <path d="M12 8h.01"></path>
+            </svg>
+          </button>
+          <button
+            type="button"
+            class={`right-panel-icon ${runnerVisible ? "is-active" : ""}`}
+            aria-label="Toggle run panel"
+            onclick={toggleRunner}
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M7 5l12 7-12 7z"></path>
             </svg>
           </button>
         </div>
@@ -7108,6 +7819,113 @@
                           </div>
                         {/if}
                       {/each}
+                    {/if}
+                  </div>
+                  <div class="inspector-section">
+                    <div class="inspector-section-title">Static running instances</div>
+                    <div class="inspector-hint">
+                      Optional per-slot fixed RI mapping (`static_ri`) for this connector.
+                    </div>
+                    {#if listConnectorStaticRiEntries(selectedNode.id).length === 0}
+                      <div class="inspector-hint">No static RI entries yet.</div>
+                    {:else}
+                      <div class="inspector-transform-list inspector-transform-list--compact">
+                        {#each listConnectorStaticRiEntries(selectedNode.id) as entry (`static-ri-${selectedNode.id}-${entry.position}`)}
+                          <div class="inspector-transform-row">
+                            <div class="inspector-transform-main inspector-transform-main--ri">
+                              <label
+                                class="inspector-inline-label"
+                                for={`static-ri-pos-${selectedNode.id}-${entry.position}`}
+                              >
+                                Pos
+                              </label>
+                              <input
+                                id={`static-ri-pos-${selectedNode.id}-${entry.position}`}
+                                class="inspector-input inspector-input--compact inspector-input--inline"
+                                type="number"
+                                inputmode="numeric"
+                                min="0"
+                                step="1"
+                                disabled={isReadOnly}
+                                value={entry.position}
+                                oninput={(event) => {
+                                  const target = event.target as HTMLInputElement | null;
+                                  moveConnectorStaticRiEntry(
+                                    selectedNode.id,
+                                    entry.position,
+                                    Number(target?.value ?? entry.position),
+                                  );
+                                }}
+                              />
+                              <label
+                                class="inspector-inline-label"
+                                for={`static-ri-start-${selectedNode.id}-${entry.position}`}
+                              >
+                                Start
+                              </label>
+                              <input
+                                id={`static-ri-start-${selectedNode.id}-${entry.position}`}
+                                class="inspector-input inspector-input--compact inspector-input--inline"
+                                type="number"
+                                inputmode="numeric"
+                                min="0"
+                                step="1"
+                                disabled={isReadOnly}
+                                value={entry.value.startPoint}
+                                oninput={(event) => {
+                                  const target = event.target as HTMLInputElement | null;
+                                  upsertConnectorStaticRiEntry(selectedNode.id, entry.position, {
+                                    startPoint: Number(target?.value ?? entry.value.startPoint),
+                                  });
+                                }}
+                              />
+                              <label
+                                class="inspector-inline-label"
+                                for={`static-ri-shift-${selectedNode.id}-${entry.position}`}
+                              >
+                                Shift
+                              </label>
+                              <input
+                                id={`static-ri-shift-${selectedNode.id}-${entry.position}`}
+                                class="inspector-input inspector-input--compact inspector-input--inline"
+                                type="number"
+                                inputmode="numeric"
+                                min="0"
+                                step="1"
+                                disabled={isReadOnly}
+                                value={entry.value.transformationShift}
+                                oninput={(event) => {
+                                  const target = event.target as HTMLInputElement | null;
+                                  upsertConnectorStaticRiEntry(selectedNode.id, entry.position, {
+                                    transformationShift: Number(
+                                      target?.value ?? entry.value.transformationShift,
+                                    ),
+                                  });
+                                }}
+                              />
+                              {#if !isReadOnly}
+                                <button
+                                  type="button"
+                                  class="inspector-remove"
+                                  onclick={() =>
+                                    removeConnectorStaticRiEntry(selectedNode.id, entry.position)}
+                                >
+                                  Remove
+                                </button>
+                              {/if}
+                            </div>
+                          </div>
+                        {/each}
+                      </div>
+                    {/if}
+                    {#if !isReadOnly}
+                      <button
+                        type="button"
+                        class="inspector-action"
+                        onclick={() => addConnectorStaticRiEntry(selectedNode.id)}
+                      >
+                        Add static RI entry
+                      </button>
                     {/if}
                   </div>
                 {/if}
@@ -7454,6 +8272,26 @@
               {/if}
             </div>
             <div class="inspector-section">
+              <div class="inspector-section-title">Execute request preview</div>
+              <div class="inspector-hint">
+                Exact `POST /execute` body generated from the current flow and `N`.
+              </div>
+              <pre class="inspector-code-preview">{chainApiExecuteJson}</pre>
+              <div class="inspector-hint">{chainApiExecutePreviewSummary}</div>
+              {#if chainApiExecutePreviewError}
+                <div class="inspector-alert">
+                  <div class="inspector-alert-text">{chainApiExecutePreviewError}</div>
+                </div>
+              {/if}
+              {#if chainApiExecutePreviewWarnings.length}
+                <div class="inspector-alert">
+                  <div class="inspector-alert-text">
+                    {chainApiExecutePreviewWarnings.join("; ")}
+                  </div>
+                </div>
+              {/if}
+            </div>
+            <div class="inspector-section">
               <div class="inspector-section-title">Deploy trace</div>
               <div class="inspector-hint">
                 Endpoint-by-endpoint responses from the latest deploy attempt.
@@ -7501,7 +8339,17 @@
   {/if}
 
   {#if rightMode === "both"}
-    <DockPanel title="Inspector + Assistant" position="right" onHide={hideRightPanel}>
+    <DockPanel
+      title="Inspector + Assistant"
+      position="right"
+      resizable
+      sizePx={rightPanelWidthPx}
+      minSizePx={getRightPanelBounds().min}
+      maxSizePx={getRightPanelBounds().max}
+      contentScale={rightPanelScale}
+      onResize={handleRightPanelResize}
+      onHide={hideRightPanel}
+    >
       <div class="right-panel-content">
         <div class="right-panel-controls">
           <button
@@ -7525,6 +8373,16 @@
               <circle cx="12" cy="12" r="7"></circle>
               <path d="M12 11v5"></path>
               <path d="M12 8h.01"></path>
+            </svg>
+          </button>
+          <button
+            type="button"
+            class={`right-panel-icon ${runnerVisible ? "is-active" : ""}`}
+            aria-label="Toggle run panel"
+            onclick={toggleRunner}
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M7 5l12 7-12 7z"></path>
             </svg>
           </button>
         </div>
@@ -7780,6 +8638,128 @@
                                 </div>
                               {/if}
                             {/each}
+                          {/if}
+                        </div>
+                        <div class="inspector-section">
+                          <div class="inspector-section-title">Static running instances</div>
+                          <div class="inspector-hint">
+                            Optional per-slot fixed RI mapping (`static_ri`) for this connector.
+                          </div>
+                          {#if listConnectorStaticRiEntries(selectedNode.id).length === 0}
+                            <div class="inspector-hint">No static RI entries yet.</div>
+                          {:else}
+                            <div class="inspector-transform-list inspector-transform-list--compact">
+                              {#each listConnectorStaticRiEntries(selectedNode.id) as entry (`static-ri-split-${selectedNode.id}-${entry.position}`)}
+                                <div class="inspector-transform-row">
+                                  <div
+                                    class="inspector-transform-main inspector-transform-main--ri"
+                                  >
+                                    <label
+                                      class="inspector-inline-label"
+                                      for={`static-ri-pos-split-${selectedNode.id}-${entry.position}`}
+                                    >
+                                      Pos
+                                    </label>
+                                    <input
+                                      id={`static-ri-pos-split-${selectedNode.id}-${entry.position}`}
+                                      class="inspector-input inspector-input--compact inspector-input--inline"
+                                      type="number"
+                                      inputmode="numeric"
+                                      min="0"
+                                      step="1"
+                                      disabled={isReadOnly}
+                                      value={entry.position}
+                                      oninput={(event) => {
+                                        const target = event.target as HTMLInputElement | null;
+                                        moveConnectorStaticRiEntry(
+                                          selectedNode.id,
+                                          entry.position,
+                                          Number(target?.value ?? entry.position),
+                                        );
+                                      }}
+                                    />
+                                    <label
+                                      class="inspector-inline-label"
+                                      for={`static-ri-start-split-${selectedNode.id}-${entry.position}`}
+                                    >
+                                      Start
+                                    </label>
+                                    <input
+                                      id={`static-ri-start-split-${selectedNode.id}-${entry.position}`}
+                                      class="inspector-input inspector-input--compact inspector-input--inline"
+                                      type="number"
+                                      inputmode="numeric"
+                                      min="0"
+                                      step="1"
+                                      disabled={isReadOnly}
+                                      value={entry.value.startPoint}
+                                      oninput={(event) => {
+                                        const target = event.target as HTMLInputElement | null;
+                                        upsertConnectorStaticRiEntry(
+                                          selectedNode.id,
+                                          entry.position,
+                                          {
+                                            startPoint: Number(
+                                              target?.value ?? entry.value.startPoint,
+                                            ),
+                                          },
+                                        );
+                                      }}
+                                    />
+                                    <label
+                                      class="inspector-inline-label"
+                                      for={`static-ri-shift-split-${selectedNode.id}-${entry.position}`}
+                                    >
+                                      Shift
+                                    </label>
+                                    <input
+                                      id={`static-ri-shift-split-${selectedNode.id}-${entry.position}`}
+                                      class="inspector-input inspector-input--compact inspector-input--inline"
+                                      type="number"
+                                      inputmode="numeric"
+                                      min="0"
+                                      step="1"
+                                      disabled={isReadOnly}
+                                      value={entry.value.transformationShift}
+                                      oninput={(event) => {
+                                        const target = event.target as HTMLInputElement | null;
+                                        upsertConnectorStaticRiEntry(
+                                          selectedNode.id,
+                                          entry.position,
+                                          {
+                                            transformationShift: Number(
+                                              target?.value ?? entry.value.transformationShift,
+                                            ),
+                                          },
+                                        );
+                                      }}
+                                    />
+                                    {#if !isReadOnly}
+                                      <button
+                                        type="button"
+                                        class="inspector-remove"
+                                        onclick={() =>
+                                          removeConnectorStaticRiEntry(
+                                            selectedNode.id,
+                                            entry.position,
+                                          )}
+                                      >
+                                        Remove
+                                      </button>
+                                    {/if}
+                                  </div>
+                                </div>
+                              {/each}
+                            </div>
+                          {/if}
+                          {#if !isReadOnly}
+                            <button
+                              type="button"
+                              class="inspector-action"
+                              onclick={() => addConnectorStaticRiEntry(selectedNode.id)}
+                            >
+                              Add static RI entry
+                            </button>
                           {/if}
                         </div>
                       {/if}
@@ -8136,6 +9116,26 @@
                     {/if}
                   </div>
                   <div class="inspector-section">
+                    <div class="inspector-section-title">Execute request preview</div>
+                    <div class="inspector-hint">
+                      Exact `POST /execute` body generated from the current flow and `N`.
+                    </div>
+                    <pre class="inspector-code-preview">{chainApiExecuteJson}</pre>
+                    <div class="inspector-hint">{chainApiExecutePreviewSummary}</div>
+                    {#if chainApiExecutePreviewError}
+                      <div class="inspector-alert">
+                        <div class="inspector-alert-text">{chainApiExecutePreviewError}</div>
+                      </div>
+                    {/if}
+                    {#if chainApiExecutePreviewWarnings.length}
+                      <div class="inspector-alert">
+                        <div class="inspector-alert-text">
+                          {chainApiExecutePreviewWarnings.join("; ")}
+                        </div>
+                      </div>
+                    {/if}
+                  </div>
+                  <div class="inspector-section">
                     <div class="inspector-section-title">Deploy trace</div>
                     <div class="inspector-hint">
                       Endpoint-by-endpoint responses from the latest deploy attempt.
@@ -8308,6 +9308,17 @@
           <path d="M12 8h.01"></path>
         </svg>
       </button>
+      <button
+        class="panel-tab"
+        type="button"
+        title="Run panel"
+        aria-label="Run panel"
+        onclick={toggleRunner}
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M7 5l12 7-12 7z"></path>
+        </svg>
+      </button>
     </div>
   {/if}
 
@@ -8462,10 +9473,6 @@
     @apply flex flex-wrap items-center gap-2;
   }
 
-  .top-run-group {
-    @apply flex items-center gap-2;
-  }
-
   .top-deploy-group {
     @apply flex items-center gap-2;
   }
@@ -8485,7 +9492,7 @@
 
   .tab {
     @apply rounded-md border border-white/10 bg-white/5 px-3 py-1 text-[0.6rem]
-      uppercase tracking-[0.2em] text-white/60 hover:border-white/30 hover:text-white;
+      tracking-[0.08em] text-white/60 hover:border-white/30 hover:text-white;
     @apply inline-flex items-center gap-2;
   }
 
@@ -8516,7 +9523,7 @@
 
   .tab-rename {
     @apply w-40 rounded-md border border-emerald-400/50 bg-black/80 px-2 py-1
-      text-[0.6rem] uppercase tracking-[0.2em] text-emerald-200 outline-none;
+      text-[0.6rem] tracking-[0.08em] text-emerald-200 outline-none;
   }
 
   .tab-add {
@@ -8816,6 +9823,10 @@
     @apply flex min-w-0 flex-1 flex-wrap items-center gap-2;
   }
 
+  .inspector-transform-main--ri {
+    @apply flex-nowrap;
+  }
+
   .inspector-transform-name {
     @apply basis-full text-[0.66rem] font-medium text-white/90;
     overflow-wrap: anywhere;
@@ -8983,6 +9994,39 @@
 
   .assistant-placeholder {
     @apply mt-4 text-[0.8rem] text-white/60;
+  }
+
+  .runner-panel {
+    @apply mt-3 flex min-h-0 flex-1 flex-col gap-3;
+  }
+
+  .runner-controls {
+    @apply flex items-center gap-2 rounded-md border border-white/10 bg-black/70 p-2;
+  }
+
+  .runner-action {
+    @apply inline-flex items-center justify-center rounded-md border border-white/20 bg-white/5
+      px-2.5 py-1 text-[0.65rem] uppercase tracking-[0.15em] text-white/80 transition
+      hover:border-white/35 hover:bg-white/10 hover:text-white disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  .runner-status {
+    @apply rounded-md border px-2 py-1.5 text-[0.7rem] leading-5;
+  }
+
+  .runner-status.is-success {
+    @apply border-emerald-400/35 bg-emerald-500/10 text-emerald-200;
+  }
+
+  .runner-status.is-error {
+    @apply border-rose-400/35 bg-rose-500/10 text-rose-200;
+  }
+
+  .runner-output {
+    @apply mt-2 max-h-80 min-h-28 overflow-auto rounded-md border border-white/10 bg-black/90 p-2
+      text-[0.63rem] leading-5 text-white/80;
+    white-space: pre-wrap;
+    word-break: break-word;
   }
 
   .right-split {

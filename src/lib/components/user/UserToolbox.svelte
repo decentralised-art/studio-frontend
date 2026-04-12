@@ -26,7 +26,7 @@
       <Tag variant="outline">No saved connectors yet</Tag>
     {:else}
       {#each toolboxParticles as particle (particle.id)}
-        <Tag variant="outline">{particle.name}</Tag>
+        <Tag variant="outline" preserveCase>{particle.name}</Tag>
       {/each}
     {/if}
   </div>

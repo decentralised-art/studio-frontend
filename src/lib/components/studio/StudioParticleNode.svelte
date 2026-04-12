@@ -13,6 +13,7 @@
   const isPlaceholder = $derived(Boolean(data.placeholder));
   const placeholderDetail = $derived((data.placeholderDetail ?? "").trim());
   const placeholderState = $derived(data.placeholderState ?? "loading");
+  const displayLabel = $derived((data.label ?? "").trim());
 </script>
 
 <div
@@ -20,7 +21,7 @@
     ? `is-placeholder is-${placeholderState}`
     : ''}"
 >
-  <div class="particle-title">{data.label}</div>
+  <div class="particle-title">{displayLabel}</div>
   {#if isPlaceholder && placeholderDetail}
     <div class="particle-detail">{placeholderDetail}</div>
   {/if}
@@ -43,7 +44,7 @@
   }
 
   .particle-title {
-    @apply text-[0.7rem] font-semibold uppercase tracking-[0.2em];
+    @apply text-[0.7rem] font-semibold tracking-[0.08em];
   }
 
   .particle-node.is-placeholder {

@@ -9,12 +9,11 @@ import {
   type MockTransformationDef,
 } from "$lib/particles/mockPtNetwork";
 import type { PtOutputFeature } from "$lib/particles/ptMidiAdapter";
-import type { StudioConnectorDef } from "$lib/studio/domain/connectorModel";
-import {
-  normalizeBindingsMap,
-  projectChildSlots,
-  type SlotProjectionRange,
-} from "$lib/studio/domain/slotProjection";
+import type {
+  StudioConnectorDef,
+  StudioRunningInstanceRef,
+} from "$lib/studio/domain/connectorModel";
+import { normalizeBindingsMap } from "$lib/studio/domain/slotProjection";
 
 export type StudioNodeKind =
   | "particle"
@@ -48,6 +47,7 @@ export type StudioNodeData = {
   fromNetwork?: boolean;
   riStart?: number;
   riShift?: number;
+  staticRi?: Record<string, StudioRunningInstanceRef>;
 };
 
 export type StudioNode = {
@@ -395,10 +395,40 @@ const buildConnectorFromGraph = (
     }
   }
 
+  const staticRiRaw = featureNode.data.staticRi;
+  const staticRi =
+    staticRiRaw && typeof staticRiRaw === "object"
+      ? Object.fromEntries(
+          Object.entries(staticRiRaw)
+            .map(([key, value]) => {
+              const slotId = Number.parseInt(key, 10);
+              if (!Number.isInteger(slotId) || slotId < 0) return null;
+              if (!value || typeof value !== "object") return null;
+              const startPoint = Number((value as { startPoint?: unknown }).startPoint);
+              const transformationShift = Number(
+                (value as { transformationShift?: unknown }).transformationShift,
+              );
+              if (!Number.isFinite(startPoint) || !Number.isFinite(transformationShift)) {
+                return null;
+              }
+              return [
+                String(slotId),
+                {
+                  startPoint: Math.trunc(startPoint),
+                  transformationShift: Math.trunc(transformationShift),
+                } satisfies StudioRunningInstanceRef,
+              ] as const;
+            })
+            .filter((entry): entry is readonly [string, StudioRunningInstanceRef] => Boolean(entry))
+            .sort((a, b) => Number.parseInt(a[0], 10) - Number.parseInt(b[0], 10)),
+        )
+      : undefined;
+
   return {
     name: connectorName,
     dimensions,
     conditionName: resolveConditionNameForFeature(featureNode.id, graph) ?? undefined,
+    ...(staticRi && Object.keys(staticRi).length > 0 ? { staticRi } : {}),
   };
 };
 
@@ -459,20 +489,60 @@ const buildRootConnector = (
   return { ...connector, name: rootName };
 };
 
-const buildStaticBindingsForChild = (
+const computeConnectorOpenSlots = (
   registry: RuntimeRegistry,
   connectorName: string,
-): Array<{ slotId: number; targetOpenSlots: number }> => {
+  cache = new Map<string, number>(),
+  visiting = new Set<string>(),
+): number => {
+  if (cache.has(connectorName)) return cache.get(connectorName) ?? 0;
+  if (visiting.has(connectorName)) {
+    throw new Error(`Connector cycle detected at '${connectorName}'.`);
+  }
+
   const connector = registry.connectors[connectorName];
-  if (!connector) return [];
-  const staticBindings: Array<{ slotId: number; targetOpenSlots: number }> = [];
-  connector.dimensions.forEach((dimension, index) => {
-    if (!dimension.composite) return;
-    const target = registry.connectors[dimension.composite];
-    if (!target) return;
-    staticBindings.push({ slotId: index, targetOpenSlots: target.dimensions.length });
-  });
-  return staticBindings;
+  if (!connector) {
+    throw new Error(`Missing connector '${connectorName}'.`);
+  }
+
+  visiting.add(connectorName);
+  try {
+    let openSlots = 0;
+
+    connector.dimensions.forEach((dimension, dimIndex) => {
+      if (!dimension.composite) {
+        openSlots += 1;
+        return;
+      }
+
+      const childOpenSlots = computeConnectorOpenSlots(
+        registry,
+        dimension.composite,
+        cache,
+        visiting,
+      );
+      openSlots += childOpenSlots;
+
+      const normalizedBindings = normalizeBindingsMap(dimension.bindings ?? {});
+      normalizedBindings.forEach((binding) => {
+        if (binding.slotId >= childOpenSlots) {
+          throw new Error(
+            `Connector '${connector.name}' dimension ${dimIndex + 1} has out-of-range binding slot ${binding.slotId} (child '${dimension.composite}' exports ${childOpenSlots} slots).`,
+          );
+        }
+      });
+
+      normalizedBindings.forEach((binding) => {
+        openSlots += computeConnectorOpenSlots(registry, binding.targetConnector, cache, visiting);
+      });
+      openSlots -= normalizedBindings.length;
+    });
+
+    cache.set(connectorName, openSlots);
+    return openSlots;
+  } finally {
+    visiting.delete(connectorName);
+  }
 };
 
 const validateBindingsForDimension = (
@@ -480,6 +550,7 @@ const validateBindingsForDimension = (
   connector: StudioConnectorDef,
   dimensionIndex: number,
   warnings: string[],
+  openSlotsCache: Map<string, number>,
 ) => {
   const dimension = connector.dimensions[dimensionIndex];
   const bindingKeys = Object.keys(dimension.bindings ?? {});
@@ -500,6 +571,21 @@ const validateBindingsForDimension = (
     return;
   }
 
+  let childOpenSlots = 0;
+  try {
+    childOpenSlots = computeConnectorOpenSlots(
+      registry,
+      child.name,
+      openSlotsCache,
+      new Set<string>(),
+    );
+  } catch (error) {
+    warnings.push(
+      `Failed to resolve open slots for ${connector.name} dimension ${dimensionIndex + 1}: ${String(error)}`,
+    );
+    return;
+  }
+
   let normalized;
   try {
     normalized = normalizeBindingsMap(dimension.bindings);
@@ -510,39 +596,22 @@ const validateBindingsForDimension = (
     return;
   }
 
-  let ranges: SlotProjectionRange[];
-  try {
-    ranges = projectChildSlots({
-      childOpenSlots: child.dimensions.length,
-      staticBindings: buildStaticBindingsForChild(registry, child.name),
-    });
-  } catch (error) {
-    warnings.push(
-      `Failed slot projection on ${connector.name} dimension ${dimensionIndex + 1}: ${String(error)}`,
-    );
-    return;
-  }
-
-  const minStart = ranges.length ? ranges[0].projectedStart : 0;
-  const maxEnd = ranges.length
-    ? Math.max(...ranges.map((range) => range.projectedStart + range.projectedWidth))
-    : 0;
-
   normalized.forEach((binding) => {
     if (!registry.connectors[binding.targetConnector]) {
       warnings.push(
         `Binding target ${binding.targetConnector} not found for ${connector.name} dimension ${dimensionIndex + 1}.`,
       );
     }
-    if (binding.slotId < minStart || binding.slotId >= maxEnd) {
+    if (binding.slotId >= childOpenSlots) {
       warnings.push(
-        `Binding slot ${binding.slotId} out of projected range for ${connector.name} dimension ${dimensionIndex + 1}.`,
+        `Binding slot ${binding.slotId} out of range for ${connector.name} dimension ${dimensionIndex + 1}. Child connector ${child.name} exposes ${childOpenSlots} open slots.`,
       );
     }
   });
 };
 
 const validateConnectorRegistry = (registry: RuntimeRegistry, warnings: string[]) => {
+  const openSlotsCache = new Map<string, number>();
   Object.values(registry.connectors).forEach((connector) => {
     connector.dimensions.forEach((dimension, index) => {
       dimension.transformations.forEach((tx) => {
@@ -557,7 +626,7 @@ const validateConnectorRegistry = (registry: RuntimeRegistry, warnings: string[]
           );
         }
       });
-      validateBindingsForDimension(registry, connector, index, warnings);
+      validateBindingsForDimension(registry, connector, index, warnings, openSlotsCache);
     });
 
     if (connector.conditionName) {
@@ -601,7 +670,13 @@ export const buildStudioRuntime = (
     if (exists) {
       if (featureNode.data.fromNetwork) {
         warnings.push(`Using local override for network connector: ${def.name}.`);
-        registry.connectors[def.name] = def;
+        registry.connectors[def.name] = {
+          ...def,
+          staticRi: exists.staticRi,
+          formatHash: exists.formatHash,
+          localAddress: exists.localAddress,
+          ownerAddress: exists.ownerAddress,
+        };
       } else {
         warnings.push(`Connector already exists in registry: ${def.name}`);
       }
@@ -624,12 +699,18 @@ export const buildStudioRuntime = (
     return { registry, rootConnector: rootName, rootParticle: rootName, warnings };
   }
 
-  registry.connectors[rootName] = buildRootConnector(
-    rootFeature,
-    graph,
-    rootName,
-    transformationNameMap,
-  );
+  const builtRoot = buildRootConnector(rootFeature, graph, rootName, transformationNameMap);
+  const existingRoot = registry.connectors[rootName];
+  registry.connectors[rootName] =
+    rootFeature.data.fromNetwork && existingRoot
+      ? {
+          ...builtRoot,
+          staticRi: existingRoot.staticRi,
+          formatHash: existingRoot.formatHash,
+          localAddress: existingRoot.localAddress,
+          ownerAddress: existingRoot.ownerAddress,
+        }
+      : builtRoot;
 
   Object.values(registry.connectors).forEach((connector) => {
     registry.features[connector.name] = connectorToFeature(connector);

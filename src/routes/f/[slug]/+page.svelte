@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { SvelteSet } from "svelte/reactivity";
   import { page } from "$app/stores";
   import { resolve } from "$app/paths";
   import Button from "$lib/components/ui/Button.svelte";
@@ -13,25 +14,35 @@
     unfollowFormatInProfile,
   } from "$lib/auth/api";
   import {
-    findParticlesByTerminalSet,
     listParticlePosts,
+    listParticleRecordsByFormatHash,
     syncParticlePostDataFromChain,
     type NetworkFeedEvent,
-    type ParticleRecord,
   } from "$lib/feed/particlePostData";
   import {
-    getLocalFormatBySlug,
-    loadLocalFormats,
-    type ParticleFormat,
-  } from "$lib/formats/localFormats";
+    getChainFormatDisplayName,
+    mapChainFormatResponseToRecord,
+    mergeChainFormatRecords,
+    upsertChainFormatRecord,
+    type ChainFormatRecord,
+  } from "$lib/formats/chainFormats";
   import { mockCurrentUserId, mockUsersById } from "$lib/data/users";
   import { networkNodeStudioKind } from "$lib/network/mockNetworkGraph";
+  import {
+    getChainFormat,
+    normalizeFormatHash,
+    resolveChainFormatCursor,
+  } from "$lib/chain/registryApi";
 
-  let format = $state<ParticleFormat | null>(null);
+  let format = $state<ChainFormatRecord | null>(null);
+  let formatHash = $state("");
   let loading = $state(true);
   let loadError = $state("");
-  let matchingParticles = $state<ParticleRecord[]>([]);
   let relatedPosts = $state<NetworkFeedEvent[]>([]);
+  let formatCursorAfter = $state<string | null>(null);
+  let formatHasMore = $state(false);
+  let loadMorePending = $state(false);
+  let loadMoreError = $state("");
   let followPending = $state(false);
   let formatFollowError = $state("");
   let localFollowedFormats = $state<string[]>([]);
@@ -39,35 +50,87 @@
     ...(mockUsersById[mockCurrentUserId]?.toolbox ?? []),
   ]);
 
-  const followedFormatKeys = $derived.by(() => new Set(localFollowedFormats));
-  const toolboxParticleIds = $derived.by(() => new Set(localToolboxParticles));
-  const author = $derived.by(() => (format ? (mockUsersById[format.authorId] ?? null) : null));
-  const isFollowingFormat = $derived.by(() =>
-    format
-      ? followedFormatKeys.has(format.id) ||
-        followedFormatKeys.has(format.slug) ||
-        followedFormatKeys.has(format.name)
-      : false,
+  const followedFormatKeys = $derived.by(() => new SvelteSet(localFollowedFormats));
+  const toolboxParticleIds = $derived.by(() => new SvelteSet(localToolboxParticles));
+  const isFollowingFormat = $derived.by(
+    () => Boolean(formatHash) && followedFormatKeys.has(formatHash),
   );
+
+  const getScalarConnectorName = (scalarLabel: string): string => {
+    const [head] = scalarLabel.split(":");
+    return (head ?? "").trim();
+  };
+
+  const recomputeRelatedPosts = (
+    normalizedHash: string,
+    formatRecord: ChainFormatRecord | null,
+  ) => {
+    if (!formatRecord) {
+      relatedPosts = [];
+      return;
+    }
+    const matchingConnectors = listParticleRecordsByFormatHash(normalizedHash);
+    const matchingIds = new SvelteSet(matchingConnectors.map((connector) => connector.id));
+    formatRecord.connectors.forEach((connectorName) => {
+      matchingIds.add(connectorName);
+    });
+
+    relatedPosts = listParticlePosts().filter(
+      (event) =>
+        event.type === "connector" &&
+        (event.formatHash === normalizedHash || matchingIds.has(event.particleId)),
+    );
+  };
+
+  const mergeFormatPageRecord = (nextPageRecord: ChainFormatRecord | null) => {
+    if (!nextPageRecord) return format;
+    const merged = mergeChainFormatRecords([...(format ? [format] : []), nextPageRecord]);
+    format = merged;
+    if (merged) upsertChainFormatRecord(merged);
+    return merged;
+  };
 
   const loadFormatPage = async () => {
     loading = true;
     loadError = "";
+    loadMoreError = "";
+    formatCursorAfter = null;
+    formatHasMore = false;
     try {
-      await syncParticlePostDataFromChain();
       const slug = ($page.params.slug ?? "").trim();
-      const nextFormat = getLocalFormatBySlug(slug, loadLocalFormats());
-      format = nextFormat;
-      if (!nextFormat) {
-        matchingParticles = [];
+      if (!slug) {
+        formatHash = "";
+        format = null;
+        relatedPosts = [];
+        loadError = "Missing format hash in URL.";
+        return;
+      }
+
+      let normalizedHash = "";
+      try {
+        normalizedHash = normalizeFormatHash(slug);
+      } catch {
+        formatHash = "";
+        format = null;
+        relatedPosts = [];
+        loadError = "Invalid format hash in URL.";
+        return;
+      }
+      formatHash = normalizedHash;
+
+      await syncParticlePostDataFromChain();
+
+      const response = await getChainFormat(normalizedHash, { limit: 256 });
+      const pageRecord = mapChainFormatResponseToRecord(response);
+      const merged = mergeFormatPageRecord(pageRecord);
+      const cursor = resolveChainFormatCursor(response);
+      formatCursorAfter = cursor.nextAfter;
+      formatHasMore = cursor.hasMore && Boolean(cursor.nextAfter);
+      if (!merged) {
         relatedPosts = [];
         return;
       }
-      matchingParticles = findParticlesByTerminalSet(nextFormat.terminalParticleIds);
-      const matchingIds = new Set(matchingParticles.map((particle) => particle.id));
-      relatedPosts = listParticlePosts().filter(
-        (event) => event.type === "connector" && matchingIds.has(event.particleId),
-      );
+      recomputeRelatedPosts(normalizedHash, merged);
     } catch (error) {
       loadError = error instanceof Error ? error.message : "Unable to load format page.";
     } finally {
@@ -75,31 +138,54 @@
     }
   };
 
-  const openParticleInStudio = (particleId: string) => {
+  const loadMoreFormatConnectors = async () => {
+    if (loading || loadMorePending || !formatHash || !formatHasMore || !formatCursorAfter) return;
+    loadMorePending = true;
+    loadMoreError = "";
+    try {
+      const response = await getChainFormat(formatHash, {
+        limit: 256,
+        after: formatCursorAfter,
+      });
+      const pageRecord = mapChainFormatResponseToRecord(response);
+      const merged = mergeFormatPageRecord(pageRecord);
+      const cursor = resolveChainFormatCursor(response);
+      formatCursorAfter = cursor.nextAfter;
+      formatHasMore = cursor.hasMore && Boolean(cursor.nextAfter);
+      recomputeRelatedPosts(formatHash, merged);
+    } catch (error) {
+      loadMoreError =
+        error instanceof Error ? error.message : "Unable to load more connectors for this format.";
+    } finally {
+      loadMorePending = false;
+    }
+  };
+
+  const openConnectorInStudio = (connectorId: string) => {
     const base = resolve("/studio");
     const target = new URL(base, window.location.origin);
-    target.searchParams.set("network_kind", networkNodeStudioKind("particle"));
-    target.searchParams.set("network_id", particleId);
+    target.searchParams.set("network_kind", networkNodeStudioKind("connector"));
+    target.searchParams.set("network_id", connectorId);
     window.open(target.toString(), "_blank", "noopener,noreferrer");
   };
 
-  const addParticleToToolbox = (particleId: string) => {
-    if (toolboxParticleIds.has(particleId)) return;
-    localToolboxParticles = [...localToolboxParticles, particleId];
+  const addConnectorToToolbox = (connectorId: string) => {
+    if (toolboxParticleIds.has(connectorId)) return;
+    localToolboxParticles = [...localToolboxParticles, connectorId];
     const currentUser = mockUsersById[mockCurrentUserId];
-    if (currentUser && !currentUser.toolbox.includes(particleId)) {
-      currentUser.toolbox = [...currentUser.toolbox, particleId];
+    if (currentUser && !currentUser.toolbox.includes(connectorId)) {
+      currentUser.toolbox = [...currentUser.toolbox, connectorId];
     }
-    void addConnectorToCurrentUserToolbox(particleId).catch((error) => {
+    void addConnectorToCurrentUserToolbox(connectorId).catch((error) => {
       console.error("[Format page] Failed to persist toolbox update.", error);
     });
   };
 
   const toggleFormatFollow = async () => {
-    if (!format || followPending) return;
+    if (!formatHash || followPending) return;
     followPending = true;
     formatFollowError = "";
-    const key = format.id;
+    const key = formatHash;
     try {
       if (isFollowingFormat) {
         await unfollowFormatInProfile(key);
@@ -134,7 +220,7 @@
     <SectionShell className="page-card-shell">
       <div class="status">
         <p class="status-title">Loading format...</p>
-        <p class="status-subtitle">Fetching chain-backed particles and local format data.</p>
+        <p class="status-subtitle">Fetching chain-backed format data.</p>
       </div>
     </SectionShell>
   {:else if loadError}
@@ -151,17 +237,17 @@
     <SectionShell className="page-card-shell">
       <div class="status">
         <p class="status-title">Format not found</p>
-        <p class="status-subtitle">No local format matches this URL.</p>
+        <p class="status-subtitle">No on-chain format matches this hash.</p>
       </div>
     </SectionShell>
   {:else}
     <section class="format-overview page-card-shell" aria-label="Format overview">
       <p class="format-kicker">Format Page</p>
-      <h1 class="format-title">{format.name}</h1>
+      <h1 class="format-title">{getChainFormatDisplayName(format.formatHash)}</h1>
       <p class="format-meta">
-        <span>{author?.nickname ?? format.authorId}</span>
+        <span>{format.formatHash}</span>
         <span aria-hidden="true">•</span>
-        <span>{format.terminalParticleIds.length} terminal particles</span>
+        <span>{format.scalars.length} {format.scalars.length === 1 ? "scalar" : "scalars"}</span>
       </p>
       <div class="format-actions">
         <Button
@@ -177,56 +263,50 @@
         <p class="format-follow-error">{formatFollowError}</p>
       {/if}
 
-      <div class="terminal-particles" aria-label="Terminal particles">
-        <p class="terminal-label">Terminal particles</p>
+      <div class="terminal-particles" aria-label="Format scalars">
+        <p class="terminal-label">Scalars</p>
         <div class="terminal-list">
-          {#each format.terminalParticleIds as particleId (particleId)}
-            <a class="terminal-pill" href={resolve("/p/[id]", { id: particleId })}>{particleId}</a>
-          {/each}
-        </div>
-      </div>
-    </section>
-
-    <section class="page-card-shell matches-section" aria-label="Matching particles">
-      <div class="matches-head">
-        <p class="matches-title">Matching particles</p>
-        <p class="matches-subtitle">{matchingParticles.length} particles match this terminal set</p>
-      </div>
-      {#if matchingParticles.length === 0}
-        <p class="matches-empty">No synced particles currently match this format.</p>
-      {:else}
-        <div class="matches-list">
-          {#each matchingParticles as particle (particle.id)}
-            <a class="match-row" href={resolve("/p/[id]", { id: particle.id })}>
-              <div class="match-meta">
-                <p class="match-name">{particle.name}</p>
-                <p class="match-summary">{particle.summary}</p>
-              </div>
-              <Button
-                variant="ghost"
-                type="button"
-                onclick={(event) => {
-                  event.preventDefault();
-                  openParticleInStudio(particle.id);
-                }}
+          {#each format.scalars as scalar (scalar)}
+            {@const scalarConnector = getScalarConnectorName(scalar)}
+            {#if scalarConnector}
+              <a class="terminal-pill" href={resolve("/c/[id]", { id: scalarConnector })}
+                >{scalar}</a
               >
-                Open in Studio
-              </Button>
-            </a>
+            {:else}
+              <span class="terminal-pill">{scalar}</span>
+            {/if}
           {/each}
         </div>
-      {/if}
+      </div>
     </section>
 
     <div class="page-card-shell">
       <ParticlePostFeed
         events={relatedPosts}
-        onParticleOpen={openParticleInStudio}
-        onAddToToolbox={addParticleToToolbox}
+        onParticleOpen={openConnectorInStudio}
+        onAddToToolbox={addConnectorToToolbox}
         {toolboxParticleIds}
-        emptyMessage="No posts for particles in this format yet."
+        emptyMessage="No connector posts for this format yet."
       />
     </div>
+
+    {#if formatHasMore || loadMoreError}
+      <div class="page-card-shell load-more-panel">
+        {#if loadMoreError}
+          <p class="load-more-error">{loadMoreError}</p>
+        {/if}
+        {#if formatHasMore}
+          <Button
+            variant="ghost"
+            type="button"
+            disabled={loadMorePending}
+            onclick={loadMoreFormatConnectors}
+          >
+            {loadMorePending ? "Loading more..." : "Load more"}
+          </Button>
+        {/if}
+      </div>
+    {/if}
   {/if}
 </div>
 
@@ -244,8 +324,7 @@
     max-width: 100%;
   }
 
-  .format-overview,
-  .matches-section {
+  .format-overview {
     @apply rounded-3xl border border-white/10 bg-black/35 backdrop-blur-sm p-4 md:p-5;
   }
 
@@ -285,42 +364,6 @@
     @apply rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-white/80 no-underline hover:border-white/25 hover:text-white transition;
   }
 
-  .matches-head {
-    @apply flex flex-wrap items-baseline justify-between gap-2;
-  }
-
-  .matches-title {
-    @apply text-base font-semibold text-white;
-  }
-
-  .matches-subtitle {
-    @apply text-xs text-white/50;
-  }
-
-  .matches-empty {
-    @apply mt-3 text-sm text-white/60;
-  }
-
-  .matches-list {
-    @apply mt-3 grid gap-2;
-  }
-
-  .match-row {
-    @apply flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/5 px-3 py-2.5 no-underline;
-  }
-
-  .match-meta {
-    @apply min-w-0;
-  }
-
-  .match-name {
-    @apply text-sm font-medium text-white;
-  }
-
-  .match-summary {
-    @apply text-xs text-white/55 line-clamp-1;
-  }
-
   .status {
     @apply space-y-2;
   }
@@ -337,6 +380,14 @@
     @apply mt-4 flex gap-2;
   }
 
+  .load-more-panel {
+    @apply flex flex-col gap-2 items-start;
+  }
+
+  .load-more-error {
+    @apply text-xs text-rose-300;
+  }
+
   @media (max-width: 1200px) {
     .format-page {
       --social-feed-card-width: min(68vw, 56rem);
@@ -346,10 +397,6 @@
   @media (max-width: 900px) {
     .format-page {
       --social-feed-card-width: 100%;
-    }
-
-    .match-row {
-      @apply flex-col items-stretch;
     }
   }
 </style>

@@ -4,7 +4,6 @@
   import { resolve } from "$app/paths";
   import { page } from "$app/state";
   import "$lib/styles/style.css";
-  import favicon from "$lib/assets/favicon.svg";
   import { getToken } from "$lib/auth/session";
 
   let { children } = $props();
@@ -40,10 +39,6 @@
     if (!isAuthenticated) guardRoute(page.route.id);
   });
 </script>
-
-<svelte:head>
-  <link rel="icon" href={favicon} />
-</svelte:head>
 
 <div class="min-h-screen flex flex-col">
   <header

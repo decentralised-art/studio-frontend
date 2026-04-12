@@ -47,7 +47,7 @@
 
   const refreshFollowState = async (targetUserId: string) => {
     const [social, targetSocial] = await Promise.all([
-      getCurrentUserSocialPreferences({ bootstrapPrototypeIfEmpty: true }),
+      getCurrentUserSocialPreferences(),
       getUserSocialConnections(targetUserId),
     ]);
     viewerFollowingIds = [...social.followedUserIds];
@@ -76,11 +76,17 @@
               .then((payload) => normalizeProfileUser(payload))
               .catch(() => null)
           : Promise.resolve(null),
-        syncParticlePostDataFromChain().catch(() => null),
       ]);
 
       user = normalizeProfileUser(userPayload);
       userFeedEvents = listNetworkFeedEventsByAuthor(user.id);
+      const activeUserId = user.id;
+      void syncParticlePostDataFromChain()
+        .then(() => {
+          if (user?.id !== activeUserId) return;
+          userFeedEvents = listNetworkFeedEventsByAuthor(activeUserId);
+        })
+        .catch(() => null);
       viewerUserId = mePayload?.id ?? null;
 
       if (!getToken()) {

@@ -36,6 +36,13 @@ export type ChainConnectorPayload = {
   dimensions: ChainConnectorDimensionPayload[];
   condition_name?: string;
   condition_args?: number[];
+  static_ri?: Record<
+    string,
+    {
+      start_point: number;
+      transformation_shift: number;
+    }
+  >;
 };
 
 export type ChainConnectorDimensionResponse = {
@@ -52,6 +59,20 @@ export type ChainConnectorResponse = {
   conditionName?: string;
   condition_args?: number[];
   conditionArgs?: number[];
+  static_ri?: Record<
+    string,
+    {
+      start_point?: number;
+      transformation_shift?: number;
+    }
+  >;
+  staticRi?: Record<
+    string,
+    {
+      start_point?: number;
+      transformation_shift?: number;
+    }
+  >;
   address?: string;
   format_hash?: string;
 };
@@ -77,8 +98,8 @@ export type ChainExecuteRunningInstancePayload = {
 
 export type ChainExecutePayload = {
   connector_name: string;
-  particles_count: number;
-  running_instances: ChainExecuteRunningInstancePayload[];
+  particles_count: string;
+  dynamic_ri: Record<string, ChainExecuteRunningInstancePayload>;
 };
 
 export type ChainExecuteStreamResponse = {
@@ -356,8 +377,9 @@ export const postChainCondition = async (payload: { name: string; sol_src: strin
 export const postChainConditionDetailed = async (payload: { name: string; sol_src: string }) =>
   postJsonWithChainAuthDetailed<ChainConditionResponse>("/condition", payload);
 
-export const postChainExecute = async (payload: ChainExecutePayload) =>
-  postJsonWithChainAuth<ChainExecuteResponse>("/execute", payload);
-
+export const postChainExecute = async (payload: ChainExecutePayload) => {
+  const result = await postChainExecuteDetailed(payload);
+  return result.body;
+};
 export const postChainExecuteDetailed = async (payload: ChainExecutePayload) =>
   postJsonWithChainAuthDetailed<ChainExecuteResponse>("/execute", payload);

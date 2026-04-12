@@ -90,6 +90,63 @@ const normalizeBindings = (bindings: unknown): Record<string, string> => {
   return out;
 };
 
+const normalizeStaticRi = (
+  value: unknown,
+  label: string,
+): StudioConnectorDef["staticRi"] | undefined => {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${label} must be an object map.`);
+  }
+
+  const entries = Object.entries(value as Record<string, unknown>)
+    .map(([rawKey, rawEntry]) => {
+      const slotId = parseCanonicalSlotKey(rawKey);
+      if (slotId === null) {
+        throw new Error(`${label} has invalid key '${rawKey}'.`);
+      }
+      const slotKey = toCanonicalSlotKey(slotId);
+      if (!slotKey) {
+        throw new Error(`${label} has invalid key '${rawKey}'.`);
+      }
+
+      if (!rawEntry || typeof rawEntry !== "object" || Array.isArray(rawEntry)) {
+        throw new Error(`${label}['${slotKey}'] must be an object.`);
+      }
+
+      const rec = rawEntry as Record<string, unknown>;
+      const startPointRaw = rec.start_point ?? rec.startPoint;
+      const transformationShiftRaw =
+        rec.transformation_shift ?? rec.transformationShift ?? rec.transformShift;
+      const startPoint =
+        startPointRaw === undefined
+          ? 0
+          : toInt32(startPointRaw, `${label}['${slotKey}'].start_point`);
+      const transformationShift =
+        transformationShiftRaw === undefined
+          ? 0
+          : toInt32(transformationShiftRaw, `${label}['${slotKey}'].transformation_shift`);
+
+      return {
+        slotId,
+        slotKey,
+        entry: {
+          startPoint,
+          transformationShift,
+        },
+      };
+    })
+    .sort((a, b) => a.slotId - b.slotId);
+
+  if (entries.length === 0) return undefined;
+
+  const out: Record<string, { startPoint: number; transformationShift: number }> = {};
+  entries.forEach(({ slotKey, entry }) => {
+    out[slotKey] = entry;
+  });
+  return out;
+};
+
 export function fromProtocolConnectorPayload(payload: ChainConnectorResponse): StudioConnectorDef {
   const name = normalizeName(payload.name, "connector.name");
   const dimensionsRaw = payload.dimensions;
@@ -137,12 +194,14 @@ export function fromProtocolConnectorPayload(payload: ChainConnectorResponse): S
 
   const formatHash = normalizeOptionalFormatHash(payload.format_hash);
   const ownerAddress = typeof payload.owner === "string" ? payload.owner.trim().toLowerCase() : "";
+  const staticRi = normalizeStaticRi(payload.static_ri ?? payload.staticRi, "static_ri");
 
   return {
     name,
     dimensions,
     conditionName,
     conditionArgs,
+    ...(staticRi ? { staticRi } : {}),
     ...(formatHash ? { formatHash } : {}),
     ...(ownerAddress ? { ownerAddress } : {}),
   };
@@ -221,10 +280,42 @@ export function toProtocolConnectorPayload(connector: StudioConnectorDef): Chain
     throw new Error(`Connector ${name} has condition args without a condition name.`);
   }
 
+  const staticRi = normalizeStaticRi(connector.staticRi, "connector.staticRi");
+  const staticRiEntries = staticRi
+    ? Object.entries(staticRi)
+        .map(([rawKey, value]) => {
+          const slotId = parseCanonicalSlotKey(rawKey);
+          if (slotId === null) {
+            throw new Error(`connector.staticRi has invalid key '${rawKey}'.`);
+          }
+          const slotKey = toCanonicalSlotKey(slotId);
+          if (!slotKey) {
+            throw new Error(`connector.staticRi has invalid key '${rawKey}'.`);
+          }
+          return {
+            slotId,
+            slotKey,
+            value: {
+              start_point: toInt32(value.startPoint, `connector.staticRi['${slotKey}'].startPoint`),
+              transformation_shift: toInt32(
+                value.transformationShift,
+                `connector.staticRi['${slotKey}'].transformationShift`,
+              ),
+            },
+          };
+        })
+        .sort((a, b) => a.slotId - b.slotId)
+    : [];
+  const staticRiOut: Record<string, { start_point: number; transformation_shift: number }> = {};
+  staticRiEntries.forEach(({ slotKey, value }) => {
+    staticRiOut[slotKey] = value;
+  });
+
   return {
     name,
     dimensions,
     ...(conditionName ? { condition_name: conditionName } : {}),
     ...(conditionArgs ? { condition_args: conditionArgs } : {}),
+    ...(Object.keys(staticRiOut).length > 0 ? { static_ri: staticRiOut } : {}),
   };
 }
