@@ -126,7 +126,7 @@
     {nodeTypes}
     {edgeTypes}
     defaultEdgeOptions={{
-      style: { stroke: "rgba(255,255,255,0.45)", strokeWidth: 1.6 },
+      style: "stroke: rgba(255,255,255,0.45); stroke-width: 1.6px;",
     }}
     fitView
     fitViewOptions={{ padding: 0.25 }}

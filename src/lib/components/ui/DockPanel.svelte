@@ -29,6 +29,7 @@
   } = $props();
 
   let resizing = $state(false);
+  const clampSize = (value: number) => Math.max(minSizePx, Math.min(maxSizePx, Math.round(value)));
   const canResize = $derived(
     resizable && (position === "left" || position === "right") && typeof onResize === "function",
   );
@@ -37,7 +38,6 @@
     clampSize(typeof sizePx === "number" && Number.isFinite(sizePx) ? sizePx : minSizePx),
   );
 
-  const clampSize = (value: number) => Math.max(minSizePx, Math.min(maxSizePx, Math.round(value)));
   const RESIZE_STEP_PX = 16;
   const RESIZE_STEP_PX_FAST = 48;
 

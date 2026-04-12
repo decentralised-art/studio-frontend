@@ -151,7 +151,9 @@
     riLocked?: boolean;
     riPosition?: number;
     staticRi?: Record<string, StudioRunningInstanceRef>;
+    materializedReferencedRiPositions?: number[];
     showRiControls?: boolean;
+    riLockToggleDisabled?: boolean;
   };
   type StudioNode = {
     id: string;
@@ -363,6 +365,43 @@
     const asNumber = typeof value === "number" ? value : Number(String(value).trim());
     if (!Number.isInteger(asNumber) || asNumber < 0) return null;
     return String(asNumber);
+  };
+
+  const parseConnectorEdgeRelation = (edge: Edge): "composite" | "binding" | "unknown" => {
+    if (edge.data && typeof edge.data === "object") {
+      const relation = (edge.data as { relation?: unknown; kind?: unknown }).relation;
+      if (relation === "composite" || relation === "binding") return relation;
+      const kind = (edge.data as { relation?: unknown; kind?: unknown }).kind;
+      if (kind === "composite" || kind === "binding") return kind;
+    }
+    const label = typeof edge.label === "string" ? edge.label.trim().toLowerCase() : "";
+    if (label.startsWith("composite")) return "composite";
+    if (label.startsWith("binding")) return "binding";
+    return "unknown";
+  };
+
+  const parseConnectorEdgeBindingSlot = (edge: Edge): number | null => {
+    if (edge.data && typeof edge.data === "object") {
+      const slot = (edge.data as { bindingSlot?: unknown; binding_slot?: unknown; slot?: unknown })
+        .bindingSlot;
+      if (Number.isInteger(slot) && Number(slot) >= 0) return Number(slot);
+      const alt = (edge.data as { bindingSlot?: unknown; binding_slot?: unknown; slot?: unknown })
+        .binding_slot;
+      if (Number.isInteger(alt) && Number(alt) >= 0) return Number(alt);
+      const legacy = (
+        edge.data as {
+          bindingSlot?: unknown;
+          binding_slot?: unknown;
+          slot?: unknown;
+        }
+      ).slot;
+      if (Number.isInteger(legacy) && Number(legacy) >= 0) return Number(legacy);
+    }
+    const label = typeof edge.label === "string" ? edge.label : "";
+    const match = label.match(/slot\s+(\d+)/i);
+    if (!match) return null;
+    const parsed = Number(match[1]);
+    return Number.isInteger(parsed) && parsed >= 0 ? parsed : null;
   };
 
   const cloneStaticRiMap = (
@@ -1180,6 +1219,32 @@
     ensureActiveDraftTabRootConnector();
   });
 
+  $effect(() => {
+    const tabReadOnly = activeTabReadOnly;
+    if (!nodes.length) return;
+    let changed = false;
+    const nextNodes = nodes.map((node) => {
+      if (!isConnectorKind(node.data.kind)) return node;
+      const hasNetworkSelfStatic =
+        Boolean(node.data.fromNetwork) &&
+        Boolean(resolveConnectorSelfStaticRi(getConnectorStaticRi(node)));
+      const nextToggleDisabled =
+        Boolean(node.data.fromNetwork) && (tabReadOnly || hasNetworkSelfStatic);
+      if (Boolean(node.data.riLockToggleDisabled) === nextToggleDisabled) return node;
+      changed = true;
+      return {
+        ...node,
+        data: {
+          ...node.data,
+          riLockToggleDisabled: nextToggleDisabled,
+        },
+      };
+    });
+    if (changed) {
+      nodes = nextNodes;
+    }
+  });
+
   const startTabRename = (tab: StudioTab) => {
     if (tab.particleId) return;
     tabRenameId = tab.id;
@@ -1224,6 +1289,15 @@
     scheduleLayout();
   };
 
+  const isConnectorRiLockToggleDisabled = (connector: StudioNode | null): boolean => {
+    if (!connector || !isConnectorKind(connector.data.kind)) return true;
+    if (!connector.data.fromNetwork) return false;
+    const hasNetworkSelfStatic = Boolean(
+      resolveConnectorSelfStaticRi(getConnectorStaticRi(connector)),
+    );
+    return activeTabReadOnly || hasNetworkSelfStatic;
+  };
+
   const applyConnectorRiPatch = (
     connectorId: string,
     patch: Partial<Pick<StudioNodeData, "riStart" | "riShift" | "riLocked">>,
@@ -1234,9 +1308,12 @@
 
     const nextStart = toInt(patch.riStart ?? connector.data.riStart) ?? 0;
     const nextShift = toInt(patch.riShift ?? connector.data.riShift) ?? 0;
-    const nextLocked = isNetworkConnector
-      ? Boolean(connector.data.riLocked)
-      : Boolean(patch.riLocked ?? connector.data.riLocked);
+    const currentlyLocked = Boolean(connector.data.riLocked);
+    const requestedLocked = patch.riLocked;
+    const nextLocked =
+      isNetworkConnector && isConnectorRiLockToggleDisabled(connector)
+        ? currentlyLocked
+        : Boolean(requestedLocked ?? currentlyLocked);
 
     updateNodeData(connectorId, {
       riStart: nextStart,
@@ -2255,6 +2332,269 @@
     return sources;
   };
 
+  const computeConnectorRiProjectionForGraph = (
+    graphNodes: StudioNode[],
+    graphEdges: Edge[],
+  ): {
+    positionByNodeId: Record<string, number>;
+    staticByPosition: Record<string, { startPoint: number; transformationShift: number }>;
+  } => {
+    const positionByNodeId: Record<string, number> = {};
+    const staticByPosition: Record<string, { startPoint: number; transformationShift: number }> =
+      {};
+    const rootConnectorName = resolveActiveExecuteConnectorName(graphNodes).trim();
+    if (!rootConnectorName) return { positionByNodeId, staticByPosition };
+
+    let runtime: ReturnType<typeof buildStudioRuntime>;
+    try {
+      runtime = buildStudioRuntime(
+        { nodes: graphNodes, edges: graphEdges },
+        { rootLabel: activeTab?.label ?? "Connector", rootParticleId: activeTab?.particleId },
+      );
+    } catch {
+      return { positionByNodeId, staticByPosition };
+    }
+
+    if (!runtime.registry.connectors[rootConnectorName]) {
+      return { positionByNodeId, staticByPosition };
+    }
+
+    let riPlan: ReturnType<typeof buildExecuteRiPlan>;
+    try {
+      riPlan = buildExecuteRiPlan(runtime.registry.connectors, rootConnectorName, {});
+    } catch {
+      return { positionByNodeId, staticByPosition };
+    }
+
+    const connectorNodes = graphNodes.filter((node) => isConnectorKind(node.data.kind));
+    if (!connectorNodes.length) return { positionByNodeId, staticByPosition };
+
+    const nodeById = new SvelteMap(graphNodes.map((node) => [node.id, node]));
+    const rootNode =
+      connectorNodes.find(
+        (node) => Boolean(node.data.tabRoot) && resolveNodeName(node).trim() === rootConnectorName,
+      ) ??
+      connectorNodes.find((node) => resolveNodeName(node).trim() === rootConnectorName) ??
+      null;
+    if (!rootNode) return { positionByNodeId, staticByPosition };
+
+    const mappedNodeIdByKey = new SvelteMap<string, string>();
+    const usedNodeIds = new SvelteSet<string>();
+    const pickUnassignedByName = (connectorName: string): string | null => {
+      const targetName = connectorName.trim();
+      if (!targetName) return null;
+      const match = connectorNodes.find(
+        (node) =>
+          !usedNodeIds.has(node.id) &&
+          resolveNodeName(node).trim().toLowerCase() === targetName.toLowerCase(),
+      );
+      return match?.id ?? null;
+    };
+
+    riPlan.positioning.nodes.forEach((entry) => {
+      let mappedNodeId: string | null = null;
+
+      if (entry.relation === "root") {
+        if (resolveNodeName(rootNode).trim().toLowerCase() === entry.connectorName.toLowerCase()) {
+          mappedNodeId = rootNode.id;
+        }
+      } else {
+        const parentNodeId = entry.parentKey
+          ? (mappedNodeIdByKey.get(entry.parentKey) ?? null)
+          : null;
+        const parentNode = parentNodeId ? (nodeById.get(parentNodeId) ?? null) : null;
+        const dimensionIndex = entry.parentDimensionIndex;
+        if (
+          parentNode &&
+          isConnectorKind(parentNode.data.kind) &&
+          Number.isInteger(dimensionIndex) &&
+          dimensionIndex !== null &&
+          dimensionIndex >= 0
+        ) {
+          const sourceHandle = `dim-${dimensionIndex}`;
+          const candidateEdges = graphEdges.filter((edge) => {
+            if (edge.source !== parentNode.id) return false;
+            if ((edge.sourceHandle ?? "") !== sourceHandle) return false;
+            if ((edge.targetHandle ?? "") !== "in") return false;
+            const target = edge.target ? (nodeById.get(edge.target) ?? null) : null;
+            return Boolean(target && isConnectorKind(target.data.kind));
+          });
+
+          if (entry.relation === "composite") {
+            const compositeEdge =
+              candidateEdges.find((edge) => parseConnectorEdgeRelation(edge) === "composite") ??
+              candidateEdges[0];
+            if (compositeEdge?.target) {
+              const targetNode = nodeById.get(compositeEdge.target) ?? null;
+              if (
+                targetNode &&
+                isConnectorKind(targetNode.data.kind) &&
+                resolveNodeName(targetNode).trim().toLowerCase() ===
+                  entry.connectorName.toLowerCase() &&
+                !usedNodeIds.has(targetNode.id)
+              ) {
+                mappedNodeId = targetNode.id;
+              }
+            }
+          } else if (entry.relation === "binding") {
+            const slot = Number.isInteger(entry.parentSlot) ? Number(entry.parentSlot) : null;
+            let bindingCandidates = candidateEdges.filter(
+              (edge) => parseConnectorEdgeRelation(edge) === "binding",
+            );
+            if (slot !== null) {
+              const slotMatches = bindingCandidates.filter(
+                (edge) => parseConnectorEdgeBindingSlot(edge) === slot,
+              );
+              if (slotMatches.length) bindingCandidates = slotMatches;
+            }
+            const bindingTarget = bindingCandidates
+              .map((edge) => (edge.target ? (nodeById.get(edge.target) ?? null) : null))
+              .find((targetNode) =>
+                Boolean(
+                  targetNode &&
+                  isConnectorKind(targetNode.data.kind) &&
+                  !usedNodeIds.has(targetNode.id) &&
+                  resolveNodeName(targetNode).trim().toLowerCase() ===
+                    entry.connectorName.toLowerCase(),
+                ),
+              );
+            if (bindingTarget) {
+              mappedNodeId = bindingTarget.id;
+            }
+          }
+        }
+      }
+
+      if (!mappedNodeId) {
+        mappedNodeId = pickUnassignedByName(entry.connectorName);
+      }
+      if (!mappedNodeId) return;
+
+      mappedNodeIdByKey.set(entry.key, mappedNodeId);
+      usedNodeIds.add(mappedNodeId);
+      positionByNodeId[mappedNodeId] = entry.position;
+
+      const staticEntry = riPlan.staticRiByPosition[String(entry.position)];
+      if (staticEntry) {
+        staticByPosition[String(entry.position)] = {
+          startPoint: toInt(staticEntry.startPoint) ?? 0,
+          transformationShift: toInt(staticEntry.transformationShift) ?? 0,
+        };
+      }
+    });
+
+    return { positionByNodeId, staticByPosition };
+  };
+
+  const applyComputedRiPositionsToGraphNodes = (
+    graphNodes: StudioNode[],
+    graphEdges: Edge[],
+  ): StudioNode[] => {
+    const { positionByNodeId } = computeConnectorRiProjectionForGraph(graphNodes, graphEdges);
+    if (!graphNodes.some((node) => isConnectorKind(node.data.kind))) return graphNodes;
+
+    return graphNodes.map((node) => {
+      if (!isConnectorKind(node.data.kind)) return node;
+      const projectedPosition = positionByNodeId[node.id];
+      const nextPosition =
+        typeof projectedPosition === "number" && Number.isInteger(projectedPosition)
+          ? projectedPosition
+          : undefined;
+      if (node.data.riPosition === nextPosition) return node;
+      return {
+        ...node,
+        data: {
+          ...node.data,
+          riPosition: nextPosition,
+        },
+      };
+    });
+  };
+
+  const materializeLockedReferencedRiAsRootStatic = (graphNodes: StudioNode[]): StudioNode[] => {
+    const rootNode =
+      graphNodes.find(
+        (node) =>
+          isConnectorKind(node.data.kind) && Boolean(node.data.tabRoot) && !node.data.fromNetwork,
+      ) ?? null;
+    if (!rootNode) return graphNodes;
+
+    const normalizeMaterializedPositions = (input: unknown): number[] => {
+      if (!Array.isArray(input)) return [];
+      const normalized = input
+        .map((value) => toInt(value as number | string | null | undefined))
+        .filter((value): value is number => Number.isInteger(value))
+        .sort((a, b) => a - b);
+      return Array.from(new Set(normalized));
+    };
+
+    const previousMaterializedPositions = normalizeMaterializedPositions(
+      rootNode.data.materializedReferencedRiPositions,
+    );
+    const nextMaterializedByPosition = new SvelteMap<string, StudioRunningInstanceRef>();
+    graphNodes.forEach((node) => {
+      if (!isConnectorKind(node.data.kind) || !node.data.fromNetwork || !node.data.riLocked) return;
+      const positionKey = toCanonicalPositionKey(node.data.riPosition);
+      if (!positionKey) return;
+      nextMaterializedByPosition.set(positionKey, {
+        startPoint: toInt(node.data.riStart) ?? 0,
+        transformationShift: toInt(node.data.riShift) ?? 0,
+      });
+    });
+    const nextMaterializedPositions = Array.from(nextMaterializedByPosition.keys())
+      .map((key) => Number(key))
+      .filter((value) => Number.isInteger(value) && value >= 0)
+      .sort((a, b) => a - b);
+
+    const nextRootStatic = cloneStaticRiMap(rootNode.data.staticRi);
+    let staticChanged = false;
+
+    previousMaterializedPositions.forEach((position) => {
+      const key = String(position);
+      if (!(key in nextRootStatic)) return;
+      delete nextRootStatic[key];
+      staticChanged = true;
+    });
+
+    nextMaterializedByPosition.forEach((value, positionKey) => {
+      const existing = nextRootStatic[positionKey];
+      if (
+        existing &&
+        (toInt(existing.startPoint) ?? 0) === value.startPoint &&
+        (toInt(existing.transformationShift) ?? 0) === value.transformationShift
+      ) {
+        return;
+      }
+      nextRootStatic[positionKey] = value;
+      staticChanged = true;
+    });
+
+    const materializedPositionsChanged =
+      previousMaterializedPositions.length !== nextMaterializedPositions.length ||
+      previousMaterializedPositions.some(
+        (value, index) => value !== nextMaterializedPositions[index],
+      );
+
+    if (!staticChanged && !materializedPositionsChanged) return graphNodes;
+
+    const nextTrackedPositions = nextMaterializedPositions.length
+      ? nextMaterializedPositions
+      : undefined;
+
+    return graphNodes.map((node) =>
+      node.id === rootNode.id
+        ? {
+            ...node,
+            data: {
+              ...node.data,
+              ...(staticChanged ? { staticRi: nextRootStatic } : {}),
+              materializedReferencedRiPositions: nextTrackedPositions,
+            },
+          }
+        : node,
+    );
+  };
+
   const publishRuntimeToChain = async (
     runtime: ReturnType<typeof buildStudioRuntime> | null,
     compiled: Record<string, RuntimeTransformationDef>,
@@ -2594,9 +2934,13 @@
     return rootNode ? resolveNodeName(rootNode).trim() : "";
   };
 
-  const buildExecuteRequestPreview = (graphNodes: StudioNode[] = nodes): ExecuteRequestPreview => {
+  const buildExecuteRequestPreview = (
+    graphNodes: StudioNode[] = nodes,
+    graphEdges: Edge[] = edges,
+  ): ExecuteRequestPreview => {
     const particlesCount = Math.max(1, Math.trunc(runSamplesCount));
-    const connectorName = resolveActiveExecuteConnectorName(graphNodes);
+    const positionedNodes = applyComputedRiPositionsToGraphNodes(graphNodes, graphEdges);
+    const connectorName = resolveActiveExecuteConnectorName(positionedNodes);
     if (!connectorName) {
       return {
         connectorName: "",
@@ -2611,7 +2955,7 @@
 
     // Execute path intentionally does not run local runtime/planning/validation.
     // Backend is the single source of truth for request validation and RI planning.
-    const dynamicOverrides = collectExecuteNodeOverrides(graphNodes);
+    const dynamicOverrides = collectExecuteNodeOverrides(positionedNodes);
     const dynamicRi: Record<string, { start_point: number; transformation_shift: number }> = {};
     Object.entries(dynamicOverrides).forEach(([position, value]) => {
       if (!value) return;
@@ -2645,13 +2989,15 @@
   const executeActiveGraph = async () => {
     if (!activeTab || chainRunBusy || chainDeployBusy) return;
     saveActiveGraph();
+    const positionedNodes = applyComputedRiPositionsToGraphNodes(nodes, edges);
+    nodes = positionedNodes;
     chainRunBusy = true;
     chainDeployError = null;
     chainDeployStatus = "Running on chain...";
     const runStartedAt = performance.now();
     let output: PtOutputFeature[] = [];
     let warnings: string[] = [];
-    const requestPreview = executeRequestPreview;
+    const requestPreview = buildExecuteRequestPreview(positionedNodes, edges);
     const requestPreparedAt = performance.now();
     const connectorName = requestPreview.connectorName;
     warnings = [];
@@ -2860,6 +3206,8 @@
 
   const deployActiveGraph = async () => {
     if (!activeTab) return;
+    const positionedNodes = applyComputedRiPositionsToGraphNodes(nodes, edges);
+    nodes = materializeLockedReferencedRiAsRootStatic(positionedNodes);
     chainDeployError = null;
     chainDeployStatus = null;
     const warnings = compileActiveGraph();
@@ -3099,7 +3447,7 @@
 
     deployTimestampByTab = { ...deployTimestampByTab, [activeTabId]: Date.now() };
     if (publishedRootConnectorName) {
-      chainDeployStatus = `Deployed ${activeTab.label} to chain.`;
+      chainDeployStatus = `Deployed connector '${publishedRootConnectorName}' to chain.`;
     } else if (runtime) {
       chainDeployStatus = "Deploy completed without publishing a connector.";
     } else {
@@ -3458,7 +3806,6 @@
       .filter((edge) => !hiddenNodeIds.has(edge.source) && !hiddenNodeIds.has(edge.target))
       .map((edge) => ({
         ...edge,
-        ...(edge.style ? { style: { ...edge.style } } : {}),
       }));
     return { nodes: projectedNodes, edges: projectedEdges };
   };
@@ -3479,7 +3826,6 @@
         .filter((edge) => pluginNodeIds.has(edge.source) || pluginNodeIds.has(edge.target))
         .map((edge) => ({
           ...edge,
-          ...(edge.style ? { style: { ...edge.style } } : {}),
         }));
       tabGraphs.set(activeTabId, { nodes: pluginNodes, edges: pluginEdges });
       return;
@@ -3520,7 +3866,6 @@
         }
         mergedEdges.push({
           ...edge,
-          ...(edge.style ? { style: { ...edge.style } } : {}),
         });
       });
       nodes = mergedNodes;
@@ -3965,17 +4310,11 @@
           : {}),
         ...(isBinding
           ? {
-              style: {
-                stroke: "#c97500",
-                strokeDasharray: "8 5",
-              },
+              style: "stroke:#c97500;stroke-dasharray:8 5;",
             }
           : isOpen
             ? {
-                style: {
-                  stroke: "#7b8794",
-                  strokeDasharray: "4 6",
-                },
+                style: "stroke:#7b8794;stroke-dasharray:4 6;",
               }
             : {}),
       });
@@ -5789,10 +6128,7 @@
             bindingSlot: slot,
             bindingOwnerName: resolveNodeName(sourceNode),
           };
-          nextEdge.style = {
-            stroke: "#c97500",
-            strokeDasharray: "8 5",
-          };
+          nextEdge.style = "stroke:#c97500;stroke-dasharray:8 5;";
         }
       }
     }
@@ -6837,10 +7173,7 @@
                       bindingSlot: item.slotId ?? 0,
                       bindingOwnerName: connectorName,
                     },
-                    style: {
-                      stroke: "#c97500",
-                      strokeDasharray: "8 5",
-                    },
+                    style: "stroke:#c97500;stroke-dasharray:8 5;",
                   }),
             });
             return;
@@ -6886,10 +7219,7 @@
                     bindingSlot: item.slotId ?? 0,
                     bindingOwnerName: connectorName,
                   },
-                  style: {
-                    stroke: "#c97500",
-                    strokeDasharray: "8 5",
-                  },
+                  style: "stroke:#c97500;stroke-dasharray:8 5;",
                 }),
           });
         });
@@ -7677,70 +8007,83 @@
                       </div>
                     </div>
                   {/if}
+                  {@const connectorRiLocked = selectedNode.data.riLocked ?? false}
+                  {@const connectorRiToggleDisabled = isConnectorRiLockToggleDisabled(selectedNode)}
+                  <div class="inspector-section">
+                    <div class="inspector-section-title">Running instance</div>
+                    <div class="inspector-inline">
+                      <label class="inspector-inline-label" for="connector-ri-start">Start</label>
+                      <input
+                        id="connector-ri-start"
+                        class="inspector-input inspector-input--compact inspector-input--inline"
+                        type="number"
+                        inputmode="numeric"
+                        min="0"
+                        step="1"
+                        value={selectedNode.data.riStart ?? 0}
+                        disabled={connectorRiLocked}
+                        onwheel={(event) => {
+                          event.preventDefault();
+                          (event.currentTarget as HTMLInputElement).blur();
+                        }}
+                        onkeydown={(event) => {
+                          if (["-", "+", "e", "E", "."].includes(event.key)) {
+                            event.preventDefault();
+                          }
+                        }}
+                        oninput={(event) => {
+                          const target = event.target as HTMLInputElement | null;
+                          applyConnectorRiPatch(selectedNode.id, {
+                            riStart: toInt(target?.value ?? "0"),
+                          });
+                        }}
+                      />
+                      <label class="inspector-inline-label" for="connector-ri-shift">Shift</label>
+                      <input
+                        id="connector-ri-shift"
+                        class="inspector-input inspector-input--compact inspector-input--inline"
+                        type="number"
+                        inputmode="numeric"
+                        min="0"
+                        step="1"
+                        value={selectedNode.data.riShift ?? 0}
+                        disabled={connectorRiLocked}
+                        onwheel={(event) => {
+                          event.preventDefault();
+                          (event.currentTarget as HTMLInputElement).blur();
+                        }}
+                        onkeydown={(event) => {
+                          if (["-", "+", "e", "E", "."].includes(event.key)) {
+                            event.preventDefault();
+                          }
+                        }}
+                        oninput={(event) => {
+                          const target = event.target as HTMLInputElement | null;
+                          applyConnectorRiPatch(selectedNode.id, {
+                            riShift: toInt(target?.value ?? "0"),
+                          });
+                        }}
+                      />
+                      <button
+                        type="button"
+                        class={`inspector-toggle ${connectorRiLocked ? "is-locked" : ""}`}
+                        disabled={connectorRiToggleDisabled}
+                        onclick={() =>
+                          applyConnectorRiPatch(selectedNode.id, { riLocked: !connectorRiLocked })}
+                      >
+                        {connectorRiLocked ? "static" : "open"}
+                      </button>
+                    </div>
+                  </div>
                   <div class="inspector-section">
                     <div class="inspector-section-title">Connector dimensions</div>
                     {#if getSortedConnectorDimensions(selectedNode.id).length === 0}
                       <div class="inspector-hint">No dimensions configured yet.</div>
                     {:else}
                       {#each getSortedConnectorDimensions(selectedNode.id) as dimensionNode, dimIndex (dimensionNode.id)}
-                        {@const locked = dimensionNode.data.riLocked ?? false}
                         <div class="inspector-row">
                           <span>#{dimIndex + 1}</span>
                           <span>{(dimensionNode.data.transformations ?? []).length} tx</span>
-                        </div>
-                        <div class="inspector-inline">
-                          <label
-                            class="inspector-inline-label"
-                            for={`ri-start-${dimensionNode.id}`}
-                          >
-                            Start
-                          </label>
-                          <input
-                            id={`ri-start-${dimensionNode.id}`}
-                            class="inspector-input inspector-input--compact inspector-input--inline"
-                            type="number"
-                            inputmode="numeric"
-                            min="0"
-                            step="1"
-                            value={dimensionNode.data.riStart ?? 0}
-                            disabled={isReadOnly && locked}
-                            oninput={(event) => {
-                              const target = event.target as HTMLInputElement | null;
-                              updateNodeData(dimensionNode.id, {
-                                riStart: toInt(target?.value ?? "0"),
-                              });
-                            }}
-                          />
-                          <label
-                            class="inspector-inline-label"
-                            for={`ri-shift-${dimensionNode.id}`}
-                          >
-                            Shift
-                          </label>
-                          <input
-                            id={`ri-shift-${dimensionNode.id}`}
-                            class="inspector-input inspector-input--compact inspector-input--inline"
-                            type="number"
-                            inputmode="numeric"
-                            min="0"
-                            step="1"
-                            value={dimensionNode.data.riShift ?? 0}
-                            disabled={isReadOnly && locked}
-                            oninput={(event) => {
-                              const target = event.target as HTMLInputElement | null;
-                              updateNodeData(dimensionNode.id, {
-                                riShift: toInt(target?.value ?? "0"),
-                              });
-                            }}
-                          />
-                          <button
-                            type="button"
-                            class={`inspector-toggle ${locked ? "is-locked" : ""}`}
-                            disabled={isReadOnly}
-                            onclick={() => updateNodeData(dimensionNode.id, { riLocked: !locked })}
-                          >
-                            {locked ? "fixed" : "open"}
-                          </button>
                         </div>
                         {#if (dimensionNode.data.transformations ?? []).length > 0}
                           <div class="inspector-transform-list inspector-transform-list--compact">
@@ -7930,79 +8273,6 @@
                   </div>
                 {/if}
                 {#if selectedNode.data.kind === "dimension"}
-                  {@const locked = selectedNode.data.riLocked ?? false}
-                  <div class="inspector-section">
-                    <div class="inspector-section-title">Running instance</div>
-                    <div class="inspector-inline">
-                      <label class="inspector-inline-label" for="ri-start">Start</label>
-                      <input
-                        id="ri-start"
-                        class="inspector-input inspector-input--compact inspector-input--inline"
-                        type="number"
-                        inputmode="numeric"
-                        min="0"
-                        step="1"
-                        value={selectedNode.data.riStart ?? 0}
-                        disabled={isReadOnly && locked}
-                        onwheel={(event) => {
-                          event.preventDefault();
-                          (event.currentTarget as HTMLInputElement).blur();
-                        }}
-                        onkeydown={(event) => {
-                          if (["-", "+", "e", "E", "."].includes(event.key)) {
-                            event.preventDefault();
-                          }
-                        }}
-                        oninput={(event) => {
-                          const target = event.target as HTMLInputElement | null;
-                          updateNodeData(selectedNode.id, {
-                            riStart: toInt(target?.value ?? "0"),
-                          });
-                        }}
-                      />
-                      <label class="inspector-inline-label" for="ri-shift">Shift</label>
-                      <input
-                        id="ri-shift"
-                        class="inspector-input inspector-input--compact inspector-input--inline"
-                        type="number"
-                        inputmode="numeric"
-                        min="0"
-                        step="1"
-                        value={selectedNode.data.riShift ?? 0}
-                        disabled={isReadOnly && locked}
-                        onwheel={(event) => {
-                          event.preventDefault();
-                          (event.currentTarget as HTMLInputElement).blur();
-                        }}
-                        onkeydown={(event) => {
-                          if (["-", "+", "e", "E", "."].includes(event.key)) {
-                            event.preventDefault();
-                          }
-                        }}
-                        oninput={(event) => {
-                          const target = event.target as HTMLInputElement | null;
-                          updateNodeData(selectedNode.id, {
-                            riShift: toInt(target?.value ?? "0"),
-                          });
-                        }}
-                      />
-                      <button
-                        type="button"
-                        class={`inspector-toggle ${locked ? "is-locked" : ""}`}
-                        disabled={isReadOnly}
-                        onclick={() => updateNodeData(selectedNode.id, { riLocked: !locked })}
-                      >
-                        {locked ? "fixed" : "open"}
-                      </button>
-                    </div>
-                    {#if isReadOnly}
-                      <div class="inspector-hint">
-                        {locked
-                          ? "RI fixed — locked in network particle."
-                          : "RI open — editable for runs."}
-                      </div>
-                    {/if}
-                  </div>
                   <div class="inspector-section">
                     <div class="inspector-section-title">Transformations</div>
                     <div class="inspector-transform-list">
@@ -8491,71 +8761,90 @@
                             </div>
                           </div>
                         {/if}
+                        {@const connectorRiLocked = selectedNode.data.riLocked ?? false}
+                        {@const connectorRiToggleDisabled =
+                          isConnectorRiLockToggleDisabled(selectedNode)}
+                        <div class="inspector-section">
+                          <div class="inspector-section-title">Running instance</div>
+                          <div class="inspector-inline">
+                            <label class="inspector-inline-label" for="connector-ri-start-split"
+                              >Start</label
+                            >
+                            <input
+                              id="connector-ri-start-split"
+                              class="inspector-input inspector-input--compact inspector-input--inline"
+                              type="number"
+                              inputmode="numeric"
+                              min="0"
+                              step="1"
+                              value={selectedNode.data.riStart ?? 0}
+                              disabled={connectorRiLocked}
+                              onwheel={(event) => {
+                                event.preventDefault();
+                                (event.currentTarget as HTMLInputElement).blur();
+                              }}
+                              onkeydown={(event) => {
+                                if (["-", "+", "e", "E", "."].includes(event.key)) {
+                                  event.preventDefault();
+                                }
+                              }}
+                              oninput={(event) => {
+                                const target = event.target as HTMLInputElement | null;
+                                applyConnectorRiPatch(selectedNode.id, {
+                                  riStart: toInt(target?.value ?? "0"),
+                                });
+                              }}
+                            />
+                            <label class="inspector-inline-label" for="connector-ri-shift-split"
+                              >Shift</label
+                            >
+                            <input
+                              id="connector-ri-shift-split"
+                              class="inspector-input inspector-input--compact inspector-input--inline"
+                              type="number"
+                              inputmode="numeric"
+                              min="0"
+                              step="1"
+                              value={selectedNode.data.riShift ?? 0}
+                              disabled={connectorRiLocked}
+                              onwheel={(event) => {
+                                event.preventDefault();
+                                (event.currentTarget as HTMLInputElement).blur();
+                              }}
+                              onkeydown={(event) => {
+                                if (["-", "+", "e", "E", "."].includes(event.key)) {
+                                  event.preventDefault();
+                                }
+                              }}
+                              oninput={(event) => {
+                                const target = event.target as HTMLInputElement | null;
+                                applyConnectorRiPatch(selectedNode.id, {
+                                  riShift: toInt(target?.value ?? "0"),
+                                });
+                              }}
+                            />
+                            <button
+                              type="button"
+                              class={`inspector-toggle ${connectorRiLocked ? "is-locked" : ""}`}
+                              disabled={connectorRiToggleDisabled}
+                              onclick={() =>
+                                applyConnectorRiPatch(selectedNode.id, {
+                                  riLocked: !connectorRiLocked,
+                                })}
+                            >
+                              {connectorRiLocked ? "static" : "open"}
+                            </button>
+                          </div>
+                        </div>
                         <div class="inspector-section">
                           <div class="inspector-section-title">Connector dimensions</div>
                           {#if getSortedConnectorDimensions(selectedNode.id).length === 0}
                             <div class="inspector-hint">No dimensions configured yet.</div>
                           {:else}
                             {#each getSortedConnectorDimensions(selectedNode.id) as dimensionNode, dimIndex (dimensionNode.id)}
-                              {@const locked = dimensionNode.data.riLocked ?? false}
                               <div class="inspector-row">
                                 <span>#{dimIndex + 1}</span>
                                 <span>{(dimensionNode.data.transformations ?? []).length} tx</span>
-                              </div>
-                              <div class="inspector-inline">
-                                <label
-                                  class="inspector-inline-label"
-                                  for={`ri-start-split-${dimensionNode.id}`}
-                                >
-                                  Start
-                                </label>
-                                <input
-                                  id={`ri-start-split-${dimensionNode.id}`}
-                                  class="inspector-input inspector-input--compact inspector-input--inline"
-                                  type="number"
-                                  inputmode="numeric"
-                                  min="0"
-                                  step="1"
-                                  value={dimensionNode.data.riStart ?? 0}
-                                  disabled={isReadOnly && locked}
-                                  oninput={(event) => {
-                                    const target = event.target as HTMLInputElement | null;
-                                    updateNodeData(dimensionNode.id, {
-                                      riStart: toInt(target?.value ?? "0"),
-                                    });
-                                  }}
-                                />
-                                <label
-                                  class="inspector-inline-label"
-                                  for={`ri-shift-split-${dimensionNode.id}`}
-                                >
-                                  Shift
-                                </label>
-                                <input
-                                  id={`ri-shift-split-${dimensionNode.id}`}
-                                  class="inspector-input inspector-input--compact inspector-input--inline"
-                                  type="number"
-                                  inputmode="numeric"
-                                  min="0"
-                                  step="1"
-                                  value={dimensionNode.data.riShift ?? 0}
-                                  disabled={isReadOnly && locked}
-                                  oninput={(event) => {
-                                    const target = event.target as HTMLInputElement | null;
-                                    updateNodeData(dimensionNode.id, {
-                                      riShift: toInt(target?.value ?? "0"),
-                                    });
-                                  }}
-                                />
-                                <button
-                                  type="button"
-                                  class={`inspector-toggle ${locked ? "is-locked" : ""}`}
-                                  disabled={isReadOnly}
-                                  onclick={() =>
-                                    updateNodeData(dimensionNode.id, { riLocked: !locked })}
-                                >
-                                  {locked ? "fixed" : "open"}
-                                </button>
                               </div>
                               {#if (dimensionNode.data.transformations ?? []).length > 0}
                                 <div
@@ -8764,79 +9053,6 @@
                         </div>
                       {/if}
                       {#if selectedNode.data.kind === "dimension"}
-                        {@const locked = selectedNode.data.riLocked ?? false}
-                        <div class="inspector-section">
-                          <div class="inspector-section-title">Running instance</div>
-                          <div class="inspector-inline">
-                            <label class="inspector-inline-label" for="ri-start-split">Start</label>
-                            <input
-                              id="ri-start-split"
-                              class="inspector-input inspector-input--compact inspector-input--inline"
-                              type="number"
-                              inputmode="numeric"
-                              min="0"
-                              step="1"
-                              value={selectedNode.data.riStart ?? 0}
-                              disabled={isReadOnly && locked}
-                              onwheel={(event) => {
-                                event.preventDefault();
-                                (event.currentTarget as HTMLInputElement).blur();
-                              }}
-                              onkeydown={(event) => {
-                                if (["-", "+", "e", "E", "."].includes(event.key)) {
-                                  event.preventDefault();
-                                }
-                              }}
-                              oninput={(event) => {
-                                const target = event.target as HTMLInputElement | null;
-                                updateNodeData(selectedNode.id, {
-                                  riStart: toInt(target?.value ?? "0"),
-                                });
-                              }}
-                            />
-                            <label class="inspector-inline-label" for="ri-shift-split">Shift</label>
-                            <input
-                              id="ri-shift-split"
-                              class="inspector-input inspector-input--compact inspector-input--inline"
-                              type="number"
-                              inputmode="numeric"
-                              min="0"
-                              step="1"
-                              value={selectedNode.data.riShift ?? 0}
-                              disabled={isReadOnly && locked}
-                              onwheel={(event) => {
-                                event.preventDefault();
-                                (event.currentTarget as HTMLInputElement).blur();
-                              }}
-                              onkeydown={(event) => {
-                                if (["-", "+", "e", "E", "."].includes(event.key)) {
-                                  event.preventDefault();
-                                }
-                              }}
-                              oninput={(event) => {
-                                const target = event.target as HTMLInputElement | null;
-                                updateNodeData(selectedNode.id, {
-                                  riShift: toInt(target?.value ?? "0"),
-                                });
-                              }}
-                            />
-                            <button
-                              type="button"
-                              class={`inspector-toggle ${locked ? "is-locked" : ""}`}
-                              disabled={isReadOnly}
-                              onclick={() => updateNodeData(selectedNode.id, { riLocked: !locked })}
-                            >
-                              {locked ? "fixed" : "open"}
-                            </button>
-                          </div>
-                          {#if isReadOnly}
-                            <div class="inspector-hint">
-                              {locked
-                                ? "RI fixed — locked in network particle."
-                                : "RI open — editable for runs."}
-                            </div>
-                          {/if}
-                        </div>
                         <div class="inspector-section">
                           <div class="inspector-section-title">Transformations</div>
                           <div class="inspector-transform-list">

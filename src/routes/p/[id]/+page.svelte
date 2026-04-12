@@ -39,7 +39,7 @@
   const openParticleInStudio = (targetParticleId: string) => {
     const base = resolve("/studio");
     const target = new URL(base, window.location.origin);
-    target.searchParams.set("network_kind", networkNodeStudioKind("connector"));
+    target.searchParams.set("network_kind", networkNodeStudioKind("feature"));
     target.searchParams.set("network_id", targetParticleId);
     window.open(target.toString(), "_blank", "noopener,noreferrer");
   };
@@ -130,14 +130,14 @@
 
         <div class="particle-head-actions">
           <Button
-            variant={toolboxParticleIds.has(particle.id) ? "ghost" : "primary"}
+            variant={toolboxParticleIds.has(particle!.id) ? "ghost" : "primary"}
             type="button"
-            disabled={toolboxParticleIds.has(particle.id)}
-            onclick={() => addParticleToToolbox(particle.id)}
+            disabled={toolboxParticleIds.has(particle!.id)}
+            onclick={() => addParticleToToolbox(particle!.id)}
           >
-            {toolboxParticleIds.has(particle.id) ? "In toolbox" : "Add to toolbox"}
+            {toolboxParticleIds.has(particle!.id) ? "In toolbox" : "Add to toolbox"}
           </Button>
-          <Button variant="ghost" type="button" onclick={() => openParticleInStudio(particle.id)}>
+          <Button variant="ghost" type="button" onclick={() => openParticleInStudio(particle!.id)}>
             Open in Studio
           </Button>
         </div>

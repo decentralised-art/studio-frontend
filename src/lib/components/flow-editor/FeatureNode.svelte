@@ -3,7 +3,7 @@
 
   import { Handle, Position, useSvelteFlow } from "@xyflow/svelte";
 
-  import type { FeatureNodePropsType } from "./flowEditorTypes";
+  import type { FeatureNodePropsType } from "./FlowEditorTypes";
 
   import Input from "$lib/components/ui/Input.svelte";
   import { buildChainApiUrl } from "$lib/url/url";

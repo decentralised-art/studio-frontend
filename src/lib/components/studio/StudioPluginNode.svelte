@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Handle, Position, type NodeProps } from "@xyflow/svelte";
+  import { Handle, Position, type Node, type NodeProps } from "@xyflow/svelte";
   import type { PtOutputFeature } from "$lib/particles/ptMidiAdapter";
 
   type PluginNodeData = {
@@ -8,7 +8,9 @@
     pluginTargets?: string[];
   };
 
-  const { data, selected }: NodeProps<PluginNodeData> = $props();
+  type PluginNode = Node<PluginNodeData, "plugin">;
+
+  const { data, selected }: NodeProps<PluginNode> = $props();
   const selectedClass = $derived(selected ? "is-selected" : "");
   const streams = $derived(data.pluginOutput ?? []);
   const columnCount = $derived(
@@ -27,6 +29,8 @@
   {:else}
     <div
       class="plugin-table-wrap"
+      role="region"
+      aria-label="Plugin output table"
       onwheel={(event) => event.stopPropagation()}
       ontouchmove={(event) => event.stopPropagation()}
     >

@@ -318,7 +318,7 @@
       bind:edges={flowEdges}
       {nodeTypes}
       defaultEdgeOptions={{
-        style: { stroke: "rgba(255,255,255,0.28)", strokeWidth: 1.4 },
+        style: "stroke: rgba(255,255,255,0.28); stroke-width: 1.4px;",
       }}
       nodesDraggable={false}
       nodesConnectable={false}
