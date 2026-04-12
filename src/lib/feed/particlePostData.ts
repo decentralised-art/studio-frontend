@@ -84,10 +84,10 @@ let cachedMaxSources: number | null = null;
 let cachedIncludesRuntimeCode = false;
 let cachedIncludesDependencyExpansion = false;
 const terminalSetCache = new Map<string, string[]>();
-const SOURCE_SNAPSHOT_CONCURRENCY = 6;
-const SOURCE_SNAPSHOT_TIMEOUT_MS = 3500;
+const SOURCE_SNAPSHOT_CONCURRENCY = 4;
+const SOURCE_SNAPSHOT_TIMEOUT_MS = 10000;
 const DEPENDENCY_FETCH_CONCURRENCY = 8;
-const DEPENDENCY_FETCH_TIMEOUT_MS = 3500;
+const DEPENDENCY_FETCH_TIMEOUT_MS = 8000;
 
 const withTimeout = async <T>(promise: Promise<T>, timeoutMs: number, context: string) => {
   let timeoutId: ReturnType<typeof setTimeout> | null = null;
@@ -258,6 +258,7 @@ const mergeSnapshots = async (options?: {
       ),
   );
   const successfulSnapshots = settled.filter((result) => result.status === "fulfilled").length;
+  const failedSnapshots = settled.length - successfulSnapshots;
   if (chainSources.length > 0 && successfulSnapshots === 0) {
     throw new Error("Unable to load chain snapshots from available sources.");
   }
@@ -411,6 +412,11 @@ const mergeSnapshots = async (options?: {
   }
 
   const particles = Array.from(nextParticlesById.values()).sort(compareNewestFirst);
+  if (particles.length === 0 && failedSnapshots > 0) {
+    throw new Error(
+      "Unable to load network feed reliably (some chain sources timed out or failed).",
+    );
+  }
 
   const connectorEvents = rebuildEventsFromParticles(particles);
   const runtimeCodeEvents = includeRuntimeCode

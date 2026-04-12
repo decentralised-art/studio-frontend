@@ -449,10 +449,19 @@ export const registerUser = async (email: string, displayName: string, password:
 };
 
 export const logout = async (): Promise<void> => {
-  await authFetch("/auth/logout", { method: "POST" });
+  const token = getToken();
   clearToken();
   clearChainToken();
   redirectToLogin();
+  if (!token) return;
+
+  // Optimistic logout UX: user is redirected immediately; backend session invalidation runs in background.
+  void fetch(buildServicesApiUrl("/auth/logout"), {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+  }).catch(() => {
+    // Ignore background logout failures; local auth state is already cleared.
+  });
 };
 
 export const getMe = async () => {

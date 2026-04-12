@@ -3124,17 +3124,6 @@
     transformationDraftError = null;
   };
 
-  const openConditionEditor = (conditionNode: StudioNode) => {
-    if (conditionNode.data.kind !== "condition") return;
-    conditionEditorOpen = true;
-    conditionEditorNodeId = conditionNode.id;
-    conditionEditorStatus = conditionNode.data.fromNetwork ? "network" : "draft";
-    conditionEditorLocked = Boolean(conditionNode.data.fromNetwork);
-    conditionDraftName = conditionNode.data.label || "New Condition";
-    conditionDraftCode = getConditionCode(conditionNode.id);
-    conditionDraftError = null;
-  };
-
   const closeConditionEditor = () => {
     conditionEditorOpen = false;
     conditionEditorNodeId = null;

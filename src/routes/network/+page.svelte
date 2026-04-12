@@ -179,9 +179,16 @@
   const loadChainFeed = async () => {
     feedLoadError = "";
     const hasCachedData = isParticlePostDataLoaded();
-    if (hasCachedData) {
+    const refreshFeedStateFromCache = () => {
       feedEvents = listParticlePosts();
       chainElements = listParticleSearchEntities();
+      if (feedEvents.length > 0) {
+        feedLoadError = "";
+      }
+    };
+
+    if (hasCachedData) {
+      refreshFeedStateFromCache();
       feedLoading = false;
     } else {
       feedLoading = true;
@@ -198,14 +205,8 @@
     } catch (error) {
       console.error("[Network feed] Failed to sync chain-backed particle posts.", error);
       feedLoadError = error instanceof Error ? error.message : "Unable to load network feed.";
-    } finally {
-      feedEvents = listParticlePosts();
-      chainElements = listParticleSearchEntities();
-      feedLoading = false;
-      if (feedEvents.length > 0) {
-        feedLoadError = "";
-      }
     }
+    refreshFeedStateFromCache();
 
     // Fast path can miss active sources if first source window has no events.
     // Auto-expand sources until at least one event is found or max window is reached.
@@ -227,9 +228,25 @@
           feedLoadError = error instanceof Error ? error.message : "Unable to load network feed.";
           break;
         }
-        feedEvents = listParticlePosts();
-        chainElements = listParticleSearchEntities();
+        refreshFeedStateFromCache();
       }
+    }
+
+    // Final fallback: if capped scan found nothing, attempt one uncapped sync to avoid false-empty UI
+    // when active sources are beyond the capped window.
+    if (feedEvents.length === 0 && sourceSyncLimit >= CHAIN_SOURCE_LIMIT_MAX) {
+      try {
+        await syncParticlePostDataFromChain({
+          force: true,
+          maxOwnedPerSource: CHAIN_OWNED_PER_SOURCE_LIMIT,
+          includeRuntimeCode: false,
+          includeDependencyExpansion: false,
+        });
+      } catch (error) {
+        console.warn("[Network feed] Uncapped source sync failed.", error);
+        feedLoadError = error instanceof Error ? error.message : "Unable to load network feed.";
+      }
+      refreshFeedStateFromCache();
     }
 
     canFetchMoreFromChain = sourceSyncLimit < CHAIN_SOURCE_LIMIT_MAX;
@@ -243,12 +260,15 @@
         includeDependencyExpansion: false,
       })
         .then(() => {
-          feedEvents = listParticlePosts();
-          chainElements = listParticleSearchEntities();
+          refreshFeedStateFromCache();
         })
         .catch((error) => {
           console.warn("[Network feed] Background refresh failed.", error);
         });
+    }
+
+    if (!hasCachedData) {
+      feedLoading = false;
     }
   };
 

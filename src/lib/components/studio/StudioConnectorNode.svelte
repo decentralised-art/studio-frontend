@@ -52,7 +52,7 @@
   const dimensionLabel = $derived(dimensionCount === 1 ? "dimension" : "dimensions");
   const connectorNameForTree = $derived((data.networkId ?? "").trim());
   const canOpenConnectorTree = $derived(!tabRoot && connectorNameForTree.length > 0);
-  const showBottomOutlets = $derived(!Boolean(data.hideOutlets));
+  const showBottomOutlets = $derived(!data.hideOutlets);
   const showRiControls = $derived(Boolean(data.showRiControls));
   const staticRiCount = $derived(
     data.staticRi && typeof data.staticRi === "object" ? Object.keys(data.staticRi).length : 0,
