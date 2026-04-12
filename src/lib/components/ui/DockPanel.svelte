@@ -128,18 +128,13 @@
   {/if}
 
   {#if canResize}
-    <div
+    <button
       class={`dock-resize-handle dock-resize-handle--${position} ${resizing ? "is-active" : ""}`}
-      role="separator"
-      aria-orientation="vertical"
       aria-label={position === "left" ? "Resize left panel" : "Resize right panel"}
-      aria-valuemin={minSizePx}
-      aria-valuemax={maxSizePx}
-      aria-valuenow={currentSize}
-      tabindex="0"
+      type="button"
       onpointerdown={startResize}
       onkeydown={handleResizeKeydown}
-    ></div>
+    ></button>
   {/if}
 </section>
 
@@ -193,6 +188,9 @@
     width: 10px;
     touch-action: none;
     cursor: col-resize;
+    border: 0;
+    padding: 0;
+    background: transparent;
   }
 
   .dock-resize-handle::before {

@@ -44,7 +44,6 @@
   let feedLoading = $state(true);
   let feedLoadMoreBusy = $state(false);
   let feedLoadError = $state("");
-  let profileLoading = $state(true);
   let formats = $state<ParticleFormat[]>([]);
   let chainElements = $state(listParticleSearchEntities());
   let visibleEventCount = $state(FEED_PAGE_SIZE);
@@ -383,34 +382,33 @@
 
   onMount(() => {
     formats = loadLocalFormats();
-    void Promise.allSettled([getCurrentUserToolboxLibrary(), getCurrentUserSocialPreferences()])
-      .then((results) => {
-        const [toolboxResult, socialResult] = results;
+    void Promise.allSettled([
+      getCurrentUserToolboxLibrary(),
+      getCurrentUserSocialPreferences(),
+    ]).then((results) => {
+      const [toolboxResult, socialResult] = results;
 
-        if (toolboxResult.status === "fulfilled") {
-          localToolboxParticles = [...toolboxResult.value.connector];
-        } else {
-          console.warn(
-            "[Network feed] Failed to load toolbox preferences from profile.",
-            toolboxResult.reason,
-          );
-        }
+      if (toolboxResult.status === "fulfilled") {
+        localToolboxParticles = [...toolboxResult.value.connector];
+      } else {
+        console.warn(
+          "[Network feed] Failed to load toolbox preferences from profile.",
+          toolboxResult.reason,
+        );
+      }
 
-        if (socialResult.status === "fulfilled") {
-          localFollowing =
-            socialResult.value.followedUserIds.length > 0
-              ? [...socialResult.value.followedUserIds]
-              : Object.keys(displayUsersById).filter((id) => id !== mockCurrentUserId);
-          localFollowedFormats = [...socialResult.value.followedFormatIds];
-        } else {
-          console.warn("[Network feed] Failed to load social preferences.", socialResult.reason);
-          localFollowing = Object.keys(displayUsersById).filter((id) => id !== mockCurrentUserId);
-          localFollowedFormats = [];
-        }
-      })
-      .finally(() => {
-        profileLoading = false;
-      });
+      if (socialResult.status === "fulfilled") {
+        localFollowing =
+          socialResult.value.followedUserIds.length > 0
+            ? [...socialResult.value.followedUserIds]
+            : Object.keys(displayUsersById).filter((id) => id !== mockCurrentUserId);
+        localFollowedFormats = [...socialResult.value.followedFormatIds];
+      } else {
+        console.warn("[Network feed] Failed to load social preferences.", socialResult.reason);
+        localFollowing = Object.keys(displayUsersById).filter((id) => id !== mockCurrentUserId);
+        localFollowedFormats = [];
+      }
+    });
     void loadChainFeed();
   });
 </script>
