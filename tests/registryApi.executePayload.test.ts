@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const chainAuthFetchMock = vi.fn();
+const { chainAuthFetchMock } = vi.hoisted(() => ({
+  chainAuthFetchMock: vi.fn(),
+}));
 
 vi.mock("$lib/auth/api", () => ({
   chainAuthFetch: chainAuthFetchMock,

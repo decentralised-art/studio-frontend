@@ -73,16 +73,6 @@ const cloneIncomingBindingDescriptor = (
   };
 };
 
-const cloneIncomingBindingAsForwarded = (
-  binding: RiBindingDescriptor | null | undefined,
-  fallbackSlot = 0,
-): RiBindingDescriptor | null => {
-  const cloned = cloneIncomingBindingDescriptor(binding, fallbackSlot);
-  if (!cloned) return null;
-  cloned.kind = "forwarded";
-  return cloned;
-};
-
 const getSortedIncomingBindingEntries = (bindings: Map<number, RiBindingDescriptor>) =>
   Array.from(bindings.entries())
     .filter(([slotId, binding]) => Number.isInteger(slotId) && slotId >= 0 && Boolean(binding))
@@ -309,13 +299,13 @@ export const computeRiPositioning = (
 
           const staticTarget = slotStaticTargets[childSlotId];
           if (!staticTarget) {
-            const forwardedBinding = cloneIncomingBindingAsForwarded(parentBinding, parentSlotId);
-            if (forwardedBinding) slotSelectedBindings[childSlotId] = forwardedBinding;
+            const propagatedBinding = cloneIncomingBindingDescriptor(parentBinding, parentSlotId);
+            if (propagatedBinding) slotSelectedBindings[childSlotId] = propagatedBinding;
             break;
           }
 
           const offset = localSlotId - rangeStart;
-          const forwardedInternal = cloneIncomingBindingAsForwarded(parentBinding, parentSlotId);
+          const forwardedInternal = cloneIncomingBindingDescriptor(parentBinding, parentSlotId);
           if (forwardedInternal) {
             slotForwardedInternalBindings[childSlotId].set(offset, forwardedInternal);
           }

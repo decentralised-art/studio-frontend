@@ -9,7 +9,7 @@ describe("executeRequestPlanner integration", () => {
   it("preserves synced static_ri locking in execute request generation", () => {
     const c3 = fromProtocolConnectorPayload({
       name: "c3",
-      dimensions: [{ transformations: [], composite: "c2", bindings: { "4": "time" } }],
+      dimensions: [{ transformations: [], composite: "c2", bindings: { "1": "velocity" } }],
       static_ri: {
         "0": { start_point: 5, transformation_shift: 1 },
       },
@@ -17,23 +17,8 @@ describe("executeRequestPlanner integration", () => {
     const c2 = fromProtocolConnectorPayload({
       name: "c2",
       dimensions: [
-        { transformations: [], composite: "c0", bindings: {} },
-        { transformations: [], bindings: { "4": "time" } },
         { transformations: [], composite: "pitch", bindings: {} },
-      ],
-    });
-    const c0 = fromProtocolConnectorPayload({
-      name: "c0",
-      dimensions: [
-        { transformations: [], composite: "t0", bindings: {} },
-        { transformations: [], composite: "t0", bindings: {} },
-      ],
-    });
-    const t0 = fromProtocolConnectorPayload({
-      name: "t0",
-      dimensions: [
-        { transformations: [], composite: "pitch", bindings: {} },
-        { transformations: [], bindings: { "1": "time" } },
+        { transformations: [], composite: "time", bindings: {} },
       ],
     });
     const pitch = fromProtocolConnectorPayload({
@@ -44,14 +29,17 @@ describe("executeRequestPlanner integration", () => {
       name: "time",
       dimensions: [{ transformations: [] }],
     });
+    const velocity = fromProtocolConnectorPayload({
+      name: "velocity",
+      dimensions: [{ transformations: [] }],
+    });
 
     const connectors = {
       c3,
       c2,
-      c0,
-      t0,
       pitch,
       time,
+      velocity,
     };
 
     const riPlan = buildExecuteRiPlan(connectors, "c3", {
