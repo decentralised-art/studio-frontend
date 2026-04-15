@@ -38,6 +38,18 @@ VITE_SERVICES_API_BASE_URL=https://api.decentralised.art/services
 VITE_CHAIN_API_BASE_URL=https://api.decentralised.art/chain
 ```
 
+Runtime behavior notes:
+
+1. Dev is proxy-first by default (`/services`, `/chain`) via `vite.config.ts`.
+2. Production defaults are strict network-only:
+   - `https://api.decentralised.art/services`
+   - `https://api.decentralised.art/chain`
+3. Set `VITE_*_API_BASE_URL` only when intentionally overriding targets.
+
+Detailed matrix:
+
+- `docs/runtime-environment-matrix.md`
+
 You can preview the production build with `npm run preview`.
 
 > To deploy your app, you may need to install an [adapter](https://svelte.dev/docs/kit/adapters) for your target environment.

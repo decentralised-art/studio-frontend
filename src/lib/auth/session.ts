@@ -34,9 +34,13 @@ export const getChainToken = (): string | null => {
 export const setChainToken = (token: string): void => {
   if (!browser) return;
   localStorage.setItem(CHAIN_TOKEN_KEY, token);
+  notifyAuthChange();
 };
 
 export const clearChainToken = (): void => {
   if (!browser) return;
   localStorage.removeItem(CHAIN_TOKEN_KEY);
+  notifyAuthChange();
 };
+
+export const hasAuthSession = (): boolean => Boolean(getToken() || getChainToken());

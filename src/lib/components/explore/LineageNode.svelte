@@ -13,7 +13,7 @@
 <div class={`lineage-node ${selected ? "is-selected" : ""}`}>
   <Handle type="target" position={Position.Left} class="lineage-handle" />
   <Handle type="source" position={Position.Right} class="lineage-handle" />
-  <span class="node-type">Particle</span>
+  <span class="node-type">Connector</span>
   <span class="label">{data?.label}</span>
 </div>
 

@@ -117,6 +117,67 @@ const addSource = (dedup: Map<string, ChainOwnerSyncSource>, source: ChainOwnerS
   });
 };
 
+const selectPreferredSource = (
+  existing: ChainOwnerSyncSource | undefined,
+  incoming: ChainOwnerSyncSource,
+): ChainOwnerSyncSource => {
+  if (!existing) return incoming;
+
+  const existingAuthorId = existing.authorId.trim();
+  const incomingAuthorId = incoming.authorId.trim();
+  const existingIsFallback = existingAuthorId.startsWith("chain-source-");
+  const incomingIsFallback = incomingAuthorId.startsWith("chain-source-");
+
+  // Prefer stronger identity over generic fallback IDs.
+  if (existingIsFallback && !incomingIsFallback) return incoming;
+  if (!existingIsFallback && incomingIsFallback) return existing;
+
+  // Prefer richer labels if existing one is empty.
+  if (!existing.label.trim() && incoming.label.trim()) return incoming;
+
+  // Keep existing value to avoid churn between refreshes.
+  return existing;
+};
+
+const mergeSourceIntoMap = (
+  byAddress: Map<string, ChainOwnerSyncSource>,
+  source: ChainOwnerSyncSource,
+) => {
+  const address = normalizeAddress(source.address);
+  if (!address) return;
+  const normalizedSource: ChainOwnerSyncSource = {
+    address,
+    authorId: source.authorId,
+    label: source.label,
+  };
+  byAddress.set(address, selectPreferredSource(byAddress.get(address), normalizedSource));
+};
+
+const sortSourcesDeterministically = (
+  sources: ChainOwnerSyncSource[],
+  fallbackOrder: string[],
+  stickyOrder: string[],
+) => {
+  const orderRank = new Map<string, number>();
+  let rank = 0;
+  [...fallbackOrder, ...stickyOrder].forEach((address) => {
+    const normalized = normalizeAddress(address);
+    if (!normalized || orderRank.has(normalized)) return;
+    orderRank.set(normalized, rank++);
+  });
+
+  return [...sources].sort((a, b) => {
+    const addressA = normalizeAddress(a.address);
+    const addressB = normalizeAddress(b.address);
+    const rankA = orderRank.get(addressA);
+    const rankB = orderRank.get(addressB);
+    if (rankA !== undefined && rankB !== undefined && rankA !== rankB) return rankA - rankB;
+    if (rankA !== undefined && rankB === undefined) return -1;
+    if (rankA === undefined && rankB !== undefined) return 1;
+    return addressA.localeCompare(addressB);
+  });
+};
+
 const fallbackChainSyncSources = (): ChainOwnerSyncSource[] => {
   const dedup = new Map<string, ChainOwnerSyncSource>();
 
@@ -163,6 +224,7 @@ const fallbackChainSyncSources = (): ChainOwnerSyncSource[] => {
 
 let chainSyncSourcesCache: ChainOwnerSyncSource[] | null = null;
 let chainSyncSourcesLoadPromise: Promise<ChainOwnerSyncSource[]> | null = null;
+let chainSyncSourcesStickyByAddress = new Map<string, ChainOwnerSyncSource>();
 
 export const listChainSyncSourcesForApp = async (options?: {
   force?: boolean;
@@ -172,9 +234,14 @@ export const listChainSyncSourcesForApp = async (options?: {
 
   chainSyncSourcesLoadPromise = (async () => {
     const fallback = fallbackChainSyncSources();
+    const fallbackOrder = fallback.map((entry) => normalizeAddress(entry.address));
     const fallbackByAddress = new Map<string, ChainOwnerSyncSource>(
       fallback.map((entry) => [normalizeAddress(entry.address), entry]),
     );
+    const stickyBefore = chainSyncSourcesCache
+      ? [...chainSyncSourcesCache]
+      : Array.from(chainSyncSourcesStickyByAddress.values());
+    const stickyOrder = stickyBefore.map((entry) => normalizeAddress(entry.address));
     try {
       const users = await listServicesUsers();
       const byAddress = new Map<string, ChainOwnerSyncSource>();
@@ -199,7 +266,7 @@ export const listChainSyncSourcesForApp = async (options?: {
         const mockLabel = mockId
           ? (mockUsersById[mockId]?.nickname ?? "")
           : (preferred?.label ?? "");
-        byAddress.set(address, {
+        mergeSourceIntoMap(byAddress, {
           address,
           authorId,
           label: mockLabel || sourceLabelFromUser(user),
@@ -208,19 +275,20 @@ export const listChainSyncSourcesForApp = async (options?: {
 
       // Temporary workaround: always merge with known mock/fallback sources.
       // Services users can be incomplete early in development (e.g., missing ethereum_address).
-      fallback.forEach((source) => {
-        const address = normalizeAddress(source.address);
-        if (!address) return;
-        if (byAddress.has(address)) return;
-        byAddress.set(address, {
-          address,
-          authorId: source.authorId,
-          label: source.label,
-        });
-      });
+      const unionByAddress = new Map<string, ChainOwnerSyncSource>();
+      stickyBefore.forEach((source) => mergeSourceIntoMap(unionByAddress, source));
+      fallback.forEach((source) => mergeSourceIntoMap(unionByAddress, source));
+      byAddress.forEach((source) => mergeSourceIntoMap(unionByAddress, source));
 
-      const merged = Array.from(byAddress.values());
+      const merged = sortSourcesDeterministically(
+        Array.from(unionByAddress.values()),
+        fallbackOrder,
+        stickyOrder,
+      );
       if (merged.length > 0) {
+        chainSyncSourcesStickyByAddress = new Map(
+          merged.map((source) => [normalizeAddress(source.address), source]),
+        );
         chainSyncSourcesCache = merged;
         return merged;
       }
@@ -228,8 +296,20 @@ export const listChainSyncSourcesForApp = async (options?: {
       console.warn("[Chain sync] Failed to load users from services API.", error);
     }
 
-    chainSyncSourcesCache = fallback;
-    return fallback;
+    const unionByAddress = new Map<string, ChainOwnerSyncSource>();
+    stickyBefore.forEach((source) => mergeSourceIntoMap(unionByAddress, source));
+    fallback.forEach((source) => mergeSourceIntoMap(unionByAddress, source));
+    const merged = sortSourcesDeterministically(
+      Array.from(unionByAddress.values()),
+      fallbackOrder,
+      stickyOrder,
+    );
+
+    chainSyncSourcesStickyByAddress = new Map(
+      merged.map((source) => [normalizeAddress(source.address), source]),
+    );
+    chainSyncSourcesCache = merged;
+    return merged;
   })();
 
   try {

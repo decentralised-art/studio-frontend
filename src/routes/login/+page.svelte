@@ -10,11 +10,11 @@
   import {
     authenticateAllMockAccountsInChain,
     login,
+    loginOrRegisterUser,
     loginWithMockChainAccount,
-    registerUser,
   } from "$lib/auth/api";
   import type { MockChainAuthResult } from "$lib/auth/api";
-  import { getToken } from "$lib/auth/session";
+  import { hasAuthSession } from "$lib/auth/session";
   import { mockUsers } from "$lib/data/users";
 
   let form = $state({
@@ -73,7 +73,9 @@
     mockAuthError = "";
     isMockAuthRunning = true;
     try {
-      mockAuthResults = await authenticateAllMockAccountsInChain();
+      mockAuthResults = await authenticateAllMockAccountsInChain({
+        patchServicesProfile: false,
+      });
     } catch (err) {
       mockAuthError = err instanceof Error ? err.message : "Mock chain auth failed.";
       mockAuthResults = [];
@@ -98,14 +100,19 @@
     form.password = credentials.password;
 
     try {
+      let servicesReady = true;
       try {
-        await login(credentials.email, credentials.password);
-      } catch {
-        await registerUser(credentials.email, user.nickname, credentials.password);
-        await login(credentials.email, credentials.password);
+        await loginOrRegisterUser(credentials.email, user.nickname, credentials.password);
+      } catch (error) {
+        servicesReady = false;
+        console.warn(
+          "[Login] Services auth unavailable, continuing with chain-only prototype session.",
+          error,
+        );
       }
       await loginWithMockChainAccount(user.id);
-      await goto(resolve(destination));
+      const finalDestination = servicesReady ? destination : "/studio";
+      await goto(resolve(finalDestination));
     } catch (err) {
       mockLoginError = err instanceof Error ? err.message : "Mock login failed.";
     } finally {
@@ -122,8 +129,8 @@
   );
 
   onMount(() => {
-    if (getToken()) {
-      goto(resolve("/account"));
+    if (hasAuthSession()) {
+      goto(resolve("/network"));
       return;
     }
   });

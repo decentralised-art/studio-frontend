@@ -4,12 +4,12 @@
   import { resolve } from "$app/paths";
 
   import SectionShell from "$lib/components/ui/SectionShell.svelte";
-  import { getToken } from "$lib/auth/session";
+  import { hasAuthSession } from "$lib/auth/session";
 
   let message = $state("Opening app...");
 
   onMount(async () => {
-    if (getToken()) {
+    if (hasAuthSession()) {
       message = "Opening network...";
       await goto(resolve("/network"), { replaceState: true });
       return;

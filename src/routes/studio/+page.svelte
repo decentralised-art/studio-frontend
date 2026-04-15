@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { browser } from "$app/environment";
   import { onMount } from "svelte";
   import { SvelteMap, SvelteSet } from "svelte/reactivity";
 
@@ -35,7 +36,15 @@
   import { mockParticleViews, type ExploreParticle } from "$lib/data/exploreParticles";
   import type { PtOutputFeature } from "$lib/particles/ptMidiAdapter";
   import { type MockFeatureDef, type MockParticleDef } from "$lib/particles/mockPtNetwork";
-  import { buildExecuteRiPlan, type ExecuteNodeOverrides } from "$lib/studio/executeRequestPlanner";
+  import {
+    buildExecuteRequestBody,
+    buildExecuteRiPlan,
+    formatExecuteRiSummary,
+    type ExecuteNodeOverrides,
+  } from "$lib/studio/executeRequestPlanner";
+  import { projectRiPositionsToConnectorNodes } from "$lib/studio/riProjectionMapping";
+  import { materializeReferencedRiIntoRootStatic } from "$lib/studio/riMaterialization";
+  import { resolveConnectorRiMutability } from "$lib/studio/riMutability";
   import { buildStudioRuntime } from "$lib/studio/studioRuntime";
   import {
     fetchChainOwnedStudioSnapshot,
@@ -53,6 +62,7 @@
   import {
     ChainApiRequestError,
     type ChainApiPostResult,
+    type ChainExecutePayload,
     postChainConnectorDetailed,
     postChainConditionDetailed,
     postChainExecuteDetailed,
@@ -152,6 +162,7 @@
     riPosition?: number;
     staticRi?: Record<string, StudioRunningInstanceRef>;
     materializedReferencedRiPositions?: number[];
+    materializedReferencedRiSnapshot?: Record<string, StudioRunningInstanceRef>;
     showRiControls?: boolean;
     riLockToggleDisabled?: boolean;
   };
@@ -310,6 +321,8 @@
 
   const tabGraphs = new SvelteMap<string, { nodes: StudioNode[]; edges: Edge[] }>();
   const connectorTreeModelsByTab = new SvelteMap<string, ConnectorTreeModel>();
+  const STUDIO_TABS_SESSION_STORAGE_KEY = "dcn_studio_tabs_session_v1";
+  const STUDIO_TABS_SESSION_VERSION = 1 as const;
 
   type ToolboxLibrary = {
     connector: string[];
@@ -464,26 +477,6 @@
     return null;
   };
 
-  const listConnectorStaticRiEntries = (
-    connectorId: string,
-  ): Array<{ position: number; value: StudioRunningInstanceRef }> => {
-    const node = nodes.find((candidate) => candidate.id === connectorId) ?? null;
-    const map = getConnectorStaticRi(node);
-    return Object.entries(map)
-      .map(([key, value]) => ({ position: Number(key), value }))
-      .filter((entry) => Number.isInteger(entry.position) && entry.position >= 0)
-      .sort((a, b) => a.position - b.position);
-  };
-
-  const getNextConnectorStaticRiPosition = (connectorId: string): number => {
-    const entries = listConnectorStaticRiEntries(connectorId);
-    if (!entries.length) return 0;
-    let candidate = 0;
-    const used = new SvelteSet(entries.map((entry) => entry.position));
-    while (used.has(candidate)) candidate += 1;
-    return candidate;
-  };
-
   const toContractName = (label: string) => {
     const cleaned = label.replace(/[^A-Za-z0-9]+/g, " ").trim();
     const parts = cleaned.length ? cleaned.split(/\s+/) : [];
@@ -616,6 +609,216 @@
   const activeCompileWarnings = $derived.by(() => compileWarningsByTab[activeTabId] ?? []);
   const activeCompileTimestamp = $derived.by(() => compileTimestampByTab[activeTabId] ?? null);
   const activeDeployTimestamp = $derived.by(() => deployTimestampByTab[activeTabId] ?? null);
+  let tabsSessionRestoreReady = $state(false);
+
+  type PersistedStudioGraph = {
+    nodes: StudioNode[];
+    edges: Edge[];
+  };
+
+  type PersistedStudioTreeModel = {
+    rootConnectorName: string;
+    nodes: StudioNode[];
+    edges: Edge[];
+  };
+
+  type PersistedStudioTabsSession = {
+    version: number;
+    tabs: StudioTab[];
+    activeTabId: string;
+    tabGraphs: Record<string, PersistedStudioGraph>;
+    connectorTreeModels: Record<string, PersistedStudioTreeModel>;
+  };
+
+  const deepClone = <T,>(value: T): T => {
+    if (typeof structuredClone === "function") {
+      try {
+        return structuredClone(value);
+      } catch {
+        // Fallback below handles Proxy/DataCloneError cases.
+      }
+    }
+    return JSON.parse(JSON.stringify(value)) as T;
+  };
+
+  const cloneGraph = (graph: PersistedStudioGraph): PersistedStudioGraph => deepClone(graph);
+  const cloneTreeModel = (model: PersistedStudioTreeModel): PersistedStudioTreeModel =>
+    deepClone(model);
+
+  const readStudioTabsSession = (): PersistedStudioTabsSession | null => {
+    if (!browser) return null;
+    const raw = window.sessionStorage.getItem(STUDIO_TABS_SESSION_STORAGE_KEY);
+    if (!raw) return null;
+    try {
+      const parsed = JSON.parse(raw) as PersistedStudioTabsSession;
+      if (!parsed || typeof parsed !== "object") return null;
+      if (parsed.version !== STUDIO_TABS_SESSION_VERSION) return null;
+      return parsed;
+    } catch {
+      return null;
+    }
+  };
+
+  const sanitizePersistedTabs = (value: unknown): StudioTab[] => {
+    if (!Array.isArray(value)) return [];
+    return value
+      .map((item) => {
+        if (!item || typeof item !== "object") return null;
+        const record = item as Record<string, unknown>;
+        const id = typeof record.id === "string" ? record.id.trim() : "";
+        const label = typeof record.label === "string" ? record.label.trim() : "";
+        if (!id || !label) return null;
+        const particleId =
+          typeof record.particleId === "string" && record.particleId.trim().length > 0
+            ? record.particleId.trim()
+            : undefined;
+        return { id, label, particleId } satisfies StudioTab;
+      })
+      .filter((tab): tab is StudioTab => Boolean(tab));
+  };
+
+  const sanitizePersistedGraph = (value: unknown): PersistedStudioGraph | null => {
+    if (!value || typeof value !== "object") return null;
+    const record = value as Record<string, unknown>;
+    if (!Array.isArray(record.nodes) || !Array.isArray(record.edges)) return null;
+    return {
+      nodes: deepClone(record.nodes as StudioNode[]),
+      edges: deepClone(record.edges as Edge[]),
+    };
+  };
+
+  const sanitizePersistedTreeModel = (value: unknown): PersistedStudioTreeModel | null => {
+    if (!value || typeof value !== "object") return null;
+    const record = value as Record<string, unknown>;
+    const rootConnectorName =
+      typeof record.rootConnectorName === "string" ? record.rootConnectorName.trim() : "";
+    if (!rootConnectorName) return null;
+    const graph = sanitizePersistedGraph(value);
+    if (!graph) return null;
+    return {
+      rootConnectorName,
+      nodes: graph.nodes,
+      edges: graph.edges,
+    };
+  };
+
+  const captureTabGraphsSnapshot = (): Record<string, PersistedStudioGraph> => {
+    const out: Record<string, PersistedStudioGraph> = {};
+    for (const [tabId, graph] of tabGraphs.entries()) {
+      out[tabId] = cloneGraph({ nodes: graph.nodes, edges: graph.edges });
+    }
+    return out;
+  };
+
+  const captureConnectorTreeModelsSnapshot = (): Record<string, PersistedStudioTreeModel> => {
+    const out: Record<string, PersistedStudioTreeModel> = {};
+    for (const [tabId, model] of connectorTreeModelsByTab.entries()) {
+      out[tabId] = cloneTreeModel({
+        rootConnectorName: model.rootConnectorName,
+        nodes: model.nodes,
+        edges: model.edges,
+      });
+    }
+    return out;
+  };
+
+  const persistStudioTabsSession = () => {
+    if (!browser) return;
+    try {
+      saveActiveGraph();
+      const payload: PersistedStudioTabsSession = {
+        version: STUDIO_TABS_SESSION_VERSION,
+        tabs: tabs.map((tab) => ({
+          id: tab.id,
+          label: tab.label,
+          particleId: tab.particleId?.trim() || undefined,
+        })),
+        activeTabId,
+        tabGraphs: captureTabGraphsSnapshot(),
+        connectorTreeModels: captureConnectorTreeModelsSnapshot(),
+      };
+      window.sessionStorage.setItem(STUDIO_TABS_SESSION_STORAGE_KEY, JSON.stringify(payload));
+    } catch (error) {
+      console.warn("[Studio] Failed to persist tabs session.", error);
+    }
+  };
+
+  const restoreStudioTabsSession = (): boolean => {
+    const persisted = readStudioTabsSession();
+    if (!persisted) return false;
+    const restoredTabs = sanitizePersistedTabs(persisted.tabs);
+    if (!restoredTabs.length) return false;
+    const tabIds = new SvelteSet(restoredTabs.map((tab) => tab.id));
+
+    tabGraphs.clear();
+    connectorTreeModelsByTab.clear();
+
+    restoredTabs.forEach((tab) => {
+      tabGraphs.set(tab.id, { nodes: [], edges: [] });
+    });
+
+    const persistedGraphs =
+      persisted.tabGraphs && typeof persisted.tabGraphs === "object" ? persisted.tabGraphs : {};
+    Object.entries(persistedGraphs).forEach(([tabId, graphRaw]) => {
+      if (!tabIds.has(tabId)) return;
+      const graph = sanitizePersistedGraph(graphRaw);
+      if (!graph) return;
+      tabGraphs.set(tabId, graph);
+    });
+
+    const persistedTreeModels =
+      persisted.connectorTreeModels && typeof persisted.connectorTreeModels === "object"
+        ? persisted.connectorTreeModels
+        : {};
+    Object.entries(persistedTreeModels).forEach(([tabId, modelRaw]) => {
+      if (!tabIds.has(tabId)) return;
+      const model = sanitizePersistedTreeModel(modelRaw);
+      if (!model) return;
+      connectorTreeModelsByTab.set(tabId, model);
+    });
+
+    // Keep connector tree behavior for particle tabs even if only graph snapshots were persisted.
+    restoredTabs.forEach((tab) => {
+      if (!tab.particleId || connectorTreeModelsByTab.has(tab.id)) return;
+      const graph = tabGraphs.get(tab.id);
+      if (!graph || graph.nodes.length === 0) return;
+      connectorTreeModelsByTab.set(tab.id, {
+        rootConnectorName: tab.particleId,
+        nodes: deepClone(graph.nodes),
+        edges: deepClone(graph.edges),
+      });
+    });
+
+    tabs = restoredTabs;
+    activeTabId = tabIds.has(persisted.activeTabId) ? persisted.activeTabId : restoredTabs[0].id;
+    loadTabGraph(activeTabId);
+    return true;
+  };
+
+  let persistStudioTabsSessionTimer: ReturnType<typeof setTimeout> | null = null;
+  const schedulePersistStudioTabsSession = () => {
+    if (!browser || !tabsSessionRestoreReady) return;
+    if (persistStudioTabsSessionTimer) {
+      clearTimeout(persistStudioTabsSessionTimer);
+    }
+    persistStudioTabsSessionTimer = setTimeout(() => {
+      persistStudioTabsSession();
+      persistStudioTabsSessionTimer = null;
+    }, 180);
+  };
+
+  $effect(() => {
+    touchDeps(
+      tabsSessionRestoreReady,
+      activeTabId,
+      tabs.map((tab) => `${tab.id}:${tab.label}:${tab.particleId ?? ""}`).join("|"),
+      nodes.length,
+      edges.length,
+      connectorTreeModelsByTab.size,
+      tabGraphs.size,
+    );
+    schedulePersistStudioTabsSession();
+  });
 
   const panelSize = (mode: PanelMode, open: string) => (mode === "hidden" ? "0px" : open);
 
@@ -952,9 +1155,14 @@
       applyConnectorRiPatch(nodeId, patch);
     };
 
+    const handleBeforeUnload = () => {
+      persistStudioTabsSession();
+    };
+
     window.addEventListener("keydown", handleKey);
     window.addEventListener("resize", handleWindowResize);
     window.addEventListener("studio-ri-update", handleStudioRiUpdate as EventListener);
+    window.addEventListener("beforeunload", handleBeforeUnload);
     if (canvasEl) {
       canvasEl.addEventListener("dragover", handleDragOverCapture, { capture: true });
       canvasEl.addEventListener("drop", handleDropCapture, { capture: true });
@@ -978,6 +1186,8 @@
       mutationObserver.observe(canvasEl, { childList: true, subtree: true });
     }
 
+    restoreStudioTabsSession();
+    tabsSessionRestoreReady = true;
     void loadNetworkSelectionFromQuery();
     void loadToolboxLibraryFromProfile();
     void ensureChainAuthForStudio().catch(() => {
@@ -992,12 +1202,18 @@
       window.removeEventListener("keydown", handleKey);
       window.removeEventListener("resize", handleWindowResize);
       window.removeEventListener("studio-ri-update", handleStudioRiUpdate as EventListener);
+      window.removeEventListener("beforeunload", handleBeforeUnload);
       if (canvasEl) {
         canvasEl.removeEventListener("dragover", handleDragOverCapture, { capture: true });
         canvasEl.removeEventListener("drop", handleDropCapture, { capture: true });
       }
       resizeObserver.disconnect();
       mutationObserver.disconnect();
+      if (persistStudioTabsSessionTimer) {
+        clearTimeout(persistStudioTabsSessionTimer);
+        persistStudioTabsSessionTimer = null;
+      }
+      persistStudioTabsSession();
     };
   });
 
@@ -1228,8 +1444,12 @@
       const hasNetworkSelfStatic =
         Boolean(node.data.fromNetwork) &&
         Boolean(resolveConnectorSelfStaticRi(getConnectorStaticRi(node)));
-      const nextToggleDisabled =
-        Boolean(node.data.fromNetwork) && (tabReadOnly || hasNetworkSelfStatic);
+      const mutability = resolveConnectorRiMutability({
+        fromNetwork: Boolean(node.data.fromNetwork),
+        tabReadOnly,
+        hasNetworkSelfStatic,
+      });
+      const nextToggleDisabled = mutability.lockToggleDisabled;
       if (Boolean(node.data.riLockToggleDisabled) === nextToggleDisabled) return node;
       changed = true;
       return {
@@ -1291,11 +1511,28 @@
 
   const isConnectorRiLockToggleDisabled = (connector: StudioNode | null): boolean => {
     if (!connector || !isConnectorKind(connector.data.kind)) return true;
-    if (!connector.data.fromNetwork) return false;
     const hasNetworkSelfStatic = Boolean(
       resolveConnectorSelfStaticRi(getConnectorStaticRi(connector)),
     );
-    return activeTabReadOnly || hasNetworkSelfStatic;
+    return resolveConnectorRiMutability({
+      fromNetwork: Boolean(connector.data.fromNetwork),
+      tabReadOnly: activeTabReadOnly,
+      hasNetworkSelfStatic,
+    }).lockToggleDisabled;
+  };
+
+  const getConnectorRiMutability = (connector: StudioNode | null) => {
+    if (!connector || !isConnectorKind(connector.data.kind)) {
+      return { state: "network-view-only", lockToggleDisabled: true } as const;
+    }
+    const hasNetworkSelfStatic = Boolean(
+      resolveConnectorSelfStaticRi(getConnectorStaticRi(connector)),
+    );
+    return resolveConnectorRiMutability({
+      fromNetwork: Boolean(connector.data.fromNetwork),
+      tabReadOnly: activeTabReadOnly,
+      hasNetworkSelfStatic,
+    });
   };
 
   const applyConnectorRiPatch = (
@@ -1344,64 +1581,6 @@
     const connector = nodes.find((node) => node.id === connectorId) ?? null;
     if (!connector || !isConnectorKind(connector.data.kind)) return;
     updateNodeData(connectorId, { staticRi: cloneStaticRiMap(staticRi) });
-  };
-
-  const upsertConnectorStaticRiEntry = (
-    connectorId: string,
-    position: number,
-    patch: Partial<StudioRunningInstanceRef>,
-  ) => {
-    const connector = nodes.find((node) => node.id === connectorId) ?? null;
-    if (!connector || !isConnectorKind(connector.data.kind)) return;
-    const key = toCanonicalPositionKey(position);
-    if (!key) return;
-    const current = getConnectorStaticRi(connector);
-    const existing = current[key] ?? { startPoint: 0, transformationShift: 0 };
-    current[key] = {
-      startPoint: toInt(patch.startPoint ?? existing.startPoint) ?? 0,
-      transformationShift: toInt(patch.transformationShift ?? existing.transformationShift) ?? 0,
-    };
-    setConnectorStaticRi(connectorId, current);
-  };
-
-  const addConnectorStaticRiEntry = (connectorId: string) => {
-    const nextPosition = getNextConnectorStaticRiPosition(connectorId);
-    upsertConnectorStaticRiEntry(connectorId, nextPosition, {
-      startPoint: 0,
-      transformationShift: 0,
-    });
-  };
-
-  const moveConnectorStaticRiEntry = (
-    connectorId: string,
-    fromPosition: number,
-    toPosition: number,
-  ) => {
-    const connector = nodes.find((node) => node.id === connectorId) ?? null;
-    if (!connector || !isConnectorKind(connector.data.kind)) return;
-    const fromKey = toCanonicalPositionKey(fromPosition);
-    const toKey = toCanonicalPositionKey(toPosition);
-    if (!fromKey || !toKey || fromKey === toKey) return;
-    const current = getConnectorStaticRi(connector);
-    const existing = current[fromKey];
-    if (!existing || current[toKey]) return;
-    delete current[fromKey];
-    current[toKey] = {
-      startPoint: toInt(existing.startPoint) ?? 0,
-      transformationShift: toInt(existing.transformationShift) ?? 0,
-    };
-    setConnectorStaticRi(connectorId, current);
-  };
-
-  const removeConnectorStaticRiEntry = (connectorId: string, position: number) => {
-    const connector = nodes.find((node) => node.id === connectorId) ?? null;
-    if (!connector || !isConnectorKind(connector.data.kind)) return;
-    const key = toCanonicalPositionKey(position);
-    if (!key) return;
-    const current = getConnectorStaticRi(connector);
-    if (!(key in current)) return;
-    delete current[key];
-    setConnectorStaticRi(connectorId, current);
   };
 
   let layoutFrame: number | null = null;
@@ -2298,7 +2477,7 @@
 
       refreshConnectorTreeTabs();
 
-      chainSyncStatus = `Synced ${syncedSources} sources · ${particleIds.size} particles · ${connectorNames.size} connectors · ${transformationIds.size} transformations · ${conditionIds.size} conditions.`;
+      chainSyncStatus = `Synced ${syncedSources} sources · ${particleIds.size} connector records · ${connectorNames.size} connectors · ${transformationIds.size} transformations · ${conditionIds.size} conditions.`;
     } catch (error) {
       chainSyncError =
         error instanceof Error ? error.message : "Failed to sync owned chain registry.";
@@ -2338,12 +2517,14 @@
   ): {
     positionByNodeId: Record<string, number>;
     staticByPosition: Record<string, { startPoint: number; transformationShift: number }>;
+    warnings: string[];
   } => {
     const positionByNodeId: Record<string, number> = {};
     const staticByPosition: Record<string, { startPoint: number; transformationShift: number }> =
       {};
+    const warnings: string[] = [];
     const rootConnectorName = resolveActiveExecuteConnectorName(graphNodes).trim();
-    if (!rootConnectorName) return { positionByNodeId, staticByPosition };
+    if (!rootConnectorName) return { positionByNodeId, staticByPosition, warnings };
 
     let runtime: ReturnType<typeof buildStudioRuntime>;
     try {
@@ -2352,145 +2533,62 @@
         { rootLabel: activeTab?.label ?? "Connector", rootParticleId: activeTab?.particleId },
       );
     } catch {
-      return { positionByNodeId, staticByPosition };
+      return { positionByNodeId, staticByPosition, warnings };
     }
 
     if (!runtime.registry.connectors[rootConnectorName]) {
-      return { positionByNodeId, staticByPosition };
+      return { positionByNodeId, staticByPosition, warnings };
     }
 
     let riPlan: ReturnType<typeof buildExecuteRiPlan>;
     try {
       riPlan = buildExecuteRiPlan(runtime.registry.connectors, rootConnectorName, {});
     } catch {
-      return { positionByNodeId, staticByPosition };
+      return { positionByNodeId, staticByPosition, warnings };
     }
 
     const connectorNodes = graphNodes.filter((node) => isConnectorKind(node.data.kind));
-    if (!connectorNodes.length) return { positionByNodeId, staticByPosition };
+    if (!connectorNodes.length) return { positionByNodeId, staticByPosition, warnings };
 
-    const nodeById = new SvelteMap(graphNodes.map((node) => [node.id, node]));
-    const rootNode =
-      connectorNodes.find(
-        (node) => Boolean(node.data.tabRoot) && resolveNodeName(node).trim() === rootConnectorName,
-      ) ??
-      connectorNodes.find((node) => resolveNodeName(node).trim() === rootConnectorName) ??
-      null;
-    if (!rootNode) return { positionByNodeId, staticByPosition };
-
-    const mappedNodeIdByKey = new SvelteMap<string, string>();
-    const usedNodeIds = new SvelteSet<string>();
-    const pickUnassignedByName = (connectorName: string): string | null => {
-      const targetName = connectorName.trim();
-      if (!targetName) return null;
-      const match = connectorNodes.find(
-        (node) =>
-          !usedNodeIds.has(node.id) &&
-          resolveNodeName(node).trim().toLowerCase() === targetName.toLowerCase(),
-      );
-      return match?.id ?? null;
-    };
-
-    riPlan.positioning.nodes.forEach((entry) => {
-      let mappedNodeId: string | null = null;
-
-      if (entry.relation === "root") {
-        if (resolveNodeName(rootNode).trim().toLowerCase() === entry.connectorName.toLowerCase()) {
-          mappedNodeId = rootNode.id;
-        }
-      } else {
-        const parentNodeId = entry.parentKey
-          ? (mappedNodeIdByKey.get(entry.parentKey) ?? null)
-          : null;
-        const parentNode = parentNodeId ? (nodeById.get(parentNodeId) ?? null) : null;
-        const dimensionIndex = entry.parentDimensionIndex;
-        if (
-          parentNode &&
-          isConnectorKind(parentNode.data.kind) &&
-          Number.isInteger(dimensionIndex) &&
-          dimensionIndex !== null &&
-          dimensionIndex >= 0
-        ) {
-          const sourceHandle = `dim-${dimensionIndex}`;
-          const candidateEdges = graphEdges.filter((edge) => {
-            if (edge.source !== parentNode.id) return false;
-            if ((edge.sourceHandle ?? "") !== sourceHandle) return false;
-            if ((edge.targetHandle ?? "") !== "in") return false;
-            const target = edge.target ? (nodeById.get(edge.target) ?? null) : null;
-            return Boolean(target && isConnectorKind(target.data.kind));
-          });
-
-          if (entry.relation === "composite") {
-            const compositeEdge =
-              candidateEdges.find((edge) => parseConnectorEdgeRelation(edge) === "composite") ??
-              candidateEdges[0];
-            if (compositeEdge?.target) {
-              const targetNode = nodeById.get(compositeEdge.target) ?? null;
-              if (
-                targetNode &&
-                isConnectorKind(targetNode.data.kind) &&
-                resolveNodeName(targetNode).trim().toLowerCase() ===
-                  entry.connectorName.toLowerCase() &&
-                !usedNodeIds.has(targetNode.id)
-              ) {
-                mappedNodeId = targetNode.id;
-              }
-            }
-          } else if (entry.relation === "binding") {
-            const slot = Number.isInteger(entry.parentSlot) ? Number(entry.parentSlot) : null;
-            let bindingCandidates = candidateEdges.filter(
-              (edge) => parseConnectorEdgeRelation(edge) === "binding",
-            );
-            if (slot !== null) {
-              const slotMatches = bindingCandidates.filter(
-                (edge) => parseConnectorEdgeBindingSlot(edge) === slot,
-              );
-              if (slotMatches.length) bindingCandidates = slotMatches;
-            }
-            const bindingTarget = bindingCandidates
-              .map((edge) => (edge.target ? (nodeById.get(edge.target) ?? null) : null))
-              .find((targetNode) =>
-                Boolean(
-                  targetNode &&
-                  isConnectorKind(targetNode.data.kind) &&
-                  !usedNodeIds.has(targetNode.id) &&
-                  resolveNodeName(targetNode).trim().toLowerCase() ===
-                    entry.connectorName.toLowerCase(),
-                ),
-              );
-            if (bindingTarget) {
-              mappedNodeId = bindingTarget.id;
-            }
-          }
-        }
-      }
-
-      if (!mappedNodeId) {
-        mappedNodeId = pickUnassignedByName(entry.connectorName);
-      }
-      if (!mappedNodeId) return;
-
-      mappedNodeIdByKey.set(entry.key, mappedNodeId);
-      usedNodeIds.add(mappedNodeId);
-      positionByNodeId[mappedNodeId] = entry.position;
-
-      const staticEntry = riPlan.staticRiByPosition[String(entry.position)];
-      if (staticEntry) {
-        staticByPosition[String(entry.position)] = {
-          startPoint: toInt(staticEntry.startPoint) ?? 0,
-          transformationShift: toInt(staticEntry.transformationShift) ?? 0,
-        };
-      }
+    const projection = projectRiPositionsToConnectorNodes({
+      rootConnectorName,
+      planNodes: riPlan.positioning.nodes,
+      graphNodes: connectorNodes.map((node) => ({
+        id: node.id,
+        connectorName: resolveNodeName(node),
+        tabRoot: Boolean(node.data.tabRoot),
+      })),
+      graphEdges: graphEdges.map((edge) => ({
+        source: edge.source ?? "",
+        target: edge.target ?? "",
+        sourceHandle: edge.sourceHandle ?? "",
+        targetHandle: edge.targetHandle ?? "",
+        relation: parseConnectorEdgeRelation(edge),
+        bindingSlot: parseConnectorEdgeBindingSlot(edge),
+      })),
     });
 
-    return { positionByNodeId, staticByPosition };
+    Object.assign(positionByNodeId, projection.positionByNodeId);
+    warnings.push(...projection.warnings);
+
+    const mappedPositions = new SvelteSet<number>(Object.values(projection.positionByNodeId));
+    riPlan.positioning.nodes.forEach((entry) => {
+      if (!mappedPositions.has(entry.position)) return;
+      const staticEntry = riPlan.staticRiByPosition[String(entry.position)];
+      if (!staticEntry) return;
+      staticByPosition[String(entry.position)] = {
+        startPoint: toInt(staticEntry.startPoint) ?? 0,
+        transformationShift: toInt(staticEntry.transformationShift) ?? 0,
+      };
+    });
+
+    return { positionByNodeId, staticByPosition, warnings };
   };
 
-  const applyComputedRiPositionsToGraphNodes = (
+  const applyProjectedRiPositionsToGraphNodes = (
     graphNodes: StudioNode[],
-    graphEdges: Edge[],
+    positionByNodeId: Record<string, number>,
   ): StudioNode[] => {
-    const { positionByNodeId } = computeConnectorRiProjectionForGraph(graphNodes, graphEdges);
     if (!graphNodes.some((node) => isConnectorKind(node.data.kind))) return graphNodes;
 
     return graphNodes.map((node) => {
@@ -2509,6 +2607,14 @@
         },
       };
     });
+  };
+
+  const applyComputedRiPositionsToGraphNodes = (
+    graphNodes: StudioNode[],
+    graphEdges: Edge[],
+  ): StudioNode[] => {
+    const { positionByNodeId } = computeConnectorRiProjectionForGraph(graphNodes, graphEdges);
+    return applyProjectedRiPositionsToGraphNodes(graphNodes, positionByNodeId);
   };
 
   const materializeLockedReferencedRiAsRootStatic = (graphNodes: StudioNode[]): StudioNode[] => {
@@ -2531,54 +2637,30 @@
     const previousMaterializedPositions = normalizeMaterializedPositions(
       rootNode.data.materializedReferencedRiPositions,
     );
-    const nextMaterializedByPosition = new SvelteMap<string, StudioRunningInstanceRef>();
-    graphNodes.forEach((node) => {
-      if (!isConnectorKind(node.data.kind) || !node.data.fromNetwork || !node.data.riLocked) return;
-      const positionKey = toCanonicalPositionKey(node.data.riPosition);
-      if (!positionKey) return;
-      nextMaterializedByPosition.set(positionKey, {
-        startPoint: toInt(node.data.riStart) ?? 0,
-        transformationShift: toInt(node.data.riShift) ?? 0,
-      });
-    });
-    const nextMaterializedPositions = Array.from(nextMaterializedByPosition.keys())
-      .map((key) => Number(key))
-      .filter((value) => Number.isInteger(value) && value >= 0)
-      .sort((a, b) => a - b);
+    const candidates = graphNodes
+      .filter((node) => isConnectorKind(node.data.kind))
+      .map((node) => ({
+        fromNetwork: Boolean(node.data.fromNetwork),
+        riLocked: Boolean(node.data.riLocked),
+        riPosition: node.data.riPosition,
+        riStart: toInt(node.data.riStart) ?? 0,
+        riShift: toInt(node.data.riShift) ?? 0,
+        lockToggleDisabled: isConnectorRiLockToggleDisabled(node),
+      }));
 
-    const nextRootStatic = cloneStaticRiMap(rootNode.data.staticRi);
-    let staticChanged = false;
+    const materialized = materializeReferencedRiIntoRootStatic(
+      rootNode.data.staticRi,
+      previousMaterializedPositions,
+      rootNode.data.materializedReferencedRiSnapshot,
+      candidates,
+    );
+    if (!materialized.changed) return graphNodes;
 
-    previousMaterializedPositions.forEach((position) => {
-      const key = String(position);
-      if (!(key in nextRootStatic)) return;
-      delete nextRootStatic[key];
-      staticChanged = true;
-    });
-
-    nextMaterializedByPosition.forEach((value, positionKey) => {
-      const existing = nextRootStatic[positionKey];
-      if (
-        existing &&
-        (toInt(existing.startPoint) ?? 0) === value.startPoint &&
-        (toInt(existing.transformationShift) ?? 0) === value.transformationShift
-      ) {
-        return;
-      }
-      nextRootStatic[positionKey] = value;
-      staticChanged = true;
-    });
-
-    const materializedPositionsChanged =
-      previousMaterializedPositions.length !== nextMaterializedPositions.length ||
-      previousMaterializedPositions.some(
-        (value, index) => value !== nextMaterializedPositions[index],
-      );
-
-    if (!staticChanged && !materializedPositionsChanged) return graphNodes;
-
-    const nextTrackedPositions = nextMaterializedPositions.length
-      ? nextMaterializedPositions
+    const nextTrackedPositions = materialized.materializedPositions.length
+      ? materialized.materializedPositions
+      : undefined;
+    const nextTrackedSnapshot = materialized.materializedPositions.length
+      ? materialized.materializedSnapshot
       : undefined;
 
     return graphNodes.map((node) =>
@@ -2587,8 +2669,9 @@
             ...node,
             data: {
               ...node.data,
-              ...(staticChanged ? { staticRi: nextRootStatic } : {}),
+              staticRi: materialized.staticRi,
               materializedReferencedRiPositions: nextTrackedPositions,
+              materializedReferencedRiSnapshot: nextTrackedSnapshot,
             },
           }
         : node,
@@ -2901,18 +2984,10 @@
 
   type ExecuteRequestPreview = {
     connectorName: string;
-    requestBody: {
-      connector_name: string;
-      particles_count: string;
-      dynamic_ri: Record<
-        string,
-        {
-          start_point: number;
-          transformation_shift: number;
-        }
-      >;
-    };
+    requestBody: ChainExecutePayload;
     error: string | null;
+    warnings: string[];
+    summary: string;
   };
 
   const resolveActiveExecuteConnectorName = (graphNodes: StudioNode[] = nodes): string => {
@@ -2939,41 +3014,88 @@
     graphEdges: Edge[] = edges,
   ): ExecuteRequestPreview => {
     const particlesCount = Math.max(1, Math.trunc(runSamplesCount));
-    const positionedNodes = applyComputedRiPositionsToGraphNodes(graphNodes, graphEdges);
+    const emptyRequestBody: ChainExecutePayload = {
+      connector_name: "",
+      particles_count: String(particlesCount),
+      dynamic_ri: {},
+    };
+    const projection = computeConnectorRiProjectionForGraph(graphNodes, graphEdges);
+    const positionedNodes = applyProjectedRiPositionsToGraphNodes(
+      graphNodes,
+      projection.positionByNodeId,
+    );
     const connectorName = resolveActiveExecuteConnectorName(positionedNodes);
     if (!connectorName) {
       return {
         connectorName: "",
-        requestBody: {
-          connector_name: "",
-          particles_count: String(particlesCount),
-          dynamic_ri: {},
-        },
+        requestBody: emptyRequestBody,
         error: "No connector selected to run.",
+        warnings: [...projection.warnings],
+        summary: "Execute preview unavailable.",
       };
     }
 
-    // Execute path intentionally does not run local runtime/planning/validation.
-    // Backend is the single source of truth for request validation and RI planning.
-    const dynamicOverrides = collectExecuteNodeOverrides(positionedNodes);
-    const dynamicRi: Record<string, { start_point: number; transformation_shift: number }> = {};
-    Object.entries(dynamicOverrides).forEach(([position, value]) => {
-      if (!value) return;
-      dynamicRi[position] = {
-        start_point: toInt(value.startPoint) ?? 0,
-        transformation_shift: toInt(value.transformationShift) ?? 0,
-      };
-    });
+    try {
+      const runtime = buildStudioRuntime(
+        { nodes: positionedNodes, edges: graphEdges },
+        {
+          rootLabel: activeTab?.label ?? "Connector",
+          rootParticleId: activeTab?.particleId ?? connectorName,
+        },
+        buildRuntimeOverrides({}, positionedNodes),
+      );
 
-    return {
-      connectorName,
-      requestBody: {
-        connector_name: connectorName,
-        particles_count: String(particlesCount),
-        dynamic_ri: dynamicRi,
-      },
-      error: null,
-    };
+      if (!runtime.registry.connectors[connectorName]) {
+        return {
+          connectorName,
+          requestBody: emptyRequestBody,
+          error: `Connector '${connectorName}' is not present in runtime registry.`,
+          warnings: [...projection.warnings, ...runtime.warnings],
+          summary: "Execute preview unavailable.",
+        };
+      }
+
+      const dynamicOverrides = collectExecuteNodeOverrides(positionedNodes);
+      const riPlan = buildExecuteRiPlan(
+        runtime.registry.connectors,
+        connectorName,
+        dynamicOverrides,
+      );
+      const requestBody = buildExecuteRequestBody({
+        connectorName,
+        particlesCount,
+        riPlan,
+      });
+
+      const blockedWarnings = riPlan.blockedOverrides.map(
+        (entry) =>
+          `Blocked dynamic override at pos ${entry.position} (${entry.connectorName}) locked by ${entry.lockedByConnector}.`,
+      );
+
+      return {
+        connectorName,
+        requestBody,
+        error: null,
+        warnings: [
+          ...projection.warnings,
+          ...runtime.warnings,
+          ...riPlan.warnings,
+          ...blockedWarnings,
+        ],
+        summary: formatExecuteRiSummary(riPlan),
+      };
+    } catch (error) {
+      return {
+        connectorName,
+        requestBody: emptyRequestBody,
+        error:
+          error instanceof Error
+            ? `Failed to build execute preview: ${error.message}`
+            : "Failed to build execute preview.",
+        warnings: [...projection.warnings],
+        summary: "Execute preview unavailable.",
+      };
+    }
   };
 
   const executeRequestPreview = $derived.by(() => buildExecuteRequestPreview());
@@ -2981,10 +3103,33 @@
     JSON.stringify(executeRequestPreview.requestBody, null, 2),
   );
   const chainApiExecutePreviewError = $derived.by(() => executeRequestPreview.error);
-  const chainApiExecutePreviewWarnings = $derived.by(() => [] as string[]);
-  const chainApiExecutePreviewSummary = $derived.by(
-    () => "Execute preview: raw request body only (backend validates and computes RI plan).",
-  );
+  const chainApiExecutePreviewWarnings = $derived.by(() => executeRequestPreview.warnings);
+  const chainApiExecutePreviewSummary = $derived.by(() => executeRequestPreview.summary);
+  let executePreviewCopyStatus = $state<string | null>(null);
+  let executePreviewCopyTimer = $state<ReturnType<typeof setTimeout> | null>(null);
+
+  const copyExecuteRequestPreview = async () => {
+    const text = chainApiExecuteJson;
+    if (!text.trim()) {
+      executePreviewCopyStatus = "No execute request available yet.";
+      return;
+    }
+    try {
+      if (!navigator?.clipboard?.writeText) {
+        throw new Error("Clipboard API unavailable");
+      }
+      await navigator.clipboard.writeText(text);
+      executePreviewCopyStatus = "Execute request JSON copied.";
+    } catch {
+      executePreviewCopyStatus = "Copy failed. Select and copy manually.";
+    } finally {
+      if (executePreviewCopyTimer) clearTimeout(executePreviewCopyTimer);
+      executePreviewCopyTimer = setTimeout(() => {
+        executePreviewCopyStatus = null;
+        executePreviewCopyTimer = null;
+      }, 2200);
+    }
+  };
 
   const executeActiveGraph = async () => {
     if (!activeTab || chainRunBusy || chainDeployBusy) return;
@@ -3000,7 +3145,7 @@
     const requestPreview = buildExecuteRequestPreview(positionedNodes, edges);
     const requestPreparedAt = performance.now();
     const connectorName = requestPreview.connectorName;
-    warnings = [];
+    warnings = [...requestPreview.warnings];
 
     if (!connectorName) {
       const message = requestPreview.error ?? "No connector selected to run.";
@@ -7394,7 +7539,7 @@
           <Button
             variant="ghost"
             ariaLabel="New Transformation"
-            title="New Transformation — Transformations live on connector dimensions and specify how values are selected from the attached particle."
+            title="New Transformation — Transformations live on connector dimensions and specify how values are selected from the attached connector."
             className="icon-btn"
             onclick={(event) => {
               event.preventDefault();
@@ -7430,7 +7575,7 @@
             ariaLabel="Sync my chain registry"
             title={chainSyncError ??
               chainSyncStatus ??
-              "Sync owned chain connectors, transformations, conditions and particles"}
+              "Sync owned chain connectors, transformations, conditions and connector records"}
             className="icon-btn"
             disabled={chainSyncBusy || chainDeployBusy}
             onclick={syncChainOwnedRegistry}
@@ -8008,6 +8153,7 @@
                     </div>
                   {/if}
                   {@const connectorRiLocked = selectedNode.data.riLocked ?? false}
+                  {@const connectorRiMutability = getConnectorRiMutability(selectedNode)}
                   {@const connectorRiToggleDisabled = isConnectorRiLockToggleDisabled(selectedNode)}
                   <div class="inspector-section">
                     <div class="inspector-section-title">Running instance</div>
@@ -8073,6 +8219,10 @@
                       >
                         {connectorRiLocked ? "static" : "open"}
                       </button>
+                    </div>
+                    <div class="inspector-hint">
+                      RI mode: <code>{connectorRiMutability.state}</code> · lock toggle
+                      {connectorRiMutability.lockToggleDisabled ? " disabled" : " enabled"}.
                     </div>
                   </div>
                   <div class="inspector-section">
@@ -8162,113 +8312,6 @@
                           </div>
                         {/if}
                       {/each}
-                    {/if}
-                  </div>
-                  <div class="inspector-section">
-                    <div class="inspector-section-title">Static running instances</div>
-                    <div class="inspector-hint">
-                      Optional per-slot fixed RI mapping (`static_ri`) for this connector.
-                    </div>
-                    {#if listConnectorStaticRiEntries(selectedNode.id).length === 0}
-                      <div class="inspector-hint">No static RI entries yet.</div>
-                    {:else}
-                      <div class="inspector-transform-list inspector-transform-list--compact">
-                        {#each listConnectorStaticRiEntries(selectedNode.id) as entry (`static-ri-${selectedNode.id}-${entry.position}`)}
-                          <div class="inspector-transform-row">
-                            <div class="inspector-transform-main inspector-transform-main--ri">
-                              <label
-                                class="inspector-inline-label"
-                                for={`static-ri-pos-${selectedNode.id}-${entry.position}`}
-                              >
-                                Pos
-                              </label>
-                              <input
-                                id={`static-ri-pos-${selectedNode.id}-${entry.position}`}
-                                class="inspector-input inspector-input--compact inspector-input--inline"
-                                type="number"
-                                inputmode="numeric"
-                                min="0"
-                                step="1"
-                                disabled={isReadOnly}
-                                value={entry.position}
-                                oninput={(event) => {
-                                  const target = event.target as HTMLInputElement | null;
-                                  moveConnectorStaticRiEntry(
-                                    selectedNode.id,
-                                    entry.position,
-                                    Number(target?.value ?? entry.position),
-                                  );
-                                }}
-                              />
-                              <label
-                                class="inspector-inline-label"
-                                for={`static-ri-start-${selectedNode.id}-${entry.position}`}
-                              >
-                                Start
-                              </label>
-                              <input
-                                id={`static-ri-start-${selectedNode.id}-${entry.position}`}
-                                class="inspector-input inspector-input--compact inspector-input--inline"
-                                type="number"
-                                inputmode="numeric"
-                                min="0"
-                                step="1"
-                                disabled={isReadOnly}
-                                value={entry.value.startPoint}
-                                oninput={(event) => {
-                                  const target = event.target as HTMLInputElement | null;
-                                  upsertConnectorStaticRiEntry(selectedNode.id, entry.position, {
-                                    startPoint: Number(target?.value ?? entry.value.startPoint),
-                                  });
-                                }}
-                              />
-                              <label
-                                class="inspector-inline-label"
-                                for={`static-ri-shift-${selectedNode.id}-${entry.position}`}
-                              >
-                                Shift
-                              </label>
-                              <input
-                                id={`static-ri-shift-${selectedNode.id}-${entry.position}`}
-                                class="inspector-input inspector-input--compact inspector-input--inline"
-                                type="number"
-                                inputmode="numeric"
-                                min="0"
-                                step="1"
-                                disabled={isReadOnly}
-                                value={entry.value.transformationShift}
-                                oninput={(event) => {
-                                  const target = event.target as HTMLInputElement | null;
-                                  upsertConnectorStaticRiEntry(selectedNode.id, entry.position, {
-                                    transformationShift: Number(
-                                      target?.value ?? entry.value.transformationShift,
-                                    ),
-                                  });
-                                }}
-                              />
-                              {#if !isReadOnly}
-                                <button
-                                  type="button"
-                                  class="inspector-remove"
-                                  onclick={() =>
-                                    removeConnectorStaticRiEntry(selectedNode.id, entry.position)}
-                                >
-                                  Remove
-                                </button>
-                              {/if}
-                            </div>
-                          </div>
-                        {/each}
-                      </div>
-                    {/if}
-                    {#if !isReadOnly}
-                      <button
-                        type="button"
-                        class="inspector-action"
-                        onclick={() => addConnectorStaticRiEntry(selectedNode.id)}
-                      >
-                        Add static RI entry
-                      </button>
                     {/if}
                   </div>
                 {/if}
@@ -8396,7 +8439,7 @@
               </div>
               {#if inspectorNode.data.particleId}
                 <div class="inspector-row">
-                  <span>Particle</span>
+                  <span>Connector</span>
                   <span>{inspectorNode.data.particleId}</span>
                 </div>
               {/if}
@@ -8545,6 +8588,14 @@
               <div class="inspector-section-title">Execute request preview</div>
               <div class="inspector-hint">
                 Exact `POST /execute` body generated from the current flow and `N`.
+              </div>
+              <div class="inspector-inline-controls">
+                <button type="button" class="inspector-edit" onclick={copyExecuteRequestPreview}>
+                  Copy JSON
+                </button>
+                {#if executePreviewCopyStatus}
+                  <span class="inspector-hint">{executePreviewCopyStatus}</span>
+                {/if}
               </div>
               <pre class="inspector-code-preview">{chainApiExecuteJson}</pre>
               <div class="inspector-hint">{chainApiExecutePreviewSummary}</div>
@@ -8762,6 +8813,7 @@
                           </div>
                         {/if}
                         {@const connectorRiLocked = selectedNode.data.riLocked ?? false}
+                        {@const connectorRiMutability = getConnectorRiMutability(selectedNode)}
                         {@const connectorRiToggleDisabled =
                           isConnectorRiLockToggleDisabled(selectedNode)}
                         <div class="inspector-section">
@@ -8834,6 +8886,10 @@
                             >
                               {connectorRiLocked ? "static" : "open"}
                             </button>
+                          </div>
+                          <div class="inspector-hint">
+                            RI mode: <code>{connectorRiMutability.state}</code> · lock toggle
+                            {connectorRiMutability.lockToggleDisabled ? " disabled" : " enabled"}.
                           </div>
                         </div>
                         <div class="inspector-section">
@@ -8927,128 +8983,6 @@
                                 </div>
                               {/if}
                             {/each}
-                          {/if}
-                        </div>
-                        <div class="inspector-section">
-                          <div class="inspector-section-title">Static running instances</div>
-                          <div class="inspector-hint">
-                            Optional per-slot fixed RI mapping (`static_ri`) for this connector.
-                          </div>
-                          {#if listConnectorStaticRiEntries(selectedNode.id).length === 0}
-                            <div class="inspector-hint">No static RI entries yet.</div>
-                          {:else}
-                            <div class="inspector-transform-list inspector-transform-list--compact">
-                              {#each listConnectorStaticRiEntries(selectedNode.id) as entry (`static-ri-split-${selectedNode.id}-${entry.position}`)}
-                                <div class="inspector-transform-row">
-                                  <div
-                                    class="inspector-transform-main inspector-transform-main--ri"
-                                  >
-                                    <label
-                                      class="inspector-inline-label"
-                                      for={`static-ri-pos-split-${selectedNode.id}-${entry.position}`}
-                                    >
-                                      Pos
-                                    </label>
-                                    <input
-                                      id={`static-ri-pos-split-${selectedNode.id}-${entry.position}`}
-                                      class="inspector-input inspector-input--compact inspector-input--inline"
-                                      type="number"
-                                      inputmode="numeric"
-                                      min="0"
-                                      step="1"
-                                      disabled={isReadOnly}
-                                      value={entry.position}
-                                      oninput={(event) => {
-                                        const target = event.target as HTMLInputElement | null;
-                                        moveConnectorStaticRiEntry(
-                                          selectedNode.id,
-                                          entry.position,
-                                          Number(target?.value ?? entry.position),
-                                        );
-                                      }}
-                                    />
-                                    <label
-                                      class="inspector-inline-label"
-                                      for={`static-ri-start-split-${selectedNode.id}-${entry.position}`}
-                                    >
-                                      Start
-                                    </label>
-                                    <input
-                                      id={`static-ri-start-split-${selectedNode.id}-${entry.position}`}
-                                      class="inspector-input inspector-input--compact inspector-input--inline"
-                                      type="number"
-                                      inputmode="numeric"
-                                      min="0"
-                                      step="1"
-                                      disabled={isReadOnly}
-                                      value={entry.value.startPoint}
-                                      oninput={(event) => {
-                                        const target = event.target as HTMLInputElement | null;
-                                        upsertConnectorStaticRiEntry(
-                                          selectedNode.id,
-                                          entry.position,
-                                          {
-                                            startPoint: Number(
-                                              target?.value ?? entry.value.startPoint,
-                                            ),
-                                          },
-                                        );
-                                      }}
-                                    />
-                                    <label
-                                      class="inspector-inline-label"
-                                      for={`static-ri-shift-split-${selectedNode.id}-${entry.position}`}
-                                    >
-                                      Shift
-                                    </label>
-                                    <input
-                                      id={`static-ri-shift-split-${selectedNode.id}-${entry.position}`}
-                                      class="inspector-input inspector-input--compact inspector-input--inline"
-                                      type="number"
-                                      inputmode="numeric"
-                                      min="0"
-                                      step="1"
-                                      disabled={isReadOnly}
-                                      value={entry.value.transformationShift}
-                                      oninput={(event) => {
-                                        const target = event.target as HTMLInputElement | null;
-                                        upsertConnectorStaticRiEntry(
-                                          selectedNode.id,
-                                          entry.position,
-                                          {
-                                            transformationShift: Number(
-                                              target?.value ?? entry.value.transformationShift,
-                                            ),
-                                          },
-                                        );
-                                      }}
-                                    />
-                                    {#if !isReadOnly}
-                                      <button
-                                        type="button"
-                                        class="inspector-remove"
-                                        onclick={() =>
-                                          removeConnectorStaticRiEntry(
-                                            selectedNode.id,
-                                            entry.position,
-                                          )}
-                                      >
-                                        Remove
-                                      </button>
-                                    {/if}
-                                  </div>
-                                </div>
-                              {/each}
-                            </div>
-                          {/if}
-                          {#if !isReadOnly}
-                            <button
-                              type="button"
-                              class="inspector-action"
-                              onclick={() => addConnectorStaticRiEntry(selectedNode.id)}
-                            >
-                              Add static RI entry
-                            </button>
                           {/if}
                         </div>
                       {/if}
@@ -9180,7 +9114,7 @@
                     </div>
                     {#if inspectorNode.data.particleId}
                       <div class="inspector-row">
-                        <span>Particle</span>
+                        <span>Connector</span>
                         <span>{inspectorNode.data.particleId}</span>
                       </div>
                     {/if}
@@ -9335,6 +9269,18 @@
                     <div class="inspector-section-title">Execute request preview</div>
                     <div class="inspector-hint">
                       Exact `POST /execute` body generated from the current flow and `N`.
+                    </div>
+                    <div class="inspector-inline-controls">
+                      <button
+                        type="button"
+                        class="inspector-edit"
+                        onclick={copyExecuteRequestPreview}
+                      >
+                        Copy JSON
+                      </button>
+                      {#if executePreviewCopyStatus}
+                        <span class="inspector-hint">{executePreviewCopyStatus}</span>
+                      {/if}
                     </div>
                     <pre class="inspector-code-preview">{chainApiExecuteJson}</pre>
                     <div class="inspector-hint">{chainApiExecutePreviewSummary}</div>

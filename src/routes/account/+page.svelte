@@ -21,10 +21,13 @@
     logout,
     updateUserById,
   } from "$lib/auth/api";
-  import { getToken } from "$lib/auth/session";
+  import { getToken, hasAuthSession } from "$lib/auth/session";
   import { mockCurrentUserId, mockUsersById } from "$lib/data/users";
   import type { ProfileViewUser } from "$lib/user/profileModel";
   import { normalizeProfileUser } from "$lib/user/profileModel";
+
+  const ACCOUNT_FEED_SYNC_MAX_SOURCES = 8;
+  const ACCOUNT_FEED_SYNC_MAX_OWNED_PER_SOURCE = 8;
 
   let currentUser = $state<ProfileViewUser | null>(null);
   let isLoading = $state(true);
@@ -53,8 +56,31 @@
       ? (value as Record<string, unknown>)
       : {};
 
+  const applyResolvedProfile = (user: ProfileViewUser) => {
+    currentUser = user;
+    localToolboxParticles = [...user.toolbox];
+    accountFeedEvents = listNetworkFeedEventsByAuthor(user.id);
+  };
+
+  const refreshAccountFeedInBackground = (activeUserId: string) => {
+    void syncParticlePostDataFromChain({
+      force: true,
+      forceSources: true,
+      maxSources: ACCOUNT_FEED_SYNC_MAX_SOURCES,
+      maxOwnedPerSource: ACCOUNT_FEED_SYNC_MAX_OWNED_PER_SOURCE,
+      includeRuntimeCode: false,
+    })
+      .then(() => {
+        if (currentUser?.id !== activeUserId) return;
+        accountFeedEvents = listNetworkFeedEventsByAuthor(activeUserId);
+      })
+      .catch((syncError) => {
+        console.warn("[Account] Feed refresh failed.", syncError);
+      });
+  };
+
   const loadProfile = async () => {
-    if (!getToken()) {
+    if (!hasAuthSession()) {
       isRedirecting = true;
       await goto(resolve("/login"));
       return;
@@ -65,14 +91,23 @@
     saveError = "";
     saveSuccess = "";
 
+    if (!getToken()) {
+      error =
+        "Services profile is temporarily unavailable in chain-only prototype mode. Studio and Network remain available.";
+      isLoading = false;
+      return;
+    }
+
+    let hydratedFromCache = false;
     try {
       const cachedMe = getCachedMe();
       if (cachedMe) {
         try {
           const cachedUser = normalizeProfileUser(cachedMe);
-          currentUser = cachedUser;
-          localToolboxParticles = [...cachedUser.toolbox];
-          accountFeedEvents = listNetworkFeedEventsByAuthor(cachedUser.id);
+          applyResolvedProfile(cachedUser);
+          const activeUserId = cachedUser.id;
+          refreshAccountFeedInBackground(activeUserId);
+          hydratedFromCache = true;
           isLoading = false;
         } catch {
           // ignore invalid local cache
@@ -80,25 +115,29 @@
       }
 
       const data = await getMe();
-      currentUser = normalizeProfileUser(data);
-      localToolboxParticles = [...currentUser.toolbox];
-      accountFeedEvents = listNetworkFeedEventsByAuthor(currentUser.id);
-      const activeUserId = currentUser.id;
-      void syncParticlePostDataFromChain()
-        .then(() => {
-          if (currentUser?.id !== activeUserId) return;
-          accountFeedEvents = listNetworkFeedEventsByAuthor(activeUserId);
-        })
-        .catch(() => null);
+      const resolvedUser = normalizeProfileUser(data);
+      applyResolvedProfile(resolvedUser);
+      const activeUserId = resolvedUser.id;
+      refreshAccountFeedInBackground(activeUserId);
     } catch (err) {
-      error = err instanceof Error ? err.message : "Unable to load account.";
+      if (!hydratedFromCache || !currentUser) {
+        error = err instanceof Error ? err.message : "Unable to load account.";
+      } else {
+        console.warn("[Account] Failed to refresh profile from services API.", err);
+      }
     } finally {
       isLoading = false;
     }
   };
 
-  const handleLogout = async () => {
-    await logout();
+  const handleLogout = () => {
+    if (isRedirecting) return;
+    isRedirecting = true;
+    error = "";
+    saveError = "";
+    saveSuccess = "";
+    void logout();
+    void goto(resolve("/login"), { replaceState: true });
   };
 
   const toolboxParticleIds = $derived.by(() => new Set(localToolboxParticles));

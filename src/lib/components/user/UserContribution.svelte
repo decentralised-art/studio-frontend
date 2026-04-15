@@ -20,7 +20,7 @@
     </Card>
 
     <Card variant="default">
-      <p class="mono-label">Features</p>
+      <p class="mono-label">Connectors</p>
       <p class="value">{user.authored.features}</p>
     </Card>
 

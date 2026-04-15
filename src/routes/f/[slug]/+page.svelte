@@ -34,6 +34,9 @@
     resolveChainFormatCursor,
   } from "$lib/chain/registryApi";
 
+  const FORMAT_PAGE_FEED_SYNC_MAX_SOURCES = 8;
+  const FORMAT_PAGE_FEED_SYNC_MAX_OWNED_PER_SOURCE = 8;
+
   let format = $state<ChainFormatRecord | null>(null);
   let formatHash = $state("");
   let loading = $state(true);
@@ -118,8 +121,6 @@
       }
       formatHash = normalizedHash;
 
-      await syncParticlePostDataFromChain();
-
       const response = await getChainFormat(normalizedHash, { limit: 256 });
       const pageRecord = mapChainFormatResponseToRecord(response);
       const merged = mergeFormatPageRecord(pageRecord);
@@ -131,6 +132,22 @@
         return;
       }
       recomputeRelatedPosts(normalizedHash, merged);
+
+      // Refresh connector posts in the background with bounded sync limits.
+      void syncParticlePostDataFromChain({
+        force: true,
+        forceSources: true,
+        maxSources: FORMAT_PAGE_FEED_SYNC_MAX_SOURCES,
+        maxOwnedPerSource: FORMAT_PAGE_FEED_SYNC_MAX_OWNED_PER_SOURCE,
+        includeRuntimeCode: false,
+      })
+        .then(() => {
+          if (formatHash !== normalizedHash) return;
+          recomputeRelatedPosts(normalizedHash, format);
+        })
+        .catch((error) => {
+          console.warn("[Format page] Background post sync failed.", error);
+        });
     } catch (error) {
       loadError = error instanceof Error ? error.message : "Unable to load format page.";
     } finally {

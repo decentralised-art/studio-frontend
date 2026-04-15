@@ -53,7 +53,7 @@
       currentUser.toolbox = [...currentUser.toolbox, targetParticleId];
     }
     void addConnectorToCurrentUserToolbox(targetParticleId).catch((err) => {
-      console.error("[Particle page] Failed to persist toolbox update.", err);
+      console.error("[Connector page] Failed to persist toolbox update.", err);
       localToolboxParticles = previous;
     });
   };
@@ -78,7 +78,7 @@
         localToolboxParticles = [...toolbox.connector];
       })
       .catch((error) => {
-        console.warn("[Particle page] Failed to load toolbox from profile.", error);
+        console.warn("[Connector page] Failed to load toolbox from profile.", error);
       });
     void loadParticlePageData();
   });
@@ -88,22 +88,22 @@
   {#if particleLoading}
     <SectionShell className="page-card-shell">
       <div class="status">
-        <p class="status-title">Loading particle...</p>
-        <p class="status-subtitle">Fetching chain-backed particle data.</p>
+        <p class="status-title">Loading connector...</p>
+        <p class="status-subtitle">Fetching chain-backed connector data.</p>
       </div>
     </SectionShell>
   {:else if !particle}
     <SectionShell className="page-card-shell">
       <div class="status">
-        <p class="status-title">Particle not found</p>
-        <p class="status-subtitle">No synced particle matches this ID yet.</p>
+        <p class="status-title">Connector not found</p>
+        <p class="status-subtitle">No synced connector matches this ID yet.</p>
       </div>
     </SectionShell>
   {:else}
-    <section class="particle-overview page-card-shell" aria-label="Particle overview">
+    <section class="particle-overview page-card-shell" aria-label="Connector overview">
       <div class="particle-head">
         <div class="particle-head-main">
-          <p class="particle-kicker">Particle Page</p>
+          <p class="particle-kicker">Connector Page</p>
           <h1 class="particle-title">{particle.name}</h1>
           <p class="particle-meta">
             <span>{particle.createdLabel}</span>
@@ -158,7 +158,7 @@
         onParticleOpen={openParticleInStudio}
         onAddToToolbox={addParticleToToolbox}
         {toolboxParticleIds}
-        emptyMessage={`No particles reference ${particle.name} yet.`}
+        emptyMessage={`No connectors reference ${particle.name} yet.`}
       />
     </div>
   {/if}

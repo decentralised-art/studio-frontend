@@ -1,7 +1,13 @@
 import { browser } from "$app/environment";
 import { goto } from "$app/navigation";
 import { resolve } from "$app/paths";
-import { extraChainSourceProfiles, mockCurrentUserId, mockUsers } from "$lib/data/users";
+import {
+  extraChainSourceProfiles,
+  mockCurrentUserId,
+  mockFollowingByUserId,
+  mockUsers,
+  mockUsersById,
+} from "$lib/data/users";
 import { buildChainApiUrl, buildServicesApiUrl } from "$lib/url/url";
 import { createChainAuthRequest, getOrCreateMockEthereumAccount } from "./mockEthereum";
 import {
@@ -77,6 +83,25 @@ const parseTokenFromPayload = (payload: unknown): string => {
   return "";
 };
 
+type HttpStatusError = Error & { status?: number };
+
+const createStatusError = (message: string, status: number): HttpStatusError => {
+  const error = new Error(message) as HttpStatusError;
+  error.status = status;
+  return error;
+};
+
+const isStatusError = (error: unknown, status: number): boolean => {
+  if (!error || typeof error !== "object") return false;
+  return (error as { status?: number }).status === status;
+};
+
+const shouldAttemptRegistrationAfterLoginError = (error: unknown): boolean => {
+  if (!error || typeof error !== "object") return false;
+  const status = (error as { status?: number }).status;
+  return status === 401 || status === 404;
+};
+
 const parseTokenFromResponse = (raw: string): string => {
   const trimmed = raw.trim();
   if (!trimmed) return "";
@@ -145,6 +170,30 @@ const parseResponseBody = async (response: Response) => {
     return response.json();
   }
   return response.text();
+};
+
+const loginOrRegisterWithServices = async (
+  email: string,
+  displayName: string,
+  password: string,
+): Promise<string> => {
+  try {
+    return await login(email, password);
+  } catch (error) {
+    if (!shouldAttemptRegistrationAfterLoginError(error)) {
+      throw error;
+    }
+
+    try {
+      await registerUser(email, displayName, password);
+    } catch (registerError) {
+      if (!isStatusError(registerError, 409)) {
+        throw registerError;
+      }
+    }
+
+    return login(email, password);
+  }
 };
 
 const readCachedMePayload = (): unknown | null => {
@@ -355,12 +404,7 @@ const ensureMockUserServicesEthereumAddress = async (
   const credentials = mockCredentialsForUser(userId);
 
   try {
-    try {
-      await login(credentials.email, credentials.password);
-    } catch {
-      await registerUser(credentials.email, nickname, credentials.password);
-      await login(credentials.email, credentials.password);
-    }
+    await loginOrRegisterWithServices(credentials.email, nickname, credentials.password);
 
     const me = await getMe();
     const realUserId = extractUserIdFromUserPayload(me);
@@ -393,10 +437,16 @@ const ensureMockUserServicesEthereumAddress = async (
   }
 };
 
-export const authenticateAllMockAccountsInChain = async (): Promise<MockChainAuthResult[]> => {
+export const authenticateAllMockAccountsInChain = async (options?: {
+  patchServicesProfile?: boolean;
+}): Promise<MockChainAuthResult[]> => {
   const results: MockChainAuthResult[] = [];
   for (const user of mockUsers) {
-    results.push(await authenticateMockUserInChain(user.id, user.nickname));
+    results.push(
+      await authenticateMockUserInChain(user.id, user.nickname, {
+        patchServicesProfile: options?.patchServicesProfile ?? false,
+      }),
+    );
   }
   return results;
 };
@@ -436,7 +486,15 @@ export const chainAuthFetch = async (path: string, init: RequestInit = {}) => {
 export const authFetch = async (path: string, init: RequestInit = {}) => {
   const headers = new Headers(init.headers);
   const token = getToken();
-  if (token) headers.set("Authorization", `Bearer ${token}`);
+  if (!token) {
+    // Chain-only prototype sessions are valid for Studio/Network flows.
+    // Avoid forced login redirects when services auth is unavailable.
+    return new Response(JSON.stringify({ message: "Missing services auth token." }), {
+      status: 401,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+  headers.set("Authorization", `Bearer ${token}`);
 
   const response = await fetch(buildServicesApiUrl(path), {
     ...init,
@@ -460,7 +518,7 @@ export const login = async (email: string, password: string): Promise<string> =>
 
   const payload = await response.text();
   if (!response.ok) {
-    throw new Error(payload || "Login failed");
+    throw createStatusError(payload || "Login failed", response.status);
   }
 
   const token = parseTokenFromResponse(payload);
@@ -485,11 +543,17 @@ export const registerUser = async (email: string, displayName: string, password:
 
   const payload = await parseResponseBody(response);
   if (!response.ok) {
-    throw new Error(extractErrorMessage(payload));
+    throw createStatusError(extractErrorMessage(payload), response.status);
   }
 
   return payload;
 };
+
+export const loginOrRegisterUser = async (
+  email: string,
+  displayName: string,
+  password: string,
+): Promise<string> => loginOrRegisterWithServices(email, displayName, password);
 
 export const logout = async (): Promise<void> => {
   const token = getToken();
@@ -735,6 +799,31 @@ const defaultSocialPreferences = (): SocialPreferencesProfile => ({
   followedFormatIds: [],
 });
 
+const defaultToolboxLibraryForPrototype = (): ToolboxLibraryProfile => {
+  const fallbackUser = mockUsersById[mockCurrentUserId];
+  if (!fallbackUser) return defaultToolboxLibrary();
+  return {
+    connector: uniqueStrings(fallbackUser.toolbox.map(normalizeConnectorToolboxId)),
+    transformation: [],
+    condition: [],
+  };
+};
+
+const defaultSocialPreferencesForPrototype = (): SocialPreferencesProfile => {
+  const explicit = mockFollowingByUserId[mockCurrentUserId] ?? [];
+  const allMockUsers = mockUsers
+    .map((entry) => entry.id)
+    .filter((entry) => entry !== mockCurrentUserId);
+  const extraSources = extraChainSourceProfiles
+    .map((entry) => entry.id)
+    .filter((entry) => entry !== mockCurrentUserId);
+  const fallback = [...allMockUsers, ...extraSources];
+  return {
+    followedUserIds: uniqueStrings(explicit.length > 0 ? explicit : fallback),
+    followedFormatIds: [],
+  };
+};
+
 const deriveMockUserIdFromRecord = (userRecordRaw: unknown): string | null => {
   const userRecord = asRecord(userRecordRaw);
 
@@ -884,6 +973,9 @@ const mergeSocialPreferencesIntoProfileJson = (
 };
 
 export const getCurrentUserToolboxLibrary = async (): Promise<ToolboxLibraryProfile> => {
+  if (!getToken()) {
+    return defaultToolboxLibraryForPrototype();
+  }
   const me = await getMe();
   const envelope = extractUserEnvelope(me);
   if (!envelope) {
@@ -895,6 +987,7 @@ export const getCurrentUserToolboxLibrary = async (): Promise<ToolboxLibraryProf
 export const saveCurrentUserToolboxLibrary = async (
   toolboxLibrary: ToolboxLibraryProfile,
 ): Promise<void> => {
+  if (!getToken()) return;
   const me = await getMe();
   const envelope = extractUserEnvelope(me);
   if (!envelope) {
@@ -915,6 +1008,7 @@ export const addItemToCurrentUserToolbox = async (
   kind: ToolboxItemKind,
   itemId: string,
 ): Promise<void> => {
+  if (!getToken()) return;
   const normalizedId = itemId.trim();
   if (!normalizedId) return;
   const toolbox = await getCurrentUserToolboxLibrary();
@@ -969,6 +1063,9 @@ const getPrototypeDefaultFollowedUserIds = async (
 export const getCurrentUserSocialPreferences = async (options?: {
   bootstrapPrototypeIfEmpty?: boolean;
 }): Promise<SocialPreferencesProfile> => {
+  if (!getToken()) {
+    return defaultSocialPreferencesForPrototype();
+  }
   const me = await getMe();
   const envelope = extractUserEnvelope(me);
   if (!envelope) {
@@ -1002,6 +1099,7 @@ export const getCurrentUserSocialPreferences = async (options?: {
 export const saveCurrentUserSocialPreferences = async (
   preferences: SocialPreferencesProfile,
 ): Promise<void> => {
+  if (!getToken()) return;
   const me = await getMe();
   const envelope = extractUserEnvelope(me);
   if (!envelope) {
@@ -1020,6 +1118,15 @@ export const saveCurrentUserSocialPreferences = async (
 export const followUserInProfile = async (userId: string): Promise<void> => {
   const normalizedId = userId.trim();
   if (!normalizedId) return;
+
+  if (!getToken()) {
+    const current = mockFollowingByUserId[mockCurrentUserId] ?? [];
+    if (!current.includes(normalizedId)) {
+      mockFollowingByUserId[mockCurrentUserId] = [...current, normalizedId];
+    }
+    return;
+  }
+
   const preferences = await getCurrentUserSocialPreferences();
   if (preferences.followedUserIds.includes(normalizedId)) return;
   await saveCurrentUserSocialPreferences({
@@ -1031,6 +1138,14 @@ export const followUserInProfile = async (userId: string): Promise<void> => {
 export const unfollowUserInProfile = async (userId: string): Promise<void> => {
   const normalizedId = userId.trim();
   if (!normalizedId) return;
+
+  if (!getToken()) {
+    const current = mockFollowingByUserId[mockCurrentUserId] ?? [];
+    if (!current.includes(normalizedId)) return;
+    mockFollowingByUserId[mockCurrentUserId] = current.filter((id) => id !== normalizedId);
+    return;
+  }
+
   const preferences = await getCurrentUserSocialPreferences();
   if (!preferences.followedUserIds.includes(normalizedId)) return;
   await saveCurrentUserSocialPreferences({
@@ -1040,6 +1155,7 @@ export const unfollowUserInProfile = async (userId: string): Promise<void> => {
 };
 
 export const followFormatInProfile = async (formatIdOrSlug: string): Promise<void> => {
+  if (!getToken()) return;
   const normalizedId = formatIdOrSlug.trim();
   if (!normalizedId) return;
   const preferences = await getCurrentUserSocialPreferences();
@@ -1051,6 +1167,7 @@ export const followFormatInProfile = async (formatIdOrSlug: string): Promise<voi
 };
 
 export const unfollowFormatInProfile = async (formatIdOrSlug: string): Promise<void> => {
+  if (!getToken()) return;
   const normalizedId = formatIdOrSlug.trim();
   if (!normalizedId) return;
   const preferences = await getCurrentUserSocialPreferences();
@@ -1064,6 +1181,19 @@ export const unfollowFormatInProfile = async (formatIdOrSlug: string): Promise<v
 export const getUserSocialConnections = async (
   targetUserId: string,
 ): Promise<{ followingIds: string[]; followerIds: string[] }> => {
+  if (!getToken()) {
+    const normalizedTarget = targetUserId.trim();
+    if (!normalizedTarget) return { followingIds: [], followerIds: [] };
+    const targetFollowing =
+      mockFollowingByUserId[normalizedTarget as keyof typeof mockFollowingByUserId];
+    const followerIds = Object.entries(mockFollowingByUserId)
+      .filter(([id, followed]) => id !== normalizedTarget && followed.includes(normalizedTarget))
+      .map(([id]) => id);
+    return {
+      followingIds: uniqueStrings([...(targetFollowing ?? [])]),
+      followerIds: uniqueStrings(followerIds),
+    };
+  }
   const normalizedTarget = targetUserId.trim();
   if (!normalizedTarget) return { followingIds: [], followerIds: [] };
 

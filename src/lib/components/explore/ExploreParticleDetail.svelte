@@ -109,7 +109,7 @@
 
   <div class="preview-head">
     <div class="preview-text">
-      <p class="preview-title">Particle view preview</p>
+      <p class="preview-title">Connector output preview</p>
       <p class="preview-subtitle">
         Visualization for {view?.label ?? "this view"} will appear here.
       </p>

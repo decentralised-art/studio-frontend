@@ -51,7 +51,7 @@
     <div class="space-y-0.5">
       <h2 class="text-sm font-semibold">Flow Result</h2>
       {#if selectedNodeId === undefined}
-        <p class="text-[11px] text-red-400">No feature selected.</p>
+        <p class="text-[11px] text-red-400">No connector selected.</p>
       {/if}
     </div>
 

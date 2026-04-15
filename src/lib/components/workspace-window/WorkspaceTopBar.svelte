@@ -21,7 +21,7 @@
   }
 
   function publishLabel(mode: "flow" | "solidity", domain: SolidityDomain): string {
-    if (mode === "flow") return "Publish Feature";
+    if (mode === "flow") return "Publish Connector";
     return domain === "transformation" ? "Publish Transformation" : "Publish Condition";
   }
 </script>
@@ -39,7 +39,7 @@
 
     <div class="seg" role="tablist" aria-label="Editors">
       <Button variant={state.mode === "flow" ? "primary" : "ghost"} onclick={onOpenFlow}>
-        Feature
+        Connector
       </Button>
 
       <Button

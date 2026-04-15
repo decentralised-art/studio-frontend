@@ -59,8 +59,8 @@
   {#if showHeader}
     <div class="explorer-header">
       <div class="header-text">
-        <span class="eyebrow">Particle explorer</span>
-        <h2 class="title">Particles</h2>
+        <span class="eyebrow">Connector explorer</span>
+        <h2 class="title">Connectors</h2>
       </div>
       <span class="count">{particles.length}</span>
     </div>
@@ -92,7 +92,7 @@
         </div>
       {/each}
     {:else if particles.length === 0}
-      <p class="empty">No particles match these filters yet.</p>
+      <p class="empty">No connectors match these filters yet.</p>
     {:else}
       {#each particles as particle (particle.id)}
         <CreateParticleCard

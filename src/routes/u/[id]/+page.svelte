@@ -24,7 +24,7 @@
     getUserById,
     unfollowUserInProfile,
   } from "$lib/auth/api";
-  import { getToken } from "$lib/auth/session";
+  import { getToken, hasAuthSession } from "$lib/auth/session";
   import { mockCurrentUserId, mockUsersById } from "$lib/data/users";
   import type { ProfileViewUser } from "$lib/user/profileModel";
   import { normalizeProfileUser } from "$lib/user/profileModel";
@@ -69,9 +69,10 @@
     actionError = "";
 
     try {
+      const servicesTokenPresent = Boolean(getToken());
       const [userPayload, mePayload] = await Promise.all([
         getUserById(userId),
-        getToken()
+        servicesTokenPresent
           ? getMe()
               .then((payload) => normalizeProfileUser(payload))
               .catch(() => null)
@@ -87,32 +88,23 @@
           userFeedEvents = listNetworkFeedEventsByAuthor(activeUserId);
         })
         .catch(() => null);
-      viewerUserId = mePayload?.id ?? null;
+      viewerUserId = mePayload?.id ?? (hasAuthSession() ? mockCurrentUserId : null);
 
-      if (!getToken()) {
+      try {
+        await refreshFollowState(user.id);
+      } catch (socialError) {
+        console.warn("[User page] Failed to load social follow graph.", socialError);
         viewerFollowingIds = [];
         displayedFollowingIds = [];
         displayedFollowerIds = [];
-        socialListsUnavailable = false;
-      } else {
-        try {
-          await refreshFollowState(user.id);
-        } catch (socialError) {
-          console.warn("[User page] Failed to load social follow graph.", socialError);
-          viewerFollowingIds = [];
-          displayedFollowingIds = [];
-          displayedFollowerIds = [];
-          socialListsUnavailable = true;
-        }
+        socialListsUnavailable = true;
       }
 
-      if (getToken()) {
-        try {
-          const toolbox = await getCurrentUserToolboxLibrary();
-          localToolboxParticles = [...toolbox.connector];
-        } catch (toolboxError) {
-          console.warn("[User page] Failed to load toolbox from profile.", toolboxError);
-        }
+      try {
+        const toolbox = await getCurrentUserToolboxLibrary();
+        localToolboxParticles = [...toolbox.connector];
+      } catch (toolboxError) {
+        console.warn("[User page] Failed to load toolbox from profile.", toolboxError);
       }
     } catch (err) {
       user = null;

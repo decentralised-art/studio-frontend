@@ -43,7 +43,7 @@
 <div class="list">
   {#if particles.length === 0}
     <Card variant="soft">
-      <p class="empty">No particles match these filters yet.</p>
+      <p class="empty">No connectors match these filters yet.</p>
     </Card>
   {:else}
     {#each particles as particle (particle.id)}

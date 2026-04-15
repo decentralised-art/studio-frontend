@@ -62,12 +62,12 @@
   <Handle type="target" position={Position.Top} {isConnectable} class="translate-y-[-50%]" />
 
   <!-- Node content -->
-  <div class="text-white/90 font-medium">Feature</div>
+  <div class="text-white/90 font-medium">Connector Schema</div>
 
   <!-- Editable name -->
   <Input
     label="Name"
-    placeholder="Feature name"
+    placeholder="Connector schema name"
     value={data.name}
     oninput={(event) => {
       const target = event.target as HTMLInputElement | null;
@@ -86,6 +86,6 @@
   <!-- Bottom handle (source) -->
   <Handle type="source" position={Position.Bottom} {isConnectable} class="translate-y-[50%]" />
   {#if data.exists_on_server === true}
-    <div class="text-white/50 text-sm">exists on server</div>
+    <div class="text-white/50 text-sm">exists on chain</div>
   {/if}
 </div>

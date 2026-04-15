@@ -8,7 +8,7 @@
   <section class="space-y-2">
     <p class="text-xs text-white/40 uppercase tracking-wide">Create Node</p>
 
-    <button class="btn" on:click={() => addNode("feature")}> + Feature Node </button>
+    <button class="btn" on:click={() => addNode("feature")}> + Connector Schema Node </button>
   </section>
 
   <!-- Canvas controls -->

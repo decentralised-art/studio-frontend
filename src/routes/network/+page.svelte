@@ -39,10 +39,16 @@
   const CHAIN_SOURCE_LIMIT_STEP = 4;
   const CHAIN_SOURCE_LIMIT_MAX = 64;
   const CHAIN_OWNED_PER_SOURCE_LIMIT = 4;
+  const EMPTY_FEED_VERIFICATION_MAX_OWNED_PER_SOURCE = 32;
+  const EMPTY_FEED_RETRY_ATTEMPTS = 2;
+  const EMPTY_FEED_RETRY_DELAY_MS = 700;
+  const EMPTY_FEED_BACKGROUND_REFRESH_MAX = 2;
+  const EMPTY_FEED_BACKGROUND_DELAY_MS = 1200;
 
   let followSearch = $state("");
   let feedEvents = $state<ParticlePostEvent[]>([]);
   let feedLoading = $state(true);
+  let feedSyncSettled = $state(false);
   let feedLoadMoreBusy = $state(false);
   let feedLoadError = $state("");
   let formats = $state<ParticleFormat[]>([]);
@@ -52,16 +58,37 @@
   let canFetchMoreFromChain = $state(true);
   let runtimeSearchHydrationBusy = $state(false);
   let runtimeSearchHydrated = $state(false);
+  let emptyFeedBackgroundRefreshes = $state(0);
+  let emptyFeedBackgroundBusy = $state(false);
   let localFollowing = $state<string[]>([]);
   let localFollowedFormats = $state<string[]>([]);
   let localToolboxParticles = $state<string[]>([
     ...(mockUsersById[mockCurrentUserId]?.toolbox ?? []),
   ]);
+  let pageMounted = false;
+  let feedSyncRequestVersion = 0;
+  let runtimeHydrationRequestVersion = 0;
+
+  const beginFeedSyncRequest = (): number => {
+    feedSyncRequestVersion += 1;
+    return feedSyncRequestVersion;
+  };
+
+  const isFeedSyncRequestActive = (requestVersion: number): boolean =>
+    pageMounted && requestVersion === feedSyncRequestVersion;
+
+  const beginRuntimeHydrationRequest = (): number => {
+    runtimeHydrationRequestVersion += 1;
+    return runtimeHydrationRequestVersion;
+  };
+
+  const isRuntimeHydrationRequestActive = (requestVersion: number): boolean =>
+    pageMounted && requestVersion === runtimeHydrationRequestVersion;
 
   const followedAuthorIds = $derived.by(() => new SvelteSet(localFollowing));
   const followedFormatKeys = $derived.by(() => new SvelteSet(localFollowedFormats));
   const toolboxParticleIds = $derived.by(() => new SvelteSet(localToolboxParticles));
-  const feedUiLoading = $derived.by(() => feedLoading);
+  const feedUiLoading = $derived.by(() => feedLoading || !feedSyncSettled);
   const searchQuery = $derived.by(() => followSearch.trim().toLowerCase());
   const formatFeedEvents = $derived.by(() => buildFormatFeedEvents(formats, getParticleLabelMap()));
   const followedFormatParticleIds = $derived.by(() => {
@@ -129,6 +156,14 @@
     return "No events to display yet.";
   });
 
+  const refreshFeedStateFromCache = () => {
+    feedEvents = listParticlePosts();
+    chainElements = listParticleSearchEntities();
+    if (feedEvents.length > 0) {
+      feedLoadError = "";
+    }
+  };
+
   const userSearchResults = $derived.by(() => {
     if (!searchQuery) return [] as User[];
     return mockUsers
@@ -188,15 +223,12 @@
   const showSearchResults = $derived.by(() => searchQuery.length > 0);
 
   const loadChainFeed = async () => {
+    const requestVersion = beginFeedSyncRequest();
     feedLoadError = "";
     feedLoading = true;
-    const refreshFeedStateFromCache = () => {
-      feedEvents = listParticlePosts();
-      chainElements = listParticleSearchEntities();
-      if (feedEvents.length > 0) {
-        feedLoadError = "";
-      }
-    };
+    feedSyncSettled = false;
+    emptyFeedBackgroundRefreshes = 0;
+    emptyFeedBackgroundBusy = false;
 
     try {
       await syncParticlePostDataFromChain({
@@ -210,6 +242,7 @@
       console.error("[Network feed] Failed to sync chain-backed particle posts.", error);
       feedLoadError = error instanceof Error ? error.message : "Unable to load network feed.";
     }
+    if (!isFeedSyncRequestActive(requestVersion)) return;
     refreshFeedStateFromCache();
 
     // Fast path can miss active sources if early source windows are sparse.
@@ -232,6 +265,7 @@
           feedLoadError = error instanceof Error ? error.message : "Unable to load network feed.";
           break;
         }
+        if (!isFeedSyncRequestActive(requestVersion)) return;
         refreshFeedStateFromCache();
       }
     }
@@ -250,13 +284,98 @@
         console.warn("[Network feed] Uncapped source sync failed.", error);
         feedLoadError = error instanceof Error ? error.message : "Unable to load network feed.";
       }
+      if (!isFeedSyncRequestActive(requestVersion)) return;
       refreshFeedStateFromCache();
     }
 
+    // Guard against transient false-empty states: verify once with a broader pull
+    // before letting the UI settle into the "No events" state.
+    if (feedEvents.length === 0 && !feedLoadError) {
+      try {
+        await syncParticlePostDataFromChain({
+          force: true,
+          forceSources: true,
+          maxOwnedPerSource: EMPTY_FEED_VERIFICATION_MAX_OWNED_PER_SOURCE,
+          includeRuntimeCode: false,
+        });
+      } catch (error) {
+        console.warn("[Network feed] Empty-feed verification sync failed.", error);
+        feedLoadError = error instanceof Error ? error.message : "Unable to load network feed.";
+      }
+      if (!isFeedSyncRequestActive(requestVersion)) return;
+      refreshFeedStateFromCache();
+    }
+
+    // Additional resilience for intermittent backend/source readiness.
+    // Keep the skeleton visible and retry briefly before rendering an empty state.
+    if (feedEvents.length === 0 && !feedLoadError) {
+      for (let attempt = 0; attempt < EMPTY_FEED_RETRY_ATTEMPTS; attempt += 1) {
+        await new Promise((resolveAttempt) =>
+          setTimeout(resolveAttempt, EMPTY_FEED_RETRY_DELAY_MS * (attempt + 1)),
+        );
+
+        try {
+          await syncParticlePostDataFromChain({
+            force: true,
+            forceSources: true,
+            maxOwnedPerSource: EMPTY_FEED_VERIFICATION_MAX_OWNED_PER_SOURCE,
+            includeRuntimeCode: false,
+          });
+        } catch (error) {
+          console.warn("[Network feed] Empty-feed retry sync failed.", error);
+        }
+        if (!isFeedSyncRequestActive(requestVersion)) return;
+
+        refreshFeedStateFromCache();
+        if (feedEvents.length > 0) break;
+      }
+    }
+
+    if (!isFeedSyncRequestActive(requestVersion)) return;
     canFetchMoreFromChain = sourceSyncLimit < CHAIN_SOURCE_LIMIT_MAX;
 
     feedLoading = false;
+    feedSyncSettled = true;
   };
+
+  $effect(() => {
+    if (feedLoading || !feedSyncSettled) return;
+    if (feedLoadError || feedEvents.length > 0) return;
+    if (emptyFeedBackgroundBusy) return;
+    if (emptyFeedBackgroundRefreshes >= EMPTY_FEED_BACKGROUND_REFRESH_MAX) return;
+
+    const nextAttempt = emptyFeedBackgroundRefreshes + 1;
+    const requestVersion = beginFeedSyncRequest();
+    emptyFeedBackgroundBusy = true;
+    feedLoading = true;
+    feedSyncSettled = false;
+
+    void (async () => {
+      await new Promise((resolveAttempt) =>
+        setTimeout(resolveAttempt, EMPTY_FEED_BACKGROUND_DELAY_MS * nextAttempt),
+      );
+      if (!isFeedSyncRequestActive(requestVersion)) return;
+      try {
+        await syncParticlePostDataFromChain({
+          force: true,
+          forceSources: true,
+          maxOwnedPerSource: EMPTY_FEED_VERIFICATION_MAX_OWNED_PER_SOURCE,
+          includeRuntimeCode: false,
+        });
+      } catch (error) {
+        console.warn("[Network feed] Background empty-feed refresh failed.", error);
+      }
+      if (!isFeedSyncRequestActive(requestVersion)) return;
+      refreshFeedStateFromCache();
+      emptyFeedBackgroundRefreshes = nextAttempt;
+      canFetchMoreFromChain = sourceSyncLimit < CHAIN_SOURCE_LIMIT_MAX;
+    })().finally(() => {
+      if (!isFeedSyncRequestActive(requestVersion)) return;
+      emptyFeedBackgroundBusy = false;
+      feedLoading = false;
+      feedSyncSettled = true;
+    });
+  });
 
   const loadMoreFeedEvents = async () => {
     if (feedLoadMoreBusy) return;
@@ -285,6 +404,7 @@
         maxOwnedPerSource: CHAIN_OWNED_PER_SOURCE_LIMIT,
         includeRuntimeCode: false,
       });
+      if (!pageMounted) return;
       const afterCount = listParticlePosts().length;
       feedEvents = listParticlePosts();
       chainElements = listParticleSearchEntities();
@@ -294,10 +414,13 @@
         feedLoadError = "";
       }
     } catch (error) {
+      if (!pageMounted) return;
       console.error("[Network feed] Failed to load more events.", error);
       feedLoadError = error instanceof Error ? error.message : "Unable to load more events.";
     } finally {
-      feedLoadMoreBusy = false;
+      if (pageMounted) {
+        feedLoadMoreBusy = false;
+      }
     }
   };
 
@@ -309,6 +432,7 @@
       return;
     }
 
+    const requestVersion = beginRuntimeHydrationRequest();
     runtimeSearchHydrationBusy = true;
     void syncParticlePostDataFromChain({
       force: true,
@@ -318,14 +442,17 @@
       includeRuntimeCode: true,
     })
       .then(() => {
+        if (!isRuntimeHydrationRequestActive(requestVersion)) return;
         feedEvents = listParticlePosts();
         chainElements = listParticleSearchEntities();
         runtimeSearchHydrated = true;
       })
       .catch((error) => {
+        if (!isRuntimeHydrationRequestActive(requestVersion)) return;
         console.warn("[Network feed] Runtime code hydration failed.", error);
       })
       .finally(() => {
+        if (!isRuntimeHydrationRequestActive(requestVersion)) return;
         runtimeSearchHydrationBusy = false;
       });
   });
@@ -379,11 +506,13 @@
   };
 
   onMount(() => {
+    pageMounted = true;
     formats = loadLocalFormats();
     void Promise.allSettled([
       getCurrentUserToolboxLibrary(),
       getCurrentUserSocialPreferences(),
     ]).then((results) => {
+      if (!pageMounted) return;
       const [toolboxResult, socialResult] = results;
 
       if (toolboxResult.status === "fulfilled") {
@@ -408,6 +537,13 @@
       }
     });
     void loadChainFeed();
+
+    return () => {
+      pageMounted = false;
+      // Invalidate all in-flight async responders so stale callbacks cannot mutate state.
+      feedSyncRequestVersion += 1;
+      runtimeHydrationRequestVersion += 1;
+    };
   });
 </script>
 

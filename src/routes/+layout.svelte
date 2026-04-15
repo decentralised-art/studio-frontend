@@ -4,7 +4,7 @@
   import { resolve } from "$app/paths";
   import { page } from "$app/state";
   import "$lib/styles/style.css";
-  import { getToken } from "$lib/auth/session";
+  import { hasAuthSession } from "$lib/auth/session";
 
   let { children } = $props();
   let isAuthenticated = $state(false);
@@ -13,7 +13,7 @@
   const allowedRouteIds = new Set(["/", "/login"]);
   const guardRoute = (routeId: string | null) => {
     if (redirectInProgress) return;
-    if (getToken()) return;
+    if (hasAuthSession()) return;
     if (routeId === null) return;
     if (allowedRouteIds.has(routeId)) return;
     redirectInProgress = true;
@@ -22,7 +22,7 @@
 
   onMount(() => {
     const syncAuth = () => {
-      isAuthenticated = Boolean(getToken());
+      isAuthenticated = hasAuthSession();
       currentPath = window.location.pathname;
       guardRoute(page.route.id);
     };

@@ -67,8 +67,8 @@
 
   const nodePalette: Record<NodeKind, { color: string; label: string }> = {
     creator: { color: "#71a7ff", label: "Creator" },
-    particle: { color: "#37d39d", label: "Particle" },
-    feature: { color: "#f4b247", label: "Feature" },
+    particle: { color: "#37d39d", label: "Connector" },
+    feature: { color: "#f4b247", label: "Connector Schema" },
     transformation: { color: "#f07cbc", label: "Transformation" },
     condition: { color: "#f47a7a", label: "Condition" },
     plugin: { color: "#a993ff", label: "Plugin" },
@@ -76,7 +76,7 @@
 
   const edgePalette: Record<EdgeKind, { color: string; label: string }> = {
     authored_by: { color: "#71a7ff", label: "authored by" },
-    uses_feature: { color: "#40d69c", label: "uses feature" },
+    uses_feature: { color: "#40d69c", label: "uses connector schema" },
     depends_on: { color: "#ffd166", label: "depends on" },
     uses_transformation: { color: "#f28bc6", label: "uses transformation" },
     guarded_by: { color: "#ff8f8f", label: "guarded by" },
@@ -85,8 +85,8 @@
 
   const kindToggleOptions: Array<{ value: NodeKind; label: string }> = [
     { value: "creator", label: "Creators" },
-    { value: "particle", label: "Particles" },
-    { value: "feature", label: "Features" },
+    { value: "particle", label: "Connectors" },
+    { value: "feature", label: "Connector Schemas" },
     { value: "transformation", label: "Transformations" },
     { value: "condition", label: "Conditions" },
     { value: "plugin", label: "Plugins" },
@@ -255,7 +255,7 @@
       entityId: particle.name,
       kind: "particle",
       label: meta?.name ?? particle.name,
-      summary: meta?.summary ?? "Composable runnable particle.",
+      summary: meta?.summary ?? "Composable runnable connector.",
       creatorId: meta?.authorId,
     });
 
@@ -601,7 +601,7 @@
       </div>
     {:else}
       <div class="map-canvas" bind:this={graphMount} style="height: 100%; min-height: 400px;"></div>
-      <div class="map-hint">Click particle nodes to open them in Studio.</div>
+      <div class="map-hint">Click connector nodes to open them in Studio.</div>
     {/if}
   </section>
 </div>

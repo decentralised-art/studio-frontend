@@ -76,4 +76,21 @@ describe("registryApi execute payload contract", () => {
 
     expect(chainAuthFetchMock).toHaveBeenCalledTimes(1);
   });
+
+  it("rejects invalid execute payload shape before issuing network request", async () => {
+    await expect(
+      postChainExecuteDetailed({
+        connector_name: "root_connector",
+        particles_count: "8",
+        dynamic_ri: {},
+        running_instances: [],
+      } as unknown as {
+        connector_name: string;
+        particles_count: string;
+        dynamic_ri: Record<string, { start_point: number; transformation_shift: number }>;
+      }),
+    ).rejects.toThrow(/unsupported top-level keys/i);
+
+    expect(chainAuthFetchMock).toHaveBeenCalledTimes(0);
+  });
 });

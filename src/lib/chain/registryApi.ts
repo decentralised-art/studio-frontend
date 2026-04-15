@@ -1,4 +1,5 @@
 import { chainAuthFetch } from "$lib/auth/api";
+import { normalizeChainExecutePayload } from "$lib/chain/executePayloadContract";
 import { buildChainApiUrl } from "$lib/url/url";
 
 export type ChainApiPostResult<T> = {
@@ -382,4 +383,7 @@ export const postChainExecute = async (payload: ChainExecutePayload) => {
   return result.body;
 };
 export const postChainExecuteDetailed = async (payload: ChainExecutePayload) =>
-  postJsonWithChainAuthDetailed<ChainExecuteResponse>("/execute", payload);
+  postJsonWithChainAuthDetailed<ChainExecuteResponse>(
+    "/execute",
+    normalizeChainExecutePayload(payload),
+  );

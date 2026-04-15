@@ -53,8 +53,8 @@ export type NetworkGraphData = {
 
 export const networkNodePalette: Record<NetworkNodeKind, { color: string; label: string }> = {
   creator: { color: "#71a7ff", label: "Creator" },
-  particle: { color: "#37d39d", label: "Particle" },
-  feature: { color: "#f4b247", label: "Feature" },
+  particle: { color: "#37d39d", label: "Connector" },
+  feature: { color: "#f4b247", label: "Connector Schema" },
   transformation: { color: "#f07cbc", label: "Transformation" },
   condition: { color: "#f47a7a", label: "Condition" },
   plugin: { color: "#a993ff", label: "Plugin" },
@@ -62,7 +62,7 @@ export const networkNodePalette: Record<NetworkNodeKind, { color: string; label:
 
 export const networkEdgePalette: Record<NetworkEdgeKind, { color: string; label: string }> = {
   authored_by: { color: "#71a7ff", label: "authored by" },
-  uses_feature: { color: "#40d69c", label: "uses feature" },
+  uses_feature: { color: "#40d69c", label: "uses connector schema" },
   depends_on: { color: "#ffd166", label: "depends on" },
   uses_transformation: { color: "#f28bc6", label: "uses transformation" },
   guarded_by: { color: "#ff8f8f", label: "guarded by" },
@@ -239,7 +239,7 @@ export const buildMockNetworkGraph = (): NetworkGraphData => {
       entityId: particle.name,
       kind: "particle",
       label: meta?.name ?? particle.name,
-      summary: meta?.summary ?? "Composable runnable particle.",
+      summary: meta?.summary ?? "Composable runnable connector.",
       creatorId: meta?.authorId,
     });
 
@@ -348,5 +348,6 @@ export const sliceNetworkGraphAround = (
 
 export const networkNodeStudioKind = (kind: NetworkNodeKind): string => {
   if (kind === "plugin") return "plugin";
+  if (kind === "feature" || kind === "particle") return "connector";
   return kind;
 };
