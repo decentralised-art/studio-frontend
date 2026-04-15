@@ -3,22 +3,21 @@
   import { page } from "$app/stores";
   import { resolve } from "$app/paths";
 
-  import ParticlePostFeed from "$lib/components/feed/ParticlePostFeed.svelte";
+  import ConnectorPostFeed from "$lib/components/feed/ConnectorPostFeed.svelte";
   import {
     ensureParticleRecordLoadedById as ensureConnectorRecordLoadedById,
     getParticleRecordById as getConnectorRecordById,
     listParticlePostsReferencingParticle as listPostsReferencingConnector,
-    syncParticlePostDataFromChain,
+    syncParticlePostDataFromChain as syncConnectorPostDataFromChain,
     type ParticlePostEvent as ConnectorPostEvent,
     type ParticleRecord as ConnectorRecord,
   } from "$lib/feed/particlePostData";
-  import SocialParticleDependencyFlow from "$lib/components/social/SocialParticleDependencyFlow.svelte";
+  import SocialConnectorDependencyFlow from "$lib/components/social/SocialConnectorDependencyFlow.svelte";
   import Button from "$lib/components/ui/Button.svelte";
   import SectionShell from "$lib/components/ui/SectionShell.svelte";
-  import { addParticleToCurrentUserToolbox, getCurrentUserToolboxLibrary } from "$lib/auth/api";
+  import { addConnectorToCurrentUserToolbox, getCurrentUserToolboxLibrary } from "$lib/auth/api";
   import { displayUsersById, mockCurrentUserId, mockUsersById } from "$lib/data/users";
   import { getChainFormatDisplayName } from "$lib/formats/chainFormats";
-  import { networkNodeStudioKind } from "$lib/network/mockNetworkGraph";
 
   let localToolboxConnectors = $state<string[]>([
     ...(mockUsersById[mockCurrentUserId]?.toolbox ?? []),
@@ -39,7 +38,7 @@
   const openConnectorInStudio = (targetConnectorId: string) => {
     const base = resolve("/studio");
     const target = new URL(base, window.location.origin);
-    target.searchParams.set("network_kind", networkNodeStudioKind("feature"));
+    target.searchParams.set("network_kind", "connector");
     target.searchParams.set("network_id", targetConnectorId);
     window.open(target.toString(), "_blank", "noopener,noreferrer");
   };
@@ -52,7 +51,7 @@
     if (currentUser && !currentUser.toolbox.includes(targetConnectorId)) {
       currentUser.toolbox = [...currentUser.toolbox, targetConnectorId];
     }
-    void addParticleToCurrentUserToolbox(targetConnectorId).catch((err) => {
+    void addConnectorToCurrentUserToolbox(targetConnectorId).catch((err) => {
       console.error("[Connector page] Failed to persist toolbox update.", err);
       localToolboxConnectors = previous;
     });
@@ -61,7 +60,7 @@
   const loadConnectorPageData = async () => {
     connectorLoading = true;
     try {
-      await syncParticlePostDataFromChain();
+      await syncConnectorPostDataFromChain();
     } finally {
       connector = getConnectorRecordById(connectorId);
       if (!connector && connectorId) {
@@ -148,20 +147,20 @@
       </div>
 
       <div class="connector-flow-shell">
-        <SocialParticleDependencyFlow
-          particleId={connector.id}
-          onParticleOpen={openConnectorInStudio}
+        <SocialConnectorDependencyFlow
+          connectorId={connector.id}
+          onConnectorOpen={openConnectorInStudio}
           displayMode="page"
         />
       </div>
     </section>
 
     <div class="page-card-shell">
-      <ParticlePostFeed
+      <ConnectorPostFeed
         events={relatedConnectorEvents}
-        onParticleOpen={openConnectorInStudio}
+        onConnectorOpen={openConnectorInStudio}
         onAddToToolbox={addConnectorToToolbox}
-        toolboxParticleIds={toolboxConnectorIds}
+        {toolboxConnectorIds}
         emptyMessage={`No connectors reference ${connector.name} yet.`}
       />
     </div>

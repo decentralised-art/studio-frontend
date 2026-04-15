@@ -1,20 +1,24 @@
 <script lang="ts">
   import { resolve } from "$app/paths";
   import Card from "$lib/components/ui/Card.svelte";
-  import SocialParticleDependencyFlow from "$lib/components/social/SocialParticleDependencyFlow.svelte";
+  import SocialConnectorDependencyFlow from "$lib/components/social/SocialConnectorDependencyFlow.svelte";
   import { displayUsersById } from "$lib/data/users";
   import type { ConnectorPostEvent } from "$lib/feed/particlePostData";
   const {
     event,
+    onConnectorOpen,
     onParticleOpen,
     onAddToToolbox,
     inToolbox = false,
   }: {
     event: ConnectorPostEvent;
+    onConnectorOpen?: ((connectorId: string) => void) | undefined;
     onParticleOpen?: ((particleId: string) => void) | undefined;
     onAddToToolbox?: ((particleId: string) => void) | undefined;
     inToolbox?: boolean;
   } = $props();
+
+  const resolvedOpenHandler = $derived.by(() => onConnectorOpen ?? onParticleOpen);
 
   const author = $derived.by(() => displayUsersById[event.authorId] ?? null);
   const dependencies = $derived.by(() =>
@@ -78,7 +82,10 @@
     </header>
 
     <div class="event-graph">
-      <SocialParticleDependencyFlow particleId={event.particleId} {onParticleOpen} />
+      <SocialConnectorDependencyFlow
+        connectorId={event.particleId}
+        onConnectorOpen={resolvedOpenHandler}
+      />
     </div>
 
     <div class="event-body">

@@ -45,11 +45,19 @@ describe("live execute parity smoke (manual, opt-in)", () => {
       const authResults = await authenticateAllMockAccountsInChain({
         patchServicesProfile: false,
       });
-      const lyra = authResults.find((entry) => entry.userId === "user-lyra");
-
-      expect(lyra?.success).toBe(true);
-      expect(typeof lyra?.token).toBe("string");
-      const token = lyra?.token as string;
+      const authenticated = authResults.find(
+        (entry) => entry.success && typeof entry.token === "string" && entry.token.length > 0,
+      );
+      if (!authenticated) {
+        const details = authResults
+          .map(
+            (entry) =>
+              `- ${entry.userId} (${entry.nickname}): success=${entry.success} error=${entry.error ?? "none"}`,
+          )
+          .join("\n");
+        throw new Error(`No mock chain account could be authenticated.\n${details}`);
+      }
+      const token = authenticated.token as string;
 
       const payloads: ExecutePayload[] = [
         {

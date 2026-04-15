@@ -42,9 +42,31 @@
     formatExecuteRiSummary,
     type ExecuteNodeOverrides,
   } from "$lib/studio/executeRequestPlanner";
+  import {
+    dispatchAssistantToolCall,
+    type AssistantRuntimeBridge,
+  } from "$lib/studio/assistant/dispatcher";
+  import {
+    DEFAULT_ASSISTANT_MODEL_SETTINGS,
+    type AssistantModelSettings,
+  } from "$lib/studio/assistant/modelClient";
+  import { requestSolidityEditorAssistant } from "$lib/studio/assistant/solidityEditorAssistant";
+  import {
+    buildAssistantRepairPrompt,
+    planAssistantTurn,
+    splitAssistantToolCallsByConfirmation,
+    summarizeAssistantToolCalls,
+  } from "$lib/studio/assistant/orchestrator";
+  import {
+    summarizeToolCall,
+    type AssistantEnvelope,
+    type AssistantExecutionResult,
+    type AssistantMessage,
+    type AssistantToolCall,
+  } from "$lib/studio/assistant/types";
   import { projectRiPositionsToConnectorNodes } from "$lib/studio/riProjectionMapping";
   import { materializeReferencedRiIntoRootStatic } from "$lib/studio/riMaterialization";
-  import { resolveConnectorRiMutability } from "$lib/studio/riMutability";
+  import { resolveConnectorRiMutability, resolveNextRiLocked } from "$lib/studio/riMutability";
   import { buildStudioRuntime } from "$lib/studio/studioRuntime";
   import {
     fetchChainOwnedStudioSnapshot,
@@ -76,7 +98,7 @@
   } from "$lib/studio/domain/connectorModel";
 
   type PanelMode = "open" | "hidden";
-  type RightPanelMode = "assistant" | "inspector" | "runner" | "both" | "hidden";
+  type RightPanelMode = "assistant" | "inspector" | "runner" | "hidden";
   type InspectorTab = "node" | "api";
 
   let leftMode = $state<PanelMode>("open");
@@ -96,6 +118,94 @@
     top: PanelMode;
     bottom: PanelMode;
   } | null>(null);
+
+  const ASSISTANT_SETTINGS_STORAGE_KEY = "dcn_studio_assistant_settings_v1";
+  type AssistantSettingsSnapshot = {
+    endpoint: string;
+    model: string;
+    apiKey: string;
+    temperature: number;
+    enabled: boolean;
+  };
+  type AssistantTelemetryEventName =
+    | "prompt_submitted"
+    | "tool_calls_proposed"
+    | "tool_calls_executed"
+    | "repair_attempted"
+    | "repair_succeeded"
+    | "repair_failed"
+    | "confirmation_accepted"
+    | "confirmation_rejected"
+    | "run_succeeded"
+    | "run_failed"
+    | "deploy_succeeded"
+    | "deploy_failed";
+  type AssistantPendingConfirmation = {
+    id: string;
+    calls: AssistantToolCall[];
+    createdAt: number;
+    summary: string;
+  };
+  type AssistantConversation = {
+    id: string;
+    title: string;
+    createdAt: number;
+    updatedAt: number;
+    messages: AssistantMessage[];
+    pendingConfirmation: AssistantPendingConfirmation | null;
+    lastError: string | null;
+  };
+  type AssistantContextSnapshot = {
+    active_tab: {
+      id: string;
+      label: string;
+      read_only: boolean;
+      root_connector: string | null;
+    } | null;
+    selected_connector: string | null;
+    connectors: Array<{
+      id: string;
+      name: string;
+      from_network: boolean;
+      dimensions: number;
+      ri: {
+        start_point: number;
+        transformation_shift: number;
+        mode: "dynamic" | "static";
+      };
+      definition_role: "root" | "member" | null;
+    }>;
+    links: Array<{
+      from: string;
+      to: string;
+      relation: "composite" | "binding" | "unknown";
+      dimension: number | null;
+      binding_slot: number | null;
+    }>;
+    run: {
+      particles_count: number;
+      busy: boolean;
+    };
+    deploy: {
+      busy: boolean;
+      read_only: boolean;
+    };
+    capabilities: {
+      can_edit_flow: boolean;
+      can_add_connectors: boolean;
+      can_run: boolean;
+      can_deploy: boolean;
+      high_risk_tools_require_confirmation: string[];
+    };
+    network_connector_catalog: string[];
+  };
+
+  type PopupAssistantMessage = {
+    id: string;
+    at: number;
+    role: "system" | "user" | "assistant" | "error";
+    text: string;
+  };
 
   type StudioNodeKind =
     | "particle"
@@ -197,6 +307,7 @@
   let nodes = $state.raw<StudioNode[]>([]);
   let edges = $state.raw<Edge[]>([]);
   let selectedNodeId = $state<string | null>(null);
+  let selectedEdgeId = $state<string | null>(null);
   type ConnectorDropTarget =
     | { type: "dimension"; connectorId: string; dimensionIndex: number }
     | { type: "condition"; connectorId: string }
@@ -254,6 +365,25 @@
     Record<string, Record<string, RuntimeTransformationDef>>
   >({});
   let runSamplesCount = $state(12);
+  let assistantEnabled = $state(true);
+  let assistantApiKey = $state("");
+  let assistantApiKeyDraft = $state("");
+  let assistantEndpoint = $state(DEFAULT_ASSISTANT_MODEL_SETTINGS.endpoint);
+  let assistantModel = $state(DEFAULT_ASSISTANT_MODEL_SETTINGS.model);
+  let assistantTemperature = $state(DEFAULT_ASSISTANT_MODEL_SETTINGS.temperature);
+  let assistantPanelTab = $state<"conversations" | "settings">("conversations");
+  let assistantConversationView = $state<"list" | "chat">("list");
+  let assistantConversations = $state<AssistantConversation[]>([]);
+  let assistantActiveConversationId = $state<string | null>(null);
+  let assistantPromptDraft = $state("");
+  let assistantBusy = $state(false);
+  let assistantMessages = $state<AssistantMessage[]>([]);
+  let assistantTransientMessages = $state<AssistantMessage[]>([]);
+  let assistantPendingConfirmation = $state<AssistantPendingConfirmation | null>(null);
+  let assistantSettingsStatus = $state<string | null>(null);
+  let assistantSettingsError = $state<string | null>(null);
+  let assistantLastError = $state<string | null>(null);
+  const assistantTelemetryLog = new SvelteMap<string, unknown>();
   let transformationEditorOpen = $state(false);
   let transformationEditorDimensionId = $state<string | null>(null);
   let transformationEditorStatus = $state<TransformationInstance["status"]>("draft");
@@ -262,15 +392,26 @@
   let transformationDraftName = $state("");
   let transformationDraftCode = $state("return x + args[0];");
   let transformationDraftError = $state<string | null>(null);
+  let transformationAiAssistantOpen = $state(false);
+  let transformationAiAssistantBusy = $state(false);
+  let transformationAiAssistantPrompt = $state("");
+  let transformationAiAssistantError = $state<string | null>(null);
+  let transformationAiAssistantMessages = $state<PopupAssistantMessage[]>([]);
   const transformationCodeById = new SvelteMap<string, string>();
   let conditionEditorOpen = $state(false);
   let conditionEditorNodeId = $state<string | null>(null);
+  let conditionEditorTargetConnectorId = $state<string | null>(null);
   let conditionEditorStatus = $state<"draft" | "network">("draft");
   let conditionEditorLocked = $state(false);
   let conditionEditorDeployBusy = $state(false);
   let conditionDraftName = $state("");
   let conditionDraftCode = $state("return true;");
   let conditionDraftError = $state<string | null>(null);
+  let conditionAiAssistantOpen = $state(false);
+  let conditionAiAssistantBusy = $state(false);
+  let conditionAiAssistantPrompt = $state("");
+  let conditionAiAssistantError = $state<string | null>(null);
+  let conditionAiAssistantMessages = $state<PopupAssistantMessage[]>([]);
   let libraryCreateActionError = $state<string | null>(null);
   let standaloneDraftTransformations = $state<StandaloneTransformationDraft[]>([]);
   const conditionCodeById = new SvelteMap<string, string>();
@@ -601,6 +742,34 @@
   const activeTabReadOnly = $derived.by(
     () => Boolean(activeTab?.particleId) || Boolean(connectorTreeModelsByTab.get(activeTabId)),
   );
+  const assistantKeyConfigured = $derived.by(() => assistantApiKey.trim().length > 0);
+  const assistantActiveConversation = $derived.by(
+    () =>
+      assistantConversations.find(
+        (conversation) => conversation.id === assistantActiveConversationId,
+      ) ?? null,
+  );
+  const assistantCanSend = $derived.by(
+    () =>
+      assistantPanelTab === "conversations" &&
+      assistantConversationView === "chat" &&
+      Boolean(assistantActiveConversationId) &&
+      assistantEnabled &&
+      assistantKeyConfigured &&
+      !assistantBusy &&
+      assistantPromptDraft.trim().length > 0,
+  );
+  const assistantThreadMessages = $derived.by(() =>
+    [...assistantMessages, ...assistantTransientMessages].slice().sort((a, b) => a.at - b.at),
+  );
+  const assistantModelSettings = $derived.by(
+    (): AssistantModelSettings => ({
+      apiKey: assistantApiKey,
+      endpoint: assistantEndpoint,
+      model: assistantModel,
+      temperature: assistantTemperature,
+    }),
+  );
   const activeRunOutput = $derived.by(() => runOutputByTab[activeTabId]);
   const activeRunWarnings = $derived.by(() => runWarningsByTab[activeTabId] ?? []);
   const activeRunTimestamp = $derived.by(() => runTimestampByTab[activeTabId] ?? null);
@@ -823,7 +992,7 @@
   const panelSize = (mode: PanelMode, open: string) => (mode === "hidden" ? "0px" : open);
 
   const getNodeStatusLabel = (node: StudioNode) =>
-    node.data.fromNetwork ? "Network (view-only)" : "Draft";
+    node.data.fromNetwork ? "Network (view-only)" : "Unpublished";
 
   const getLeftPanelBounds = () => {
     const compact = viewportWidthPx <= 900;
@@ -873,10 +1042,8 @@
   );
   const hasSelection = $derived.by(() => selectedNodeId !== null || activeTab !== null);
   const inspectorCanShow = $derived.by(() => inspectorTab === "api" || hasSelection);
-  const assistantVisible = $derived.by(() => rightMode === "assistant" || rightMode === "both");
-  const inspectorVisible = $derived.by(
-    () => inspectorCanShow && (rightMode === "inspector" || rightMode === "both"),
-  );
+  const assistantVisible = $derived.by(() => rightMode === "assistant");
+  const inspectorVisible = $derived.by(() => inspectorCanShow && rightMode === "inspector");
   const runnerVisible = $derived.by(() => rightMode === "runner");
   const rightSize = $derived.by(() =>
     assistantVisible || inspectorVisible || runnerVisible
@@ -917,16 +1084,16 @@
 
   const toggleAssistant = () => {
     if (assistantVisible) {
-      rightMode = inspectorVisible ? "inspector" : "hidden";
+      rightMode = "hidden";
       return;
     }
-    rightMode = inspectorVisible ? "both" : "assistant";
+    rightMode = "assistant";
   };
 
   const toggleInspector = () => {
     if (inspectorVisible) {
       inspectorAuto = false;
-      rightMode = assistantVisible ? "assistant" : "hidden";
+      rightMode = "hidden";
       return;
     }
     inspectorAuto = true;
@@ -934,7 +1101,7 @@
       inspectorTab = "api";
     }
     if (!inspectorCanShow) return;
-    rightMode = assistantVisible ? "both" : "inspector";
+    rightMode = "inspector";
   };
 
   const toggleRunner = () => {
@@ -1101,9 +1268,1190 @@
     clearNetworkIntentQuery();
   };
 
+  const emitAssistantTelemetry = (
+    eventName: AssistantTelemetryEventName,
+    payload: Record<string, unknown> = {},
+  ) => {
+    const entry = {
+      event: eventName,
+      at: Date.now(),
+      payload,
+    };
+    const key = `${entry.at}-${crypto.randomUUID()}`;
+    assistantTelemetryLog.set(key, entry);
+    if (import.meta.env.DEV) {
+      console.info("[Studio Assistant]", eventName, payload);
+    }
+  };
+
+  const ASSISTANT_WELCOME_MESSAGE_NEEDS_KEY =
+    "Studio assistant ready. Add API key in settings to enable actionable copilot mode.";
+  const ASSISTANT_WELCOME_MESSAGE_READY =
+    "Studio assistant ready. Ask me to inspect, edit, run, or deploy your flow.";
+
+  const getAssistantWelcomeMessage = () =>
+    assistantApiKey.trim() ? ASSISTANT_WELCOME_MESSAGE_READY : ASSISTANT_WELCOME_MESSAGE_NEEDS_KEY;
+
+  const buildAssistantConversationTitle = (messages: AssistantMessage[]): string => {
+    const firstUser = messages.find((message) => message.role === "user");
+    const seed = firstUser?.text?.trim();
+    if (!seed) return "New conversation";
+    return seed.length > 56 ? `${seed.slice(0, 56).trim()}...` : seed;
+  };
+
+  const createAssistantConversation = (): AssistantConversation => {
+    const id = `assistant-conv-${crypto.randomUUID()}`;
+    const createdAt = Date.now();
+    return {
+      id,
+      title: "New conversation",
+      createdAt,
+      updatedAt: createdAt,
+      messages: [
+        {
+          id: `assistant-msg-${crypto.randomUUID()}`,
+          at: createdAt,
+          role: "system",
+          text: getAssistantWelcomeMessage(),
+        },
+      ],
+      pendingConfirmation: null,
+      lastError: null,
+    };
+  };
+
+  const refreshAssistantWelcomeMessages = () => {
+    const nextWelcome = getAssistantWelcomeMessage();
+    const knownWelcomeMessages = new SvelteSet([
+      ASSISTANT_WELCOME_MESSAGE_NEEDS_KEY,
+      ASSISTANT_WELCOME_MESSAGE_READY,
+    ]);
+
+    assistantMessages = assistantMessages.map((message) =>
+      message.role === "system" && knownWelcomeMessages.has(message.text)
+        ? { ...message, text: nextWelcome }
+        : message,
+    );
+
+    assistantConversations = assistantConversations.map((conversation) => ({
+      ...conversation,
+      messages: conversation.messages.map((message) =>
+        message.role === "system" && knownWelcomeMessages.has(message.text)
+          ? { ...message, text: nextWelcome }
+          : message,
+      ),
+    }));
+  };
+
+  const syncAssistantConversationRuntimeState = () => {
+    if (!assistantActiveConversationId) return;
+    assistantConversations = assistantConversations.map((conversation) => {
+      if (conversation.id !== assistantActiveConversationId) return conversation;
+      return {
+        ...conversation,
+        title: buildAssistantConversationTitle(assistantMessages),
+        updatedAt: Date.now(),
+        messages: [...assistantMessages],
+        pendingConfirmation: assistantPendingConfirmation
+          ? { ...assistantPendingConfirmation }
+          : null,
+        lastError: assistantLastError,
+      };
+    });
+  };
+
+  const loadAssistantConversation = (conversationId: string) => {
+    const conversation =
+      assistantConversations.find((candidate) => candidate.id === conversationId) ?? null;
+    if (!conversation) return;
+    assistantPanelTab = "conversations";
+    assistantActiveConversationId = conversation.id;
+    assistantMessages = [...conversation.messages];
+    assistantPendingConfirmation = conversation.pendingConfirmation
+      ? { ...conversation.pendingConfirmation }
+      : null;
+    assistantLastError = conversation.lastError;
+    clearAssistantTransientMessages();
+    assistantPromptDraft = "";
+    assistantConversationView = "chat";
+  };
+
+  const openAssistantConversationList = () => {
+    syncAssistantConversationRuntimeState();
+    assistantPanelTab = "conversations";
+    assistantConversationView = "list";
+  };
+
+  const startNewAssistantConversation = () => {
+    syncAssistantConversationRuntimeState();
+    const created = createAssistantConversation();
+    assistantConversations = [created, ...assistantConversations];
+    loadAssistantConversation(created.id);
+  };
+
+  const deleteAssistantConversation = (conversationId: string) => {
+    const remaining = assistantConversations.filter(
+      (conversation) => conversation.id !== conversationId,
+    );
+    assistantConversations = remaining;
+
+    if (assistantActiveConversationId !== conversationId) return;
+
+    if (remaining.length === 0) {
+      const fallback = createAssistantConversation();
+      assistantConversations = [fallback];
+      loadAssistantConversation(fallback.id);
+      assistantConversationView = "list";
+      return;
+    }
+
+    loadAssistantConversation(remaining[0].id);
+    assistantConversationView = "list";
+  };
+
+  const clearActiveAssistantConversation = () => {
+    if (!assistantActiveConversationId) return;
+    const now = Date.now();
+    assistantMessages = [
+      {
+        id: `assistant-msg-${crypto.randomUUID()}`,
+        at: now,
+        role: "system",
+        text: getAssistantWelcomeMessage(),
+      },
+    ];
+    assistantPendingConfirmation = null;
+    assistantLastError = null;
+    assistantPromptDraft = "";
+    clearAssistantTransientMessages();
+    syncAssistantConversationRuntimeState();
+  };
+
+  const appendAssistantMessage = (
+    message: Omit<AssistantMessage, "id" | "at"> & Partial<Pick<AssistantMessage, "id" | "at">>,
+  ) => {
+    const next: AssistantMessage = {
+      id: message.id ?? `assistant-msg-${crypto.randomUUID()}`,
+      at: message.at ?? Date.now(),
+      role: message.role,
+      text: message.text,
+      ...(message.toolCallId ? { toolCallId: message.toolCallId } : {}),
+      ...(message.pendingConfirmationId
+        ? { pendingConfirmationId: message.pendingConfirmationId }
+        : {}),
+    };
+    assistantMessages = [...assistantMessages, next];
+    syncAssistantConversationRuntimeState();
+  };
+
+  const appendAssistantTransientMessage = (
+    message: Omit<AssistantMessage, "id" | "at"> & Partial<Pick<AssistantMessage, "id" | "at">>,
+  ) => {
+    const next: AssistantMessage = {
+      id: message.id ?? `assistant-msg-transient-${crypto.randomUUID()}`,
+      at: message.at ?? Date.now(),
+      role: message.role,
+      text: message.text,
+      ...(message.toolCallId ? { toolCallId: message.toolCallId } : {}),
+      ...(message.pendingConfirmationId
+        ? { pendingConfirmationId: message.pendingConfirmationId }
+        : {}),
+    };
+    assistantTransientMessages = [...assistantTransientMessages, next];
+  };
+
+  const clearAssistantTransientMessages = () => {
+    if (!assistantTransientMessages.length) return;
+    assistantTransientMessages = [];
+  };
+
+  const createPopupAssistantMessage = (
+    role: PopupAssistantMessage["role"],
+    text: string,
+  ): PopupAssistantMessage => ({
+    id: `popup-assistant-msg-${crypto.randomUUID()}`,
+    at: Date.now(),
+    role,
+    text,
+  });
+
+  const appendTransformationAiAssistantMessage = (
+    role: PopupAssistantMessage["role"],
+    text: string,
+  ) => {
+    transformationAiAssistantMessages = [
+      ...transformationAiAssistantMessages,
+      createPopupAssistantMessage(role, text),
+    ];
+  };
+
+  const appendConditionAiAssistantMessage = (role: PopupAssistantMessage["role"], text: string) => {
+    conditionAiAssistantMessages = [
+      ...conditionAiAssistantMessages,
+      createPopupAssistantMessage(role, text),
+    ];
+  };
+
+  const toggleTransformationAiAssistant = () => {
+    transformationAiAssistantOpen = !transformationAiAssistantOpen;
+    if (transformationAiAssistantOpen && transformationAiAssistantMessages.length === 0) {
+      appendTransformationAiAssistantMessage(
+        "system",
+        "Solidity assistant ready. Ask for code edits or guidance; accepted edits are applied directly to this draft.",
+      );
+    }
+  };
+
+  const toggleConditionAiAssistant = () => {
+    conditionAiAssistantOpen = !conditionAiAssistantOpen;
+    if (conditionAiAssistantOpen && conditionAiAssistantMessages.length === 0) {
+      appendConditionAiAssistantMessage(
+        "system",
+        "Solidity assistant ready. Ask for code edits or guidance; accepted edits are applied directly to this draft.",
+      );
+    }
+  };
+
+  const getSolidityAssistantSettingsOrThrow = (): AssistantModelSettings => {
+    if (!assistantEnabled) {
+      throw new Error("AI assistant is disabled in settings.");
+    }
+    if (!assistantKeyConfigured) {
+      throw new Error("AI assistant API key is missing. Add it in Assistant settings.");
+    }
+    return assistantModelSettings;
+  };
+
+  const requestTransformationCodeEdit = async () => {
+    const prompt = transformationAiAssistantPrompt.trim();
+    if (!prompt || transformationAiAssistantBusy) return;
+
+    try {
+      const settings = getSolidityAssistantSettingsOrThrow();
+      transformationAiAssistantError = null;
+      appendTransformationAiAssistantMessage("user", prompt);
+      transformationAiAssistantBusy = true;
+      transformationAiAssistantPrompt = "";
+
+      const result = await requestSolidityEditorAssistant({
+        settings,
+        target: "transformation",
+        draftName: transformationDraftName,
+        draftCode: transformationDraftCode,
+        userPrompt: prompt,
+      });
+
+      if (result.assistantResponse) {
+        appendTransformationAiAssistantMessage("assistant", result.assistantResponse);
+      }
+      if (result.thoughtLog.length) {
+        result.thoughtLog.forEach((line, index) => {
+          appendTransformationAiAssistantMessage(
+            "assistant",
+            `log ${index + 1}/${result.thoughtLog.length}: ${line}`,
+          );
+        });
+      }
+
+      const parsedSnippet = parseSoliditySnippet(result.code);
+      if (!parsedSnippet.ok) {
+        throw new Error(`AI proposed invalid snippet: ${parsedSnippet.error}`);
+      }
+
+      transformationDraftCode = parsedSnippet.value;
+      if (result.suggestedName?.trim()) {
+        transformationDraftName = result.suggestedName.trim();
+      }
+      transformationDraftError = null;
+      appendTransformationAiAssistantMessage(
+        "assistant",
+        "Draft updated in the editor. Review and publish when ready.",
+      );
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Failed to apply AI transformation edit.";
+      transformationAiAssistantError = message;
+      appendTransformationAiAssistantMessage("error", `AI assistant failed: ${message}`);
+    } finally {
+      transformationAiAssistantBusy = false;
+    }
+  };
+
+  const requestConditionCodeEdit = async () => {
+    const prompt = conditionAiAssistantPrompt.trim();
+    if (!prompt || conditionAiAssistantBusy) return;
+
+    try {
+      const settings = getSolidityAssistantSettingsOrThrow();
+      conditionAiAssistantError = null;
+      appendConditionAiAssistantMessage("user", prompt);
+      conditionAiAssistantBusy = true;
+      conditionAiAssistantPrompt = "";
+
+      const result = await requestSolidityEditorAssistant({
+        settings,
+        target: "condition",
+        draftName: conditionDraftName,
+        draftCode: conditionDraftCode,
+        userPrompt: prompt,
+      });
+
+      if (result.assistantResponse) {
+        appendConditionAiAssistantMessage("assistant", result.assistantResponse);
+      }
+      if (result.thoughtLog.length) {
+        result.thoughtLog.forEach((line, index) => {
+          appendConditionAiAssistantMessage(
+            "assistant",
+            `log ${index + 1}/${result.thoughtLog.length}: ${line}`,
+          );
+        });
+      }
+
+      const parsedSnippet = parseSoliditySnippet(result.code);
+      if (!parsedSnippet.ok) {
+        throw new Error(`AI proposed invalid snippet: ${parsedSnippet.error}`);
+      }
+
+      conditionDraftCode = parsedSnippet.value;
+      if (result.suggestedName?.trim()) {
+        conditionDraftName = result.suggestedName.trim();
+      }
+      conditionDraftError = null;
+      appendConditionAiAssistantMessage(
+        "assistant",
+        "Draft updated in the editor. Review and publish when ready.",
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to apply AI condition edit.";
+      conditionAiAssistantError = message;
+      appendConditionAiAssistantMessage("error", `AI assistant failed: ${message}`);
+    } finally {
+      conditionAiAssistantBusy = false;
+    }
+  };
+
+  const appendAssistantPlanningNarrative = (envelope: AssistantEnvelope) => {
+    if (envelope.assistant_response?.trim()) {
+      appendAssistantMessage({
+        role: "assistant",
+        text: envelope.assistant_response.trim(),
+      });
+    }
+    if (import.meta.env.DEV && envelope.thought_log?.length) {
+      console.info("[Studio Assistant] Thought log", envelope.thought_log);
+    }
+  };
+
+  const loadAssistantSettingsFromStorage = () => {
+    if (!browser) return;
+    const raw = window.localStorage.getItem(ASSISTANT_SETTINGS_STORAGE_KEY);
+    if (!raw) {
+      assistantApiKeyDraft = "";
+      return;
+    }
+    try {
+      const parsed = JSON.parse(raw) as Partial<AssistantSettingsSnapshot>;
+      if (typeof parsed.endpoint === "string" && parsed.endpoint.trim()) {
+        assistantEndpoint = parsed.endpoint.trim();
+      }
+      if (typeof parsed.model === "string" && parsed.model.trim()) {
+        assistantModel = parsed.model.trim();
+      }
+      if (typeof parsed.apiKey === "string") {
+        assistantApiKey = parsed.apiKey;
+        assistantApiKeyDraft = parsed.apiKey;
+      }
+      if (typeof parsed.temperature === "number" && Number.isFinite(parsed.temperature)) {
+        assistantTemperature = Math.min(2, Math.max(0, parsed.temperature));
+      }
+      if (typeof parsed.enabled === "boolean") {
+        assistantEnabled = parsed.enabled;
+      }
+    } catch (error) {
+      console.warn("[Studio Assistant] Failed to parse local settings.", error);
+    }
+  };
+
+  const persistAssistantSettingsToStorage = () => {
+    if (!browser) return;
+    const payload: AssistantSettingsSnapshot = {
+      endpoint: assistantEndpoint.trim() || DEFAULT_ASSISTANT_MODEL_SETTINGS.endpoint,
+      model: assistantModel.trim() || DEFAULT_ASSISTANT_MODEL_SETTINGS.model,
+      apiKey: assistantApiKey.trim(),
+      temperature: Number.isFinite(assistantTemperature)
+        ? Math.min(2, Math.max(0, assistantTemperature))
+        : DEFAULT_ASSISTANT_MODEL_SETTINGS.temperature,
+      enabled: assistantEnabled,
+    };
+    window.localStorage.setItem(ASSISTANT_SETTINGS_STORAGE_KEY, JSON.stringify(payload));
+  };
+
+  const saveAssistantApiKey = () => {
+    const trimmed = assistantApiKeyDraft.trim();
+    assistantApiKey = trimmed;
+    assistantApiKeyDraft = trimmed;
+    refreshAssistantWelcomeMessages();
+    persistAssistantSettingsToStorage();
+    assistantSettingsError = null;
+    assistantSettingsStatus = trimmed ? "Assistant key saved locally." : "Assistant key removed.";
+  };
+
+  const clearAssistantApiKey = () => {
+    assistantApiKey = "";
+    assistantApiKeyDraft = "";
+    refreshAssistantWelcomeMessages();
+    persistAssistantSettingsToStorage();
+    assistantSettingsError = null;
+    assistantSettingsStatus = "Assistant key cleared.";
+  };
+
+  const saveAssistantModelSettings = () => {
+    assistantEndpoint = assistantEndpoint.trim() || DEFAULT_ASSISTANT_MODEL_SETTINGS.endpoint;
+    assistantModel = assistantModel.trim() || DEFAULT_ASSISTANT_MODEL_SETTINGS.model;
+    assistantTemperature = Number.isFinite(assistantTemperature)
+      ? Math.min(2, Math.max(0, assistantTemperature))
+      : DEFAULT_ASSISTANT_MODEL_SETTINGS.temperature;
+    persistAssistantSettingsToStorage();
+    assistantSettingsError = null;
+    assistantSettingsStatus = "Assistant model settings saved.";
+  };
+
+  const resolveConnectorNodeForAssistant = (identifier: string): StudioNode | null => {
+    const normalized = normalizeKey(identifier);
+    if (!normalized) return null;
+    const byId = nodes.find((node) => node.id === identifier && isConnectorKind(node.data.kind));
+    if (byId) return byId;
+
+    const matchesIdentifier = (node: StudioNode): boolean => {
+      if (!isConnectorKind(node.data.kind)) return false;
+      const nodeName = resolveNodeName(node);
+      const networkId = node.data.networkId ?? "";
+      const sourceId = node.data.sourceId ?? "";
+      return (
+        normalizeKey(nodeName) === normalized ||
+        normalizeKey(networkId) === normalized ||
+        normalizeKey(sourceId) === normalized
+      );
+    };
+
+    // Prefer currently selected connector when the identifier is ambiguous.
+    const selected = selectedNodeId ? nodesById[selectedNodeId] : null;
+    if (selected && matchesIdentifier(selected)) return selected;
+
+    // Prefer the most recently added matching connector, not the oldest one.
+    for (let i = nodes.length - 1; i >= 0; i -= 1) {
+      const candidate = nodes[i];
+      if (matchesIdentifier(candidate)) return candidate;
+    }
+
+    return null;
+  };
+
+  const addConnectorNodeToFlowForAssistant = (
+    connector: string,
+  ): { node: StudioNode; source: "network" | "draft" } => {
+    if (activeTabReadOnly) {
+      throw new Error("Cannot add connectors in view-only tab.");
+    }
+    const normalized = normalizeKey(connector);
+    const beforeIds = new SvelteSet(nodes.map((node) => node.id));
+    const networkItem =
+      networkLibrary.feature.find(
+        (item) =>
+          normalizeKey(getLibraryRegistryName(item)) === normalized ||
+          normalizeKey(item.name) === normalized,
+      ) ?? null;
+
+    if (networkItem) {
+      addLibraryNode(networkItem, getCanvasCenter());
+    } else {
+      addQuickNode("connector", connector, getCanvasCenter());
+    }
+
+    const addedConnector =
+      nodes.find(
+        (node) =>
+          !beforeIds.has(node.id) &&
+          isConnectorKind(node.data.kind) &&
+          normalizeKey(resolveNodeName(node)) === normalized,
+      ) ??
+      nodes.find((node) => !beforeIds.has(node.id) && isConnectorKind(node.data.kind)) ??
+      resolveConnectorNodeForAssistant(connector);
+
+    if (!addedConnector) {
+      throw new Error(`Failed to add connector '${connector}' to flow.`);
+    }
+    return {
+      node: addedConnector,
+      source: networkItem ? "network" : "draft",
+    };
+  };
+
+  const ensureConnectorNodeInFlowForAssistant = (
+    connector: string,
+    options: { createIfMissing?: boolean } = {},
+  ): { node: StudioNode; created: boolean; source?: "network" | "draft" } => {
+    const existing = resolveConnectorNodeForAssistant(connector);
+    if (existing) return { node: existing, created: false };
+    if (!options.createIfMissing) {
+      throw new Error(`Connector '${connector}' not found in current flow.`);
+    }
+    const added = addConnectorNodeToFlowForAssistant(connector);
+    return {
+      node: added.node,
+      created: true,
+      source: added.source,
+    };
+  };
+
+  const buildAssistantContextSnapshot = (): AssistantContextSnapshot => {
+    const selectedConnector = getSelectedConnectorNode();
+    const rootConnectorName = resolveActiveExecuteConnectorName(nodes) || null;
+    const connectorNodes = nodes.filter((node) => isConnectorKind(node.data.kind));
+    const connectorDetails = connectorNodes.map((node) => ({
+      id: node.id,
+      name: resolveNodeName(node),
+      from_network: Boolean(node.data.fromNetwork),
+      dimensions: node.data.dimensions ?? 1,
+      ri: {
+        start_point: toInt(node.data.riStart) ?? 0,
+        transformation_shift: toInt(node.data.riShift) ?? 0,
+        mode: node.data.riLocked ? ("static" as const) : ("dynamic" as const),
+      },
+      definition_role: node.data.definitionRole ?? null,
+    }));
+
+    const linkDetails = edges
+      .map((edge) => {
+        const sourceNode = edge.source ? nodesById[edge.source] : null;
+        const targetNode = edge.target ? nodesById[edge.target] : null;
+        if (!sourceNode || !targetNode) return null;
+        if (!isConnectorKind(sourceNode.data.kind) || !isConnectorKind(targetNode.data.kind)) {
+          return null;
+        }
+        const dimensionIndex = parseDimensionHandle(edge.sourceHandle);
+        return {
+          from: resolveNodeName(sourceNode),
+          to: resolveNodeName(targetNode),
+          relation: parseConnectorEdgeRelation(edge),
+          dimension: dimensionIndex === null ? null : dimensionIndex + 1,
+          binding_slot: parseConnectorEdgeBindingSlot(edge),
+        };
+      })
+      .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry));
+
+    return {
+      active_tab: activeTab
+        ? {
+            id: activeTab.id,
+            label: activeTab.label,
+            read_only: activeTabReadOnly,
+            root_connector: rootConnectorName,
+          }
+        : null,
+      selected_connector: selectedConnector ? resolveNodeName(selectedConnector) : null,
+      connectors: connectorDetails,
+      links: linkDetails,
+      run: {
+        particles_count: runSamplesCount,
+        busy: chainRunBusy,
+      },
+      deploy: {
+        busy: chainDeployBusy,
+        read_only: activeTabReadOnly,
+      },
+      capabilities: {
+        can_edit_flow: !activeTabReadOnly,
+        can_add_connectors: !activeTabReadOnly,
+        can_run: !chainRunBusy && !chainDeployBusy,
+        can_deploy: !activeTabReadOnly && !chainRunBusy && !chainDeployBusy && !chainSyncBusy,
+        high_risk_tools_require_confirmation: [
+          "deploy_connector",
+          "disconnect_connectors",
+          "remove_transformation_from_dimension",
+        ],
+      },
+      network_connector_catalog: networkLibrary.feature
+        .map((item) => getLibraryRegistryName(item) || item.name)
+        .filter((name, index, all) => name && all.indexOf(name) === index)
+        .slice(0, 200),
+    };
+  };
+
+  const assistantRuntimeBridge: AssistantRuntimeBridge = {
+    inspectFlow: () => ({
+      message: "Flow inspected.",
+      data: buildAssistantContextSnapshot(),
+    }),
+    selectConnector: ({ connector }) => {
+      const resolved = ensureConnectorNodeInFlowForAssistant(connector, {
+        createIfMissing: !activeTabReadOnly,
+      });
+      selectedNodeId = resolved.node.id;
+      return {
+        message: resolved.created
+          ? `Added and selected connector '${resolveNodeName(resolved.node)}'.`
+          : `Selected connector '${resolveNodeName(resolved.node)}'.`,
+        data: {
+          node_id: resolved.node.id,
+          connector: resolveNodeName(resolved.node),
+        },
+      };
+    },
+    renameConnector: ({ connector, new_name }) => {
+      if (activeTabReadOnly) throw new Error("Cannot rename connectors in view-only tab.");
+      const target = connector
+        ? resolveConnectorNodeForAssistant(connector)
+        : getSelectedConnectorNode();
+      if (!target) {
+        throw new Error(
+          connector
+            ? `Connector '${connector}' not found in current flow.`
+            : "No connector selected to rename.",
+        );
+      }
+      if (target.data.fromNetwork) {
+        throw new Error("Cannot rename read-only connector.");
+      }
+
+      const nextName = new_name.trim();
+      if (!nextName) throw new Error("New connector name cannot be empty.");
+
+      const previousLabel = target.data.label;
+      if (previousLabel === nextName) {
+        selectedNodeId = target.id;
+        return {
+          message: `Connector '${previousLabel}' already has that name.`,
+          data: {
+            node_id: target.id,
+            connector: previousLabel,
+          },
+        };
+      }
+
+      selectedNodeId = target.id;
+      nameDraft = nextName;
+      const previousPendingCollision = pendingNameCollision;
+      commitNameChange(target);
+
+      const collisionForTarget =
+        pendingNameCollision &&
+        pendingNameCollision !== previousPendingCollision &&
+        pendingNameCollision.nodeId === target.id &&
+        normalizeKey(pendingNameCollision.desiredName) === normalizeKey(nextName);
+      if (collisionForTarget) {
+        const existingName = pendingNameCollision.existingName;
+        pendingNameCollision = null;
+        throw new Error(
+          `Name '${nextName}' is already deployed as '${existingName}'. Choose a different name.`,
+        );
+      }
+
+      const renamedNode = nodes.find((node) => node.id === target.id) ?? target;
+      const renamedLabel = renamedNode.data.label;
+      if (renamedLabel !== nextName) {
+        throw new Error(`Failed to rename connector '${previousLabel}'.`);
+      }
+
+      return {
+        message: `Renamed connector '${previousLabel}' to '${renamedLabel}'.`,
+        data: {
+          node_id: renamedNode.id,
+          connector: renamedLabel,
+        },
+      };
+    },
+    addConnectorToFlow: ({ connector }) => {
+      const { node, source } = addConnectorNodeToFlowForAssistant(connector);
+      selectedNodeId = node.id;
+      return {
+        message:
+          source === "network"
+            ? `Added network connector '${connector}' to flow.`
+            : `Added draft connector '${connector}' to flow.`,
+      };
+    },
+    connectConnectors: ({ from_connector, to_connector, dimension, relation }) => {
+      if (activeTabReadOnly) throw new Error("Cannot edit links in view-only tab.");
+      let source = ensureConnectorNodeInFlowForAssistant(from_connector, {
+        createIfMissing: true,
+      }).node;
+      let target = ensureConnectorNodeInFlowForAssistant(to_connector, {
+        createIfMissing: true,
+      }).node;
+      let autoCorrectedDirection = false;
+      const sourceDimensionCountBeforeSwap = source.data.dimensions ?? 1;
+      const targetDimensionCountBeforeSwap = target.data.dimensions ?? 1;
+      const sourceLooksLikeOwner = Boolean(source.data.tabRoot);
+      const targetLooksLikeOwner = Boolean(target.data.tabRoot);
+
+      if (
+        (targetLooksLikeOwner && !sourceLooksLikeOwner) ||
+        (dimension > sourceDimensionCountBeforeSwap && dimension <= targetDimensionCountBeforeSwap)
+      ) {
+        [source, target] = [target, source];
+        autoCorrectedDirection = true;
+      }
+
+      // Root connectors intentionally hide their top inlet in draft tabs; never target them.
+      if (target.data.tabRoot && !source.data.tabRoot) {
+        [source, target] = [target, source];
+        autoCorrectedDirection = true;
+      }
+
+      const sourceDimensionCount = source.data.dimensions ?? 1;
+      if (dimension < 1 || dimension > sourceDimensionCount) {
+        throw new Error(
+          `Connector '${resolveNodeName(source)}' has ${sourceDimensionCount} dimensions; cannot use D${dimension}.`,
+        );
+      }
+
+      const sourceHandle = `dim-${dimension - 1}`;
+      const sameDimensionEdges = edges.filter(
+        (edge) => edge.source === source.id && edge.sourceHandle === sourceHandle,
+      );
+      const hasComposite = sameDimensionEdges.some(
+        (edge) => parseConnectorEdgeRelation(edge) === "composite",
+      );
+
+      if (relation === "composite" && hasComposite) {
+        throw new Error(
+          `D${dimension} already has a composite link. Remove it first before adding a new composite.`,
+        );
+      }
+
+      if (relation === "binding" && !hasComposite) {
+        throw new Error(
+          `D${dimension} has no composite link yet. Create a composite first, then add binding.`,
+        );
+      }
+
+      const beforeEdgeCount = edges.length;
+      handleConnect({
+        source: source.id,
+        target: target.id,
+        sourceHandle,
+        targetHandle: "in",
+      });
+      if (edges.length === beforeEdgeCount) {
+        throw new Error("No connector link was created.");
+      }
+      return {
+        message: `Connected '${resolveNodeName(source)}' -> '${resolveNodeName(target)}' on D${dimension}${autoCorrectedDirection ? " (direction auto-corrected)." : "."}`,
+      };
+    },
+    disconnectConnectors: ({ from_connector, to_connector, dimension, relation }) => {
+      if (activeTabReadOnly) throw new Error("Cannot remove links in view-only tab.");
+      const normalizedFrom = from_connector ? normalizeKey(from_connector) : null;
+      const normalizedTo = to_connector ? normalizeKey(to_connector) : null;
+      if (!normalizedFrom && !normalizedTo && !dimension && !relation) {
+        throw new Error(
+          "disconnect_connectors requires at least one filter: from_connector, to_connector, dimension, or relation.",
+        );
+      }
+
+      const edgesToRemove = edges.filter((edge) => {
+        const sourceNode = edge.source ? nodesById[edge.source] : null;
+        const targetNode = edge.target ? nodesById[edge.target] : null;
+        if (!sourceNode || !targetNode) return false;
+        if (!isConnectorKind(sourceNode.data.kind) || !isConnectorKind(targetNode.data.kind)) {
+          return false;
+        }
+        if (normalizedFrom && normalizeKey(resolveNodeName(sourceNode)) !== normalizedFrom) {
+          return false;
+        }
+        if (normalizedTo && normalizeKey(resolveNodeName(targetNode)) !== normalizedTo) {
+          return false;
+        }
+        if (dimension) {
+          const edgeDimension = parseDimensionHandle(edge.sourceHandle);
+          if (edgeDimension === null || edgeDimension + 1 !== dimension) return false;
+        }
+        if (relation && parseConnectorEdgeRelation(edge) !== relation) return false;
+        return true;
+      });
+
+      if (!edgesToRemove.length) {
+        throw new Error("No connector links matched the disconnect request.");
+      }
+
+      const removeIds = new SvelteSet(edgesToRemove.map((edge) => edge.id));
+      edges = edges.filter((edge) => !removeIds.has(edge.id));
+      const affectedSources = new SvelteSet(edgesToRemove.map((edge) => edge.source));
+      affectedSources.forEach((sourceId) => {
+        if (sourceId) syncConnectorRowPreview(sourceId, { schedule: false });
+      });
+      scheduleLayout();
+      return {
+        message: `Removed ${edgesToRemove.length} connector link(s).`,
+      };
+    },
+    setConnectorRiMode: ({ connector, mode }) => {
+      const resolved = ensureConnectorNodeInFlowForAssistant(connector, {
+        createIfMissing: !activeTabReadOnly,
+      });
+      applyConnectorRiPatch(resolved.node.id, { riLocked: mode === "static" });
+      return {
+        message: `Set RI mode for '${resolveNodeName(resolved.node)}' to ${mode}.`,
+      };
+    },
+    setConnectorRiValues: ({ connector, start_point, transformation_shift }) => {
+      const resolved = ensureConnectorNodeInFlowForAssistant(connector, {
+        createIfMissing: !activeTabReadOnly,
+      });
+      applyConnectorRiPatch(resolved.node.id, {
+        riStart: start_point,
+        riShift: transformation_shift,
+      });
+      return {
+        message: `Updated RI values for '${resolveNodeName(resolved.node)}' to start=${start_point}, shift=${transformation_shift}.`,
+      };
+    },
+    addTransformationToDimension: ({ connector, dimension, transformation, args }) => {
+      if (activeTabReadOnly) throw new Error("Cannot edit transformations in view-only tab.");
+      const connectorNode = resolveConnectorNodeForAssistant(connector);
+      if (!connectorNode) throw new Error(`Connector '${connector}' not found in current flow.`);
+      const dimensionNode = getDimensionNodeForConnectorIndex(connectorNode.id, dimension - 1);
+      if (!dimensionNode) {
+        throw new Error(
+          `Dimension D${dimension} not found on connector '${resolveNodeName(connectorNode)}'.`,
+        );
+      }
+      if (dimensionNode.data.fromNetwork) {
+        throw new Error("Cannot edit transformations on read-only connector dimension.");
+      }
+      const transformationId = addTransformationToDimension(
+        dimensionNode.id,
+        transformation,
+        args ?? [],
+        "network",
+      );
+      if (!transformationId) throw new Error("Failed to add transformation.");
+      return {
+        message: `Added transformation '${transformation}' to '${resolveNodeName(connectorNode)}' D${dimension}.`,
+      };
+    },
+    removeTransformationFromDimension: ({ connector, dimension, transformation, index }) => {
+      if (activeTabReadOnly) throw new Error("Cannot edit transformations in view-only tab.");
+      const connectorNode = resolveConnectorNodeForAssistant(connector);
+      if (!connectorNode) throw new Error(`Connector '${connector}' not found in current flow.`);
+      const dimensionNode = getDimensionNodeForConnectorIndex(connectorNode.id, dimension - 1);
+      if (!dimensionNode) {
+        throw new Error(
+          `Dimension D${dimension} not found on connector '${resolveNodeName(connectorNode)}'.`,
+        );
+      }
+      if (dimensionNode.data.fromNetwork) {
+        throw new Error("Cannot edit transformations on read-only connector dimension.");
+      }
+      const transformations = dimensionNode.data.transformations ?? [];
+      let target =
+        typeof index === "number" && index > 0 && index <= transformations.length
+          ? transformations[index - 1]
+          : null;
+      if (!target && transformation) {
+        const normalizedTransformation = normalizeKey(transformation);
+        target =
+          transformations.find((item) => normalizeKey(item.name) === normalizedTransformation) ??
+          null;
+      }
+      if (!target) {
+        throw new Error("Transformation to remove was not found in requested dimension.");
+      }
+      removeTransformationFromDimension(dimensionNode.id, target.id);
+      return {
+        message: `Removed transformation '${target.name}' from '${resolveNodeName(connectorNode)}' D${dimension}.`,
+      };
+    },
+    runConnector: async ({ connector, particles_count }) => {
+      if (particles_count && Number.isFinite(particles_count)) {
+        runSamplesCount = Math.max(1, Math.trunc(particles_count));
+      }
+      if (connector) {
+        const node = resolveConnectorNodeForAssistant(connector);
+        if (!node) throw new Error(`Connector '${connector}' not found in current flow.`);
+        selectedNodeId = node.id;
+      }
+      await executeActiveGraph();
+      if (chainDeployError) {
+        throw new Error(chainDeployError);
+      }
+      const output = chainRunMessageByTab[activeTabId] ?? "[]";
+      return {
+        message: "Run completed.",
+        data: output,
+      };
+    },
+    deployConnector: async (_args) => {
+      if (activeTabReadOnly) throw new Error("Cannot deploy from view-only tab.");
+      await deployActiveGraph();
+      if (chainDeployError) {
+        throw new Error(chainDeployError);
+      }
+      return {
+        message: chainDeployStatus || "Deploy completed.",
+      };
+    },
+  };
+
+  const executeAssistantToolCalls = async (
+    toolCalls: AssistantToolCall[],
+    source: "auto" | "confirmed",
+  ): Promise<AssistantExecutionResult[]> => {
+    const results: AssistantExecutionResult[] = [];
+    for (const [index, call] of toolCalls.entries()) {
+      appendAssistantTransientMessage({
+        role: "assistant",
+        text: `Executing step ${index + 1}/${toolCalls.length}: ${summarizeToolCall(call)}`,
+      });
+      const result = await dispatchAssistantToolCall(call, assistantRuntimeBridge);
+      results.push(result);
+      emitAssistantTelemetry("tool_calls_executed", {
+        source,
+        tool_name: call.tool_name,
+        ok: result.ok,
+      });
+
+      if (call.tool_name === "run_connector") {
+        emitAssistantTelemetry(result.ok ? "run_succeeded" : "run_failed", {
+          source,
+          ok: result.ok,
+        });
+      }
+      if (call.tool_name === "deploy_connector") {
+        emitAssistantTelemetry(result.ok ? "deploy_succeeded" : "deploy_failed", {
+          source,
+          ok: result.ok,
+        });
+      }
+
+      appendAssistantTransientMessage({
+        role: result.ok ? "tool" : "error",
+        text: `${result.ok ? "OK" : "ERR"} · ${summarizeToolCall(call)} · ${result.message}`,
+        toolCallId: result.callId,
+      });
+    }
+    return results;
+  };
+
+  const sendAssistantPrompt = async () => {
+    assistantLastError = null;
+    syncAssistantConversationRuntimeState();
+    assistantSettingsStatus = null;
+    const prompt = assistantPromptDraft.trim();
+    if (!prompt) return;
+    if (!assistantActiveConversationId) {
+      startNewAssistantConversation();
+    }
+    if (assistantConversationView !== "chat") {
+      assistantConversationView = "chat";
+    }
+    if (!assistantEnabled) {
+      assistantLastError = "Assistant is disabled in local settings.";
+      syncAssistantConversationRuntimeState();
+      return;
+    }
+    if (!assistantKeyConfigured) {
+      assistantLastError = "Assistant API key is missing. Add and save it in settings.";
+      syncAssistantConversationRuntimeState();
+      return;
+    }
+    if (assistantBusy) return;
+
+    assistantPromptDraft = "";
+    clearAssistantTransientMessages();
+    appendAssistantMessage({ role: "user", text: prompt });
+    emitAssistantTelemetry("prompt_submitted", {
+      prompt_length: prompt.length,
+    });
+
+    assistantBusy = true;
+    try {
+      const context = buildAssistantContextSnapshot();
+      const plan = await planAssistantTurn({
+        prompt,
+        context,
+        settings: assistantModelSettings,
+      });
+      const proposedCalls = plan.envelope.tool_calls;
+      emitAssistantTelemetry("tool_calls_proposed", {
+        intent: plan.envelope.intent,
+        count: proposedCalls.length,
+      });
+
+      if (!proposedCalls.length) {
+        if (plan.envelope.assistant_response?.trim()) {
+          appendAssistantPlanningNarrative(plan.envelope);
+        } else {
+          appendAssistantMessage({
+            role: "assistant",
+            text: "No executable actions were proposed. Ask for guidance or specify concrete edits.",
+          });
+        }
+        return;
+      }
+
+      appendAssistantTransientMessage({
+        role: "assistant",
+        text: `Planned actions:\\n${summarizeAssistantToolCalls(proposedCalls)}`,
+      });
+
+      const split = splitAssistantToolCallsByConfirmation(proposedCalls);
+      let autoExecutionResults: AssistantExecutionResult[] = [];
+      if (split.autoExecute.length) {
+        autoExecutionResults = await executeAssistantToolCalls(split.autoExecute, "auto");
+      }
+      let encounteredExecutionFailures = autoExecutionResults.some((result) => !result.ok);
+
+      if (split.requiresConfirmation.length) {
+        const confirmationId = `assistant-confirm-${crypto.randomUUID()}`;
+        assistantPendingConfirmation = {
+          id: confirmationId,
+          calls: split.requiresConfirmation,
+          createdAt: Date.now(),
+          summary: summarizeAssistantToolCalls(split.requiresConfirmation),
+        };
+        syncAssistantConversationRuntimeState();
+        appendAssistantTransientMessage({
+          role: "assistant",
+          text: `Confirmation required before high-risk actions:\\n${assistantPendingConfirmation.summary}`,
+          pendingConfirmationId: confirmationId,
+        });
+      }
+
+      const failedAutoCalls = autoExecutionResults.filter((result) => !result.ok);
+      if (failedAutoCalls.length && !assistantPendingConfirmation) {
+        emitAssistantTelemetry("repair_attempted", {
+          failed_count: failedAutoCalls.length,
+        });
+        appendAssistantTransientMessage({
+          role: "assistant",
+          text: "Some actions failed. I will prepare one corrective plan.",
+        });
+
+        const repairPrompt = buildAssistantRepairPrompt({
+          originalPrompt: prompt,
+          attemptedCalls: split.autoExecute,
+          executionResults: autoExecutionResults,
+        });
+        const repairPlan = await planAssistantTurn({
+          prompt: repairPrompt,
+          context: buildAssistantContextSnapshot(),
+          settings: assistantModelSettings,
+        });
+
+        if (!repairPlan.envelope.tool_calls.length) {
+          appendAssistantMessage({
+            role: "assistant",
+            text: "No corrective actions were proposed. Please refine your request or execute manually.",
+          });
+          emitAssistantTelemetry("repair_failed", {
+            failed_count: failedAutoCalls.length,
+            reason: "no_repair_calls",
+          });
+          return;
+        }
+
+        appendAssistantTransientMessage({
+          role: "assistant",
+          text: `Corrective actions:\\n${summarizeAssistantToolCalls(repairPlan.envelope.tool_calls)}`,
+        });
+
+        const repairSplit = splitAssistantToolCallsByConfirmation(repairPlan.envelope.tool_calls);
+        if (repairSplit.autoExecute.length) {
+          const repairResults = await executeAssistantToolCalls(repairSplit.autoExecute, "auto");
+          if (repairResults.some((result) => !result.ok)) {
+            encounteredExecutionFailures = true;
+          }
+        }
+        if (repairSplit.requiresConfirmation.length) {
+          const confirmationId = `assistant-confirm-${crypto.randomUUID()}`;
+          assistantPendingConfirmation = {
+            id: confirmationId,
+            calls: repairSplit.requiresConfirmation,
+            createdAt: Date.now(),
+            summary: summarizeAssistantToolCalls(repairSplit.requiresConfirmation),
+          };
+          syncAssistantConversationRuntimeState();
+          appendAssistantTransientMessage({
+            role: "assistant",
+            text: `Confirmation required before high-risk corrective actions:\\n${assistantPendingConfirmation.summary}`,
+            pendingConfirmationId: confirmationId,
+          });
+        }
+        emitAssistantTelemetry("repair_succeeded", {
+          failed_count: failedAutoCalls.length,
+          repair_calls: repairPlan.envelope.tool_calls.length,
+        });
+      }
+
+      if (!assistantPendingConfirmation && !encounteredExecutionFailures) {
+        appendAssistantPlanningNarrative(plan.envelope);
+      }
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Assistant request failed unexpectedly.";
+      assistantLastError = message;
+      syncAssistantConversationRuntimeState();
+      appendAssistantMessage({
+        role: "error",
+        text: `Assistant failed: ${message}`,
+      });
+    } finally {
+      assistantBusy = false;
+      clearAssistantTransientMessages();
+      syncAssistantConversationRuntimeState();
+    }
+  };
+
+  const confirmAssistantPendingActions = async () => {
+    if (!assistantPendingConfirmation || assistantBusy) return;
+    const pending = assistantPendingConfirmation;
+    assistantPendingConfirmation = null;
+    syncAssistantConversationRuntimeState();
+    emitAssistantTelemetry("confirmation_accepted", {
+      count: pending.calls.length,
+    });
+    clearAssistantTransientMessages();
+    appendAssistantTransientMessage({
+      role: "assistant",
+      text: "Executing confirmed actions.",
+    });
+    assistantBusy = true;
+    try {
+      await executeAssistantToolCalls(pending.calls, "confirmed");
+    } finally {
+      assistantBusy = false;
+      clearAssistantTransientMessages();
+      syncAssistantConversationRuntimeState();
+    }
+  };
+
+  const cancelAssistantPendingActions = () => {
+    if (!assistantPendingConfirmation) return;
+    emitAssistantTelemetry("confirmation_rejected", {
+      count: assistantPendingConfirmation.calls.length,
+    });
+    clearAssistantTransientMessages();
+    appendAssistantMessage({
+      role: "assistant",
+      text: "High-risk action bundle cancelled.",
+    });
+    assistantPendingConfirmation = null;
+    syncAssistantConversationRuntimeState();
+  };
+
   onMount(() => {
     viewportWidthPx = window.innerWidth;
     applyResponsivePanelWidths();
+    loadAssistantSettingsFromStorage();
+    if (assistantConversations.length === 0) {
+      const conversation = createAssistantConversation();
+      assistantConversations = [conversation];
+      loadAssistantConversation(conversation.id);
+      assistantConversationView = "list";
+    }
 
     const handleDragOverCapture = (event: DragEvent) => {
       handleDragOver(event);
@@ -1116,6 +2464,12 @@
       if (transformationEditorOpen || conditionEditorOpen) return;
       if (isEditableTarget(event.target)) return;
       const key = event.key.toLowerCase();
+
+      if ((key === "backspace" || key === "delete") && (selectedNodeId || selectedEdgeId)) {
+        event.preventDefault();
+        removeSelectedGraphEntity();
+        return;
+      }
 
       if (key === "[") {
         event.preventDefault();
@@ -1316,13 +2670,14 @@
         name: item.name,
         kind: "transformation" as const,
         authorId: mockCurrentUserId,
-        summary: "Draft (local, not yet published).",
+        summary: "Unpublished in current tab (publish to chain before reuse).",
       })),
     ],
     condition: [...deployedLibrary.conditions],
     plugin: [...mockPlugins, ...deployedLibrary.plugins],
   }));
   const selectedNode = $derived.by(() => nodes.find((node) => node.id === selectedNodeId) ?? null);
+  const selectedEdge = $derived.by(() => edges.find((edge) => edge.id === selectedEdgeId) ?? null);
   const inspectorNode = $derived.by(() => {
     if (selectedNode) return selectedNode;
     if (!activeTab) return null;
@@ -1414,12 +2769,10 @@
   $effect(() => {
     if (!hasSelection && inspectorTab !== "api") {
       if (rightMode === "inspector") rightMode = "hidden";
-      if (rightMode === "both") rightMode = "assistant";
       return;
     }
     if (!inspectorAuto) return;
     if (rightMode === "hidden") rightMode = "inspector";
-    if (rightMode === "assistant") rightMode = "both";
   });
 
   $effect(() => {
@@ -1450,13 +2803,21 @@
         hasNetworkSelfStatic,
       });
       const nextToggleDisabled = mutability.lockToggleDisabled;
-      if (Boolean(node.data.riLockToggleDisabled) === nextToggleDisabled) return node;
+      const currentLocked = Boolean(node.data.riLocked);
+      const nextLocked = mutability.state === "network-self-static" ? true : currentLocked;
+      if (
+        Boolean(node.data.riLockToggleDisabled) === nextToggleDisabled &&
+        currentLocked === nextLocked
+      ) {
+        return node;
+      }
       changed = true;
       return {
         ...node,
         data: {
           ...node.data,
           riLockToggleDisabled: nextToggleDisabled,
+          riLocked: nextLocked,
         },
       };
     });
@@ -1542,15 +2903,23 @@
     const connector = nodes.find((node) => node.id === connectorId) ?? null;
     if (!connector || !isConnectorKind(connector.data.kind)) return;
     const isNetworkConnector = Boolean(connector.data.fromNetwork);
+    const hasNetworkSelfStatic = Boolean(
+      resolveConnectorSelfStaticRi(getConnectorStaticRi(connector)),
+    );
+    const mutability = resolveConnectorRiMutability({
+      fromNetwork: isNetworkConnector,
+      tabReadOnly: activeTabReadOnly,
+      hasNetworkSelfStatic,
+    });
 
     const nextStart = toInt(patch.riStart ?? connector.data.riStart) ?? 0;
     const nextShift = toInt(patch.riShift ?? connector.data.riShift) ?? 0;
     const currentlyLocked = Boolean(connector.data.riLocked);
-    const requestedLocked = patch.riLocked;
-    const nextLocked =
-      isNetworkConnector && isConnectorRiLockToggleDisabled(connector)
-        ? currentlyLocked
-        : Boolean(requestedLocked ?? currentlyLocked);
+    const nextLocked = resolveNextRiLocked({
+      mutability,
+      currentLocked: currentlyLocked,
+      requestedLocked: patch.riLocked,
+    });
 
     updateNodeData(connectorId, {
       riStart: nextStart,
@@ -2108,29 +3477,94 @@
     }
   });
 
-  const openNewTransformationEditor = () => {
+  const resolvePreferredEditableDimensionId = (): string | null => {
+    if (connectorDropTarget?.type === "dimension") {
+      const targetDimension = getDimensionNodeForConnectorIndex(
+        connectorDropTarget.connectorId,
+        connectorDropTarget.dimensionIndex,
+      );
+      if (targetDimension && !targetDimension.data.fromNetwork) {
+        return targetDimension.id;
+      }
+    }
+
+    const selected = nodes.find((node) => node.id === selectedNodeId) ?? null;
+    if (selected?.data.kind === "dimension" && !selected.data.fromNetwork) {
+      return selected.id;
+    }
+
+    const connector = getSelectedConnectorNode();
+    if (!connector || connector.data.fromNetwork) return null;
+    const firstDimension = getDimensionNodesForFeature(connector.id)
+      .sort((a, b) => (a.data.dimensionIndex ?? 0) - (b.data.dimensionIndex ?? 0))
+      .find((node) => !node.data.fromNetwork);
+    return firstDimension?.id ?? null;
+  };
+
+  const resolvePreferredEditableConnectorId = (): string | null => {
+    const selected = getSelectedConnectorNode();
+    if (selected && !selected.data.fromNetwork) return selected.id;
+    if (connectorDropTarget?.connectorId) {
+      const target = getFeatureNode(connectorDropTarget.connectorId);
+      if (target && !target.data.fromNetwork) return target.id;
+    }
+    return null;
+  };
+
+  const openNewTransformationEditor = (
+    options: {
+      dimensionId?: string | null;
+    } = {},
+  ) => {
     if (activeTabReadOnly) return;
     libraryCreateActionError = null;
     transformationEditorOpen = true;
-    transformationEditorDimensionId = null;
+    transformationEditorDimensionId = options.dimensionId ?? null;
     transformationEditorStatus = "draft";
     transformationEditorLocked = false;
     transformationDraftName = createUniqueName("transformation", "new_transformation");
     transformationDraftCode = defaultDraftCode;
     transformationDraftError = null;
+    transformationAiAssistantOpen = false;
+    transformationAiAssistantBusy = false;
+    transformationAiAssistantPrompt = "";
+    transformationAiAssistantError = null;
+    transformationAiAssistantMessages = [];
   };
 
-  const openNewConditionEditor = () => {
+  const openNewConditionEditor = (
+    options: {
+      targetConnectorId?: string | null;
+    } = {},
+  ) => {
     if (activeTabReadOnly) return;
     libraryCreateActionError = null;
     conditionEditorOpen = true;
     conditionEditorNodeId = null;
+    conditionEditorTargetConnectorId = options.targetConnectorId ?? null;
     conditionEditorStatus = "draft";
     conditionEditorLocked = false;
     conditionEditorDeployBusy = false;
     conditionDraftName = createUniqueName("condition", "new_condition");
     conditionDraftCode = defaultConditionDraftCode;
     conditionDraftError = null;
+    conditionAiAssistantOpen = false;
+    conditionAiAssistantBusy = false;
+    conditionAiAssistantPrompt = "";
+    conditionAiAssistantError = null;
+    conditionAiAssistantMessages = [];
+  };
+
+  const openContextualTransformationEditor = () => {
+    openNewTransformationEditor({
+      dimensionId: resolvePreferredEditableDimensionId(),
+    });
+  };
+
+  const openContextualConditionEditor = () => {
+    openNewConditionEditor({
+      targetConnectorId: resolvePreferredEditableConnectorId(),
+    });
   };
 
   const requestClearCanvas = () => {
@@ -3615,17 +5049,28 @@
     transformationEditorStatus = "draft";
     transformationEditorLocked = false;
     transformationDraftError = null;
+    transformationAiAssistantOpen = false;
+    transformationAiAssistantBusy = false;
+    transformationAiAssistantPrompt = "";
+    transformationAiAssistantError = null;
+    transformationAiAssistantMessages = [];
   };
 
   const closeConditionEditor = () => {
     conditionEditorOpen = false;
     conditionEditorNodeId = null;
+    conditionEditorTargetConnectorId = null;
     conditionEditorStatus = "draft";
     conditionEditorLocked = false;
     conditionEditorDeployBusy = false;
     conditionDraftName = "";
     conditionDraftCode = defaultConditionDraftCode;
     conditionDraftError = null;
+    conditionAiAssistantOpen = false;
+    conditionAiAssistantBusy = false;
+    conditionAiAssistantPrompt = "";
+    conditionAiAssistantError = null;
+    conditionAiAssistantMessages = [];
   };
 
   const saveConditionEditor = async () => {
@@ -3635,6 +5080,7 @@
       return;
     }
     const nodeId = conditionEditorNodeId;
+    const targetConnectorId = conditionEditorTargetConnectorId;
 
     const trimmedName = conditionDraftName.trim();
     if (!trimmedName) {
@@ -3741,6 +5187,15 @@
         }),
       };
       addItemToToolboxLibrary("condition", trimmedName);
+
+      if (!nodeId && targetConnectorId) {
+        attachConditionToConnector(targetConnectorId, {
+          label: trimmedName,
+          status: "network",
+          networkId: trimmedName,
+          sourceId: `condition-${slugify(trimmedName)}`,
+        });
+      }
 
       chainDeployStatus = `Deployed condition ${trimmedName}.`;
       closeConditionEditor();
@@ -4388,6 +5843,7 @@
   const buildConnectorTreeGraph = (
     rootConnectorName: string,
     origin: { x: number; y: number },
+    options: { hideReadOnlyLeafOutlets?: boolean; markRootAsTabRoot?: boolean } = {},
   ): ConnectorTreeModel => {
     const root = deployedRegistry.connectors[rootConnectorName];
     if (!root) return { rootConnectorName, nodes: [], edges: [] };
@@ -4554,7 +6010,7 @@
           sourceId: `feature-${connectorName}`,
           networkId: connectorName,
           fromNetwork: true,
-          tabRoot: input.depth === 0,
+          tabRoot: options.markRootAsTabRoot === false ? false : input.depth === 0,
           hideOutlets: false,
           riPosition: connectorRiPosition,
           riStart: connectorSelfStaticRi?.startPoint ?? 0,
@@ -4854,7 +6310,7 @@
       const hasRenderableChild = info.children.some((childId) => graphNodeById.has(childId));
       node.data = {
         ...node.data,
-        hideOutlets: !hasRenderableChild,
+        hideOutlets: options.hideReadOnlyLeafOutlets === false ? false : !hasRenderableChild,
       };
     });
 
@@ -5543,9 +6999,9 @@
 
   const savedToolboxIdsForLibraryTab = $derived.by(() => {
     const kind = libraryKindForTab(libraryTab);
-    if (!kind) return new Set<string>();
+    if (!kind) return new SvelteSet<string>();
     const source = networkLibrary[kind] ?? [];
-    return new Set(
+    return new SvelteSet(
       source.filter((item) => isLibraryItemSavedInToolbox(item)).map((item) => item.id),
     );
   });
@@ -5755,7 +7211,10 @@
       y: 160 + Math.round(Math.random() * 200),
     };
     if (item.kind === "feature") {
-      const graph = buildConnectorTreeGraph(registryName, nodePosition);
+      const graph = buildConnectorTreeGraph(registryName, nodePosition, {
+        hideReadOnlyLeafOutlets: false,
+        markRootAsTabRoot: false,
+      });
       if (graph.nodes.length) {
         nodes = [...nodes, ...graph.nodes];
         edges = [...edges, ...graph.edges];
@@ -6041,8 +7500,86 @@
     }
   };
 
-  const handleSelectionChange: OnSelectionChange<StudioNode, Edge> = ({ nodes: selectedNodes }) => {
+  const canDeleteNodeByPolicy = (node: StudioNode): boolean => {
+    if (activeTabReadOnly) return node.data.kind === "plugin";
+    return !(isConnectorKind(node.data.kind) && Boolean(node.data.tabRoot));
+  };
+
+  const canDeleteEdgeByPolicy = (edge: Edge): boolean => {
+    if (!activeTabReadOnly) return true;
+    const sourceNode = edge.source ? nodesById[edge.source] : null;
+    const targetNode = edge.target ? nodesById[edge.target] : null;
+    return sourceNode?.data.kind === "plugin" || targetNode?.data.kind === "plugin";
+  };
+
+  const removeEdgeById = (edgeId: string): boolean => {
+    const edge = edges.find((item) => item.id === edgeId) ?? null;
+    if (!edge || !canDeleteEdgeByPolicy(edge)) return false;
+
+    edges = edges.filter((item) => item.id !== edgeId);
+    if (selectedEdgeId === edgeId) selectedEdgeId = null;
+
+    const sourceNode = edge.source ? nodesById[edge.source] : null;
+    if (sourceNode && isConnectorKind(sourceNode.data.kind)) {
+      syncConnectorRowPreview(sourceNode.id, { schedule: false });
+      scheduleLayout();
+    }
+    return true;
+  };
+
+  const removeNodeById = (nodeId: string): boolean => {
+    const node = nodesById[nodeId];
+    if (!node || !canDeleteNodeByPolicy(node)) return false;
+
+    const removeIds = new SvelteSet<string>([nodeId]);
+    if (isConnectorKind(node.data.kind)) {
+      nodes
+        .filter((candidate) => candidate.data.kind === "dimension")
+        .forEach((dimensionNode) => {
+          if (dimensionNode.data.parentFeatureId === nodeId) {
+            removeIds.add(dimensionNode.id);
+          }
+        });
+    }
+
+    const edgesToRemove = edges.filter(
+      (edge) => removeIds.has(edge.source) || removeIds.has(edge.target),
+    );
+    const connectorSourcesToRefresh = new SvelteSet<string>();
+    edgesToRemove.forEach((edge) => {
+      const sourceNode = edge.source ? nodesById[edge.source] : null;
+      if (sourceNode && isConnectorKind(sourceNode.data.kind) && !removeIds.has(sourceNode.id)) {
+        connectorSourcesToRefresh.add(sourceNode.id);
+      }
+    });
+
+    nodes = nodes.filter((item) => !removeIds.has(item.id));
+    edges = edges.filter((edge) => !removeIds.has(edge.source) && !removeIds.has(edge.target));
+
+    connectorSourcesToRefresh.forEach((sourceId) => {
+      syncConnectorRowPreview(sourceId, { schedule: false });
+    });
+    scheduleLayout();
+
+    if (selectedNodeId && removeIds.has(selectedNodeId)) selectedNodeId = null;
+    if (selectedEdgeId && edgesToRemove.some((edge) => edge.id === selectedEdgeId)) {
+      selectedEdgeId = null;
+    }
+    return true;
+  };
+
+  const removeSelectedGraphEntity = (): boolean => {
+    if (selectedEdgeId) return removeEdgeById(selectedEdgeId);
+    if (selectedNodeId) return removeNodeById(selectedNodeId);
+    return false;
+  };
+
+  const handleSelectionChange: OnSelectionChange<StudioNode, Edge> = ({
+    nodes: selectedNodes,
+    edges: selectedEdges,
+  }) => {
     selectedNodeId = selectedNodes[0]?.id ?? null;
+    selectedEdgeId = selectedNodes.length > 0 ? null : (selectedEdges[0]?.id ?? null);
   };
 
   const handleBeforeDelete = async ({
@@ -6060,9 +7597,12 @@
 
       const blockedNodeIds = new SvelteSet<string>([rootConnectorId]);
       const allowedNodes = toDelete.filter((node) => !blockedNodeIds.has(node.id));
-      const allowedEdges = toDeleteEdges.filter(
-        (edge) => !blockedNodeIds.has(edge.source) && !blockedNodeIds.has(edge.target),
-      );
+      const rootSelected = toDelete.some((node) => node.id === rootConnectorId);
+      const allowedEdges = rootSelected
+        ? toDeleteEdges.filter(
+            (edge) => !blockedNodeIds.has(edge.source) && !blockedNodeIds.has(edge.target),
+          )
+        : toDeleteEdges;
       if (!allowedNodes.length && !allowedEdges.length) return false;
       return { nodes: allowedNodes, edges: allowedEdges };
     }
@@ -6085,6 +7625,49 @@
     const value = Number(handle.replace("dim-", ""));
     return Number.isFinite(value) ? value : null;
   };
+
+  $effect(() => {
+    let changed = false;
+    const normalizedEdges = edges.map((edge) => {
+      const currentLabel = typeof edge.label === "string" ? edge.label.trim() : "";
+      if (currentLabel.length > 0) return edge;
+
+      const sourceNode = edge.source ? nodesById[edge.source] : null;
+      const targetNode = edge.target ? nodesById[edge.target] : null;
+      if (
+        !sourceNode ||
+        !targetNode ||
+        !isConnectorKind(sourceNode.data.kind) ||
+        !isConnectorKind(targetNode.data.kind)
+      ) {
+        return edge;
+      }
+
+      const relation = parseConnectorEdgeRelation(edge);
+      if (relation === "unknown") return edge;
+
+      const nextLabel =
+        relation === "composite"
+          ? (() => {
+              const dim = parseDimensionHandle(edge.sourceHandle);
+              return dim === null ? "composite" : `composite · D${dim + 1}`;
+            })()
+          : (() => {
+              const slot = parseConnectorEdgeBindingSlot(edge);
+              return slot === null ? "binding" : `binding · slot ${slot}`;
+            })();
+
+      changed = true;
+      return {
+        ...edge,
+        label: nextLabel,
+      };
+    });
+
+    if (changed) {
+      edges = normalizedEdges;
+    }
+  });
 
   const isValidConnection: (connection: Connection | Edge) => boolean = (connection) => {
     if (!connection.source || !connection.target) return false;
@@ -6316,6 +7899,7 @@
     node: StudioNode;
     event: MouseEvent | TouchEvent;
   }) => {
+    selectedEdgeId = null;
     if (event instanceof MouseEvent) {
       const openTreeTrigger =
         event.target instanceof Element
@@ -6343,6 +7927,11 @@
         openParticleTab(node.data.particleId);
       }
     }
+  };
+
+  const handleEdgeClick = ({ edge }: { edge: Edge; event: MouseEvent | TouchEvent }) => {
+    selectedNodeId = null;
+    selectedEdgeId = edge.id;
   };
 
   const buildChainConnectorRequestBodyPreview = () => {
@@ -7544,7 +9133,7 @@
             onclick={(event) => {
               event.preventDefault();
               event.stopPropagation();
-              openNewTransformationEditor();
+              openContextualTransformationEditor();
             }}
           >
             <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -7560,7 +9149,7 @@
             onclick={(event) => {
               event.preventDefault();
               event.stopPropagation();
-              openNewConditionEditor();
+              openContextualConditionEditor();
             }}
           >
             <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -7739,7 +9328,7 @@
               variant="ghost"
               type="button"
               disabled={activeTabReadOnly}
-              onclick={openNewTransformationEditor}
+              onclick={openContextualTransformationEditor}
             >
               New transformation
             </Button>
@@ -7766,7 +9355,7 @@
               variant="ghost"
               type="button"
               disabled={activeTabReadOnly}
-              onclick={openNewConditionEditor}
+              onclick={openContextualConditionEditor}
             >
               New condition
             </Button>
@@ -7830,10 +9419,11 @@
         onbeforedelete={handleBeforeDelete}
         {isValidConnection}
         onnodeclick={handleNodeClick}
+        onedgeclick={handleEdgeClick}
         fitView
         nodesDraggable
         nodesConnectable
-        deleteKey={activeTabReadOnly ? null : "Backspace"}
+        deleteKey={activeTabReadOnly ? null : ["Backspace", "Delete"]}
         zoomOnScroll
         zoomOnDoubleClick={false}
         zoomOnPinch
@@ -7900,7 +9490,259 @@
             </svg>
           </button>
         </div>
-        <div class="assistant-placeholder">Agent assistant chat goes here.</div>
+        <div class="assistant-panel">
+          <div class="assistant-panel-tabs" role="tablist" aria-label="Assistant views">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={assistantPanelTab === "conversations"}
+              class={`assistant-panel-tab ${assistantPanelTab === "conversations" ? "is-active" : ""}`}
+              onclick={() => {
+                assistantPanelTab = "conversations";
+              }}
+            >
+              Conversations
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={assistantPanelTab === "settings"}
+              class={`assistant-panel-tab ${assistantPanelTab === "settings" ? "is-active" : ""}`}
+              onclick={() => {
+                assistantPanelTab = "settings";
+              }}
+            >
+              Settings
+            </button>
+          </div>
+
+          {#if assistantPanelTab === "settings"}
+            <div class="assistant-settings">
+              <div class="assistant-settings-title">Model settings</div>
+              <label class="assistant-toggle">
+                <input
+                  type="checkbox"
+                  checked={assistantEnabled}
+                  onchange={(event) => {
+                    const target = event.target as HTMLInputElement | null;
+                    assistantEnabled = Boolean(target?.checked);
+                    persistAssistantSettingsToStorage();
+                  }}
+                />
+                <span>Assistant enabled</span>
+              </label>
+              <label class="assistant-settings-label" for="assistant-api-key">API key</label>
+              <input
+                id="assistant-api-key"
+                class="assistant-input"
+                type="password"
+                placeholder="sk-..."
+                autocomplete="off"
+                value={assistantApiKeyDraft}
+                oninput={(event) => {
+                  const target = event.target as HTMLInputElement | null;
+                  assistantApiKeyDraft = target?.value ?? "";
+                }}
+              />
+              <div class="assistant-settings-actions">
+                <button type="button" onclick={saveAssistantApiKey}>Save key</button>
+                <button type="button" onclick={clearAssistantApiKey}>Clear</button>
+              </div>
+              <label class="assistant-settings-label" for="assistant-endpoint">Endpoint</label>
+              <input
+                id="assistant-endpoint"
+                class="assistant-input"
+                type="text"
+                value={assistantEndpoint}
+                oninput={(event) => {
+                  const target = event.target as HTMLInputElement | null;
+                  assistantEndpoint = target?.value ?? "";
+                }}
+                onblur={saveAssistantModelSettings}
+              />
+              <label class="assistant-settings-label" for="assistant-model">Model</label>
+              <input
+                id="assistant-model"
+                class="assistant-input"
+                type="text"
+                value={assistantModel}
+                oninput={(event) => {
+                  const target = event.target as HTMLInputElement | null;
+                  assistantModel = target?.value ?? "";
+                }}
+                onblur={saveAssistantModelSettings}
+              />
+              <label class="assistant-settings-label" for="assistant-temperature">Temperature</label
+              >
+              <input
+                id="assistant-temperature"
+                class="assistant-input"
+                type="number"
+                min="0"
+                max="2"
+                step="0.1"
+                value={assistantTemperature}
+                oninput={(event) => {
+                  const target = event.target as HTMLInputElement | null;
+                  const next = Number(target?.value ?? assistantTemperature);
+                  assistantTemperature = Number.isFinite(next)
+                    ? Math.min(2, Math.max(0, next))
+                    : assistantTemperature;
+                }}
+                onblur={saveAssistantModelSettings}
+              />
+              {#if assistantSettingsStatus}
+                <div class="assistant-status assistant-status--success">
+                  {assistantSettingsStatus}
+                </div>
+              {/if}
+              {#if assistantSettingsError}
+                <div class="assistant-status assistant-status--error">{assistantSettingsError}</div>
+              {/if}
+              {#if !assistantKeyConfigured}
+                <div class="assistant-status assistant-status--warn">
+                  API key is required before sending prompts.
+                </div>
+              {/if}
+            </div>
+          {:else}
+            {#if assistantConversationView === "chat"}
+              <div class="assistant-conversation-toolbar">
+                <button
+                  type="button"
+                  class="assistant-mini-btn"
+                  onclick={openAssistantConversationList}
+                >
+                  Back to conversations
+                </button>
+                <button
+                  type="button"
+                  class="assistant-mini-btn assistant-mini-btn--danger"
+                  disabled={assistantBusy || !assistantActiveConversation}
+                  onclick={clearActiveAssistantConversation}
+                >
+                  Erase
+                </button>
+              </div>
+            {:else}
+              <div class="assistant-conversation-toolbar">
+                <div class="assistant-settings-title">Conversations</div>
+                <button
+                  type="button"
+                  class="assistant-icon-btn"
+                  aria-label="Start new conversation"
+                  disabled={assistantBusy}
+                  onclick={startNewAssistantConversation}
+                >
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M12 7v10"></path>
+                    <path d="M7 12h10"></path>
+                  </svg>
+                </button>
+              </div>
+              <div class="assistant-conversation-list">
+                {#if assistantConversations.length === 0}
+                  <div class="assistant-status assistant-status--warn">No conversations yet.</div>
+                {:else}
+                  {#each assistantConversations as conversation (conversation.id)}
+                    <div
+                      class={`assistant-conversation-item ${conversation.id === assistantActiveConversationId ? "is-active" : ""}`}
+                    >
+                      <button
+                        type="button"
+                        class="assistant-conversation-open"
+                        onclick={() => loadAssistantConversation(conversation.id)}
+                      >
+                        <span class="assistant-conversation-title">{conversation.title}</span>
+                        <span class="assistant-conversation-meta">
+                          {new Date(conversation.updatedAt).toLocaleString()}
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        class="assistant-icon-btn assistant-icon-btn--danger"
+                        aria-label={`Delete conversation ${conversation.title}`}
+                        disabled={assistantBusy}
+                        onclick={() => deleteAssistantConversation(conversation.id)}
+                      >
+                        ×
+                      </button>
+                    </div>
+                  {/each}
+                {/if}
+              </div>
+            {/if}
+
+            {#if assistantConversationView === "chat"}
+              {#if assistantPendingConfirmation}
+                <div class="assistant-confirm">
+                  <div class="assistant-confirm-title">Confirmation required</div>
+                  <pre>{assistantPendingConfirmation.summary}</pre>
+                  <div class="assistant-confirm-actions">
+                    <button
+                      type="button"
+                      class="assistant-confirm-accept"
+                      disabled={assistantBusy}
+                      onclick={confirmAssistantPendingActions}
+                    >
+                      Confirm
+                    </button>
+                    <button
+                      type="button"
+                      class="assistant-confirm-cancel"
+                      disabled={assistantBusy}
+                      onclick={cancelAssistantPendingActions}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              {/if}
+              {#if assistantLastError}
+                <div class="assistant-status assistant-status--error">{assistantLastError}</div>
+              {/if}
+              <div class="assistant-thread">
+                {#each assistantThreadMessages as message (message.id)}
+                  <div class={`assistant-message assistant-message--${message.role}`}>
+                    <div class="assistant-message-meta">
+                      <span>{message.role}</span>
+                      <span>{new Date(message.at).toLocaleTimeString()}</span>
+                    </div>
+                    <pre>{message.text}</pre>
+                  </div>
+                {/each}
+              </div>
+              <div class="assistant-composer">
+                <textarea
+                  class="assistant-composer-input"
+                  rows="3"
+                  placeholder="Ask assistant to edit flow or explain app actions..."
+                  value={assistantPromptDraft}
+                  disabled={!assistantEnabled || assistantBusy || !assistantKeyConfigured}
+                  oninput={(event) => {
+                    const target = event.target as HTMLTextAreaElement | null;
+                    assistantPromptDraft = target?.value ?? "";
+                  }}
+                  onkeydown={(event) => {
+                    if (event.key !== "Enter" || event.shiftKey) return;
+                    event.preventDefault();
+                    void sendAssistantPrompt();
+                  }}
+                ></textarea>
+                <div class="assistant-composer-actions">
+                  <button
+                    type="button"
+                    class="assistant-send"
+                    disabled={!assistantCanSend}
+                    onclick={() => void sendAssistantPrompt()}
+                  >
+                    {assistantBusy ? "Working..." : "Send"}
+                  </button>
+                </div>
+              </div>
+            {/if}
+          {/if}
+        </div>
       </div>
     </DockPanel>
   {/if}
@@ -8087,6 +9929,7 @@
               {#if selectedNode}
                 {@const isReadOnly = selectedNode.data.fromNetwork}
                 {@const isNameReadOnly = isReadOnly || selectedNode.data.kind === "condition"}
+                {@const canDeleteSelectedNode = canDeleteNodeByPolicy(selectedNode)}
                 <label class="inspector-label" for="node-name">Name</label>
                 <input
                   id="node-name"
@@ -8105,6 +9948,19 @@
                     }
                   }}
                 />
+                <button
+                  type="button"
+                  class="inspector-action inspector-action--danger"
+                  disabled={!canDeleteSelectedNode}
+                  onclick={() => {
+                    removeNodeById(selectedNode.id);
+                  }}
+                >
+                  Remove selected {selectedNode.data.kind === "connector" ? "connector" : "node"}
+                </button>
+                {#if !canDeleteSelectedNode && isConnectorKind(selectedNode.data.kind) && selectedNode.data.tabRoot}
+                  <div class="inspector-hint">Root connector of this tab cannot be removed.</div>
+                {/if}
                 {#if pendingNameCollision && pendingNameCollision.nodeId === selectedNode.id}
                   <div class="inspector-alert">
                     <div class="inspector-alert-text">
@@ -8419,6 +10275,54 @@
                     Open connector tab
                   </button>
                 {/if}
+              {:else if selectedEdge}
+                {@const sourceLabel =
+                  nodesById[selectedEdge.source]?.data.label ?? selectedEdge.source}
+                {@const targetLabel =
+                  nodesById[selectedEdge.target]?.data.label ?? selectedEdge.target}
+                {@const relation = parseConnectorEdgeRelation(selectedEdge)}
+                {@const dimension = (() => {
+                  const parsed = parseDimensionHandle(selectedEdge.sourceHandle);
+                  return parsed === null ? null : parsed + 1;
+                })()}
+                {@const bindingSlot = parseConnectorEdgeBindingSlot(selectedEdge)}
+                <div class="inspector-section">
+                  <div class="inspector-section-title">Selected link</div>
+                  <div class="inspector-row">
+                    <span>From</span>
+                    <span>{sourceLabel}</span>
+                  </div>
+                  <div class="inspector-row">
+                    <span>To</span>
+                    <span>{targetLabel}</span>
+                  </div>
+                  <div class="inspector-row">
+                    <span>Relation</span>
+                    <span>{relation}</span>
+                  </div>
+                  {#if dimension !== null}
+                    <div class="inspector-row">
+                      <span>Dimension</span>
+                      <span>D{dimension}</span>
+                    </div>
+                  {/if}
+                  {#if bindingSlot !== null}
+                    <div class="inspector-row">
+                      <span>Binding slot</span>
+                      <span>{bindingSlot}</span>
+                    </div>
+                  {/if}
+                  <button
+                    type="button"
+                    class="inspector-action inspector-action--danger"
+                    disabled={!canDeleteEdgeByPolicy(selectedEdge)}
+                    onclick={() => {
+                      removeEdgeById(selectedEdge.id);
+                    }}
+                  >
+                    Remove selected link
+                  </button>
+                </div>
               {:else}
                 <div class="inspector-row">
                   <span>Context</span>
@@ -8659,699 +10563,6 @@
     </DockPanel>
   {/if}
 
-  {#if rightMode === "both"}
-    <DockPanel
-      title="Inspector + Assistant"
-      position="right"
-      resizable
-      sizePx={rightPanelWidthPx}
-      minSizePx={getRightPanelBounds().min}
-      maxSizePx={getRightPanelBounds().max}
-      contentScale={rightPanelScale}
-      onResize={handleRightPanelResize}
-      onHide={hideRightPanel}
-    >
-      <div class="right-panel-content">
-        <div class="right-panel-controls">
-          <button
-            type="button"
-            class={`right-panel-icon ${assistantVisible ? "is-active" : ""}`}
-            aria-label="Toggle assistant panel"
-            onclick={toggleAssistant}
-          >
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M4 6h16v10H8l-4 4z"></path>
-              <path d="M8 10h8M8 13h6"></path>
-            </svg>
-          </button>
-          <button
-            type="button"
-            class={`right-panel-icon ${inspectorVisible ? "is-active" : ""}`}
-            aria-label="Toggle inspector panel"
-            onclick={toggleInspector}
-          >
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <circle cx="12" cy="12" r="7"></circle>
-              <path d="M12 11v5"></path>
-              <path d="M12 8h.01"></path>
-            </svg>
-          </button>
-          <button
-            type="button"
-            class={`right-panel-icon ${runnerVisible ? "is-active" : ""}`}
-            aria-label="Toggle run panel"
-            onclick={toggleRunner}
-          >
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M7 5l12 7-12 7z"></path>
-            </svg>
-          </button>
-        </div>
-        <div class="right-split">
-          <div class="right-section">
-            <div class="right-section-body">
-              <div class="inspector">
-                <div class="inspector-header">
-                  <div class="inspector-tabs" role="tablist" aria-label="Inspector views">
-                    <button
-                      type="button"
-                      role="tab"
-                      aria-selected={inspectorTab === "node"}
-                      class={`inspector-tab ${inspectorTab === "node" ? "is-active" : ""}`}
-                      onclick={() => {
-                        inspectorTab = "node";
-                      }}
-                    >
-                      Node
-                    </button>
-                    <button
-                      type="button"
-                      role="tab"
-                      aria-selected={inspectorTab === "api"}
-                      class={`inspector-tab ${inspectorTab === "api" ? "is-active" : ""}`}
-                      onclick={() => {
-                        inspectorTab = "api";
-                      }}
-                    >
-                      API
-                    </button>
-                  </div>
-                </div>
-                {#if inspectorTab === "node"}
-                  {#if inspectorNode}
-                    {#if selectedNode}
-                      {@const isReadOnly = selectedNode.data.fromNetwork}
-                      {@const isNameReadOnly = isReadOnly || selectedNode.data.kind === "condition"}
-                      <label class="inspector-label" for="node-name-split">Name</label>
-                      <input
-                        id="node-name-split"
-                        class="inspector-input"
-                        value={nameDraft}
-                        disabled={isNameReadOnly}
-                        oninput={(event) => {
-                          const target = event.target as HTMLInputElement | null;
-                          nameDraft = target?.value ?? "";
-                        }}
-                        onblur={() => commitNameChange(selectedNode)}
-                        onkeydown={(event) => {
-                          if (event.key === "Enter") {
-                            event.preventDefault();
-                            commitNameChange(selectedNode);
-                          }
-                        }}
-                      />
-                      {#if pendingNameCollision && pendingNameCollision.nodeId === selectedNode.id}
-                        <div class="inspector-alert">
-                          <div class="inspector-alert-text">
-                            “{pendingNameCollision.desiredName}” already exists in the network.
-                          </div>
-                          <div class="inspector-alert-actions">
-                            <button type="button" onclick={applyNameCollisionUseExisting}>
-                              Use existing
-                            </button>
-                            <button type="button" onclick={applyNameCollisionCreateNew}>
-                              Create new
-                            </button>
-                          </div>
-                        </div>
-                      {/if}
-                      {#if isConnectorKind(selectedNode.data.kind)}
-                        <label class="inspector-label" for="node-dimensions-split">Dimensions</label
-                        >
-                        <input
-                          id="node-dimensions-split"
-                          class="inspector-input"
-                          type="number"
-                          min="1"
-                          value={dimensionDraft ?? 1}
-                          disabled={isReadOnly}
-                          oninput={(event) => {
-                            const target = event.target as HTMLInputElement | null;
-                            dimensionDraft = target ? Number(target.value) : 1;
-                          }}
-                          onchange={() => {
-                            if (dimensionDraft !== null) {
-                              requestDimensionChange(selectedNode.id, dimensionDraft);
-                            }
-                          }}
-                        />
-                        {#if pendingDimensionChange && pendingDimensionChange.nodeId === selectedNode.id}
-                          <div class="inspector-alert">
-                            <div class="inspector-alert-text">
-                              Removing dimensions will delete {pendingDimensionChange
-                                .removedDimensions.length}
-                              dimension(s) with transformations. Continue?
-                            </div>
-                            <div class="inspector-alert-actions">
-                              <button type="button" onclick={confirmDimensionRemoval}>
-                                Remove
-                              </button>
-                              <button type="button" onclick={cancelDimensionRemoval}>
-                                Cancel
-                              </button>
-                            </div>
-                          </div>
-                        {/if}
-                        {@const connectorRiLocked = selectedNode.data.riLocked ?? false}
-                        {@const connectorRiMutability = getConnectorRiMutability(selectedNode)}
-                        {@const connectorRiToggleDisabled =
-                          isConnectorRiLockToggleDisabled(selectedNode)}
-                        <div class="inspector-section">
-                          <div class="inspector-section-title">Running instance</div>
-                          <div class="inspector-inline">
-                            <label class="inspector-inline-label" for="connector-ri-start-split"
-                              >Start</label
-                            >
-                            <input
-                              id="connector-ri-start-split"
-                              class="inspector-input inspector-input--compact inspector-input--inline"
-                              type="number"
-                              inputmode="numeric"
-                              min="0"
-                              step="1"
-                              value={selectedNode.data.riStart ?? 0}
-                              disabled={connectorRiLocked}
-                              onwheel={(event) => {
-                                event.preventDefault();
-                                (event.currentTarget as HTMLInputElement).blur();
-                              }}
-                              onkeydown={(event) => {
-                                if (["-", "+", "e", "E", "."].includes(event.key)) {
-                                  event.preventDefault();
-                                }
-                              }}
-                              oninput={(event) => {
-                                const target = event.target as HTMLInputElement | null;
-                                applyConnectorRiPatch(selectedNode.id, {
-                                  riStart: toInt(target?.value ?? "0"),
-                                });
-                              }}
-                            />
-                            <label class="inspector-inline-label" for="connector-ri-shift-split"
-                              >Shift</label
-                            >
-                            <input
-                              id="connector-ri-shift-split"
-                              class="inspector-input inspector-input--compact inspector-input--inline"
-                              type="number"
-                              inputmode="numeric"
-                              min="0"
-                              step="1"
-                              value={selectedNode.data.riShift ?? 0}
-                              disabled={connectorRiLocked}
-                              onwheel={(event) => {
-                                event.preventDefault();
-                                (event.currentTarget as HTMLInputElement).blur();
-                              }}
-                              onkeydown={(event) => {
-                                if (["-", "+", "e", "E", "."].includes(event.key)) {
-                                  event.preventDefault();
-                                }
-                              }}
-                              oninput={(event) => {
-                                const target = event.target as HTMLInputElement | null;
-                                applyConnectorRiPatch(selectedNode.id, {
-                                  riShift: toInt(target?.value ?? "0"),
-                                });
-                              }}
-                            />
-                            <button
-                              type="button"
-                              class={`inspector-toggle ${connectorRiLocked ? "is-locked" : ""}`}
-                              disabled={connectorRiToggleDisabled}
-                              onclick={() =>
-                                applyConnectorRiPatch(selectedNode.id, {
-                                  riLocked: !connectorRiLocked,
-                                })}
-                            >
-                              {connectorRiLocked ? "static" : "open"}
-                            </button>
-                          </div>
-                          <div class="inspector-hint">
-                            RI mode: <code>{connectorRiMutability.state}</code> · lock toggle
-                            {connectorRiMutability.lockToggleDisabled ? " disabled" : " enabled"}.
-                          </div>
-                        </div>
-                        <div class="inspector-section">
-                          <div class="inspector-section-title">Connector dimensions</div>
-                          {#if getSortedConnectorDimensions(selectedNode.id).length === 0}
-                            <div class="inspector-hint">No dimensions configured yet.</div>
-                          {:else}
-                            {#each getSortedConnectorDimensions(selectedNode.id) as dimensionNode, dimIndex (dimensionNode.id)}
-                              <div class="inspector-row">
-                                <span>#{dimIndex + 1}</span>
-                                <span>{(dimensionNode.data.transformations ?? []).length} tx</span>
-                              </div>
-                              {#if (dimensionNode.data.transformations ?? []).length > 0}
-                                <div
-                                  class="inspector-transform-list inspector-transform-list--compact"
-                                >
-                                  {#each dimensionNode.data.transformations ?? [] as transformation, transformationIndex (transformation.id)}
-                                    {@const canEditArgs = !isReadOnly}
-                                    <div
-                                      class={`inspector-transform-row ${canEditArgs ? "is-draggable" : ""} ${transformationRowDropClass(
-                                        dimensionNode.id,
-                                        transformationIndex,
-                                      )} ${transformationDragState ? "is-drag-active" : ""}`}
-                                      role="presentation"
-                                      draggable={canEditArgs}
-                                      ondragstart={(event) =>
-                                        canEditArgs &&
-                                        handleTransformationDragStart(
-                                          event,
-                                          dimensionNode.id,
-                                          transformationIndex,
-                                        )}
-                                      ondragend={endTransformationDrag}
-                                      ondragover={(event) =>
-                                        canEditArgs &&
-                                        handleTransformationRowDragOver(
-                                          event,
-                                          dimensionNode.id,
-                                          transformationIndex,
-                                        )}
-                                      ondrop={(event) =>
-                                        canEditArgs &&
-                                        handleTransformationRowDrop(
-                                          event,
-                                          dimensionNode.id,
-                                          transformationIndex,
-                                        )}
-                                    >
-                                      <div class="inspector-transform-main">
-                                        <span class="inspector-transform-name"
-                                          >{transformation.name}</span
-                                        >
-                                        {#if canEditArgs}
-                                          <input
-                                            class="inspector-input inspector-input--compact inspector-transform-args-input"
-                                            value={transformation.args.join(", ")}
-                                            placeholder="args: 0, 1"
-                                            oninput={(event) => {
-                                              const target =
-                                                event.target as HTMLInputElement | null;
-                                              updateTransformationArgsOnDimension(
-                                                dimensionNode.id,
-                                                transformation.id,
-                                                target?.value ?? "",
-                                              );
-                                            }}
-                                          />
-                                        {:else}
-                                          <span class="inspector-transform-args">
-                                            args: {transformation.args.length
-                                              ? transformation.args.join(", ")
-                                              : "none"}
-                                          </span>
-                                        {/if}
-                                        {#if canEditArgs}
-                                          <button
-                                            type="button"
-                                            class="inspector-remove"
-                                            onclick={() =>
-                                              removeTransformationFromDimension(
-                                                dimensionNode.id,
-                                                transformation.id,
-                                              )}
-                                          >
-                                            Remove
-                                          </button>
-                                        {/if}
-                                      </div>
-                                    </div>
-                                  {/each}
-                                </div>
-                              {/if}
-                            {/each}
-                          {/if}
-                        </div>
-                      {/if}
-                      {#if selectedNode.data.kind === "dimension"}
-                        <div class="inspector-section">
-                          <div class="inspector-section-title">Transformations</div>
-                          <div class="inspector-transform-list">
-                            {#if (selectedNode.data.transformations ?? []).length === 0}
-                              <div class="inspector-hint">
-                                No transformations on this dimension.
-                              </div>
-                            {:else}
-                              {#each selectedNode.data.transformations ?? [] as transformation, transformationIndex (transformation.id)}
-                                {@const canEditArgs = !isReadOnly}
-                                <div
-                                  class={`inspector-transform-row ${canEditArgs ? "is-draggable" : ""} ${transformationRowDropClass(
-                                    selectedNode.id,
-                                    transformationIndex,
-                                  )} ${transformationDragState ? "is-drag-active" : ""}`}
-                                  role="presentation"
-                                  draggable={canEditArgs}
-                                  ondragstart={(event) =>
-                                    canEditArgs &&
-                                    handleTransformationDragStart(
-                                      event,
-                                      selectedNode.id,
-                                      transformationIndex,
-                                    )}
-                                  ondragend={endTransformationDrag}
-                                  ondragover={(event) =>
-                                    canEditArgs &&
-                                    handleTransformationRowDragOver(
-                                      event,
-                                      selectedNode.id,
-                                      transformationIndex,
-                                    )}
-                                  ondrop={(event) =>
-                                    canEditArgs &&
-                                    handleTransformationRowDrop(
-                                      event,
-                                      selectedNode.id,
-                                      transformationIndex,
-                                    )}
-                                >
-                                  <div class="inspector-transform-main">
-                                    <span class="inspector-transform-name"
-                                      >{transformation.name}</span
-                                    >
-                                    {#if canEditArgs}
-                                      <input
-                                        class="inspector-input inspector-input--compact inspector-transform-args-input"
-                                        value={transformation.args.join(", ")}
-                                        placeholder="args: 0, 1"
-                                        oninput={(event) => {
-                                          const target = event.target as HTMLInputElement | null;
-                                          updateTransformationArgsOnDimension(
-                                            selectedNode.id,
-                                            transformation.id,
-                                            target?.value ?? "",
-                                          );
-                                        }}
-                                      />
-                                    {:else}
-                                      <span class="inspector-transform-args">
-                                        args: {transformation.args.length
-                                          ? transformation.args.join(", ")
-                                          : "none"}
-                                      </span>
-                                    {/if}
-                                    {#if canEditArgs}
-                                      <button
-                                        type="button"
-                                        class="inspector-remove"
-                                        onclick={() =>
-                                          removeTransformationFromDimension(
-                                            selectedNode.id,
-                                            transformation.id,
-                                          )}
-                                      >
-                                        Remove
-                                      </button>
-                                    {/if}
-                                  </div>
-                                </div>
-                              {/each}
-                            {/if}
-                          </div>
-                        </div>
-                      {/if}
-                      {#if selectedNode.data.kind === "condition"}
-                        {@const conditionCodePreview = selectedNode.data.fromNetwork
-                          ? "// Network condition source is immutable and not editable in Studio."
-                          : getConditionCode(selectedNode.id)}
-                        <div class="inspector-section">
-                          <div class="inspector-section-title">Condition</div>
-                          <div class="inspector-hint">
-                            Conditions are immutable once published. Create a new condition from the
-                            left panel and reconnect it if you need changes.
-                          </div>
-                          <pre class="inspector-code-preview">{conditionCodePreview}</pre>
-                        </div>
-                      {/if}
-                      {#if selectedNode.data.kind === "particle" && selectedNode.data.particleId}
-                        <button
-                          type="button"
-                          class="inspector-action"
-                          onclick={() => openConnectorTab(selectedNode.data.particleId!)}
-                        >
-                          Open connector tab
-                        </button>
-                      {/if}
-                    {:else}
-                      <div class="inspector-row">
-                        <span>Context</span>
-                        <span>Current tab</span>
-                      </div>
-                    {/if}
-                    <div class="inspector-row">
-                      <span>Status</span>
-                      <span>{getNodeStatusLabel(inspectorNode)}</span>
-                    </div>
-                    <div class="inspector-row">
-                      <span>Type</span>
-                      <span>{inspectorNode.data.kind}</span>
-                    </div>
-                    <div class="inspector-row">
-                      <span>Name</span>
-                      <span>{inspectorNode.data.label}</span>
-                    </div>
-                    {#if inspectorNode.data.particleId}
-                      <div class="inspector-row">
-                        <span>Connector</span>
-                        <span>{inspectorNode.data.particleId}</span>
-                      </div>
-                    {/if}
-                    {#if inspectorNode.data.sourceId}
-                      <div class="inspector-row">
-                        <span>Source</span>
-                        <span>{inspectorNode.data.sourceId}</span>
-                      </div>
-                    {/if}
-                    {#if inspectorNode.data.viewId}
-                      <div class="inspector-row">
-                        <span>View</span>
-                        <span>{inspectorNode.data.viewId}</span>
-                      </div>
-                    {/if}
-                    {#if activeRunOutput}
-                      <div class="inspector-section">
-                        <div class="inspector-section-title">Last run</div>
-                        <div class="inspector-row">
-                          <span>Streams</span>
-                          <span>{activeRunOutput.length}</span>
-                        </div>
-                        {#if activeRunTimestamp}
-                          <div class="inspector-row">
-                            <span>Ran</span>
-                            <span>{new Date(activeRunTimestamp).toLocaleTimeString()}</span>
-                          </div>
-                        {/if}
-                        {#if activeRunWarnings.length}
-                          <div class="inspector-alert">
-                            <div class="inspector-alert-text">
-                              {activeRunWarnings.join("; ")}
-                            </div>
-                          </div>
-                        {/if}
-                      </div>
-                    {/if}
-                    {#if activeCompileTimestamp}
-                      <div class="inspector-section">
-                        <div class="inspector-section-title">Last compile</div>
-                        <div class="inspector-row">
-                          <span>Ran</span>
-                          <span>{new Date(activeCompileTimestamp).toLocaleTimeString()}</span>
-                        </div>
-                        {#if activeCompileWarnings.length}
-                          <div class="inspector-alert">
-                            <div class="inspector-alert-text">
-                              {activeCompileWarnings.join("; ")}
-                            </div>
-                          </div>
-                        {/if}
-                      </div>
-                    {/if}
-                    {#if activeDeployTimestamp}
-                      <div class="inspector-section">
-                        <div class="inspector-section-title">Last deploy</div>
-                        <div class="inspector-row">
-                          <span>Ran</span>
-                          <span>{new Date(activeDeployTimestamp).toLocaleTimeString()}</span>
-                        </div>
-                      </div>
-                    {/if}
-                  {:else}
-                    <div class="inspector-empty">Select a node to view details.</div>
-                  {/if}
-                {:else}
-                  <div class="inspector-section">
-                    <div class="inspector-section-title">Connector JSON views</div>
-                    <div
-                      class="inspector-json-view-tabs"
-                      role="tablist"
-                      aria-label="JSON view mode"
-                    >
-                      <button
-                        type="button"
-                        class={`inspector-tab ${apiJsonView === "protocol" ? "is-active" : ""}`}
-                        role="tab"
-                        aria-selected={apiJsonView === "protocol"}
-                        onclick={() => (apiJsonView = "protocol")}
-                      >
-                        Protocol JSON
-                      </button>
-                      <button
-                        type="button"
-                        class={`inspector-tab ${apiJsonView === "resolved" ? "is-active" : ""}`}
-                        role="tab"
-                        aria-selected={apiJsonView === "resolved"}
-                        onclick={() => (apiJsonView = "resolved")}
-                      >
-                        Resolved tree JSON
-                      </button>
-                    </div>
-                    {#if apiJsonView === "protocol"}
-                      <div class="inspector-hint">
-                        Canonical protocol JSON for the selected connector (read-only).
-                      </div>
-                      <pre class="inspector-code-preview">{chainApiProtocolJson}</pre>
-                    {:else}
-                      <div class="inspector-hint">
-                        Edit computed full-tree JSON to update the flow. Read-only (on-chain)
-                        connectors are preserved automatically.
-                      </div>
-                      <div class="inspector-api-controls">
-                        <label class="inspector-checkbox">
-                          <input
-                            type="checkbox"
-                            checked={apiEditorLiveApply}
-                            onchange={(event) => {
-                              const target = event.target as HTMLInputElement | null;
-                              apiEditorLiveApply = Boolean(target?.checked);
-                              if (apiEditorLiveApply) {
-                                handleApiEditorInput(apiEditorText);
-                              }
-                            }}
-                          />
-                          <span>Live apply</span>
-                        </label>
-                        <button
-                          type="button"
-                          class="inspector-edit"
-                          onclick={applyApiEditorNow}
-                          disabled={apiEditorLiveApply}
-                        >
-                          Apply JSON
-                        </button>
-                      </div>
-                      <textarea
-                        class="inspector-json-editor"
-                        value={apiEditorText}
-                        spellcheck="false"
-                        onfocus={() => {
-                          apiEditorFocused = true;
-                        }}
-                        onblur={() => {
-                          apiEditorFocused = false;
-                        }}
-                        oninput={(event) => {
-                          const target = event.target as HTMLTextAreaElement | null;
-                          handleApiEditorInput(target?.value ?? "");
-                        }}
-                      ></textarea>
-                      {#if apiEditorError}
-                        <div class="inspector-alert">
-                          <div class="inspector-alert-text">{apiEditorError}</div>
-                        </div>
-                      {:else if apiEditorStatus}
-                        <div class="inspector-hint">{apiEditorStatus}</div>
-                      {/if}
-                    {/if}
-                  </div>
-                  <div class="inspector-section">
-                    <div class="inspector-section-title">Execute request preview</div>
-                    <div class="inspector-hint">
-                      Exact `POST /execute` body generated from the current flow and `N`.
-                    </div>
-                    <div class="inspector-inline-controls">
-                      <button
-                        type="button"
-                        class="inspector-edit"
-                        onclick={copyExecuteRequestPreview}
-                      >
-                        Copy JSON
-                      </button>
-                      {#if executePreviewCopyStatus}
-                        <span class="inspector-hint">{executePreviewCopyStatus}</span>
-                      {/if}
-                    </div>
-                    <pre class="inspector-code-preview">{chainApiExecuteJson}</pre>
-                    <div class="inspector-hint">{chainApiExecutePreviewSummary}</div>
-                    {#if chainApiExecutePreviewError}
-                      <div class="inspector-alert">
-                        <div class="inspector-alert-text">{chainApiExecutePreviewError}</div>
-                      </div>
-                    {/if}
-                    {#if chainApiExecutePreviewWarnings.length}
-                      <div class="inspector-alert">
-                        <div class="inspector-alert-text">
-                          {chainApiExecutePreviewWarnings.join("; ")}
-                        </div>
-                      </div>
-                    {/if}
-                  </div>
-                  <div class="inspector-section">
-                    <div class="inspector-section-title">Deploy trace</div>
-                    <div class="inspector-hint">
-                      Endpoint-by-endpoint responses from the latest deploy attempt.
-                    </div>
-                    {#if deployTraceEntries.length === 0}
-                      <div class="inspector-empty">No deploy trace yet.</div>
-                    {:else}
-                      <div class="deploy-trace-list">
-                        {#each deployTraceEntries as entry (entry.id)}
-                          <div class="deploy-trace-item">
-                            <div class="deploy-trace-head">
-                              <span class={`deploy-trace-badge ${entry.ok ? "is-ok" : "is-error"}`}>
-                                {entry.ok ? "OK" : "ERR"}
-                              </span>
-                              <code>{entry.method} {entry.path}</code>
-                              <span class="deploy-trace-status">
-                                {entry.responseStatus ?? "n/a"}
-                              </span>
-                            </div>
-                            <div class="deploy-trace-block">
-                              <div class="deploy-trace-label">Request body</div>
-                              <pre class="deploy-trace-json">{JSON.stringify(
-                                  entry.requestBody,
-                                  null,
-                                  2,
-                                )}</pre>
-                            </div>
-                            <div class="deploy-trace-block">
-                              <div class="deploy-trace-label">Response body</div>
-                              <pre class="deploy-trace-json">{JSON.stringify(
-                                  entry.responseBody,
-                                  null,
-                                  2,
-                                )}</pre>
-                            </div>
-                          </div>
-                        {/each}
-                      </div>
-                    {/if}
-                  </div>
-                {/if}
-              </div>
-            </div>
-          </div>
-          <div class="right-section">
-            <div class="right-section-body">
-              <div class="assistant-placeholder">Agent assistant chat goes here.</div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </DockPanel>
-  {/if}
-
   {#if bottomMode !== "hidden"}
     <DockPanel
       title="Utilities"
@@ -9488,16 +10699,28 @@
     <div class="confirm-overlay" role="dialog" aria-modal="true">
       <div class="editor-modal">
         <div class="editor-header">
-          <div class="editor-title">Create transformation</div>
+          <div class="editor-title">Publish transformation</div>
           <div class="editor-header-actions">
             <span class="editor-status">
-              {transformationEditorStatus === "network" ? "Network" : "Draft"}
+              {transformationEditorStatus === "network" ? "Published" : "Unpublished"}
             </span>
+            <button type="button" class="editor-fork" onclick={toggleTransformationAiAssistant}>
+              AI assistant
+            </button>
             <button type="button" class="editor-close" onclick={closeTransformationEditor}>
               Close
             </button>
           </div>
         </div>
+        <div class="editor-hint">
+          Deploy-oriented flow: this publishes directly to chain and adds the transformation to your
+          toolbox.
+        </div>
+        {#if transformationEditorDimensionId}
+          <div class="editor-hint">
+            After publish, it will be attached to the selected dimension.
+          </div>
+        {/if}
         <div class="editor-fields">
           <label class="editor-label" for="tx-name">Name</label>
           <input
@@ -9522,6 +10745,63 @@
             readOnly={transformationEditorReadOnly || transformationEditorDeployBusy}
           />
         </div>
+        {#if transformationAiAssistantOpen}
+          <div class="editor-ai-assistant">
+            <div class="editor-ai-assistant-title">Transformation AI assistant</div>
+            <div class="editor-ai-assistant-hint">
+              Describe the behavior you want. The assistant edits this Solidity snippet directly.
+            </div>
+            <div class="editor-ai-assistant-thread">
+              {#if transformationAiAssistantMessages.length === 0}
+                <div class="editor-ai-assistant-empty">No AI messages yet.</div>
+              {:else}
+                {#each transformationAiAssistantMessages as message (message.id)}
+                  <div
+                    class={`editor-ai-assistant-message editor-ai-assistant-message--${message.role}`}
+                  >
+                    <div class="editor-ai-assistant-message-meta">
+                      <span>{message.role}</span>
+                      <span>{new Date(message.at).toLocaleTimeString()}</span>
+                    </div>
+                    <pre>{message.text}</pre>
+                  </div>
+                {/each}
+              {/if}
+            </div>
+            {#if transformationAiAssistantError}
+              <div class="editor-error">{transformationAiAssistantError}</div>
+            {/if}
+            <div class="editor-ai-assistant-composer">
+              <textarea
+                class="editor-ai-assistant-input"
+                rows="3"
+                placeholder="Example: Keep name, make this transformation clamp x between args[0] and args[1]."
+                value={transformationAiAssistantPrompt}
+                disabled={transformationAiAssistantBusy || transformationEditorReadOnly}
+                oninput={(event) => {
+                  const target = event.target as HTMLTextAreaElement | null;
+                  transformationAiAssistantPrompt = target?.value ?? "";
+                  transformationAiAssistantError = null;
+                }}
+                onkeydown={(event) => {
+                  if (event.key !== "Enter" || event.shiftKey) return;
+                  event.preventDefault();
+                  void requestTransformationCodeEdit();
+                }}
+              ></textarea>
+              <button
+                type="button"
+                class="editor-fork"
+                disabled={transformationEditorReadOnly ||
+                  transformationAiAssistantBusy ||
+                  transformationAiAssistantPrompt.trim().length === 0}
+                onclick={() => void requestTransformationCodeEdit()}
+              >
+                {transformationAiAssistantBusy ? "Applying..." : "Apply AI edit"}
+              </button>
+            </div>
+          </div>
+        {/if}
         <div class="editor-actions">
           <button type="button" onclick={closeTransformationEditor}>Cancel</button>
           <button
@@ -9530,7 +10810,7 @@
             disabled={transformationEditorReadOnly || transformationEditorDeployBusy}
             onclick={saveTransformationEditor}
           >
-            {transformationEditorDeployBusy ? "Deploying..." : "Deploy to chain"}
+            {transformationEditorDeployBusy ? "Publishing..." : "Publish to chain"}
           </button>
         </div>
       </div>
@@ -9541,14 +10821,28 @@
     <div class="confirm-overlay" role="dialog" aria-modal="true">
       <div class="editor-modal">
         <div class="editor-header">
-          <div class="editor-title">Create condition</div>
+          <div class="editor-title">Publish condition</div>
           <div class="editor-header-actions">
             <span class="editor-status"
-              >{conditionEditorStatus === "network" ? "Network" : "Draft"}</span
+              >{conditionEditorStatus === "network" ? "Published" : "Unpublished"}</span
             >
+            <button type="button" class="editor-fork" onclick={toggleConditionAiAssistant}>
+              AI assistant
+            </button>
             <button type="button" class="editor-close" onclick={closeConditionEditor}>Close</button>
           </div>
         </div>
+        <div class="editor-hint">
+          Deploy-oriented flow: this publishes directly to chain and adds the condition to your
+          toolbox.
+        </div>
+        {#if conditionEditorTargetConnectorId}
+          {@const targetConnectorLabel =
+            nodesById[conditionEditorTargetConnectorId]?.data.label ?? "selected connector"}
+          <div class="editor-hint">
+            After publish, it will be attached to <code>{targetConnectorLabel}</code>.
+          </div>
+        {/if}
         <div class="editor-fields">
           <label class="editor-label" for="condition-name">Name</label>
           <input
@@ -9573,6 +10867,63 @@
             readOnly={conditionEditorReadOnly || conditionEditorDeployBusy}
           />
         </div>
+        {#if conditionAiAssistantOpen}
+          <div class="editor-ai-assistant">
+            <div class="editor-ai-assistant-title">Condition AI assistant</div>
+            <div class="editor-ai-assistant-hint">
+              Describe the rule you want. The assistant edits this Solidity snippet directly.
+            </div>
+            <div class="editor-ai-assistant-thread">
+              {#if conditionAiAssistantMessages.length === 0}
+                <div class="editor-ai-assistant-empty">No AI messages yet.</div>
+              {:else}
+                {#each conditionAiAssistantMessages as message (message.id)}
+                  <div
+                    class={`editor-ai-assistant-message editor-ai-assistant-message--${message.role}`}
+                  >
+                    <div class="editor-ai-assistant-message-meta">
+                      <span>{message.role}</span>
+                      <span>{new Date(message.at).toLocaleTimeString()}</span>
+                    </div>
+                    <pre>{message.text}</pre>
+                  </div>
+                {/each}
+              {/if}
+            </div>
+            {#if conditionAiAssistantError}
+              <div class="editor-error">{conditionAiAssistantError}</div>
+            {/if}
+            <div class="editor-ai-assistant-composer">
+              <textarea
+                class="editor-ai-assistant-input"
+                rows="3"
+                placeholder="Example: Return true only when args[0] is between 12 and 72."
+                value={conditionAiAssistantPrompt}
+                disabled={conditionAiAssistantBusy || conditionEditorReadOnly}
+                oninput={(event) => {
+                  const target = event.target as HTMLTextAreaElement | null;
+                  conditionAiAssistantPrompt = target?.value ?? "";
+                  conditionAiAssistantError = null;
+                }}
+                onkeydown={(event) => {
+                  if (event.key !== "Enter" || event.shiftKey) return;
+                  event.preventDefault();
+                  void requestConditionCodeEdit();
+                }}
+              ></textarea>
+              <button
+                type="button"
+                class="editor-fork"
+                disabled={conditionEditorReadOnly ||
+                  conditionAiAssistantBusy ||
+                  conditionAiAssistantPrompt.trim().length === 0}
+                onclick={() => void requestConditionCodeEdit()}
+              >
+                {conditionAiAssistantBusy ? "Applying..." : "Apply AI edit"}
+              </button>
+            </div>
+          </div>
+        {/if}
         <div class="editor-actions">
           <button type="button" onclick={closeConditionEditor}>Cancel</button>
           <button
@@ -9581,7 +10932,7 @@
             disabled={conditionEditorReadOnly || conditionEditorDeployBusy}
             onclick={saveConditionEditor}
           >
-            {conditionEditorDeployBusy ? "Deploying..." : "Deploy to chain"}
+            {conditionEditorDeployBusy ? "Publishing..." : "Publish to chain"}
           </button>
         </div>
       </div>
@@ -10045,6 +11396,14 @@
       uppercase tracking-[0.18em] text-white/70 hover:border-white/30 hover:text-white;
   }
 
+  .inspector-action--danger {
+    @apply border-rose-400/35 text-rose-200/90 hover:border-rose-300/60 hover:text-rose-100;
+  }
+
+  .inspector-action--danger:disabled {
+    @apply cursor-not-allowed border-white/10 text-white/35 hover:border-white/10 hover:text-white/35;
+  }
+
   .inspector-code-preview {
     @apply max-h-44 overflow-auto rounded-md border border-white/10 bg-black/80 p-2 text-[0.6rem] leading-5 text-emerald-100/90;
     white-space: pre-wrap;
@@ -10154,8 +11513,211 @@
     word-break: break-word;
   }
 
-  .assistant-placeholder {
-    @apply mt-4 text-[0.8rem] text-white/60;
+  .assistant-panel {
+    @apply mt-2 flex h-full min-h-0 flex-1 flex-col gap-2;
+  }
+
+  .assistant-panel-tabs {
+    @apply inline-flex items-center gap-1 rounded-md border border-white/10 bg-black/70 p-1;
+  }
+
+  .assistant-panel-tab {
+    @apply rounded-md px-2 py-1 text-[0.56rem] uppercase tracking-[0.18em] text-white/50 hover:text-white/80;
+  }
+
+  .assistant-panel-tab.is-active {
+    @apply border border-white/15 bg-white/10 text-white/90;
+  }
+
+  .assistant-settings {
+    @apply rounded-md border border-white/10 bg-black/70 p-2;
+  }
+
+  .assistant-settings-title {
+    @apply text-[0.55rem] uppercase tracking-[0.2em] text-white/50;
+  }
+
+  .assistant-toggle {
+    @apply mt-2 inline-flex items-center gap-2 text-[0.65rem] text-white/75;
+  }
+
+  .assistant-toggle input {
+    accent-color: rgb(16 185 129);
+  }
+
+  .assistant-settings-label {
+    @apply mt-2 block text-[0.55rem] uppercase tracking-[0.18em] text-white/45;
+  }
+
+  .assistant-input {
+    @apply mt-1 w-full rounded-md border border-white/15 bg-black/80 px-2 py-1 text-[0.68rem]
+      text-white/80 outline-none focus:border-emerald-400/60;
+  }
+
+  .assistant-settings-actions {
+    @apply mt-2 flex items-center gap-2;
+  }
+
+  .assistant-settings-actions button {
+    @apply rounded-md border border-white/15 bg-white/5 px-2 py-1 text-[0.55rem]
+      uppercase tracking-[0.16em] text-white/70 hover:border-white/35 hover:text-white;
+  }
+
+  .assistant-status {
+    @apply mt-2 rounded-md border px-2 py-1 text-[0.62rem] leading-5;
+  }
+
+  .assistant-status--success {
+    @apply border-emerald-400/30 bg-emerald-500/10 text-emerald-200;
+  }
+
+  .assistant-status--error {
+    @apply border-rose-400/35 bg-rose-500/10 text-rose-200;
+  }
+
+  .assistant-status--warn {
+    @apply border-amber-400/30 bg-amber-500/10 text-amber-100;
+  }
+
+  .assistant-confirm {
+    @apply rounded-md border border-amber-400/25 bg-amber-500/10 p-2 text-[0.65rem] text-amber-100;
+  }
+
+  .assistant-confirm-title {
+    @apply text-[0.55rem] uppercase tracking-[0.2em] text-amber-100/80;
+  }
+
+  .assistant-confirm pre {
+    @apply mt-1 max-h-28 overflow-auto whitespace-pre-wrap text-[0.62rem] leading-5 text-amber-100/90;
+  }
+
+  .assistant-confirm-actions {
+    @apply mt-2 flex items-center gap-2;
+  }
+
+  .assistant-confirm-accept {
+    @apply rounded-md border border-emerald-400/40 bg-emerald-500/15 px-2 py-1 text-[0.55rem]
+      uppercase tracking-[0.16em] text-emerald-100 hover:border-emerald-300/70 disabled:opacity-55;
+  }
+
+  .assistant-confirm-cancel {
+    @apply rounded-md border border-rose-400/40 bg-rose-500/10 px-2 py-1 text-[0.55rem]
+      uppercase tracking-[0.16em] text-rose-100 hover:border-rose-300/70 disabled:opacity-55;
+  }
+
+  .assistant-thread {
+    @apply min-h-0 flex-1 space-y-2 overflow-auto rounded-md border border-white/10 bg-black/75 p-2;
+  }
+
+  .assistant-thread--compact {
+    @apply max-h-64;
+  }
+
+  .assistant-message {
+    @apply rounded-md border p-2;
+  }
+
+  .assistant-message-meta {
+    @apply mb-1 flex items-center justify-between text-[0.52rem] uppercase tracking-[0.18em] text-white/45;
+  }
+
+  .assistant-message pre {
+    @apply whitespace-pre-wrap text-[0.64rem] leading-5 text-white/80;
+  }
+
+  .assistant-message--system {
+    @apply border-blue-400/20 bg-blue-500/5;
+  }
+
+  .assistant-message--user {
+    @apply border-white/15 bg-white/5;
+  }
+
+  .assistant-message--assistant {
+    @apply border-emerald-400/20 bg-emerald-500/5;
+  }
+
+  .assistant-message--tool {
+    @apply border-cyan-400/20 bg-cyan-500/5;
+  }
+
+  .assistant-message--error {
+    @apply border-rose-400/30 bg-rose-500/10;
+  }
+
+  .assistant-composer {
+    @apply rounded-md border border-white/10 bg-black/70 p-2;
+  }
+
+  .assistant-composer-input {
+    @apply w-full rounded-md border border-white/15 bg-black/80 px-2 py-1 text-[0.67rem]
+      text-white/80 outline-none focus:border-emerald-400/60 disabled:opacity-55;
+    resize: vertical;
+    min-height: 58px;
+  }
+
+  .assistant-composer-actions {
+    @apply mt-2 flex items-center justify-end;
+  }
+
+  .assistant-send {
+    @apply rounded-md border border-emerald-400/40 bg-emerald-500/10 px-3 py-1 text-[0.56rem]
+      uppercase tracking-[0.18em] text-emerald-100 hover:border-emerald-300/70 disabled:cursor-not-allowed disabled:opacity-45;
+  }
+
+  .assistant-mini-btn {
+    @apply rounded-md border border-white/15 bg-white/5 px-2 py-1 text-[0.52rem]
+      uppercase tracking-[0.16em] text-white/75 hover:border-white/35 hover:text-white disabled:opacity-45;
+  }
+
+  .assistant-mini-btn--danger {
+    @apply border-rose-400/35 bg-rose-500/10 text-rose-100 hover:border-rose-300/70;
+  }
+
+  .assistant-conversation-toolbar {
+    @apply flex items-center justify-between gap-2 rounded-md border border-white/10 bg-black/70 p-2;
+  }
+
+  .assistant-icon-btn {
+    @apply inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-white/15 bg-white/5 p-0
+      text-[0.62rem] font-medium leading-none text-white/80 hover:border-white/35 hover:text-white disabled:opacity-45;
+  }
+
+  .assistant-icon-btn svg {
+    @apply h-2.5 w-2.5;
+    stroke: currentColor;
+    stroke-width: 2;
+    fill: none;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .assistant-icon-btn--danger {
+    @apply border-rose-400/35 bg-rose-500/10 text-rose-100 hover:border-rose-300/70;
+  }
+
+  .assistant-conversation-list {
+    @apply min-h-0 flex-1 space-y-2 overflow-auto rounded-md border border-white/10 bg-black/75 p-2;
+  }
+
+  .assistant-conversation-item {
+    @apply flex items-start justify-between gap-2 rounded-md border border-white/10 bg-white/5 p-2;
+  }
+
+  .assistant-conversation-item.is-active {
+    @apply border-emerald-400/35 bg-emerald-500/10;
+  }
+
+  .assistant-conversation-open {
+    @apply flex min-w-0 flex-1 flex-col items-start gap-1 rounded-md border border-transparent bg-transparent px-0 py-0 text-left;
+  }
+
+  .assistant-conversation-title {
+    @apply truncate text-[0.65rem] font-medium text-white/85;
+  }
+
+  .assistant-conversation-meta {
+    @apply mt-1 text-[0.55rem] uppercase tracking-[0.12em] text-white/45;
   }
 
   .runner-panel {
@@ -10189,18 +11751,6 @@
       text-[0.63rem] leading-5 text-white/80;
     white-space: pre-wrap;
     word-break: break-word;
-  }
-
-  .right-split {
-    @apply flex h-full flex-col gap-3;
-  }
-
-  .right-section {
-    @apply flex min-h-0 flex-1 flex-col rounded-md border border-white/10 bg-black/70 p-2;
-  }
-
-  .right-section-body {
-    @apply mt-2 min-h-0 flex-1 overflow-auto;
   }
 
   .right-panel-content {
@@ -10355,6 +11905,56 @@
 
   .editor-shell :global(.shell) {
     @apply flex-1 min-h-0;
+  }
+
+  .editor-ai-assistant {
+    @apply flex flex-col gap-2 rounded-md border border-white/10 bg-black/70 p-2;
+  }
+
+  .editor-ai-assistant-title {
+    @apply text-[0.6rem] uppercase tracking-[0.2em] text-white/60;
+  }
+
+  .editor-ai-assistant-hint {
+    @apply text-[0.62rem] text-white/50;
+  }
+
+  .editor-ai-assistant-thread {
+    @apply max-h-44 overflow-auto rounded-md border border-white/10 bg-black/80 p-2 flex flex-col gap-2;
+  }
+
+  .editor-ai-assistant-empty {
+    @apply text-[0.62rem] text-white/45;
+  }
+
+  .editor-ai-assistant-message {
+    @apply rounded-md border border-white/10 bg-black/70 p-2;
+  }
+
+  .editor-ai-assistant-message-meta {
+    @apply mb-1 flex items-center justify-between text-[0.52rem] uppercase tracking-[0.18em] text-white/45;
+  }
+
+  .editor-ai-assistant-message pre {
+    @apply whitespace-pre-wrap break-words text-[0.64rem] text-white/80 leading-5;
+  }
+
+  .editor-ai-assistant-message--assistant {
+    @apply border-emerald-400/20 bg-emerald-950/10;
+  }
+
+  .editor-ai-assistant-message--error {
+    @apply border-rose-400/30 bg-rose-950/20 text-rose-100;
+  }
+
+  .editor-ai-assistant-composer {
+    @apply flex flex-col gap-2;
+  }
+
+  .editor-ai-assistant-input {
+    @apply w-full rounded-md border border-white/10 bg-black/80 px-2 py-1 text-[0.7rem] text-white/85
+      outline-none focus:border-emerald-400/60;
+    resize: vertical;
   }
 
   .editor-actions {

@@ -6,6 +6,9 @@ const readSource = (relativePath: string): string =>
   readFileSync(resolve(process.cwd(), relativePath), "utf8");
 
 const auditedFiles = [
+  "src/lib/components/feed/ConnectorPostFeed.svelte",
+  "src/lib/components/social/SocialConnectorDependencyFlow.svelte",
+  "src/lib/components/social/SocialEventCard.svelte",
   "src/lib/components/create/CreateParticleExplorer.svelte",
   "src/lib/components/explore/ExploreParticleList.svelte",
   "src/lib/components/explore/ExploreParticleDetail.svelte",
@@ -16,9 +19,14 @@ const auditedFiles = [
   "src/lib/components/workspace-window/WorkspaceTopBar.svelte",
   "src/lib/components/user/UserContribution.svelte",
   "src/routes/map/+page.svelte",
+  "src/routes/account/+page.svelte",
+  "src/routes/c/[id]/+page.svelte",
+  "src/routes/f/[slug]/+page.svelte",
+  "src/routes/network/+page.svelte",
   "src/lib/network/mockNetworkGraph.ts",
   "src/routes/p/[id]/+page.svelte",
   "src/routes/studio/+page.svelte",
+  "src/routes/u/[id]/+page.svelte",
 ] as const;
 
 const forbiddenLegacyPhrases = [
@@ -41,6 +49,12 @@ const forbiddenLegacyPhrases = [
 ] as const;
 
 const requiredConnectorPhrases: Record<string, string[]> = {
+  "src/lib/components/social/SocialEventCard.svelte": [
+    "created a new connector:",
+    "Connector dependencies",
+    "Format:",
+    "Dependencies:",
+  ],
   "src/lib/components/create/CreateParticleExplorer.svelte": [
     "Connector explorer",
     "Connectors",
@@ -71,6 +85,13 @@ const requiredConnectorPhrases: Record<string, string[]> = {
     'label: "uses connector schema"',
   ],
   "src/routes/p/[id]/+page.svelte": [
+    "Connector Page",
+    "Connector not found",
+    "Loading connector...",
+    "No synced connector matches this ID yet.",
+    "No connectors reference",
+  ],
+  "src/routes/c/[id]/+page.svelte": [
     "Connector Page",
     "Connector not found",
     "Loading connector...",

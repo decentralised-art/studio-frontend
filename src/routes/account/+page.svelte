@@ -1,15 +1,15 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { SvelteSet } from "svelte/reactivity";
   import { goto } from "$app/navigation";
   import { resolve } from "$app/paths";
 
-  import ParticlePostFeed from "$lib/components/feed/ParticlePostFeed.svelte";
+  import ConnectorPostFeed from "$lib/components/feed/ConnectorPostFeed.svelte";
   import {
     listNetworkFeedEventsByAuthor,
-    syncParticlePostDataFromChain,
+    syncParticlePostDataFromChain as syncConnectorPostDataFromChain,
     type NetworkFeedEvent,
   } from "$lib/feed/particlePostData";
-  import { networkNodeStudioKind } from "$lib/network/mockNetworkGraph";
   import Button from "$lib/components/ui/Button.svelte";
   import SectionShell from "$lib/components/ui/SectionShell.svelte";
   import UserProfilePage from "$lib/components/user/UserProfilePage.svelte";
@@ -37,7 +37,7 @@
   let isLinkingWallet = $state(false);
   let saveError = $state("");
   let saveSuccess = $state("");
-  let localToolboxParticles = $state<string[]>([
+  let localToolboxConnectors = $state<string[]>([
     ...(mockUsersById[mockCurrentUserId]?.toolbox ?? []),
   ]);
   let accountFeedEvents = $state<NetworkFeedEvent[]>([]);
@@ -58,12 +58,12 @@
 
   const applyResolvedProfile = (user: ProfileViewUser) => {
     currentUser = user;
-    localToolboxParticles = [...user.toolbox];
+    localToolboxConnectors = [...user.toolbox];
     accountFeedEvents = listNetworkFeedEventsByAuthor(user.id);
   };
 
   const refreshAccountFeedInBackground = (activeUserId: string) => {
-    void syncParticlePostDataFromChain({
+    void syncConnectorPostDataFromChain({
       force: true,
       forceSources: true,
       maxSources: ACCOUNT_FEED_SYNC_MAX_SOURCES,
@@ -140,26 +140,26 @@
     void goto(resolve("/login"), { replaceState: true });
   };
 
-  const toolboxParticleIds = $derived.by(() => new Set(localToolboxParticles));
-  const openParticleInStudio = (particleId: string) => {
+  const toolboxConnectorIds = $derived.by(() => new SvelteSet(localToolboxConnectors));
+  const openConnectorInStudio = (connectorId: string) => {
     const base = resolve("/studio");
     const target = new URL(base, window.location.origin);
-    target.searchParams.set("network_kind", networkNodeStudioKind("feature"));
-    target.searchParams.set("network_id", particleId);
+    target.searchParams.set("network_kind", "connector");
+    target.searchParams.set("network_id", connectorId);
     window.open(target.toString(), "_blank", "noopener,noreferrer");
   };
 
-  const addParticleToToolbox = (particleId: string) => {
-    if (toolboxParticleIds.has(particleId)) return;
-    const previous = [...localToolboxParticles];
-    localToolboxParticles = [...localToolboxParticles, particleId];
+  const addConnectorToToolbox = (connectorId: string) => {
+    if (toolboxConnectorIds.has(connectorId)) return;
+    const previous = [...localToolboxConnectors];
+    localToolboxConnectors = [...localToolboxConnectors, connectorId];
     const currentUser = mockUsersById[mockCurrentUserId];
-    if (currentUser && !currentUser.toolbox.includes(particleId)) {
-      currentUser.toolbox = [...currentUser.toolbox, particleId];
+    if (currentUser && !currentUser.toolbox.includes(connectorId)) {
+      currentUser.toolbox = [...currentUser.toolbox, connectorId];
     }
-    void addConnectorToCurrentUserToolbox(particleId).catch((err) => {
+    void addConnectorToCurrentUserToolbox(connectorId).catch((err) => {
       console.error("[Account] Failed to persist toolbox update.", err);
-      localToolboxParticles = previous;
+      localToolboxConnectors = previous;
     });
   };
 
@@ -269,7 +269,7 @@
         </SectionShell>
       </div>
       <div class="profile-post-feed profile-card-shell">
-        <ParticlePostFeed loading events={[]} {toolboxParticleIds} />
+        <ConnectorPostFeed loading events={[]} {toolboxConnectorIds} />
       </div>
     </div>
   {:else if error}
@@ -301,11 +301,11 @@
       </div>
 
       <div class="profile-post-feed profile-card-shell">
-        <ParticlePostFeed
+        <ConnectorPostFeed
           events={accountFeedEvents}
-          onParticleOpen={openParticleInStudio}
-          onAddToToolbox={addParticleToToolbox}
-          {toolboxParticleIds}
+          onConnectorOpen={openConnectorInStudio}
+          onAddToToolbox={addConnectorToToolbox}
+          {toolboxConnectorIds}
           emptyMessage="No activity by this user yet."
         />
       </div>

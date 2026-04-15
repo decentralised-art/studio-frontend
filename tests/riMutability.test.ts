@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { resolveConnectorRiMutability } from "../src/lib/studio/riMutability";
+import { resolveConnectorRiMutability, resolveNextRiLocked } from "../src/lib/studio/riMutability";
 
 describe("riMutability", () => {
   it("keeps draft connectors toggleable", () => {
@@ -45,5 +45,53 @@ describe("riMutability", () => {
 
     expect(result.state).toBe("network-self-static");
     expect(result.lockToggleDisabled).toBe(true);
+  });
+
+  it("forces locked state for on-chain self-static connectors", () => {
+    const mutability = resolveConnectorRiMutability({
+      fromNetwork: true,
+      tabReadOnly: false,
+      hasNetworkSelfStatic: true,
+    });
+
+    const nextLocked = resolveNextRiLocked({
+      mutability,
+      currentLocked: false,
+      requestedLocked: false,
+    });
+
+    expect(nextLocked).toBe(true);
+  });
+
+  it("keeps current lock bit when toggle is disabled", () => {
+    const mutability = resolveConnectorRiMutability({
+      fromNetwork: true,
+      tabReadOnly: true,
+      hasNetworkSelfStatic: false,
+    });
+
+    const nextLocked = resolveNextRiLocked({
+      mutability,
+      currentLocked: false,
+      requestedLocked: true,
+    });
+
+    expect(nextLocked).toBe(false);
+  });
+
+  it("applies requested lock bit for editable network references", () => {
+    const mutability = resolveConnectorRiMutability({
+      fromNetwork: true,
+      tabReadOnly: false,
+      hasNetworkSelfStatic: false,
+    });
+
+    const nextLocked = resolveNextRiLocked({
+      mutability,
+      currentLocked: false,
+      requestedLocked: true,
+    });
+
+    expect(nextLocked).toBe(true);
   });
 });

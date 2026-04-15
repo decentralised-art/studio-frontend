@@ -3,96 +3,95 @@
   import { page } from "$app/stores";
   import { resolve } from "$app/paths";
 
-  import ParticlePostFeed from "$lib/components/feed/ParticlePostFeed.svelte";
+  import ConnectorPostFeed from "$lib/components/feed/ConnectorPostFeed.svelte";
   import {
-    ensureParticleRecordLoadedById,
-    getParticleRecordById,
-    listParticlePostsReferencingParticle,
-    syncParticlePostDataFromChain,
-    type ParticlePostEvent,
-    type ParticleRecord,
+    ensureParticleRecordLoadedById as ensureConnectorRecordLoadedById,
+    getParticleRecordById as getConnectorRecordById,
+    listParticlePostsReferencingParticle as listPostsReferencingConnector,
+    syncParticlePostDataFromChain as syncConnectorPostDataFromChain,
+    type ParticlePostEvent as ConnectorPostEvent,
+    type ParticleRecord as ConnectorRecord,
   } from "$lib/feed/particlePostData";
-  import SocialParticleDependencyFlow from "$lib/components/social/SocialParticleDependencyFlow.svelte";
+  import SocialConnectorDependencyFlow from "$lib/components/social/SocialConnectorDependencyFlow.svelte";
   import Button from "$lib/components/ui/Button.svelte";
   import SectionShell from "$lib/components/ui/SectionShell.svelte";
   import { addConnectorToCurrentUserToolbox, getCurrentUserToolboxLibrary } from "$lib/auth/api";
   import { displayUsersById, mockCurrentUserId, mockUsersById } from "$lib/data/users";
   import { getChainFormatDisplayName } from "$lib/formats/chainFormats";
-  import { networkNodeStudioKind } from "$lib/network/mockNetworkGraph";
 
-  let localToolboxParticles = $state<string[]>([
+  let localToolboxConnectors = $state<string[]>([
     ...(mockUsersById[mockCurrentUserId]?.toolbox ?? []),
   ]);
-  let particle = $state<ParticleRecord | null>(null);
-  let relatedEvents = $state<ParticlePostEvent[]>([]);
-  let particleLoading = $state(true);
+  let connector = $state<ConnectorRecord | null>(null);
+  let relatedEvents = $state<ConnectorPostEvent[]>([]);
+  let connectorLoading = $state(true);
 
-  const toolboxParticleIds = $derived.by(() => new Set(localToolboxParticles));
-  const particleId = $derived.by(() => $page.params.id?.trim() ?? "");
+  const toolboxConnectorIds = $derived.by(() => new Set(localToolboxConnectors));
+  const connectorId = $derived.by(() => $page.params.id?.trim() ?? "");
   const author = $derived.by(() =>
-    particle ? (displayUsersById[particle.authorId] ?? null) : null,
+    connector ? (displayUsersById[connector.authorId] ?? null) : null,
   );
-  const particleFormatName = $derived.by(() =>
-    particle?.formatHash ? getChainFormatDisplayName(particle.formatHash) : "",
+  const connectorFormatName = $derived.by(() =>
+    connector?.formatHash ? getChainFormatDisplayName(connector.formatHash) : "",
   );
 
-  const openParticleInStudio = (targetParticleId: string) => {
+  const openConnectorInStudio = (targetConnectorId: string) => {
     const base = resolve("/studio");
     const target = new URL(base, window.location.origin);
-    target.searchParams.set("network_kind", networkNodeStudioKind("feature"));
-    target.searchParams.set("network_id", targetParticleId);
+    target.searchParams.set("network_kind", "connector");
+    target.searchParams.set("network_id", targetConnectorId);
     window.open(target.toString(), "_blank", "noopener,noreferrer");
   };
 
-  const addParticleToToolbox = (targetParticleId: string) => {
-    if (toolboxParticleIds.has(targetParticleId)) return;
-    const previous = [...localToolboxParticles];
-    localToolboxParticles = [...localToolboxParticles, targetParticleId];
+  const addConnectorToToolbox = (targetConnectorId: string) => {
+    if (toolboxConnectorIds.has(targetConnectorId)) return;
+    const previous = [...localToolboxConnectors];
+    localToolboxConnectors = [...localToolboxConnectors, targetConnectorId];
     const currentUser = mockUsersById[mockCurrentUserId];
-    if (currentUser && !currentUser.toolbox.includes(targetParticleId)) {
-      currentUser.toolbox = [...currentUser.toolbox, targetParticleId];
+    if (currentUser && !currentUser.toolbox.includes(targetConnectorId)) {
+      currentUser.toolbox = [...currentUser.toolbox, targetConnectorId];
     }
-    void addConnectorToCurrentUserToolbox(targetParticleId).catch((err) => {
+    void addConnectorToCurrentUserToolbox(targetConnectorId).catch((err) => {
       console.error("[Connector page] Failed to persist toolbox update.", err);
-      localToolboxParticles = previous;
+      localToolboxConnectors = previous;
     });
   };
 
-  const loadParticlePageData = async () => {
-    particleLoading = true;
+  const loadConnectorPageData = async () => {
+    connectorLoading = true;
     try {
-      await syncParticlePostDataFromChain();
+      await syncConnectorPostDataFromChain();
     } finally {
-      particle = getParticleRecordById(particleId);
-      if (!particle && particleId) {
-        particle = await ensureParticleRecordLoadedById(particleId);
+      connector = getConnectorRecordById(connectorId);
+      if (!connector && connectorId) {
+        connector = await ensureConnectorRecordLoadedById(connectorId);
       }
-      relatedEvents = listParticlePostsReferencingParticle(particleId);
-      particleLoading = false;
+      relatedEvents = listPostsReferencingConnector(connectorId);
+      connectorLoading = false;
     }
   };
 
   onMount(() => {
     void getCurrentUserToolboxLibrary()
       .then((toolbox) => {
-        localToolboxParticles = [...toolbox.connector];
+        localToolboxConnectors = [...toolbox.connector];
       })
       .catch((error) => {
         console.warn("[Connector page] Failed to load toolbox from profile.", error);
       });
-    void loadParticlePageData();
+    void loadConnectorPageData();
   });
 </script>
 
-<div class="particle-page">
-  {#if particleLoading}
+<div class="connector-page">
+  {#if connectorLoading}
     <SectionShell className="page-card-shell">
       <div class="status">
         <p class="status-title">Loading connector...</p>
         <p class="status-subtitle">Fetching chain-backed connector data.</p>
       </div>
     </SectionShell>
-  {:else if !particle}
+  {:else if !connector}
     <SectionShell className="page-card-shell">
       <div class="status">
         <p class="status-title">Connector not found</p>
@@ -100,65 +99,69 @@
       </div>
     </SectionShell>
   {:else}
-    <section class="particle-overview page-card-shell" aria-label="Connector overview">
-      <div class="particle-head">
-        <div class="particle-head-main">
-          <p class="particle-kicker">Connector Page</p>
-          <h1 class="particle-title">{particle.name}</h1>
-          <p class="particle-meta">
-            <span>{particle.createdLabel}</span>
+    <section class="connector-overview page-card-shell" aria-label="Connector overview">
+      <div class="connector-head">
+        <div class="connector-head-main">
+          <p class="connector-kicker">Connector Page</p>
+          <h1 class="connector-title">{connector.name}</h1>
+          <p class="connector-meta">
+            <span>{connector.createdLabel}</span>
             <span aria-hidden="true">•</span>
             {#if author}
-              <a class="particle-author-link" href={resolve("/u/[id]", { id: author.id })}>
+              <a class="connector-author-link" href={resolve("/u/[id]", { id: author.id })}>
                 {author.nickname}
               </a>
             {:else}
-              <span>{particle.authorId}</span>
+              <span>{connector.authorId}</span>
             {/if}
-            {#if particle.formatHash}
+            {#if connector.formatHash}
               <span aria-hidden="true">•</span>
               <a
-                class="particle-author-link"
-                href={resolve("/f/[slug]", { slug: particle.formatHash })}
+                class="connector-author-link"
+                href={resolve("/f/[slug]", { slug: connector.formatHash })}
               >
-                {particleFormatName}
+                {connectorFormatName}
               </a>
             {/if}
           </p>
-          <p class="particle-summary">{particle.summary}</p>
+          <p class="connector-summary">{connector.summary}</p>
         </div>
 
-        <div class="particle-head-actions">
+        <div class="connector-head-actions">
           <Button
-            variant={toolboxParticleIds.has(particle!.id) ? "ghost" : "primary"}
+            variant={toolboxConnectorIds.has(connector!.id) ? "ghost" : "primary"}
             type="button"
-            disabled={toolboxParticleIds.has(particle!.id)}
-            onclick={() => addParticleToToolbox(particle!.id)}
+            disabled={toolboxConnectorIds.has(connector!.id)}
+            onclick={() => addConnectorToToolbox(connector!.id)}
           >
-            {toolboxParticleIds.has(particle!.id) ? "In toolbox" : "Add to toolbox"}
+            {toolboxConnectorIds.has(connector!.id) ? "In toolbox" : "Add to toolbox"}
           </Button>
-          <Button variant="ghost" type="button" onclick={() => openParticleInStudio(particle!.id)}>
+          <Button
+            variant="ghost"
+            type="button"
+            onclick={() => openConnectorInStudio(connector!.id)}
+          >
             Open in Studio
           </Button>
         </div>
       </div>
 
-      <div class="particle-flow-shell">
-        <SocialParticleDependencyFlow
-          particleId={particle.id}
-          onParticleOpen={openParticleInStudio}
+      <div class="connector-flow-shell">
+        <SocialConnectorDependencyFlow
+          connectorId={connector.id}
+          onConnectorOpen={openConnectorInStudio}
           displayMode="page"
         />
       </div>
     </section>
 
     <div class="page-card-shell">
-      <ParticlePostFeed
+      <ConnectorPostFeed
         events={relatedEvents}
-        onParticleOpen={openParticleInStudio}
-        onAddToToolbox={addParticleToToolbox}
-        {toolboxParticleIds}
-        emptyMessage={`No connectors reference ${particle.name} yet.`}
+        onConnectorOpen={openConnectorInStudio}
+        onAddToToolbox={addConnectorToToolbox}
+        {toolboxConnectorIds}
+        emptyMessage={`No connectors reference ${connector.name} yet.`}
       />
     </div>
   {/if}
@@ -167,7 +170,7 @@
 <style lang="postcss">
   @reference "$lib/styles/style.css";
 
-  .particle-page {
+  .connector-page {
     @apply space-y-4 pt-3 md:pt-4;
     --social-feed-card-width: min(50vw, 56rem);
   }
@@ -178,43 +181,43 @@
     max-width: 100%;
   }
 
-  .particle-overview {
+  .connector-overview {
     @apply rounded-3xl border border-white/10 bg-black/35 backdrop-blur-sm p-4 md:p-5;
   }
 
-  .particle-head {
+  .connector-head {
     @apply flex flex-col gap-4 md:flex-row md:items-start md:justify-between;
   }
 
-  .particle-head-main {
+  .connector-head-main {
     @apply min-w-0;
   }
 
-  .particle-kicker {
+  .connector-kicker {
     @apply text-[0.62rem] uppercase tracking-[0.18em] text-white/45;
   }
 
-  .particle-title {
+  .connector-title {
     @apply mt-1 text-2xl md:text-[1.8rem] font-semibold text-white leading-tight;
   }
 
-  .particle-meta {
+  .connector-meta {
     @apply mt-2 flex flex-wrap items-center gap-2 text-sm text-white/60;
   }
 
-  .particle-author-link {
+  .connector-author-link {
     @apply text-white/85 hover:text-white transition no-underline;
   }
 
-  .particle-summary {
+  .connector-summary {
     @apply mt-3 text-sm leading-relaxed text-white/80;
   }
 
-  .particle-head-actions {
+  .connector-head-actions {
     @apply flex flex-wrap gap-2 shrink-0;
   }
 
-  .particle-flow-shell {
+  .connector-flow-shell {
     @apply mt-4;
   }
 
@@ -231,13 +234,13 @@
   }
 
   @media (max-width: 1200px) {
-    .particle-page {
+    .connector-page {
       --social-feed-card-width: min(68vw, 56rem);
     }
   }
 
   @media (max-width: 900px) {
-    .particle-page {
+    .connector-page {
       --social-feed-card-width: 100%;
     }
   }

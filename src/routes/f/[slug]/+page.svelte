@@ -5,7 +5,7 @@
   import { resolve } from "$app/paths";
   import Button from "$lib/components/ui/Button.svelte";
   import SectionShell from "$lib/components/ui/SectionShell.svelte";
-  import ParticlePostFeed from "$lib/components/feed/ParticlePostFeed.svelte";
+  import ConnectorPostFeed from "$lib/components/feed/ConnectorPostFeed.svelte";
   import {
     addConnectorToCurrentUserToolbox,
     followFormatInProfile,
@@ -14,9 +14,9 @@
     unfollowFormatInProfile,
   } from "$lib/auth/api";
   import {
-    listParticlePosts,
-    listParticleRecordsByFormatHash,
-    syncParticlePostDataFromChain,
+    listParticlePosts as listConnectorPosts,
+    listParticleRecordsByFormatHash as listConnectorRecordsByFormatHash,
+    syncParticlePostDataFromChain as syncConnectorPostDataFromChain,
     type NetworkFeedEvent,
   } from "$lib/feed/particlePostData";
   import {
@@ -27,7 +27,6 @@
     type ChainFormatRecord,
   } from "$lib/formats/chainFormats";
   import { mockCurrentUserId, mockUsersById } from "$lib/data/users";
-  import { networkNodeStudioKind } from "$lib/network/mockNetworkGraph";
   import {
     getChainFormat,
     normalizeFormatHash,
@@ -49,12 +48,12 @@
   let followPending = $state(false);
   let formatFollowError = $state("");
   let localFollowedFormats = $state<string[]>([]);
-  let localToolboxParticles = $state<string[]>([
+  let localToolboxConnectors = $state<string[]>([
     ...(mockUsersById[mockCurrentUserId]?.toolbox ?? []),
   ]);
 
   const followedFormatKeys = $derived.by(() => new SvelteSet(localFollowedFormats));
-  const toolboxParticleIds = $derived.by(() => new SvelteSet(localToolboxParticles));
+  const toolboxConnectorIds = $derived.by(() => new SvelteSet(localToolboxConnectors));
   const isFollowingFormat = $derived.by(
     () => Boolean(formatHash) && followedFormatKeys.has(formatHash),
   );
@@ -72,13 +71,13 @@
       relatedPosts = [];
       return;
     }
-    const matchingConnectors = listParticleRecordsByFormatHash(normalizedHash);
+    const matchingConnectors = listConnectorRecordsByFormatHash(normalizedHash);
     const matchingIds = new SvelteSet(matchingConnectors.map((connector) => connector.id));
     formatRecord.connectors.forEach((connectorName) => {
       matchingIds.add(connectorName);
     });
 
-    relatedPosts = listParticlePosts().filter(
+    relatedPosts = listConnectorPosts().filter(
       (event) =>
         event.type === "connector" &&
         (event.formatHash === normalizedHash || matchingIds.has(event.particleId)),
@@ -134,7 +133,7 @@
       recomputeRelatedPosts(normalizedHash, merged);
 
       // Refresh connector posts in the background with bounded sync limits.
-      void syncParticlePostDataFromChain({
+      void syncConnectorPostDataFromChain({
         force: true,
         forceSources: true,
         maxSources: FORMAT_PAGE_FEED_SYNC_MAX_SOURCES,
@@ -181,14 +180,14 @@
   const openConnectorInStudio = (connectorId: string) => {
     const base = resolve("/studio");
     const target = new URL(base, window.location.origin);
-    target.searchParams.set("network_kind", networkNodeStudioKind("feature"));
+    target.searchParams.set("network_kind", "connector");
     target.searchParams.set("network_id", connectorId);
     window.open(target.toString(), "_blank", "noopener,noreferrer");
   };
 
   const addConnectorToToolbox = (connectorId: string) => {
-    if (toolboxParticleIds.has(connectorId)) return;
-    localToolboxParticles = [...localToolboxParticles, connectorId];
+    if (toolboxConnectorIds.has(connectorId)) return;
+    localToolboxConnectors = [...localToolboxConnectors, connectorId];
     const currentUser = mockUsersById[mockCurrentUserId];
     if (currentUser && !currentUser.toolbox.includes(connectorId)) {
       currentUser.toolbox = [...currentUser.toolbox, connectorId];
@@ -222,7 +221,7 @@
   onMount(() => {
     void Promise.all([getCurrentUserToolboxLibrary(), getCurrentUserSocialPreferences()])
       .then(([toolbox, social]) => {
-        localToolboxParticles = [...toolbox.connector];
+        localToolboxConnectors = [...toolbox.connector];
         localFollowedFormats = [...social.followedFormatIds];
       })
       .catch((error) => {
@@ -298,11 +297,11 @@
     </section>
 
     <div class="page-card-shell">
-      <ParticlePostFeed
+      <ConnectorPostFeed
         events={relatedPosts}
-        onParticleOpen={openConnectorInStudio}
+        onConnectorOpen={openConnectorInStudio}
         onAddToToolbox={addConnectorToToolbox}
-        {toolboxParticleIds}
+        {toolboxConnectorIds}
         emptyMessage="No connector posts for this format yet."
       />
     </div>

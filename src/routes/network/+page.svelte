@@ -2,7 +2,7 @@
   import { onMount } from "svelte";
   import { SvelteSet } from "svelte/reactivity";
   import { resolve } from "$app/paths";
-  import ParticlePostFeed from "$lib/components/feed/ParticlePostFeed.svelte";
+  import ConnectorPostFeed from "$lib/components/feed/ConnectorPostFeed.svelte";
   import {
     addConnectorToCurrentUserToolbox,
     followUserInProfile,
@@ -10,13 +10,13 @@
     getCurrentUserToolboxLibrary,
   } from "$lib/auth/api";
   import {
-    findParticlesByTerminalSet,
-    getParticleLabelMap,
-    listParticlePosts,
-    listParticleSearchEntities,
-    syncParticlePostDataFromChain,
+    findParticlesByTerminalSet as findConnectorsByTerminalSet,
+    getParticleLabelMap as getConnectorLabelMap,
+    listParticlePosts as listConnectorPosts,
+    listParticleSearchEntities as listConnectorSearchEntities,
+    syncParticlePostDataFromChain as syncConnectorPostDataFromChain,
     type NetworkFeedEvent,
-    type ParticlePostEvent,
+    type ParticlePostEvent as ConnectorPostEvent,
   } from "$lib/feed/particlePostData";
   import {
     buildFormatFeedEvents,
@@ -25,7 +25,6 @@
   } from "$lib/formats/localFormats";
   import Button from "$lib/components/ui/Button.svelte";
   import Input from "$lib/components/ui/Input.svelte";
-  import { networkNodeStudioKind } from "$lib/network/mockNetworkGraph";
   import {
     displayUsersById,
     mockCurrentUserId,
@@ -46,13 +45,13 @@
   const EMPTY_FEED_BACKGROUND_DELAY_MS = 1200;
 
   let followSearch = $state("");
-  let feedEvents = $state<ParticlePostEvent[]>([]);
+  let feedEvents = $state<ConnectorPostEvent[]>([]);
   let feedLoading = $state(true);
   let feedSyncSettled = $state(false);
   let feedLoadMoreBusy = $state(false);
   let feedLoadError = $state("");
   let formats = $state<ParticleFormat[]>([]);
-  let chainElements = $state(listParticleSearchEntities());
+  let chainElements = $state(listConnectorSearchEntities());
   let visibleEventCount = $state(FEED_PAGE_SIZE);
   let sourceSyncLimit = $state(CHAIN_SOURCE_LIMIT_STEP);
   let canFetchMoreFromChain = $state(true);
@@ -62,7 +61,7 @@
   let emptyFeedBackgroundBusy = $state(false);
   let localFollowing = $state<string[]>([]);
   let localFollowedFormats = $state<string[]>([]);
-  let localToolboxParticles = $state<string[]>([
+  let localToolboxConnectors = $state<string[]>([
     ...(mockUsersById[mockCurrentUserId]?.toolbox ?? []),
   ]);
   let pageMounted = false;
@@ -87,11 +86,13 @@
 
   const followedAuthorIds = $derived.by(() => new SvelteSet(localFollowing));
   const followedFormatKeys = $derived.by(() => new SvelteSet(localFollowedFormats));
-  const toolboxParticleIds = $derived.by(() => new SvelteSet(localToolboxParticles));
+  const toolboxConnectorIds = $derived.by(() => new SvelteSet(localToolboxConnectors));
   const feedUiLoading = $derived.by(() => feedLoading || !feedSyncSettled);
   const searchQuery = $derived.by(() => followSearch.trim().toLowerCase());
-  const formatFeedEvents = $derived.by(() => buildFormatFeedEvents(formats, getParticleLabelMap()));
-  const followedFormatParticleIds = $derived.by(() => {
+  const formatFeedEvents = $derived.by(() =>
+    buildFormatFeedEvents(formats, getConnectorLabelMap()),
+  );
+  const followedFormatConnectorIds = $derived.by(() => {
     const selectedFormats = formatFeedEvents.filter(
       (event) =>
         followedFormatKeys.has(event.formatId) ||
@@ -101,8 +102,8 @@
     const ids = new SvelteSet<string>();
     selectedFormats.forEach((event) => {
       event.terminalParticleIds.forEach((id) => ids.add(id));
-      findParticlesByTerminalSet(event.terminalParticleIds).forEach((particle) => {
-        ids.add(particle.id);
+      findConnectorsByTerminalSet(event.terminalParticleIds).forEach((connector) => {
+        ids.add(connector.id);
       });
     });
     return ids;
@@ -120,7 +121,7 @@
       }
       if (event.type === "connector") {
         return (
-          followedAuthorIds.has(event.authorId) || followedFormatParticleIds.has(event.particleId)
+          followedAuthorIds.has(event.authorId) || followedFormatConnectorIds.has(event.particleId)
         );
       }
       return followedAuthorIds.has(event.authorId);
@@ -157,8 +158,8 @@
   });
 
   const refreshFeedStateFromCache = () => {
-    feedEvents = listParticlePosts();
-    chainElements = listParticleSearchEntities();
+    feedEvents = listConnectorPosts();
+    chainElements = listConnectorSearchEntities();
     if (feedEvents.length > 0) {
       feedLoadError = "";
     }
@@ -231,7 +232,7 @@
     emptyFeedBackgroundBusy = false;
 
     try {
-      await syncParticlePostDataFromChain({
+      await syncConnectorPostDataFromChain({
         force: true,
         forceSources: true,
         maxSources: sourceSyncLimit,
@@ -239,7 +240,7 @@
         includeRuntimeCode: false,
       });
     } catch (error) {
-      console.error("[Network feed] Failed to sync chain-backed particle posts.", error);
+      console.error("[Network feed] Failed to sync chain-backed connector posts.", error);
       feedLoadError = error instanceof Error ? error.message : "Unable to load network feed.";
     }
     if (!isFeedSyncRequestActive(requestVersion)) return;
@@ -253,7 +254,7 @@
         nextLimit = Math.min(CHAIN_SOURCE_LIMIT_MAX, nextLimit + CHAIN_SOURCE_LIMIT_STEP);
         sourceSyncLimit = nextLimit;
         try {
-          await syncParticlePostDataFromChain({
+          await syncConnectorPostDataFromChain({
             force: true,
             forceSources: true,
             maxSources: sourceSyncLimit,
@@ -274,7 +275,7 @@
     // when active sources are beyond the capped window.
     if (feedEvents.length < MIN_INITIAL_FEED_EVENTS && sourceSyncLimit >= CHAIN_SOURCE_LIMIT_MAX) {
       try {
-        await syncParticlePostDataFromChain({
+        await syncConnectorPostDataFromChain({
           force: true,
           forceSources: true,
           maxOwnedPerSource: CHAIN_OWNED_PER_SOURCE_LIMIT,
@@ -292,7 +293,7 @@
     // before letting the UI settle into the "No events" state.
     if (feedEvents.length === 0 && !feedLoadError) {
       try {
-        await syncParticlePostDataFromChain({
+        await syncConnectorPostDataFromChain({
           force: true,
           forceSources: true,
           maxOwnedPerSource: EMPTY_FEED_VERIFICATION_MAX_OWNED_PER_SOURCE,
@@ -315,7 +316,7 @@
         );
 
         try {
-          await syncParticlePostDataFromChain({
+          await syncConnectorPostDataFromChain({
             force: true,
             forceSources: true,
             maxOwnedPerSource: EMPTY_FEED_VERIFICATION_MAX_OWNED_PER_SOURCE,
@@ -356,7 +357,7 @@
       );
       if (!isFeedSyncRequestActive(requestVersion)) return;
       try {
-        await syncParticlePostDataFromChain({
+        await syncConnectorPostDataFromChain({
           force: true,
           forceSources: true,
           maxOwnedPerSource: EMPTY_FEED_VERIFICATION_MAX_OWNED_PER_SOURCE,
@@ -387,7 +388,7 @@
 
     if (!canFetchMoreFromChain) return;
 
-    const beforeCount = listParticlePosts().length;
+    const beforeCount = listConnectorPosts().length;
     const nextLimit = Math.min(CHAIN_SOURCE_LIMIT_MAX, sourceSyncLimit + CHAIN_SOURCE_LIMIT_STEP);
     if (nextLimit <= sourceSyncLimit) {
       canFetchMoreFromChain = false;
@@ -397,7 +398,7 @@
     feedLoadMoreBusy = true;
     sourceSyncLimit = nextLimit;
     try {
-      await syncParticlePostDataFromChain({
+      await syncConnectorPostDataFromChain({
         force: true,
         forceSources: true,
         maxSources: sourceSyncLimit,
@@ -405,9 +406,9 @@
         includeRuntimeCode: false,
       });
       if (!pageMounted) return;
-      const afterCount = listParticlePosts().length;
-      feedEvents = listParticlePosts();
-      chainElements = listParticleSearchEntities();
+      const afterCount = listConnectorPosts().length;
+      feedEvents = listConnectorPosts();
+      chainElements = listConnectorSearchEntities();
       visibleEventCount += FEED_PAGE_SIZE;
       canFetchMoreFromChain = sourceSyncLimit < CHAIN_SOURCE_LIMIT_MAX || afterCount > beforeCount;
       if (feedEvents.length > 0) {
@@ -434,7 +435,7 @@
 
     const requestVersion = beginRuntimeHydrationRequest();
     runtimeSearchHydrationBusy = true;
-    void syncParticlePostDataFromChain({
+    void syncConnectorPostDataFromChain({
       force: true,
       forceSources: true,
       maxSources: sourceSyncLimit,
@@ -443,8 +444,8 @@
     })
       .then(() => {
         if (!isRuntimeHydrationRequestActive(requestVersion)) return;
-        feedEvents = listParticlePosts();
-        chainElements = listParticleSearchEntities();
+        feedEvents = listConnectorPosts();
+        chainElements = listConnectorSearchEntities();
         runtimeSearchHydrated = true;
       })
       .catch((error) => {
@@ -461,7 +462,7 @@
     if (!connectorId) return;
     const base = resolve("/studio");
     const target = new URL(base, window.location.origin);
-    target.searchParams.set("network_kind", networkNodeStudioKind("feature"));
+    target.searchParams.set("network_kind", "connector");
     target.searchParams.set("network_id", connectorId);
     window.open(target.toString(), "_blank", "noopener,noreferrer");
   };
@@ -491,17 +492,17 @@
     }
   };
 
-  const addParticleToToolbox = (particleId: string) => {
-    if (toolboxParticleIds.has(particleId)) return;
-    const previous = [...localToolboxParticles];
-    localToolboxParticles = [...localToolboxParticles, particleId];
+  const addConnectorToToolbox = (connectorId: string) => {
+    if (toolboxConnectorIds.has(connectorId)) return;
+    const previous = [...localToolboxConnectors];
+    localToolboxConnectors = [...localToolboxConnectors, connectorId];
     const currentUser = mockUsersById[mockCurrentUserId];
-    if (currentUser && !currentUser.toolbox.includes(particleId)) {
-      currentUser.toolbox = [...currentUser.toolbox, particleId];
+    if (currentUser && !currentUser.toolbox.includes(connectorId)) {
+      currentUser.toolbox = [...currentUser.toolbox, connectorId];
     }
-    void addConnectorToCurrentUserToolbox(particleId).catch((error) => {
+    void addConnectorToCurrentUserToolbox(connectorId).catch((error) => {
       console.error("[Network feed] Failed to persist toolbox update.", error);
-      localToolboxParticles = previous;
+      localToolboxConnectors = previous;
     });
   };
 
@@ -516,7 +517,7 @@
       const [toolboxResult, socialResult] = results;
 
       if (toolboxResult.status === "fulfilled") {
-        localToolboxParticles = [...toolboxResult.value.connector];
+        localToolboxConnectors = [...toolboxResult.value.connector];
       } else {
         console.warn(
           "[Network feed] Failed to load toolbox preferences from profile.",
@@ -645,16 +646,16 @@
     </section>
   </div>
 
-  <ParticlePostFeed
+  <ConnectorPostFeed
     loading={feedUiLoading}
     loadingMore={feedLoadMoreBusy}
     hasMore={canLoadMoreEvents}
     events={visibleNetworkFeedEvents}
     emptyMessage={feedEmptyMessage}
     onLoadMore={loadMoreFeedEvents}
-    onParticleOpen={openConnectorInStudio}
-    onAddToToolbox={addParticleToToolbox}
-    {toolboxParticleIds}
+    onConnectorOpen={openConnectorInStudio}
+    onAddToToolbox={addConnectorToToolbox}
+    {toolboxConnectorIds}
   />
 </div>
 

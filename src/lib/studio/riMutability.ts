@@ -15,6 +15,12 @@ export type ConnectorRiMutability = {
   lockToggleDisabled: boolean;
 };
 
+export type ResolveNextRiLockedInput = {
+  mutability: ConnectorRiMutability;
+  currentLocked: boolean;
+  requestedLocked?: boolean;
+};
+
 /**
  * RI mutability policy:
  * - Draft connectors are always toggleable (open <-> static).
@@ -38,4 +44,32 @@ export const resolveConnectorRiMutability = (
   }
 
   return { state: "network-editable", lockToggleDisabled: false };
+};
+
+/**
+ * Resolve next RI lock bit for connector controls.
+ *
+ * Rules:
+ * - `network-self-static` is always locked.
+ * - If lock toggle is disabled, keep current bit.
+ * - Otherwise, apply requested bit when provided.
+ */
+export const resolveNextRiLocked = ({
+  mutability,
+  currentLocked,
+  requestedLocked,
+}: ResolveNextRiLockedInput): boolean => {
+  if (mutability.state === "network-self-static") {
+    return true;
+  }
+
+  if (mutability.lockToggleDisabled) {
+    return currentLocked;
+  }
+
+  if (typeof requestedLocked === "boolean") {
+    return requestedLocked;
+  }
+
+  return currentLocked;
 };
