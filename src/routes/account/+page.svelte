@@ -5,11 +5,9 @@
   import { resolve } from "$app/paths";
 
   import ConnectorPostFeed from "$lib/components/feed/ConnectorPostFeed.svelte";
-  import {
-    listNetworkFeedEventsByAuthor,
-    syncParticlePostDataFromChain as syncConnectorPostDataFromChain,
-    type NetworkFeedEvent,
-  } from "$lib/feed/particlePostData";
+  import { listNetworkFeedEventsByAuthor, type NetworkFeedEvent } from "$lib/feed/particlePostData";
+  import { mapSnapshotParticlesToConnectorEvents } from "$lib/feed/networkEventMappers";
+  import { fetchChainOwnedStudioSnapshot } from "$lib/studio/chainStudioAdapter";
   import Button from "$lib/components/ui/Button.svelte";
   import SectionShell from "$lib/components/ui/SectionShell.svelte";
   import UserProfilePage from "$lib/components/user/UserProfilePage.svelte";
@@ -17,17 +15,13 @@
   import {
     addConnectorToCurrentUserToolbox,
     getCachedMe,
-    getMe,
+    getCurrentUserProfileState,
     logout,
     updateUserById,
   } from "$lib/auth/api";
   import { getToken, hasAuthSession } from "$lib/auth/session";
-  import { mockCurrentUserId, mockUsersById } from "$lib/data/users";
   import type { ProfileViewUser } from "$lib/user/profileModel";
   import { normalizeProfileUser } from "$lib/user/profileModel";
-
-  const ACCOUNT_FEED_SYNC_MAX_SOURCES = 8;
-  const ACCOUNT_FEED_SYNC_MAX_OWNED_PER_SOURCE = 8;
 
   let currentUser = $state<ProfileViewUser | null>(null);
   let isLoading = $state(true);
@@ -37,10 +31,15 @@
   let isLinkingWallet = $state(false);
   let saveError = $state("");
   let saveSuccess = $state("");
-  let localToolboxConnectors = $state<string[]>([
-    ...(mockUsersById[mockCurrentUserId]?.toolbox ?? []),
-  ]);
+  let localToolboxConnectors = $state<string[]>([]);
   let accountFeedEvents = $state<NetworkFeedEvent[]>([]);
+  let accountLoadRequestVersion = 0;
+
+  const normalizeAddressForKey = (value: string): string => {
+    const trimmed = value.trim().toLowerCase();
+    if (!trimmed) return "";
+    return trimmed.startsWith("0x") ? trimmed : `0x${trimmed}`;
+  };
 
   type Eip1193Provider = {
     request: (args: { method: string; params?: unknown[] | object }) => Promise<unknown>;
@@ -59,27 +58,55 @@
   const applyResolvedProfile = (user: ProfileViewUser) => {
     currentUser = user;
     localToolboxConnectors = [...user.toolbox];
-    accountFeedEvents = listNetworkFeedEventsByAuthor(user.id);
+    accountFeedEvents = listNetworkFeedEventsByAuthor(
+      normalizeAddressForKey(user.address) || user.id,
+    );
   };
 
-  const refreshAccountFeedInBackground = (activeUserId: string) => {
-    void syncConnectorPostDataFromChain({
-      force: true,
-      forceSources: true,
-      maxSources: ACCOUNT_FEED_SYNC_MAX_SOURCES,
-      maxOwnedPerSource: ACCOUNT_FEED_SYNC_MAX_OWNED_PER_SOURCE,
-      includeRuntimeCode: false,
-    })
-      .then(() => {
-        if (currentUser?.id !== activeUserId) return;
-        accountFeedEvents = listNetworkFeedEventsByAuthor(activeUserId);
-      })
-      .catch((syncError) => {
-        console.warn("[Account] Feed refresh failed.", syncError);
+  const beginAccountLoadRequest = (): number => {
+    accountLoadRequestVersion += 1;
+    return accountLoadRequestVersion;
+  };
+
+  const isAccountLoadRequestActive = (requestVersion: number): boolean =>
+    requestVersion === accountLoadRequestVersion;
+
+  const refreshAccountFeedWithTargetedSnapshot = async (
+    activeUserId: string,
+    activeUserAddress: string,
+    requestVersion: number,
+  ) => {
+    if (!isAccountLoadRequestActive(requestVersion)) return;
+    accountFeedEvents = listNetworkFeedEventsByAuthor(
+      normalizeAddressForKey(activeUserAddress) || activeUserId,
+    );
+
+    const normalizedAddress = normalizeAddressForKey(activeUserAddress);
+    if (!normalizedAddress) return;
+
+    try {
+      const snapshot = await fetchChainOwnedStudioSnapshot(normalizedAddress, {
+        authorId: normalizedAddress,
+        limit: 200,
+        includeRuntimeCode: false,
       });
+      if (!isAccountLoadRequestActive(requestVersion)) return;
+      if (currentUser?.id !== activeUserId) return;
+      const targetedEvents = mapSnapshotParticlesToConnectorEvents(
+        normalizedAddress,
+        snapshot.particles,
+      );
+      if (targetedEvents.length > 0) {
+        accountFeedEvents = targetedEvents;
+      }
+    } catch (syncError) {
+      if (!isAccountLoadRequestActive(requestVersion)) return;
+      console.warn("[Account] Targeted account feed refresh failed.", syncError);
+    }
   };
 
   const loadProfile = async () => {
+    const requestVersion = beginAccountLoadRequest();
     if (!hasAuthSession()) {
       isRedirecting = true;
       await goto(resolve("/login"));
@@ -106,7 +133,11 @@
           const cachedUser = normalizeProfileUser(cachedMe);
           applyResolvedProfile(cachedUser);
           const activeUserId = cachedUser.id;
-          refreshAccountFeedInBackground(activeUserId);
+          void refreshAccountFeedWithTargetedSnapshot(
+            activeUserId,
+            cachedUser.address,
+            requestVersion,
+          );
           hydratedFromCache = true;
           isLoading = false;
         } catch {
@@ -114,19 +145,31 @@
         }
       }
 
-      const data = await getMe();
-      const resolvedUser = normalizeProfileUser(data);
+      const profileState = await getCurrentUserProfileState();
+      if (!isAccountLoadRequestActive(requestVersion)) return;
+      if (!profileState.me) {
+        throw new Error("Failed to load account profile.");
+      }
+      const resolvedUser = normalizeProfileUser(profileState.me);
       applyResolvedProfile(resolvedUser);
+      localToolboxConnectors = [...profileState.toolbox.connector];
       const activeUserId = resolvedUser.id;
-      refreshAccountFeedInBackground(activeUserId);
+      void refreshAccountFeedWithTargetedSnapshot(
+        activeUserId,
+        resolvedUser.address,
+        requestVersion,
+      );
     } catch (err) {
+      if (!isAccountLoadRequestActive(requestVersion)) return;
       if (!hydratedFromCache || !currentUser) {
         error = err instanceof Error ? err.message : "Unable to load account.";
       } else {
         console.warn("[Account] Failed to refresh profile from services API.", err);
       }
     } finally {
-      isLoading = false;
+      if (isAccountLoadRequestActive(requestVersion)) {
+        isLoading = false;
+      }
     }
   };
 
@@ -141,6 +184,18 @@
   };
 
   const toolboxConnectorIds = $derived.by(() => new SvelteSet(localToolboxConnectors));
+  const accountFeedAuthorLabels = $derived.by(() => {
+    const labels: Record<string, string> = {};
+    if (!currentUser) return labels;
+    const nickname = currentUser.nickname.trim();
+    if (!nickname) return labels;
+    labels[currentUser.id] = nickname;
+    const normalizedAddress = normalizeAddressForKey(currentUser.address);
+    if (normalizedAddress) {
+      labels[normalizedAddress] = nickname;
+    }
+    return labels;
+  });
   const openConnectorInStudio = (connectorId: string) => {
     const base = resolve("/studio");
     const target = new URL(base, window.location.origin);
@@ -153,10 +208,6 @@
     if (toolboxConnectorIds.has(connectorId)) return;
     const previous = [...localToolboxConnectors];
     localToolboxConnectors = [...localToolboxConnectors, connectorId];
-    const currentUser = mockUsersById[mockCurrentUserId];
-    if (currentUser && !currentUser.toolbox.includes(connectorId)) {
-      currentUser.toolbox = [...currentUser.toolbox, connectorId];
-    }
     void addConnectorToCurrentUserToolbox(connectorId).catch((err) => {
       console.error("[Account] Failed to persist toolbox update.", err);
       localToolboxConnectors = previous;
@@ -177,6 +228,7 @@
         ...existingProfileJson,
         public: {
           ...publicProfile,
+          nickname,
           bio,
           avatar_url: currentUser.avatarUrl,
           kind: currentUser.kind,
@@ -228,7 +280,12 @@
     }
   };
 
-  onMount(loadProfile);
+  onMount(() => {
+    void loadProfile();
+    return () => {
+      accountLoadRequestVersion += 1;
+    };
+  });
 </script>
 
 <div class="account-page">
@@ -306,6 +363,7 @@
           onConnectorOpen={openConnectorInStudio}
           onAddToToolbox={addConnectorToToolbox}
           {toolboxConnectorIds}
+          authorLabelById={accountFeedAuthorLabels}
           emptyMessage="No activity by this user yet."
         />
       </div>

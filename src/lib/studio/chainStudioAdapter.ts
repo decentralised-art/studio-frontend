@@ -1,22 +1,15 @@
-import { browser } from "$app/environment";
-import { listServicesUsers } from "$lib/auth/api";
-import { getOrCreateMockEthereumAccount } from "$lib/auth/mockEthereum";
 import { fromProtocolConnectorPayload } from "$lib/chain/connectorContractAdapter";
 import {
   getChainAccount,
+  getChainAccounts,
   getChainCondition,
   getChainConnector,
   getChainTransformation,
+  resolveChainAccountsCursor,
   type ChainConnectorResponse,
 } from "$lib/chain/registryApi";
 import type { ExploreParticle } from "$lib/data/exploreParticles";
 import type { LibraryItem } from "$lib/data/studioLibrary";
-import {
-  extraChainSyncSources,
-  mockUserSeedChainSyncSources,
-  mockUsers,
-  mockUsersById,
-} from "$lib/data/users";
 import type { MockFeatureDef, MockParticleDef } from "$lib/particles/mockPtNetwork";
 import type { StudioConnectorDef } from "$lib/studio/domain/connectorModel";
 
@@ -53,178 +46,27 @@ export type ChainOwnerSyncSource = {
   label: string;
 };
 
-const normalizeAddress = (value: string) => value.trim().toLowerCase();
+const CHAIN_ACCOUNTS_PAGE_LIMIT = 256;
+const CHAIN_ACCOUNTS_PAGE_GUARD = 128;
+const ETH_ADDRESS_RE = /^0x[0-9a-f]{40}$/;
 
-const fallbackAuthorIdFromAddress = (address: string) => {
-  const normalized = normalizeAddress(address).replace(/^0x/, "");
-  return normalized ? `chain-source-${normalized.slice(0, 8)}` : "chain-source-unknown";
+const normalizeAddress = (value: string): string => {
+  const trimmed = value.trim().toLowerCase();
+  if (!trimmed) return "";
+  const withPrefix = trimmed.startsWith("0x") ? trimmed : `0x${trimmed}`;
+  return withPrefix;
 };
 
-const sourceLabelFromUser = (user: Record<string, unknown>) => {
-  const displayName =
-    typeof user.display_name === "string"
-      ? user.display_name.trim()
-      : typeof user.displayName === "string"
-        ? user.displayName.trim()
-        : "";
-  if (displayName) return displayName;
-  const email = typeof user.email === "string" ? user.email.trim() : "";
-  if (email) return email;
-  const id = typeof user.id === "string" ? user.id.trim() : "";
-  return id || "Unknown user";
-};
+const isChainAddress = (value: string): boolean => ETH_ADDRESS_RE.test(value);
 
-const mockUserIdFromServicesUser = (
-  user: Record<string, unknown>,
-): keyof typeof mockUsersById | null => {
-  const email = typeof user.email === "string" ? user.email.trim().toLowerCase() : "";
-  if (email.endsWith("@mock.decentralised.art")) {
-    const id = email.replace(/@mock\.decentralised\.art$/i, "");
-    if (id in mockUsersById) return id as keyof typeof mockUsersById;
-  }
-
-  const displayName =
-    typeof user.display_name === "string"
-      ? user.display_name.trim()
-      : typeof user.displayName === "string"
-        ? user.displayName.trim()
-        : "";
-  if (displayName) {
-    const match = Object.values(mockUsersById).find((entry) => entry.nickname === displayName);
-    if (match) return match.id as keyof typeof mockUsersById;
-  }
-
-  return null;
-};
-
-const resolveMockRuntimeAddress = (userId: string): string => {
-  if (!browser) return "";
-  try {
-    return normalizeAddress(getOrCreateMockEthereumAccount(`mock-user:${userId}`).address);
-  } catch {
-    return "";
-  }
-};
-
-const addSource = (dedup: Map<string, ChainOwnerSyncSource>, source: ChainOwnerSyncSource) => {
-  const address = normalizeAddress(source.address);
-  if (!address) return;
-  if (dedup.has(address)) return;
-  dedup.set(address, {
-    address,
-    authorId: source.authorId,
-    label: source.label,
-  });
-};
-
-const selectPreferredSource = (
-  existing: ChainOwnerSyncSource | undefined,
-  incoming: ChainOwnerSyncSource,
-): ChainOwnerSyncSource => {
-  if (!existing) return incoming;
-
-  const existingAuthorId = existing.authorId.trim();
-  const incomingAuthorId = incoming.authorId.trim();
-  const existingIsFallback = existingAuthorId.startsWith("chain-source-");
-  const incomingIsFallback = incomingAuthorId.startsWith("chain-source-");
-
-  // Prefer stronger identity over generic fallback IDs.
-  if (existingIsFallback && !incomingIsFallback) return incoming;
-  if (!existingIsFallback && incomingIsFallback) return existing;
-
-  // Prefer richer labels if existing one is empty.
-  if (!existing.label.trim() && incoming.label.trim()) return incoming;
-
-  // Keep existing value to avoid churn between refreshes.
-  return existing;
-};
-
-const mergeSourceIntoMap = (
-  byAddress: Map<string, ChainOwnerSyncSource>,
-  source: ChainOwnerSyncSource,
-) => {
-  const address = normalizeAddress(source.address);
-  if (!address) return;
-  const normalizedSource: ChainOwnerSyncSource = {
-    address,
-    authorId: source.authorId,
-    label: source.label,
-  };
-  byAddress.set(address, selectPreferredSource(byAddress.get(address), normalizedSource));
-};
-
-const sortSourcesDeterministically = (
-  sources: ChainOwnerSyncSource[],
-  fallbackOrder: string[],
-  stickyOrder: string[],
-) => {
-  const orderRank = new Map<string, number>();
-  let rank = 0;
-  [...fallbackOrder, ...stickyOrder].forEach((address) => {
-    const normalized = normalizeAddress(address);
-    if (!normalized || orderRank.has(normalized)) return;
-    orderRank.set(normalized, rank++);
-  });
-
-  return [...sources].sort((a, b) => {
-    const addressA = normalizeAddress(a.address);
-    const addressB = normalizeAddress(b.address);
-    const rankA = orderRank.get(addressA);
-    const rankB = orderRank.get(addressB);
-    if (rankA !== undefined && rankB !== undefined && rankA !== rankB) return rankA - rankB;
-    if (rankA !== undefined && rankB === undefined) return -1;
-    if (rankA === undefined && rankB !== undefined) return 1;
-    return addressA.localeCompare(addressB);
-  });
-};
-
-const fallbackChainSyncSources = (): ChainOwnerSyncSource[] => {
-  const dedup = new Map<string, ChainOwnerSyncSource>();
-
-  // 1) Seed addresses from source data (immutable baseline)
-  mockUserSeedChainSyncSources.forEach((entry) => {
-    addSource(dedup, {
-      address: entry.address,
-      authorId: entry.id,
-      label: entry.label,
-    });
-  });
-
-  // 2) Current in-memory mock addresses (may be patched after chain auth)
-  mockUsers.forEach((entry) => {
-    addSource(dedup, {
-      address: entry.address,
-      authorId: entry.id,
-      label: entry.nickname,
-    });
-  });
-
-  // 3) Deterministic runtime wallet aliases used by chain auth
-  mockUsers.forEach((entry) => {
-    const runtimeAddress = resolveMockRuntimeAddress(entry.id);
-    if (!runtimeAddress) return;
-    addSource(dedup, {
-      address: runtimeAddress,
-      authorId: entry.id,
-      label: entry.nickname,
-    });
-  });
-
-  // 4) External explicit sources
-  extraChainSyncSources.forEach((entry) => {
-    addSource(dedup, {
-      address: entry.address,
-      authorId: entry.id,
-      label: entry.label,
-    });
-  });
-
-  return Array.from(dedup.values());
+const shortAddress = (address: string): string => {
+  const normalized = normalizeAddress(address);
+  if (!isChainAddress(normalized)) return normalized || "Unknown account";
+  return `${normalized.slice(0, 8)}...${normalized.slice(-4)}`;
 };
 
 let chainSyncSourcesCache: ChainOwnerSyncSource[] | null = null;
 let chainSyncSourcesLoadPromise: Promise<ChainOwnerSyncSource[]> | null = null;
-let chainSyncSourcesStickyByAddress = new Map<string, ChainOwnerSyncSource>();
 
 export const listChainSyncSourcesForApp = async (options?: {
   force?: boolean;
@@ -233,83 +75,37 @@ export const listChainSyncSourcesForApp = async (options?: {
   if (chainSyncSourcesLoadPromise && !options?.force) return chainSyncSourcesLoadPromise;
 
   chainSyncSourcesLoadPromise = (async () => {
-    const fallback = fallbackChainSyncSources();
-    const fallbackOrder = fallback.map((entry) => normalizeAddress(entry.address));
-    const fallbackByAddress = new Map<string, ChainOwnerSyncSource>(
-      fallback.map((entry) => [normalizeAddress(entry.address), entry]),
-    );
-    const stickyBefore = chainSyncSourcesCache
-      ? [...chainSyncSourcesCache]
-      : Array.from(chainSyncSourcesStickyByAddress.values());
-    const stickyOrder = stickyBefore.map((entry) => normalizeAddress(entry.address));
-    try {
-      const users = await listServicesUsers();
-      const byAddress = new Map<string, ChainOwnerSyncSource>();
-      users.forEach((user) => {
-        const addressRaw =
-          typeof user.ethereum_address === "string"
-            ? user.ethereum_address
-            : typeof user.ethereumAddress === "string"
-              ? user.ethereumAddress
-              : "";
-        const address = normalizeAddress(addressRaw);
-        if (!address) return;
+    const byAddress = new Map<string, ChainOwnerSyncSource>();
+
+    let after: string | null = null;
+    let guard = 0;
+    do {
+      const response = await getChainAccounts({
+        limit: CHAIN_ACCOUNTS_PAGE_LIMIT,
+        ...(after ? { after } : {}),
+      });
+      const accounts = Array.isArray(response.accounts) ? response.accounts : [];
+      accounts.forEach((value) => {
+        const address = normalizeAddress(value);
+        if (!isChainAddress(address)) return;
         if (byAddress.has(address)) return;
-        const preferred = fallbackByAddress.get(address);
-        const mockId = mockUserIdFromServicesUser(user);
-        const authorId =
-          preferred?.authorId ??
-          mockId ??
-          (typeof user.id === "string" && user.id.trim().length > 0
-            ? user.id.trim()
-            : fallbackAuthorIdFromAddress(address));
-        const mockLabel = mockId
-          ? (mockUsersById[mockId]?.nickname ?? "")
-          : (preferred?.label ?? "");
-        mergeSourceIntoMap(byAddress, {
+        byAddress.set(address, {
           address,
-          authorId,
-          label: mockLabel || sourceLabelFromUser(user),
+          authorId: address,
+          label: shortAddress(address),
         });
       });
+      const cursor = resolveChainAccountsCursor(response);
+      if (!cursor.hasMore || !cursor.nextAfter) break;
+      after = cursor.nextAfter;
+      guard += 1;
+    } while (guard < CHAIN_ACCOUNTS_PAGE_GUARD);
 
-      // Temporary workaround: always merge with known mock/fallback sources.
-      // Services users can be incomplete early in development (e.g., missing ethereum_address).
-      const unionByAddress = new Map<string, ChainOwnerSyncSource>();
-      stickyBefore.forEach((source) => mergeSourceIntoMap(unionByAddress, source));
-      fallback.forEach((source) => mergeSourceIntoMap(unionByAddress, source));
-      byAddress.forEach((source) => mergeSourceIntoMap(unionByAddress, source));
-
-      const merged = sortSourcesDeterministically(
-        Array.from(unionByAddress.values()),
-        fallbackOrder,
-        stickyOrder,
-      );
-      if (merged.length > 0) {
-        chainSyncSourcesStickyByAddress = new Map(
-          merged.map((source) => [normalizeAddress(source.address), source]),
-        );
-        chainSyncSourcesCache = merged;
-        return merged;
-      }
-    } catch (error) {
-      console.warn("[Chain sync] Failed to load users from services API.", error);
-    }
-
-    const unionByAddress = new Map<string, ChainOwnerSyncSource>();
-    stickyBefore.forEach((source) => mergeSourceIntoMap(unionByAddress, source));
-    fallback.forEach((source) => mergeSourceIntoMap(unionByAddress, source));
-    const merged = sortSourcesDeterministically(
-      Array.from(unionByAddress.values()),
-      fallbackOrder,
-      stickyOrder,
+    const resolved = Array.from(byAddress.values()).sort((a, b) =>
+      a.address.localeCompare(b.address),
     );
-
-    chainSyncSourcesStickyByAddress = new Map(
-      merged.map((source) => [normalizeAddress(source.address), source]),
-    );
-    chainSyncSourcesCache = merged;
-    return merged;
+    chainSyncSourcesCache = resolved;
+    return resolved;
   })();
 
   try {
@@ -501,7 +297,7 @@ const uniqueStrings = (values: string[]) => Array.from(new Set(values.filter(Boo
 export const fetchChainOwnedStudioSnapshot = async (
   address: string,
   options: { authorId: string; limit?: number; includeRuntimeCode?: boolean } = {
-    authorId: "user-lyra",
+    authorId: normalizeAddress(address) || "unknown-owner",
     includeRuntimeCode: true,
   },
 ): Promise<ChainStudioSyncResult> => {
@@ -648,24 +444,10 @@ export const fetchChainParticleForStudio = async (
 
   const feature = connectorToFeature(connector);
   const particle = connectorToParticle(connector);
-  const ownerAddress = (connectorPayload.owner ?? "").toLowerCase();
+  const ownerAddress = normalizeAddress(connectorPayload.owner ?? "");
   let authorId = options?.authorId?.trim() ?? "";
-  if (!authorId && ownerAddress) {
-    try {
-      const sources = await listChainSyncSourcesForApp();
-      authorId =
-        sources.find(
-          (source) => normalizeAddress(source.address) === normalizeAddress(ownerAddress),
-        )?.authorId ?? "";
-    } catch {
-      authorId = "";
-    }
-  }
   if (!authorId) {
-    authorId = mockUsers.find((user) => normalizeAddress(user.address) === ownerAddress)?.id ?? "";
-  }
-  if (!authorId) {
-    authorId = fallbackAuthorIdFromAddress(ownerAddress);
+    authorId = ownerAddress || "unknown-owner";
   }
 
   return {

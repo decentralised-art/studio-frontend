@@ -4,9 +4,36 @@
   import { displayUsersById } from "$lib/data/users";
   import type { RuntimeCodePostEvent } from "$lib/feed/particlePostData";
 
-  const { event }: { event: RuntimeCodePostEvent } = $props();
+  const {
+    event,
+    authorLabelById,
+  }: { event: RuntimeCodePostEvent; authorLabelById?: Readonly<Record<string, string>> } = $props();
+
+  const normalizeAddress = (value: string) => {
+    const trimmed = value.trim().toLowerCase();
+    if (!trimmed) return "";
+    return trimmed.startsWith("0x") ? trimmed : `0x${trimmed}`;
+  };
+
+  const shortAddress = (value: string) => {
+    const normalized = normalizeAddress(value);
+    if (!normalized) return "";
+    if (normalized.length < 14) return normalized;
+    return `${normalized.slice(0, 8)}...${normalized.slice(-4)}`;
+  };
 
   const author = $derived.by(() => displayUsersById[event.authorId] ?? null);
+  const mappedAuthorLabel = $derived.by(() => {
+    const exact = authorLabelById?.[event.authorId]?.trim();
+    if (exact && exact.length > 0) return exact;
+    const normalized = normalizeAddress(event.authorId);
+    const byNormalized = authorLabelById?.[normalized]?.trim();
+    if (byNormalized && byNormalized.length > 0) return byNormalized;
+    return "";
+  });
+  const authorLabel = $derived.by(
+    () => mappedAuthorLabel || author?.nickname || shortAddress(event.authorId) || event.authorId,
+  );
   const elementKindLabel = $derived.by(() =>
     event.type === "transformation" ? "transformation" : "condition",
   );
@@ -17,7 +44,7 @@
     <header class="event-header">
       <div class="event-author">
         {#if author}
-          <img class="author-avatar" src={author.avatarUrl} alt={`${author.nickname} avatar`} />
+          <img class="author-avatar" src={author.avatarUrl} alt={`${authorLabel} avatar`} />
         {:else}
           <div class="author-avatar author-avatar--fallback" aria-hidden="true">?</div>
         {/if}
@@ -25,7 +52,7 @@
           <div class="author-row">
             <div class="author-identity">
               <a class="author-name author-link" href={resolve("/u/[id]", { id: event.authorId })}
-                >{author?.nickname ?? event.authorId}</a
+                >{authorLabel}</a
               >
               {#if event.createdLabel}
                 <p class="event-time">{event.createdLabel}</p>

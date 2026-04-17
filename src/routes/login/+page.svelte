@@ -7,13 +7,7 @@
   import Input from "$lib/components/ui/Input.svelte";
   import SectionShell from "$lib/components/ui/SectionShell.svelte";
 
-  import {
-    authenticateAllMockAccountsInChain,
-    login,
-    loginOrRegisterUser,
-    loginWithMockChainAccount,
-  } from "$lib/auth/api";
-  import type { MockChainAuthResult } from "$lib/auth/api";
+  import { login, loginOrRegisterUser, loginWithMockChainAccount } from "$lib/auth/api";
   import { hasAuthSession } from "$lib/auth/session";
   import { mockUsers } from "$lib/data/users";
 
@@ -24,10 +18,6 @@
 
   let isSubmitting = $state(false);
   let loginError = $state("");
-  let isMockAuthRunning = $state(false);
-  let mockAuthError = $state("");
-  let mockAuthResults = $state<MockChainAuthResult[]>([]);
-  let mockLoginError = $state("");
   const isDev = import.meta.env.DEV;
 
   const MOCK_PASSWORD = "mock-user-password";
@@ -69,21 +59,6 @@
     }
   };
 
-  const handleAuthenticateAllMockAccounts = async () => {
-    mockAuthError = "";
-    isMockAuthRunning = true;
-    try {
-      mockAuthResults = await authenticateAllMockAccountsInChain({
-        patchServicesProfile: false,
-      });
-    } catch (err) {
-      mockAuthError = err instanceof Error ? err.message : "Mock chain auth failed.";
-      mockAuthResults = [];
-    } finally {
-      isMockAuthRunning = false;
-    }
-  };
-
   const loginWithMockUser = async (
     userId: string,
     destination: "/account" | "/studio" = "/account",
@@ -91,7 +66,6 @@
     const user = mockUsers.find((entry) => entry.id === userId);
     if (!user) return;
 
-    mockLoginError = "";
     loginError = "";
     isSubmitting = true;
 
@@ -114,7 +88,7 @@
       const finalDestination = servicesReady ? destination : "/studio";
       await goto(resolve(finalDestination));
     } catch (err) {
-      mockLoginError = err instanceof Error ? err.message : "Mock login failed.";
+      loginError = err instanceof Error ? err.message : "Mock login failed.";
     } finally {
       isSubmitting = false;
     }
@@ -123,10 +97,6 @@
   const handlePrototypePreview = async () => {
     await loginWithMockUser("user-lyra", "/studio");
   };
-
-  const mockAuthSuccessCount = $derived.by(() =>
-    mockAuthResults.reduce((count, result) => count + (result.success ? 1 : 0), 0),
-  );
 
   onMount(() => {
     if (hasAuthSession()) {
@@ -154,7 +124,7 @@
           variant="primary"
           type="button"
           onclick={handlePrototypePreview}
-          disabled={isSubmitting || isMockAuthRunning}
+          disabled={isSubmitting}
         >
           Preview Prototype
         </Button>
@@ -182,119 +152,7 @@
       </div>
 
       {#if isDev}
-        <div class="actions dev-actions">
-          <Button
-            variant="ghost"
-            type="button"
-            onclick={handleAuthenticateAllMockAccounts}
-            disabled={isSubmitting || isMockAuthRunning}
-          >
-            {isMockAuthRunning
-              ? "Authenticating mock accounts..."
-              : "Authenticate all mock accounts"}
-          </Button>
-        </div>
-
-        <div class="mock-login-panel">
-          <div class="mock-login-header">
-            <p class="mock-login-title">Mock user sign in</p>
-            <p class="mock-login-subtitle">
-              Uses the regular services login flow. Missing mock users are registered automatically.
-            </p>
-          </div>
-
-          <div class="mock-login-grid">
-            {#each mockUsers as user (user.id)}
-              <Button
-                variant="ghost"
-                type="button"
-                disabled={isSubmitting || isMockAuthRunning}
-                onclick={() => loginWithMockUser(user.id)}
-              >
-                {user.nickname}
-              </Button>
-            {/each}
-          </div>
-
-          <p class="mock-login-credentials">
-            Password for all mock users: <code>{MOCK_PASSWORD}</code>
-          </p>
-
-          {#if form.email.endsWith("@mock.decentralised.art")}
-            <p class="mock-login-credentials">
-              Current mock email: <code>{form.email}</code>
-            </p>
-          {/if}
-        </div>
-
-        {#if mockAuthError}
-          <p class="error">{mockAuthError}</p>
-        {/if}
-
-        {#if mockLoginError}
-          <p class="error">{mockLoginError}</p>
-        {/if}
-
-        {#if mockAuthResults.length > 0}
-          <div class="mock-auth-results">
-            <p class="success">
-              Chain auth completed for {mockAuthResults.length} mocked accounts. Success:
-              {mockAuthSuccessCount}/{mockAuthResults.length}.
-            </p>
-
-            {#each mockAuthResults as result (result.userId)}
-              <div class="mock-result-card">
-                <p class="mock-result-title">{result.nickname} ({result.userId})</p>
-                <p class={result.success ? "success" : "error"}>
-                  {result.success ? "Authenticated" : "Authentication failed"}
-                </p>
-
-                <div class="mock-result-line">
-                  <span class="mock-result-label">public_key</span>
-                  <code class="mock-result-value">{result.publicKey}</code>
-                </div>
-                <div class="mock-result-line">
-                  <span class="mock-result-label">private_key</span>
-                  <code class="mock-result-value">{result.privateKey}</code>
-                </div>
-                <div class="mock-result-line">
-                  <span class="mock-result-label">auth_request["address"]</span>
-                  <code class="mock-result-value">{result.address}</code>
-                </div>
-                <div class="mock-result-line">
-                  <span class="mock-result-label">auth_request["message"]</span>
-                  <code class="mock-result-value">{result.message ?? "n/a"}</code>
-                </div>
-                <div class="mock-result-line">
-                  <span class="mock-result-label">auth_request["signature"]</span>
-                  <code class="mock-result-value">{result.signature ?? "n/a"}</code>
-                </div>
-                <div class="mock-result-line">
-                  <span class="mock-result-label">nonce</span>
-                  <code class="mock-result-value">{result.nonce ?? "n/a"}</code>
-                </div>
-                <div class="mock-result-line">
-                  <span class="mock-result-label">jwt</span>
-                  <code class="mock-result-value">{result.token ?? "n/a"}</code>
-                </div>
-                <div class="mock-result-line">
-                  <span class="mock-result-label">patched_user_id</span>
-                  <code class="mock-result-value">{result.patchedUserId ?? "n/a"}</code>
-                </div>
-                <div class="mock-result-line">
-                  <span class="mock-result-label">ethereum_address_patched</span>
-                  <code class="mock-result-value"
-                    >{result.ethereumAddressPatched ? "true" : "false"}</code
-                  >
-                </div>
-
-                {#if result.error}
-                  <p class="error">{result.error}</p>
-                {/if}
-              </div>
-            {/each}
-          </div>
-        {/if}
+        <p class="mock-login-credentials">Prototype mock password: <code>{MOCK_PASSWORD}</code></p>
       {/if}
 
       <p class="registration-closed">
@@ -351,34 +209,6 @@
     @apply flex items-center justify-end;
   }
 
-  .dev-actions {
-    @apply justify-start;
-  }
-
-  .mock-auth-results {
-    @apply border border-white/10 rounded-lg p-3 space-y-3 bg-black/20;
-  }
-
-  .mock-login-panel {
-    @apply border border-white/10 rounded-lg p-3 space-y-3 bg-black/20;
-  }
-
-  .mock-login-header {
-    @apply space-y-1;
-  }
-
-  .mock-login-title {
-    @apply text-sm font-semibold text-white;
-  }
-
-  .mock-login-subtitle {
-    @apply text-xs text-white/60;
-  }
-
-  .mock-login-grid {
-    @apply grid grid-cols-1 sm:grid-cols-2 gap-2;
-  }
-
   .mock-login-credentials {
     @apply text-xs text-white/60;
   }
@@ -387,32 +217,8 @@
     @apply text-white/80 bg-white/5 px-1 py-0.5 rounded;
   }
 
-  .mock-result-card {
-    @apply border border-white/10 rounded-md p-3 space-y-2;
-  }
-
-  .mock-result-title {
-    @apply text-sm font-semibold text-white;
-  }
-
-  .mock-result-line {
-    @apply grid grid-cols-1 gap-1;
-  }
-
-  .mock-result-label {
-    @apply text-xs text-white/70;
-  }
-
-  .mock-result-value {
-    @apply text-[11px] text-white/90 break-all font-mono;
-  }
-
   .error {
     @apply text-sm text-red-400;
-  }
-
-  .success {
-    @apply text-sm text-emerald-300;
   }
 
   .registration-closed {

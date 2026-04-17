@@ -9,18 +9,44 @@
     onConnectorOpen,
     onParticleOpen,
     onAddToToolbox,
+    authorLabelById,
     inToolbox = false,
   }: {
     event: ConnectorPostEvent;
     onConnectorOpen?: ((connectorId: string) => void) | undefined;
     onParticleOpen?: ((particleId: string) => void) | undefined;
     onAddToToolbox?: ((particleId: string) => void) | undefined;
+    authorLabelById?: Readonly<Record<string, string>>;
     inToolbox?: boolean;
   } = $props();
 
   const resolvedOpenHandler = $derived.by(() => onConnectorOpen ?? onParticleOpen);
 
+  const normalizeAddress = (value: string) => {
+    const trimmed = value.trim().toLowerCase();
+    if (!trimmed) return "";
+    return trimmed.startsWith("0x") ? trimmed : `0x${trimmed}`;
+  };
+
+  const shortAddress = (value: string) => {
+    const normalized = normalizeAddress(value);
+    if (!normalized) return "";
+    if (normalized.length < 14) return normalized;
+    return `${normalized.slice(0, 8)}...${normalized.slice(-4)}`;
+  };
+
   const author = $derived.by(() => displayUsersById[event.authorId] ?? null);
+  const mappedAuthorLabel = $derived.by(() => {
+    const exact = authorLabelById?.[event.authorId]?.trim();
+    if (exact && exact.length > 0) return exact;
+    const normalized = normalizeAddress(event.authorId);
+    const byNormalized = authorLabelById?.[normalized]?.trim();
+    if (byNormalized && byNormalized.length > 0) return byNormalized;
+    return "";
+  });
+  const authorLabel = $derived.by(
+    () => mappedAuthorLabel || author?.nickname || shortAddress(event.authorId) || event.authorId,
+  );
   const dependencies = $derived.by(() =>
     event.usedParticleIds.map((id, index) => ({
       id,
@@ -56,7 +82,7 @@
     <header class="event-header">
       <div class="event-author">
         {#if author}
-          <img class="author-avatar" src={author.avatarUrl} alt={`${author.nickname} avatar`} />
+          <img class="author-avatar" src={author.avatarUrl} alt={`${authorLabel} avatar`} />
         {:else}
           <div class="author-avatar author-avatar--fallback" aria-hidden="true">?</div>
         {/if}
@@ -64,7 +90,7 @@
           <div class="author-row">
             <div class="author-identity">
               <a class="author-name author-link" href={resolve("/u/[id]", { id: event.authorId })}
-                >{author?.nickname ?? event.authorId}</a
+                >{authorLabel}</a
               >
               {#if event.createdLabel}
                 <p class="event-time">{event.createdLabel}</p>

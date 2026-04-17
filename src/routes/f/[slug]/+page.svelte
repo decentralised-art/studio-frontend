@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { SvelteSet } from "svelte/reactivity";
+  import { SvelteMap, SvelteSet } from "svelte/reactivity";
   import { page } from "$app/stores";
   import { resolve } from "$app/paths";
   import Button from "$lib/components/ui/Button.svelte";
@@ -8,17 +8,17 @@
   import ConnectorPostFeed from "$lib/components/feed/ConnectorPostFeed.svelte";
   import {
     addConnectorToCurrentUserToolbox,
+    getCurrentUserProfileState,
     followFormatInProfile,
-    getCurrentUserSocialPreferences,
-    getCurrentUserToolboxLibrary,
+    listServicesUsers,
     unfollowFormatInProfile,
   } from "$lib/auth/api";
   import {
     listParticlePosts as listConnectorPosts,
     listParticleRecordsByFormatHash as listConnectorRecordsByFormatHash,
-    syncParticlePostDataFromChain as syncConnectorPostDataFromChain,
     type NetworkFeedEvent,
   } from "$lib/feed/particlePostData";
+  import { mapSnapshotParticlesToConnectorEvents } from "$lib/feed/networkEventMappers";
   import {
     getChainFormatDisplayName,
     mapChainFormatResponseToRecord,
@@ -26,15 +26,15 @@
     upsertChainFormatRecord,
     type ChainFormatRecord,
   } from "$lib/formats/chainFormats";
-  import { mockCurrentUserId, mockUsersById } from "$lib/data/users";
   import {
     getChainFormat,
     normalizeFormatHash,
     resolveChainFormatCursor,
   } from "$lib/chain/registryApi";
+  import { buildAuthorLabelMapFromServicesUsers } from "$lib/social/authorLabels";
+  import { fetchChainParticleForStudio } from "$lib/studio/chainStudioAdapter";
 
-  const FORMAT_PAGE_FEED_SYNC_MAX_SOURCES = 8;
-  const FORMAT_PAGE_FEED_SYNC_MAX_OWNED_PER_SOURCE = 8;
+  const TARGETED_FORMAT_CONNECTOR_FETCH_LIMIT = 96;
 
   let format = $state<ChainFormatRecord | null>(null);
   let formatHash = $state("");
@@ -48,12 +48,15 @@
   let followPending = $state(false);
   let formatFollowError = $state("");
   let localFollowedFormats = $state<string[]>([]);
-  let localToolboxConnectors = $state<string[]>([
-    ...(mockUsersById[mockCurrentUserId]?.toolbox ?? []),
-  ]);
+  let localToolboxConnectors = $state<string[]>([]);
+  let servicesUserLabels = $state<Record<string, string>>({});
+  let formatLoadRequestVersion = 0;
+  let profileLoadRequestVersion = 0;
+  let labelsLoadRequestVersion = 0;
 
   const followedFormatKeys = $derived.by(() => new SvelteSet(localFollowedFormats));
   const toolboxConnectorIds = $derived.by(() => new SvelteSet(localToolboxConnectors));
+  const feedAuthorLabels = $derived.by(() => servicesUserLabels);
   const isFollowingFormat = $derived.by(
     () => Boolean(formatHash) && followedFormatKeys.has(formatHash),
   );
@@ -92,14 +95,65 @@
     return merged;
   };
 
-  const loadFormatPage = async () => {
+  const sortNetworkEvents = (events: NetworkFeedEvent[]) =>
+    [...events].sort((a, b) => {
+      const byCreatedAt = b.createdAt - a.createdAt;
+      if (byCreatedAt !== 0) return byCreatedAt;
+      return b.id.localeCompare(a.id);
+    });
+
+  const hydrateFormatConnectorPosts = async (
+    connectorIds: string[],
+    requestVersion: number,
+  ): Promise<void> => {
+    const uniqueConnectorIds = Array.from(
+      new Set(
+        connectorIds
+          .map((id) => id.trim())
+          .filter(Boolean)
+          .slice(0, TARGETED_FORMAT_CONNECTOR_FETCH_LIMIT),
+      ),
+    );
+    if (uniqueConnectorIds.length === 0) return;
+
+    const settled = await Promise.allSettled(
+      uniqueConnectorIds.map((connectorId) => fetchChainParticleForStudio(connectorId)),
+    );
+    if (!isFormatLoadRequestActive(requestVersion)) return;
+
+    const targetedEvents = settled.flatMap((result) => {
+      if (result.status !== "fulfilled") return [];
+      const particleMeta = result.value.particleMeta;
+      if (!particleMeta) return [];
+      return mapSnapshotParticlesToConnectorEvents(particleMeta.authorId, [particleMeta]);
+    });
+    if (targetedEvents.length === 0) return;
+
+    const mergedById = new SvelteMap<string, NetworkFeedEvent>();
+    [...relatedPosts, ...targetedEvents].forEach((event) => {
+      mergedById.set(event.id, event);
+    });
+    relatedPosts = sortNetworkEvents(Array.from(mergedById.values()));
+  };
+
+  const beginFormatLoadRequest = (): number => {
+    formatLoadRequestVersion += 1;
+    return formatLoadRequestVersion;
+  };
+
+  const isFormatLoadRequestActive = (requestVersion: number): boolean =>
+    requestVersion === formatLoadRequestVersion;
+
+  const loadFormatPage = async (routeSlug: string) => {
+    const requestVersion = beginFormatLoadRequest();
     loading = true;
     loadError = "";
     loadMoreError = "";
+    loadMorePending = false;
     formatCursorAfter = null;
     formatHasMore = false;
     try {
-      const slug = ($page.params.slug ?? "").trim();
+      const slug = routeSlug.trim();
       if (!slug) {
         formatHash = "";
         format = null;
@@ -121,6 +175,7 @@
       formatHash = normalizedHash;
 
       const response = await getChainFormat(normalizedHash, { limit: 256 });
+      if (!isFormatLoadRequestActive(requestVersion)) return;
       const pageRecord = mapChainFormatResponseToRecord(response);
       const merged = mergeFormatPageRecord(pageRecord);
       const cursor = resolveChainFormatCursor(response);
@@ -131,26 +186,17 @@
         return;
       }
       recomputeRelatedPosts(normalizedHash, merged);
-
-      // Refresh connector posts in the background with bounded sync limits.
-      void syncConnectorPostDataFromChain({
-        force: true,
-        forceSources: true,
-        maxSources: FORMAT_PAGE_FEED_SYNC_MAX_SOURCES,
-        maxOwnedPerSource: FORMAT_PAGE_FEED_SYNC_MAX_OWNED_PER_SOURCE,
-        includeRuntimeCode: false,
-      })
-        .then(() => {
-          if (formatHash !== normalizedHash) return;
-          recomputeRelatedPosts(normalizedHash, format);
-        })
-        .catch((error) => {
-          console.warn("[Format page] Background post sync failed.", error);
-        });
+      void hydrateFormatConnectorPosts(merged.connectors, requestVersion).catch((error) => {
+        if (!isFormatLoadRequestActive(requestVersion)) return;
+        console.warn("[Format page] Targeted connector hydration failed.", error);
+      });
     } catch (error) {
+      if (!isFormatLoadRequestActive(requestVersion)) return;
       loadError = error instanceof Error ? error.message : "Unable to load format page.";
     } finally {
-      loading = false;
+      if (isFormatLoadRequestActive(requestVersion)) {
+        loading = false;
+      }
     }
   };
 
@@ -158,22 +204,33 @@
     if (loading || loadMorePending || !formatHash || !formatHasMore || !formatCursorAfter) return;
     loadMorePending = true;
     loadMoreError = "";
+    const requestVersion = formatLoadRequestVersion;
     try {
       const response = await getChainFormat(formatHash, {
         limit: 256,
         after: formatCursorAfter,
       });
+      if (!isFormatLoadRequestActive(requestVersion)) return;
       const pageRecord = mapChainFormatResponseToRecord(response);
       const merged = mergeFormatPageRecord(pageRecord);
       const cursor = resolveChainFormatCursor(response);
       formatCursorAfter = cursor.nextAfter;
       formatHasMore = cursor.hasMore && Boolean(cursor.nextAfter);
       recomputeRelatedPosts(formatHash, merged);
+      if (pageRecord) {
+        void hydrateFormatConnectorPosts(pageRecord.connectors, requestVersion).catch((error) => {
+          if (!isFormatLoadRequestActive(requestVersion)) return;
+          console.warn("[Format page] Targeted connector hydration failed.", error);
+        });
+      }
     } catch (error) {
+      if (!isFormatLoadRequestActive(requestVersion)) return;
       loadMoreError =
         error instanceof Error ? error.message : "Unable to load more connectors for this format.";
     } finally {
-      loadMorePending = false;
+      if (isFormatLoadRequestActive(requestVersion)) {
+        loadMorePending = false;
+      }
     }
   };
 
@@ -188,10 +245,6 @@
   const addConnectorToToolbox = (connectorId: string) => {
     if (toolboxConnectorIds.has(connectorId)) return;
     localToolboxConnectors = [...localToolboxConnectors, connectorId];
-    const currentUser = mockUsersById[mockCurrentUserId];
-    if (currentUser && !currentUser.toolbox.includes(connectorId)) {
-      currentUser.toolbox = [...currentUser.toolbox, connectorId];
-    }
     void addConnectorToCurrentUserToolbox(connectorId).catch((error) => {
       console.error("[Format page] Failed to persist toolbox update.", error);
     });
@@ -218,16 +271,44 @@
     }
   };
 
+  const hydrateViewerProfileState = async () => {
+    const requestVersion = ++profileLoadRequestVersion;
+    try {
+      const profileState = await getCurrentUserProfileState({ preferCached: true });
+      if (requestVersion !== profileLoadRequestVersion) return;
+      localToolboxConnectors = [...profileState.toolbox.connector];
+      localFollowedFormats = [...profileState.social.followedFormatHashes];
+    } catch (error) {
+      if (requestVersion !== profileLoadRequestVersion) return;
+      console.warn("[Format page] Failed to load viewer profile state.", error);
+    }
+  };
+
+  const hydrateServicesAuthorLabels = async () => {
+    const requestVersion = ++labelsLoadRequestVersion;
+    try {
+      const labels = buildAuthorLabelMapFromServicesUsers(await listServicesUsers());
+      if (requestVersion !== labelsLoadRequestVersion) return;
+      servicesUserLabels = labels;
+    } catch (error) {
+      if (requestVersion !== labelsLoadRequestVersion) return;
+      console.warn("[Format page] Failed to load services user labels.", error);
+    }
+  };
+
+  $effect(() => {
+    const routeSlug = ($page.params.slug ?? "").trim();
+    void loadFormatPage(routeSlug);
+  });
+
   onMount(() => {
-    void Promise.all([getCurrentUserToolboxLibrary(), getCurrentUserSocialPreferences()])
-      .then(([toolbox, social]) => {
-        localToolboxConnectors = [...toolbox.connector];
-        localFollowedFormats = [...social.followedFormatIds];
-      })
-      .catch((error) => {
-        console.warn("[Format page] Failed to load profile preferences.", error);
-      });
-    void loadFormatPage();
+    void hydrateViewerProfileState();
+    void hydrateServicesAuthorLabels();
+    return () => {
+      formatLoadRequestVersion += 1;
+      profileLoadRequestVersion += 1;
+      labelsLoadRequestVersion += 1;
+    };
   });
 </script>
 
@@ -246,7 +327,13 @@
         <p class="status-subtitle">{loadError}</p>
       </div>
       <div class="status-actions">
-        <Button variant="primary" type="button" onclick={loadFormatPage}>Retry</Button>
+        <Button
+          variant="primary"
+          type="button"
+          onclick={() => void loadFormatPage(($page.params.slug ?? "").trim())}
+        >
+          Retry
+        </Button>
       </div>
     </SectionShell>
   {:else if !format}
@@ -302,6 +389,7 @@
         onConnectorOpen={openConnectorInStudio}
         onAddToToolbox={addConnectorToToolbox}
         {toolboxConnectorIds}
+        authorLabelById={feedAuthorLabels}
         emptyMessage="No connector posts for this format yet."
       />
     </div>

@@ -6,26 +6,23 @@
   import { page } from "$app/stores";
 
   import ConnectorPostFeed from "$lib/components/feed/ConnectorPostFeed.svelte";
-  import {
-    listNetworkFeedEventsByAuthor,
-    syncParticlePostDataFromChain as syncConnectorPostDataFromChain,
-    type NetworkFeedEvent,
-  } from "$lib/feed/particlePostData";
+  import { listNetworkFeedEventsByAuthor, type NetworkFeedEvent } from "$lib/feed/particlePostData";
+  import { mapSnapshotParticlesToConnectorEvents } from "$lib/feed/networkEventMappers";
+  import { fetchChainOwnedStudioSnapshot } from "$lib/studio/chainStudioAdapter";
   import SectionShell from "$lib/components/ui/SectionShell.svelte";
   import Button from "$lib/components/ui/Button.svelte";
   import UserProfilePage from "$lib/components/user/UserProfilePage.svelte";
   import {
     addConnectorToCurrentUserToolbox,
     followUserInProfile,
-    getCurrentUserSocialPreferences,
-    getCurrentUserToolboxLibrary,
+    getCurrentUserProfileState,
     getUserSocialConnections,
-    getMe,
     getUserById,
+    listServicesUsers,
     unfollowUserInProfile,
   } from "$lib/auth/api";
   import { getToken, hasAuthSession } from "$lib/auth/session";
-  import { mockCurrentUserId, mockUsersById } from "$lib/data/users";
+  import { buildAuthorLabelMapFromServicesUsers } from "$lib/social/authorLabels";
   import type { ProfileViewUser } from "$lib/user/profileModel";
   import { normalizeProfileUser } from "$lib/user/profileModel";
 
@@ -40,24 +37,51 @@
   let followPending = $state(false);
   let activeSocialList = $state<"followers" | "following" | null>(null);
   let socialListsUnavailable = $state(false);
-  let localToolboxConnectors = $state<string[]>([
-    ...(mockUsersById[mockCurrentUserId]?.toolbox ?? []),
-  ]);
+  let localToolboxConnectors = $state<string[]>([]);
   let userFeedEvents = $state<NetworkFeedEvent[]>([]);
+  let servicesUserLabels = $state<Record<string, string>>({});
+  let userLoadRequestVersion = 0;
 
-  const refreshFollowState = async (targetUserId: string) => {
-    const [social, targetSocial] = await Promise.all([
-      getCurrentUserSocialPreferences(),
-      getUserSocialConnections(targetUserId),
-    ]);
-    viewerFollowingIds = [...social.followedUserIds];
-    displayedFollowingIds = [...targetSocial.followingIds];
-    displayedFollowerIds = [...targetSocial.followerIds];
-    socialListsUnavailable = false;
+  const normalizeAddressForKey = (value: string): string => {
+    const trimmed = value.trim().toLowerCase();
+    if (!trimmed) return "";
+    return trimmed.startsWith("0x") ? trimmed : `0x${trimmed}`;
   };
 
-  const loadUser = async () => {
-    const userId = $page.params.id?.trim() ?? "";
+  const isChainAddress = (value: string): boolean =>
+    /^0x[0-9a-f]{40}$/i.test(normalizeAddressForKey(value));
+
+  const shortAddress = (value: string): string => {
+    const normalized = normalizeAddressForKey(value);
+    if (!normalized) return "";
+    if (normalized.length < 14) return normalized;
+    return `${normalized.slice(0, 8)}...${normalized.slice(-4)}`;
+  };
+
+  const resolvedUserFollowKey = $derived.by(() =>
+    user ? normalizeAddressForKey(user.address) || user.id : "",
+  );
+
+  const refreshFollowState = async (targetUserAddressOrId: string) => {
+    const profileState = await getCurrentUserProfileState({ preferCached: true });
+    viewerFollowingIds = [...profileState.social.followedUserAddresses];
+    const targetSocial = await getUserSocialConnections(targetUserAddressOrId);
+    displayedFollowingIds = [...targetSocial.followingIds];
+    displayedFollowerIds = [...targetSocial.followerIds];
+    socialListsUnavailable = targetSocial.status !== "ok";
+  };
+
+  const beginUserLoadRequest = (): number => {
+    userLoadRequestVersion += 1;
+    return userLoadRequestVersion;
+  };
+
+  const isUserLoadRequestActive = (requestVersion: number): boolean =>
+    requestVersion === userLoadRequestVersion;
+
+  const loadUser = async (routeUserId: string) => {
+    const requestVersion = beginUserLoadRequest();
+    const userId = routeUserId.trim();
     if (!userId) {
       error = "Missing user ID.";
       isLoading = false;
@@ -67,65 +91,112 @@
     isLoading = true;
     error = "";
     actionError = "";
+    activeSocialList = null;
+    displayedFollowingIds = [];
+    displayedFollowerIds = [];
+    socialListsUnavailable = false;
 
     try {
       const servicesTokenPresent = Boolean(getToken());
-      const [userPayload, mePayload] = await Promise.all([
-        getUserById(userId),
-        servicesTokenPresent
-          ? getMe()
-              .then((payload) => normalizeProfileUser(payload))
-              .catch(() => null)
-          : Promise.resolve(null),
-      ]);
+      const normalizedRequestedAddress = normalizeAddressForKey(userId);
+      const isAddressRoute = isChainAddress(normalizedRequestedAddress);
+      const profileStatePromise = servicesTokenPresent
+        ? getCurrentUserProfileState({ preferCached: true }).catch(() => null)
+        : Promise.resolve(null);
+      const userPayload = await (isAddressRoute
+        ? Promise.resolve({
+            user: {
+              id: normalizedRequestedAddress,
+              display_name: shortAddress(normalizedRequestedAddress),
+              ethereum_address: normalizedRequestedAddress,
+              bio: "",
+            },
+          })
+        : getUserById(userId));
+      if (!isUserLoadRequestActive(requestVersion)) return;
 
       user = normalizeProfileUser(userPayload);
-      userFeedEvents = listNetworkFeedEventsByAuthor(user.id);
       const activeUserId = user.id;
-      void syncConnectorPostDataFromChain()
-        .then(() => {
-          if (user?.id !== activeUserId) return;
-          userFeedEvents = listNetworkFeedEventsByAuthor(activeUserId);
+      const feedAuthorKey = normalizeAddressForKey(user.address) || user.id;
+      userFeedEvents = listNetworkFeedEventsByAuthor(feedAuthorKey);
+      viewerUserId = hasAuthSession() ? "viewer" : null;
+      viewerFollowingIds = [];
+      localToolboxConnectors = [];
+
+      if (isChainAddress(feedAuthorKey)) {
+        void fetchChainOwnedStudioSnapshot(feedAuthorKey, {
+          authorId: feedAuthorKey,
+          limit: 200,
+          includeRuntimeCode: false,
         })
-        .catch(() => null);
-      viewerUserId = mePayload?.id ?? (hasAuthSession() ? mockCurrentUserId : null);
-
-      try {
-        await refreshFollowState(user.id);
-      } catch (socialError) {
-        console.warn("[User page] Failed to load social follow graph.", socialError);
-        viewerFollowingIds = [];
-        displayedFollowingIds = [];
-        displayedFollowerIds = [];
-        socialListsUnavailable = true;
+          .then((snapshot) => {
+            if (!isUserLoadRequestActive(requestVersion)) return;
+            if (user?.id !== activeUserId) return;
+            const targetedEvents = mapSnapshotParticlesToConnectorEvents(
+              feedAuthorKey,
+              snapshot.particles,
+            );
+            if (targetedEvents.length > 0) {
+              userFeedEvents = targetedEvents;
+            }
+          })
+          .catch((targetedError) => {
+            if (!isUserLoadRequestActive(requestVersion)) return;
+            console.warn("[User page] Targeted chain account fetch failed.", targetedError);
+          });
       }
 
-      try {
-        const toolbox = await getCurrentUserToolboxLibrary();
-        localToolboxConnectors = [...toolbox.connector];
-      } catch (toolboxError) {
-        console.warn("[User page] Failed to load toolbox from profile.", toolboxError);
-      }
+      isLoading = false;
+
+      void profileStatePromise.then((profileState) => {
+        if (!isUserLoadRequestActive(requestVersion)) return;
+        const viewerAddressFromProfile =
+          profileState?.me && typeof profileState.me === "object"
+            ? normalizeAddressForKey(normalizeProfileUser(profileState.me).address)
+            : "";
+        viewerUserId =
+          viewerAddressFromProfile || profileState?.userId || (hasAuthSession() ? "viewer" : null);
+        viewerFollowingIds = [...(profileState?.social.followedUserAddresses ?? [])];
+        localToolboxConnectors = [...(profileState?.toolbox.connector ?? [])];
+      });
+
+      const socialTarget = normalizeAddressForKey(user.address) || user.id;
+      void getUserSocialConnections(socialTarget)
+        .then((targetSocial) => {
+          if (!isUserLoadRequestActive(requestVersion)) return;
+          displayedFollowingIds = [...targetSocial.followingIds];
+          displayedFollowerIds = [...targetSocial.followerIds];
+          socialListsUnavailable = targetSocial.status !== "ok";
+        })
+        .catch((socialError) => {
+          if (!isUserLoadRequestActive(requestVersion)) return;
+          console.warn("[User page] Failed to load social follow graph.", socialError);
+          displayedFollowingIds = [];
+          displayedFollowerIds = [];
+          socialListsUnavailable = true;
+        });
     } catch (err) {
+      if (!isUserLoadRequestActive(requestVersion)) return;
       user = null;
       error = err instanceof Error ? err.message : "Unable to load user profile.";
-    } finally {
       isLoading = false;
     }
   };
 
   const handleToggleFollow = async () => {
-    if (!user || !viewerUserId || viewerUserId === user.id || followPending) return;
+    if (!user || !viewerUserId || followPending) return;
+    const targetAddress = normalizeAddressForKey(user.address);
+    if (!targetAddress) return;
     followPending = true;
 
     try {
-      const isFollowing = viewerFollowingIds.includes(user.id);
+      const isFollowing = viewerFollowingIds.includes(targetAddress);
       if (isFollowing) {
-        await unfollowUserInProfile(user.id);
+        await unfollowUserInProfile(targetAddress);
       } else {
-        await followUserInProfile(user.id);
+        await followUserInProfile(targetAddress);
       }
-      await refreshFollowState(user.id);
+      await refreshFollowState(targetAddress);
     } catch (err) {
       actionError = err instanceof Error ? err.message : "Failed to update follow state.";
     } finally {
@@ -173,6 +244,18 @@
         : "",
   );
   const toolboxConnectorIds = $derived.by(() => new SvelteSet(localToolboxConnectors));
+  const userFeedAuthorLabels = $derived.by(() => {
+    const labels: Record<string, string> = { ...servicesUserLabels };
+    if (!user) return labels;
+    const nickname = user.nickname.trim();
+    if (!nickname) return labels;
+    labels[user.id] = nickname;
+    const normalizedAddress = normalizeAddressForKey(user.address);
+    if (normalizedAddress) {
+      labels[normalizedAddress] = nickname;
+    }
+    return labels;
+  });
   const openConnectorInStudio = (connectorId: string) => {
     const base = resolve("/studio");
     const target = new URL(base, window.location.origin);
@@ -185,17 +268,29 @@
     if (toolboxConnectorIds.has(connectorId)) return;
     const previous = [...localToolboxConnectors];
     localToolboxConnectors = [...localToolboxConnectors, connectorId];
-    const currentUser = mockUsersById[mockCurrentUserId];
-    if (currentUser && !currentUser.toolbox.includes(connectorId)) {
-      currentUser.toolbox = [...currentUser.toolbox, connectorId];
-    }
     void addConnectorToCurrentUserToolbox(connectorId).catch((err) => {
       console.error("[User page] Failed to persist toolbox update.", err);
       localToolboxConnectors = previous;
     });
   };
 
-  onMount(loadUser);
+  $effect(() => {
+    const routeUserId = ($page.params.id ?? "").trim();
+    void loadUser(routeUserId);
+  });
+
+  onMount(() => {
+    void listServicesUsers()
+      .then((users) => {
+        servicesUserLabels = buildAuthorLabelMapFromServicesUsers(users);
+      })
+      .catch((error) => {
+        console.warn("[User page] Failed to load services user labels.", error);
+      });
+    return () => {
+      userLoadRequestVersion += 1;
+    };
+  });
 </script>
 
 <div class="user-page">
@@ -244,7 +339,13 @@
       </div>
 
       <div class="actions">
-        <Button variant="primary" type="button" onclick={loadUser}>Retry</Button>
+        <Button
+          variant="primary"
+          type="button"
+          onclick={() => void loadUser(($page.params.id ?? "").trim())}
+        >
+          Retry
+        </Button>
       </div>
     </SectionShell>
   {:else if user}
@@ -254,10 +355,12 @@
           {user}
           mode="public"
           {viewerUserId}
-          isFollowing={viewerFollowingIds.includes(user.id)}
+          isFollowing={Boolean(
+            resolvedUserFollowKey && viewerFollowingIds.includes(resolvedUserFollowKey),
+          )}
           {followPending}
-          followersCount={displayedFollowerIds.length}
-          followingCount={displayedFollowingIds.length}
+          followersCount={socialListsUnavailable ? undefined : displayedFollowerIds.length}
+          followingCount={socialListsUnavailable ? undefined : displayedFollowingIds.length}
           socialCountersDisabled={socialListsUnavailable}
           onOpenFollowers={openFollowersList}
           onOpenFollowing={openFollowingList}
@@ -278,6 +381,7 @@
           onConnectorOpen={openConnectorInStudio}
           onAddToToolbox={addConnectorToToolbox}
           {toolboxConnectorIds}
+          authorLabelById={userFeedAuthorLabels}
           emptyMessage="No activity by this user yet."
         />
       </div>
@@ -314,13 +418,13 @@
                     href={resolve("/u/[id]", { id })}
                     onclick={closeSocialList}
                   >
-                    <img
-                      class="social-list-avatar"
-                      src={mockUsersById[id]?.avatarUrl ?? mockUsersById[user.id]?.avatarUrl ?? ""}
-                      alt=""
-                    />
+                    <div class="social-list-avatar social-list-avatar--fallback" aria-hidden="true">
+                      U
+                    </div>
                     <div class="social-list-meta">
-                      <p class="social-list-name">{mockUsersById[id]?.nickname ?? id}</p>
+                      <p class="social-list-name">
+                        {servicesUserLabels[normalizeAddressForKey(id)] ?? id}
+                      </p>
                       <p class="social-list-id">{id}</p>
                     </div>
                   </a>
@@ -430,6 +534,10 @@
 
   .social-list-avatar {
     @apply h-9 w-9 rounded-lg border border-white/10 bg-white/5 object-cover shrink-0;
+  }
+
+  .social-list-avatar--fallback {
+    @apply flex items-center justify-center text-white/65 text-xs font-semibold;
   }
 
   .social-list-meta {

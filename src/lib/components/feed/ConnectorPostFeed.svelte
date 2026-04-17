@@ -14,6 +14,7 @@
     onAddToToolbox,
     toolboxConnectorIds,
     toolboxParticleIds,
+    authorLabelById,
     emptyMessage = "No events to display yet.",
   }: {
     events: NetworkFeedEvent[];
@@ -26,6 +27,7 @@
     onAddToToolbox?: ((connectorId: string) => void) | undefined;
     toolboxConnectorIds?: ReadonlySet<string>;
     toolboxParticleIds?: ReadonlySet<string>;
+    authorLabelById?: Readonly<Record<string, string>>;
     emptyMessage?: string;
   } = $props();
 
@@ -44,5 +46,6 @@
   onParticleOpen={resolvedOpenHandler}
   {onAddToToolbox}
   toolboxParticleIds={resolvedToolboxIds}
+  {authorLabelById}
   {emptyMessage}
 />

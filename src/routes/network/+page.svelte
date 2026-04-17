@@ -5,13 +5,14 @@
   import ConnectorPostFeed from "$lib/components/feed/ConnectorPostFeed.svelte";
   import {
     addConnectorToCurrentUserToolbox,
+    followFormatInProfile,
     followUserInProfile,
-    getCurrentUserSocialPreferences,
-    getCurrentUserToolboxLibrary,
+    getCurrentUserProfileState,
+    listServicesUsers,
+    unfollowUserInProfile,
+    unfollowFormatInProfile,
   } from "$lib/auth/api";
   import {
-    findParticlesByTerminalSet as findConnectorsByTerminalSet,
-    getParticleLabelMap as getConnectorLabelMap,
     listParticlePosts as listConnectorPosts,
     listParticleSearchEntities as listConnectorSearchEntities,
     syncParticlePostDataFromChain as syncConnectorPostDataFromChain,
@@ -19,30 +20,30 @@
     type ParticlePostEvent as ConnectorPostEvent,
   } from "$lib/feed/particlePostData";
   import {
-    buildFormatFeedEvents,
-    loadLocalFormats,
-    type ParticleFormat,
-  } from "$lib/formats/localFormats";
+    getChainFormats,
+    normalizeFormatHash,
+    resolveChainFormatsCursor,
+  } from "$lib/chain/registryApi";
+  import { computeFeedSourceAddresses } from "$lib/feed/feedSources";
+  import { resolveNetworkFeedEmptyMessage } from "$lib/feed/networkFeedUi";
+  import {
+    getServicesUserEthereumAddress,
+    resolveServicesUserDisplayLabel,
+  } from "$lib/social/authorLabels";
   import Button from "$lib/components/ui/Button.svelte";
   import Input from "$lib/components/ui/Input.svelte";
-  import {
-    displayUsersById,
-    mockCurrentUserId,
-    mockUsers,
-    mockUsersById,
-    type User,
-  } from "$lib/data/users";
+  import { getChainFormatDisplayName } from "$lib/formats/chainFormats";
 
   const FEED_PAGE_SIZE = 10;
-  const MIN_INITIAL_FEED_EVENTS = 3;
-  const CHAIN_SOURCE_LIMIT_STEP = 4;
-  const CHAIN_SOURCE_LIMIT_MAX = 64;
-  const CHAIN_OWNED_PER_SOURCE_LIMIT = 4;
-  const EMPTY_FEED_VERIFICATION_MAX_OWNED_PER_SOURCE = 32;
-  const EMPTY_FEED_RETRY_ATTEMPTS = 2;
-  const EMPTY_FEED_RETRY_DELAY_MS = 700;
-  const EMPTY_FEED_BACKGROUND_REFRESH_MAX = 2;
-  const EMPTY_FEED_BACKGROUND_DELAY_MS = 1200;
+  const FEED_SOURCE_MAX_OWNED_PER_SOURCE = 8;
+  const RUNTIME_SEARCH_MAX_OWNED_PER_SOURCE = 16;
+  const CHAIN_DISCOVERY_FORMATS_PAGE_LIMIT = 256;
+  const CHAIN_DISCOVERY_FORMATS_PAGE_GUARD = 128;
+
+  type DiscoveredUser = {
+    address: string;
+    label: string;
+  };
 
   let followSearch = $state("");
   let feedEvents = $state<ConnectorPostEvent[]>([]);
@@ -50,23 +51,46 @@
   let feedSyncSettled = $state(false);
   let feedLoadMoreBusy = $state(false);
   let feedLoadError = $state("");
-  let formats = $state<ParticleFormat[]>([]);
   let chainElements = $state(listConnectorSearchEntities());
   let visibleEventCount = $state(FEED_PAGE_SIZE);
-  let sourceSyncLimit = $state(CHAIN_SOURCE_LIMIT_STEP);
-  let canFetchMoreFromChain = $state(true);
   let runtimeSearchHydrationBusy = $state(false);
   let runtimeSearchHydrated = $state(false);
-  let emptyFeedBackgroundRefreshes = $state(0);
-  let emptyFeedBackgroundBusy = $state(false);
+  let discoveredUsers = $state<DiscoveredUser[]>([]);
+  let discoveredUsersLoaded = $state(false);
+  let discoveredUsersLoading = $state(false);
+  let discoveredFormatHashes = $state<string[]>([]);
+  let discoveredFormatHashesLoaded = $state(false);
+  let discoveredFormatHashesLoading = $state(false);
   let localFollowing = $state<string[]>([]);
   let localFollowedFormats = $state<string[]>([]);
-  let localToolboxConnectors = $state<string[]>([
-    ...(mockUsersById[mockCurrentUserId]?.toolbox ?? []),
-  ]);
+  let localToolboxConnectors = $state<string[]>([]);
+  let currentUserAddress = $state("");
+  let currentUserLabel = $state("");
+  let socialPreferencesHydrated = $state(false);
   let pageMounted = false;
   let feedSyncRequestVersion = 0;
   let runtimeHydrationRequestVersion = 0;
+
+  const normalizeAddressForKey = (value: string): string => {
+    const trimmed = value.trim().toLowerCase();
+    if (!trimmed) return "";
+    return trimmed.startsWith("0x") ? trimmed : `0x${trimmed}`;
+  };
+
+  const shortAddress = (address: string): string => {
+    const normalized = normalizeAddressForKey(address);
+    if (!normalized) return "";
+    if (normalized.length < 14) return normalized;
+    return `${normalized.slice(0, 8)}...${normalized.slice(-4)}`;
+  };
+
+  const normalizeFormatHashForKey = (value: string): string => {
+    try {
+      return normalizeFormatHash(value);
+    } catch {
+      return "";
+    }
+  };
 
   const beginFeedSyncRequest = (): number => {
     feedSyncRequestVersion += 1;
@@ -87,44 +111,52 @@
   const followedAuthorIds = $derived.by(() => new SvelteSet(localFollowing));
   const followedFormatKeys = $derived.by(() => new SvelteSet(localFollowedFormats));
   const toolboxConnectorIds = $derived.by(() => new SvelteSet(localToolboxConnectors));
-  const feedUiLoading = $derived.by(() => feedLoading || !feedSyncSettled);
-  const searchQuery = $derived.by(() => followSearch.trim().toLowerCase());
-  const formatFeedEvents = $derived.by(() =>
-    buildFormatFeedEvents(formats, getConnectorLabelMap()),
+  const currentUserAddressKey = $derived.by(() => normalizeAddressForKey(currentUserAddress));
+  const feedUiLoading = $derived.by(
+    () => feedLoading || !feedSyncSettled || !socialPreferencesHydrated,
   );
-  const followedFormatConnectorIds = $derived.by(() => {
-    const selectedFormats = formatFeedEvents.filter(
-      (event) =>
-        followedFormatKeys.has(event.formatId) ||
-        followedFormatKeys.has(event.formatSlug) ||
-        followedFormatKeys.has(event.formatName),
-    );
-    const ids = new SvelteSet<string>();
-    selectedFormats.forEach((event) => {
-      event.terminalParticleIds.forEach((id) => ids.add(id));
-      findConnectorsByTerminalSet(event.terminalParticleIds).forEach((connector) => {
-        ids.add(connector.id);
-      });
+  const searchQuery = $derived.by(() => followSearch.trim().toLowerCase());
+  const discoveredUserLabelByAddress = $derived.by(
+    () =>
+      new Map(
+        discoveredUsers.map(
+          (entry) => [normalizeAddressForKey(entry.address), entry.label] as const,
+        ),
+      ),
+  );
+  const feedAuthorLabels = $derived.by(() => {
+    const labelMap: Record<string, string> = {};
+    discoveredUsers.forEach((entry) => {
+      const normalized = normalizeAddressForKey(entry.address);
+      if (!normalized) return;
+      const label = entry.label.trim();
+      if (!label) return;
+      labelMap[normalized] = label;
     });
-    return ids;
+    if (currentUserAddressKey) {
+      const label = currentUserLabel.trim();
+      if (label) {
+        labelMap[currentUserAddressKey] = label;
+      }
+    }
+    return labelMap;
   });
   const networkFeedEvents = $derived.by(() => {
-    const combined = [...feedEvents, ...formatFeedEvents] as NetworkFeedEvent[];
+    const combined = [...feedEvents] as NetworkFeedEvent[];
     const filtered = combined.filter((event) => {
-      if (event.type === "format") {
-        return (
-          followedAuthorIds.has(event.authorId) ||
-          followedFormatKeys.has(event.formatId) ||
-          followedFormatKeys.has(event.formatSlug) ||
-          followedFormatKeys.has(event.formatName)
-        );
-      }
+      const authorAddress = normalizeAddressForKey(event.authorId);
+      const authoredByViewer = Boolean(
+        currentUserAddressKey && authorAddress === currentUserAddressKey,
+      );
       if (event.type === "connector") {
+        const connectorFormatHash = normalizeFormatHashForKey(event.formatHash ?? "");
         return (
-          followedAuthorIds.has(event.authorId) || followedFormatConnectorIds.has(event.particleId)
+          authoredByViewer ||
+          followedAuthorIds.has(authorAddress) ||
+          Boolean(connectorFormatHash && followedFormatKeys.has(connectorFormatHash))
         );
       }
-      return followedAuthorIds.has(event.authorId);
+      return authoredByViewer || followedAuthorIds.has(authorAddress);
     });
 
     const sorted = [...filtered].sort((a, b) => {
@@ -133,28 +165,25 @@
       return b.id.localeCompare(a.id);
     });
 
-    // Fallback for prototype mode: if follow mapping is temporarily out of sync
-    // (e.g. services UUIDs vs local aliases), avoid false "No events" empties.
-    if (sorted.length === 0 && combined.length > 0) {
-      return [...combined].sort((a, b) => {
-        const byCreatedAt = b.createdAt - a.createdAt;
-        if (byCreatedAt !== 0) return byCreatedAt;
-        return b.id.localeCompare(a.id);
-      });
-    }
     return sorted;
   });
   const visibleNetworkFeedEvents = $derived.by(() =>
     networkFeedEvents.slice(0, Math.max(0, visibleEventCount)),
   );
   const hasMoreVisibleEvents = $derived.by(() => networkFeedEvents.length > visibleEventCount);
-  const canLoadMoreEvents = $derived.by(() => hasMoreVisibleEvents || canFetchMoreFromChain);
+  const canLoadMoreEvents = $derived.by(() => hasMoreVisibleEvents);
   const feedEmptyMessage = $derived.by(() => {
-    if (feedLoadError) return feedLoadError;
-    if (feedEvents.length > 0 && visibleNetworkFeedEvents.length === 0) {
-      return "No events from followed users or followed formats yet.";
-    }
-    return "No events to display yet.";
+    const hasFollowTargets = localFollowing.length > 0 || localFollowedFormats.length > 0;
+    const hasOwnEvents = Boolean(
+      currentUserAddressKey &&
+      feedEvents.some((event) => normalizeAddressForKey(event.authorId) === currentUserAddressKey),
+    );
+    return resolveNetworkFeedEmptyMessage({
+      feedLoadError,
+      hasVisibleEvents: visibleNetworkFeedEvents.length > 0,
+      hasFollowTargets,
+      hasOwnEvents,
+    });
   });
 
   const refreshFeedStateFromCache = () => {
@@ -166,15 +195,19 @@
   };
 
   const userSearchResults = $derived.by(() => {
-    if (!searchQuery) return [] as User[];
-    return mockUsers
-      .filter((user) => user.id !== mockCurrentUserId)
-      .filter((user) => {
-        return `${user.nickname} ${user.address} ${user.bio ?? ""}`
-          .toLowerCase()
-          .includes(searchQuery);
-      })
-      .slice(0, 6);
+    if (!searchQuery) return [] as DiscoveredUser[];
+    return discoveredUsers
+      .filter((user) => `${user.label} ${user.address}`.toLowerCase().includes(searchQuery))
+      .slice(0, 8);
+  });
+
+  const formatSearchResults = $derived.by(() => {
+    if (!searchQuery) return [] as string[];
+    return discoveredFormatHashes
+      .filter((hash) =>
+        `${hash} ${getChainFormatDisplayName(hash)}`.toLowerCase().includes(searchQuery),
+      )
+      .slice(0, 8);
   });
 
   type SearchableEntityKind = "connector" | "transformation" | "condition";
@@ -216,167 +249,59 @@
         kind: item.kind,
         entityId: item.id,
         summary: item.summary,
-        creatorName: displayUsersById[item.authorId]?.nickname ?? "unknown contributor",
+        creatorName:
+          discoveredUserLabelByAddress.get(normalizeAddressForKey(item.authorId)) ??
+          shortAddress(item.authorId) ??
+          "unknown contributor",
       }))
       .slice(0, 10);
   });
 
   const showSearchResults = $derived.by(() => searchQuery.length > 0);
 
+  const getFeedSourceAddresses = (): string[] => {
+    return computeFeedSourceAddresses({
+      currentUserAddress: currentUserAddressKey,
+      followedUserAddresses: localFollowing,
+    });
+  };
+
   const loadChainFeed = async () => {
     const requestVersion = beginFeedSyncRequest();
     feedLoadError = "";
     feedLoading = true;
     feedSyncSettled = false;
-    emptyFeedBackgroundRefreshes = 0;
-    emptyFeedBackgroundBusy = false;
-
+    const sourceAddresses = getFeedSourceAddresses();
+    if (import.meta.env.DEV) {
+      console.info("[Network feed] Sync sources", sourceAddresses);
+    }
     try {
-      await syncConnectorPostDataFromChain({
-        force: true,
-        forceSources: true,
-        maxSources: sourceSyncLimit,
-        maxOwnedPerSource: CHAIN_OWNED_PER_SOURCE_LIMIT,
-        includeRuntimeCode: false,
-      });
+      if (sourceAddresses.length === 0) {
+        feedEvents = [];
+        chainElements = { connectors: [], transformations: [], conditions: [] };
+      } else {
+        await syncConnectorPostDataFromChain({
+          force: true,
+          sourceAddresses,
+          maxOwnedPerSource: FEED_SOURCE_MAX_OWNED_PER_SOURCE,
+          includeRuntimeCode: false,
+          includeDependencyExpansion: false,
+        });
+        if (!isFeedSyncRequestActive(requestVersion)) return;
+        refreshFeedStateFromCache();
+      }
+      visibleEventCount = FEED_PAGE_SIZE;
     } catch (error) {
+      if (!isFeedSyncRequestActive(requestVersion)) return;
       console.error("[Network feed] Failed to sync chain-backed connector posts.", error);
       feedLoadError = error instanceof Error ? error.message : "Unable to load network feed.";
-    }
-    if (!isFeedSyncRequestActive(requestVersion)) return;
-    refreshFeedStateFromCache();
-
-    // Fast path can miss active sources if early source windows are sparse.
-    // Auto-expand sources until we have a minimally useful feed window.
-    if (feedEvents.length < MIN_INITIAL_FEED_EVENTS && sourceSyncLimit < CHAIN_SOURCE_LIMIT_MAX) {
-      let nextLimit = sourceSyncLimit;
-      while (feedEvents.length < MIN_INITIAL_FEED_EVENTS && nextLimit < CHAIN_SOURCE_LIMIT_MAX) {
-        nextLimit = Math.min(CHAIN_SOURCE_LIMIT_MAX, nextLimit + CHAIN_SOURCE_LIMIT_STEP);
-        sourceSyncLimit = nextLimit;
-        try {
-          await syncConnectorPostDataFromChain({
-            force: true,
-            forceSources: true,
-            maxSources: sourceSyncLimit,
-            maxOwnedPerSource: CHAIN_OWNED_PER_SOURCE_LIMIT,
-            includeRuntimeCode: false,
-          });
-        } catch (error) {
-          console.warn("[Network feed] Auto-expand source sync failed.", error);
-          feedLoadError = error instanceof Error ? error.message : "Unable to load network feed.";
-          break;
-        }
-        if (!isFeedSyncRequestActive(requestVersion)) return;
-        refreshFeedStateFromCache();
+    } finally {
+      if (isFeedSyncRequestActive(requestVersion)) {
+        feedLoading = false;
+        feedSyncSettled = true;
       }
     }
-
-    // Final fallback: if capped scan found nothing, attempt one uncapped sync to avoid false-empty UI
-    // when active sources are beyond the capped window.
-    if (feedEvents.length < MIN_INITIAL_FEED_EVENTS && sourceSyncLimit >= CHAIN_SOURCE_LIMIT_MAX) {
-      try {
-        await syncConnectorPostDataFromChain({
-          force: true,
-          forceSources: true,
-          maxOwnedPerSource: CHAIN_OWNED_PER_SOURCE_LIMIT,
-          includeRuntimeCode: false,
-        });
-      } catch (error) {
-        console.warn("[Network feed] Uncapped source sync failed.", error);
-        feedLoadError = error instanceof Error ? error.message : "Unable to load network feed.";
-      }
-      if (!isFeedSyncRequestActive(requestVersion)) return;
-      refreshFeedStateFromCache();
-    }
-
-    // Guard against transient false-empty states: verify once with a broader pull
-    // before letting the UI settle into the "No events" state.
-    if (feedEvents.length === 0 && !feedLoadError) {
-      try {
-        await syncConnectorPostDataFromChain({
-          force: true,
-          forceSources: true,
-          maxOwnedPerSource: EMPTY_FEED_VERIFICATION_MAX_OWNED_PER_SOURCE,
-          includeRuntimeCode: false,
-        });
-      } catch (error) {
-        console.warn("[Network feed] Empty-feed verification sync failed.", error);
-        feedLoadError = error instanceof Error ? error.message : "Unable to load network feed.";
-      }
-      if (!isFeedSyncRequestActive(requestVersion)) return;
-      refreshFeedStateFromCache();
-    }
-
-    // Additional resilience for intermittent backend/source readiness.
-    // Keep the skeleton visible and retry briefly before rendering an empty state.
-    if (feedEvents.length === 0 && !feedLoadError) {
-      for (let attempt = 0; attempt < EMPTY_FEED_RETRY_ATTEMPTS; attempt += 1) {
-        await new Promise((resolveAttempt) =>
-          setTimeout(resolveAttempt, EMPTY_FEED_RETRY_DELAY_MS * (attempt + 1)),
-        );
-
-        try {
-          await syncConnectorPostDataFromChain({
-            force: true,
-            forceSources: true,
-            maxOwnedPerSource: EMPTY_FEED_VERIFICATION_MAX_OWNED_PER_SOURCE,
-            includeRuntimeCode: false,
-          });
-        } catch (error) {
-          console.warn("[Network feed] Empty-feed retry sync failed.", error);
-        }
-        if (!isFeedSyncRequestActive(requestVersion)) return;
-
-        refreshFeedStateFromCache();
-        if (feedEvents.length > 0) break;
-      }
-    }
-
-    if (!isFeedSyncRequestActive(requestVersion)) return;
-    canFetchMoreFromChain = sourceSyncLimit < CHAIN_SOURCE_LIMIT_MAX;
-
-    feedLoading = false;
-    feedSyncSettled = true;
   };
-
-  $effect(() => {
-    if (feedLoading || !feedSyncSettled) return;
-    if (feedLoadError || feedEvents.length > 0) return;
-    if (emptyFeedBackgroundBusy) return;
-    if (emptyFeedBackgroundRefreshes >= EMPTY_FEED_BACKGROUND_REFRESH_MAX) return;
-
-    const nextAttempt = emptyFeedBackgroundRefreshes + 1;
-    const requestVersion = beginFeedSyncRequest();
-    emptyFeedBackgroundBusy = true;
-    feedLoading = true;
-    feedSyncSettled = false;
-
-    void (async () => {
-      await new Promise((resolveAttempt) =>
-        setTimeout(resolveAttempt, EMPTY_FEED_BACKGROUND_DELAY_MS * nextAttempt),
-      );
-      if (!isFeedSyncRequestActive(requestVersion)) return;
-      try {
-        await syncConnectorPostDataFromChain({
-          force: true,
-          forceSources: true,
-          maxOwnedPerSource: EMPTY_FEED_VERIFICATION_MAX_OWNED_PER_SOURCE,
-          includeRuntimeCode: false,
-        });
-      } catch (error) {
-        console.warn("[Network feed] Background empty-feed refresh failed.", error);
-      }
-      if (!isFeedSyncRequestActive(requestVersion)) return;
-      refreshFeedStateFromCache();
-      emptyFeedBackgroundRefreshes = nextAttempt;
-      canFetchMoreFromChain = sourceSyncLimit < CHAIN_SOURCE_LIMIT_MAX;
-    })().finally(() => {
-      if (!isFeedSyncRequestActive(requestVersion)) return;
-      emptyFeedBackgroundBusy = false;
-      feedLoading = false;
-      feedSyncSettled = true;
-    });
-  });
 
   const loadMoreFeedEvents = async () => {
     if (feedLoadMoreBusy) return;
@@ -386,43 +311,7 @@
       return;
     }
 
-    if (!canFetchMoreFromChain) return;
-
-    const beforeCount = listConnectorPosts().length;
-    const nextLimit = Math.min(CHAIN_SOURCE_LIMIT_MAX, sourceSyncLimit + CHAIN_SOURCE_LIMIT_STEP);
-    if (nextLimit <= sourceSyncLimit) {
-      canFetchMoreFromChain = false;
-      return;
-    }
-
-    feedLoadMoreBusy = true;
-    sourceSyncLimit = nextLimit;
-    try {
-      await syncConnectorPostDataFromChain({
-        force: true,
-        forceSources: true,
-        maxSources: sourceSyncLimit,
-        maxOwnedPerSource: CHAIN_OWNED_PER_SOURCE_LIMIT,
-        includeRuntimeCode: false,
-      });
-      if (!pageMounted) return;
-      const afterCount = listConnectorPosts().length;
-      feedEvents = listConnectorPosts();
-      chainElements = listConnectorSearchEntities();
-      visibleEventCount += FEED_PAGE_SIZE;
-      canFetchMoreFromChain = sourceSyncLimit < CHAIN_SOURCE_LIMIT_MAX || afterCount > beforeCount;
-      if (feedEvents.length > 0) {
-        feedLoadError = "";
-      }
-    } catch (error) {
-      if (!pageMounted) return;
-      console.error("[Network feed] Failed to load more events.", error);
-      feedLoadError = error instanceof Error ? error.message : "Unable to load more events.";
-    } finally {
-      if (pageMounted) {
-        feedLoadMoreBusy = false;
-      }
-    }
+    return;
   };
 
   $effect(() => {
@@ -433,14 +322,17 @@
       return;
     }
 
+    const sourceAddresses = getFeedSourceAddresses();
+    if (sourceAddresses.length === 0) return;
+
     const requestVersion = beginRuntimeHydrationRequest();
     runtimeSearchHydrationBusy = true;
     void syncConnectorPostDataFromChain({
       force: true,
-      forceSources: true,
-      maxSources: sourceSyncLimit,
-      maxOwnedPerSource: CHAIN_OWNED_PER_SOURCE_LIMIT,
+      sourceAddresses,
+      maxOwnedPerSource: RUNTIME_SEARCH_MAX_OWNED_PER_SOURCE,
       includeRuntimeCode: true,
+      includeDependencyExpansion: false,
     })
       .then(() => {
         if (!isRuntimeHydrationRequestActive(requestVersion)) return;
@@ -480,15 +372,45 @@
     window.open(target.toString(), "_blank", "noopener,noreferrer");
   };
 
-  const followUser = async (userId: User["id"]) => {
-    if (localFollowing.includes(userId)) return;
+  const toggleUserFollow = async (address: string) => {
+    const normalizedAddress = normalizeAddressForKey(address);
+    if (!normalizedAddress) return;
     const previous = [...localFollowing];
-    localFollowing = [...localFollowing, userId];
+    const isFollowing = localFollowing.includes(normalizedAddress);
+    localFollowing = isFollowing
+      ? localFollowing.filter((entry) => entry !== normalizedAddress)
+      : [...localFollowing, normalizedAddress];
     try {
-      await followUserInProfile(userId);
+      if (isFollowing) {
+        await unfollowUserInProfile(normalizedAddress);
+      } else {
+        await followUserInProfile(normalizedAddress);
+      }
+      runtimeSearchHydrated = false;
+      void loadChainFeed();
     } catch (error) {
       console.error("[Network feed] Failed to persist following state.", error);
       localFollowing = previous;
+    }
+  };
+
+  const toggleFormatFollow = async (formatHash: string) => {
+    const normalizedHash = normalizeFormatHashForKey(formatHash);
+    if (!normalizedHash) return;
+    const previous = [...localFollowedFormats];
+    const isFollowing = followedFormatKeys.has(normalizedHash);
+    localFollowedFormats = isFollowing
+      ? localFollowedFormats.filter((entry) => entry !== normalizedHash)
+      : Array.from(new Set([...localFollowedFormats, normalizedHash]));
+    try {
+      if (isFollowing) {
+        await unfollowFormatInProfile(normalizedHash);
+      } else {
+        await followFormatInProfile(normalizedHash);
+      }
+    } catch (error) {
+      console.error("[Network feed] Failed to persist followed format state.", error);
+      localFollowedFormats = previous;
     }
   };
 
@@ -496,48 +418,164 @@
     if (toolboxConnectorIds.has(connectorId)) return;
     const previous = [...localToolboxConnectors];
     localToolboxConnectors = [...localToolboxConnectors, connectorId];
-    const currentUser = mockUsersById[mockCurrentUserId];
-    if (currentUser && !currentUser.toolbox.includes(connectorId)) {
-      currentUser.toolbox = [...currentUser.toolbox, connectorId];
-    }
     void addConnectorToCurrentUserToolbox(connectorId).catch((error) => {
       console.error("[Network feed] Failed to persist toolbox update.", error);
       localToolboxConnectors = previous;
     });
   };
 
+  const loadDiscoveredFormatHashes = async (): Promise<string[]> => {
+    const discovered = new SvelteSet<string>();
+    let after: string | null = null;
+    let guard = 0;
+
+    do {
+      const response = await getChainFormats({
+        limit: CHAIN_DISCOVERY_FORMATS_PAGE_LIMIT,
+        ...(after ? { after } : {}),
+      });
+      const formats = Array.isArray(response.formats) ? response.formats : [];
+      formats.forEach((rawHash) => {
+        const normalized = normalizeFormatHashForKey(rawHash);
+        if (normalized) discovered.add(normalized);
+      });
+      const cursor = resolveChainFormatsCursor(response);
+      if (!cursor.hasMore || !cursor.nextAfter) break;
+      after = cursor.nextAfter;
+      guard += 1;
+    } while (guard < CHAIN_DISCOVERY_FORMATS_PAGE_GUARD);
+
+    return Array.from(discovered).sort((a, b) => a.localeCompare(b));
+  };
+
+  const loadDiscoveredUsers = async (): Promise<DiscoveredUser[]> => {
+    const users = await listServicesUsers();
+    const nextUsers: DiscoveredUser[] = [];
+    users.forEach((user) => {
+      const address = getServicesUserEthereumAddress(user);
+      if (!address) return;
+      if (nextUsers.some((entry) => entry.address === address)) return;
+      nextUsers.push({
+        address,
+        label: resolveServicesUserDisplayLabel(user, address),
+      });
+    });
+    return nextUsers.sort((a, b) => a.address.localeCompare(b.address));
+  };
+
+  const extractEthereumAddress = (value: unknown): string => {
+    if (!value || typeof value !== "object") return "";
+    const root = value as Record<string, unknown>;
+    const nested =
+      root.user && typeof root.user === "object" ? (root.user as Record<string, unknown>) : root;
+    const raw =
+      typeof nested.ethereum_address === "string"
+        ? nested.ethereum_address
+        : typeof nested.ethereumAddress === "string"
+          ? nested.ethereumAddress
+          : "";
+    return normalizeAddressForKey(raw);
+  };
+
+  const extractDisplayName = (value: unknown): string => {
+    if (!value || typeof value !== "object") return "";
+    const root = value as Record<string, unknown>;
+    const nested =
+      root.user && typeof root.user === "object" ? (root.user as Record<string, unknown>) : root;
+    if (typeof nested.display_name === "string" && nested.display_name.trim().length > 0) {
+      return nested.display_name.trim();
+    }
+    if (typeof nested.displayName === "string" && nested.displayName.trim().length > 0) {
+      return nested.displayName.trim();
+    }
+    return "";
+  };
+
+  $effect(() => {
+    if (searchQuery.length === 0) return;
+    if (discoveredUsersLoaded || discoveredUsersLoading) return;
+    discoveredUsersLoading = true;
+    discoveredUsersLoading = true;
+    void loadDiscoveredUsers()
+      .then((users) => {
+        if (!pageMounted) return;
+        discoveredUsers = [...users];
+        discoveredUsersLoaded = true;
+      })
+      .catch((error) => {
+        if (!pageMounted) return;
+        console.warn("[Network feed] Failed to load users from services API.", error);
+      })
+      .finally(() => {
+        if (!pageMounted) return;
+        discoveredUsersLoading = false;
+      });
+  });
+
+  $effect(() => {
+    if (searchQuery.length === 0) return;
+    if (discoveredFormatHashesLoaded || discoveredFormatHashesLoading) return;
+    discoveredFormatHashesLoading = true;
+    void loadDiscoveredFormatHashes()
+      .then((hashes) => {
+        if (!pageMounted) return;
+        discoveredFormatHashes = [...hashes];
+        discoveredFormatHashesLoaded = true;
+      })
+      .catch((error) => {
+        if (!pageMounted) return;
+        console.warn("[Network feed] Failed to load chain format discovery.", error);
+      })
+      .finally(() => {
+        if (!pageMounted) return;
+        discoveredFormatHashesLoading = false;
+      });
+  });
+
   onMount(() => {
     pageMounted = true;
-    formats = loadLocalFormats();
-    void Promise.allSettled([
-      getCurrentUserToolboxLibrary(),
-      getCurrentUserSocialPreferences(),
-    ]).then((results) => {
-      if (!pageMounted) return;
-      const [toolboxResult, socialResult] = results;
-
-      if (toolboxResult.status === "fulfilled") {
-        localToolboxConnectors = [...toolboxResult.value.connector];
-      } else {
-        console.warn(
-          "[Network feed] Failed to load toolbox preferences from profile.",
-          toolboxResult.reason,
-        );
-      }
-
-      if (socialResult.status === "fulfilled") {
-        localFollowing =
-          socialResult.value.followedUserIds.length > 0
-            ? [...socialResult.value.followedUserIds]
-            : Object.keys(displayUsersById).filter((id) => id !== mockCurrentUserId);
-        localFollowedFormats = [...socialResult.value.followedFormatIds];
-      } else {
-        console.warn("[Network feed] Failed to load social preferences.", socialResult.reason);
-        localFollowing = Object.keys(displayUsersById).filter((id) => id !== mockCurrentUserId);
+    socialPreferencesHydrated = false;
+    void getCurrentUserProfileState({ preferCached: true })
+      .then((profileState) => {
+        if (!pageMounted) return;
+        localToolboxConnectors = [...profileState.toolbox.connector];
+        currentUserAddress = extractEthereumAddress(profileState.me);
+        currentUserLabel = extractDisplayName(profileState.me);
+        localFollowing = profileState.social.followedUserAddresses
+          .map(normalizeAddressForKey)
+          .filter(Boolean);
+        localFollowedFormats = profileState.social.followedFormatHashes
+          .map(normalizeFormatHashForKey)
+          .filter(Boolean);
+        socialPreferencesHydrated = true;
+        void loadChainFeed();
+      })
+      .catch((error) => {
+        if (!pageMounted) return;
+        console.warn("[Network feed] Failed to load profile state.", error);
+        localToolboxConnectors = [];
+        currentUserAddress = "";
+        currentUserLabel = "";
+        localFollowing = [];
         localFollowedFormats = [];
-      }
-    });
-    void loadChainFeed();
+        socialPreferencesHydrated = true;
+        void loadChainFeed();
+      });
+
+    void loadDiscoveredUsers()
+      .then((users) => {
+        if (!pageMounted) return;
+        discoveredUsers = [...users];
+        discoveredUsersLoaded = true;
+      })
+      .catch((error) => {
+        if (!pageMounted) return;
+        console.warn("[Network feed] Failed to pre-hydrate services user labels.", error);
+      })
+      .finally(() => {
+        if (!pageMounted) return;
+        discoveredUsersLoading = false;
+      });
 
     return () => {
       pageMounted = false;
@@ -569,32 +607,65 @@
           {#if userSearchResults.length}
             <div class="result-group">
               <p class="result-group-label">Users</p>
-              {#each userSearchResults as user (user.id)}
+              {#each userSearchResults as user (user.address)}
                 <div class="follow-candidate-item" role="listitem">
                   <div class="candidate-meta">
-                    <img
-                      class="candidate-avatar"
-                      src={user.avatarUrl}
-                      alt={`${user.nickname} avatar`}
-                    />
+                    <div class="candidate-avatar candidate-avatar--glyph" aria-hidden="true">U</div>
                     <div class="candidate-text">
-                      <p class="candidate-name">{user.nickname}</p>
-                      <p class="candidate-kind">{user.kind === "agent" ? "AI Agent" : "Human"}</p>
+                      <p class="candidate-name">{user.label}</p>
+                      <p class="candidate-kind">{user.address}</p>
                     </div>
                   </div>
-                  {#if followedAuthorIds.has(user.id)}
-                    <span class="candidate-state">Following</span>
-                  {:else}
+                  <Button
+                    variant={followedAuthorIds.has(user.address) ? "ghost" : "primary"}
+                    onclick={() => {
+                      void toggleUserFollow(user.address);
+                    }}
+                    className="follow-btn"
+                  >
+                    {followedAuthorIds.has(user.address) ? "Following" : "Follow"}
+                  </Button>
+                </div>
+              {/each}
+            </div>
+          {/if}
+
+          {#if formatSearchResults.length}
+            <div class="result-group">
+              <p class="result-group-label">Formats</p>
+              {#each formatSearchResults as formatHash (formatHash)}
+                <div class="follow-candidate-item" role="listitem">
+                  <div class="candidate-meta">
+                    <div class="candidate-avatar candidate-avatar--glyph" aria-hidden="true">F</div>
+                    <div class="candidate-text">
+                      <p class="candidate-name">{getChainFormatDisplayName(formatHash)}</p>
+                      <p class="candidate-kind">{formatHash}</p>
+                    </div>
+                  </div>
+                  <div class="candidate-actions">
                     <Button
                       variant="ghost"
                       onclick={() => {
-                        void followUser(user.id);
+                        window.open(
+                          resolve("/f/[slug]", { slug: formatHash }),
+                          "_blank",
+                          "noopener,noreferrer",
+                        );
                       }}
                       className="follow-btn"
                     >
-                      Follow
+                      Open
                     </Button>
-                  {/if}
+                    <Button
+                      variant={followedFormatKeys.has(formatHash) ? "ghost" : "primary"}
+                      onclick={() => {
+                        void toggleFormatFollow(formatHash);
+                      }}
+                      className="follow-btn"
+                    >
+                      {followedFormatKeys.has(formatHash) ? "Following" : "Follow"}
+                    </Button>
+                  </div>
                 </div>
               {/each}
             </div>
@@ -638,8 +709,14 @@
             </div>
           {/if}
 
-          {#if userSearchResults.length === 0 && entitySearchResults.length === 0}
-            <div class="search-empty" role="listitem">No users or network elements found.</div>
+          {#if userSearchResults.length === 0 && formatSearchResults.length === 0 && entitySearchResults.length === 0}
+            <div class="search-empty" role="listitem">
+              {#if discoveredUsersLoading || discoveredFormatHashesLoading || runtimeSearchHydrationBusy}
+                Searching network data...
+              {:else}
+                No users, formats, or network elements found.
+              {/if}
+            </div>
           {/if}
         </div>
       {/if}
@@ -656,6 +733,7 @@
     onConnectorOpen={openConnectorInStudio}
     onAddToToolbox={addConnectorToToolbox}
     {toolboxConnectorIds}
+    authorLabelById={feedAuthorLabels}
   />
 </div>
 
@@ -731,8 +809,8 @@
     @apply text-[0.62rem] uppercase tracking-[0.14em] text-white/45;
   }
 
-  .candidate-state {
-    @apply text-[0.62rem] uppercase tracking-[0.14em] text-white/45 px-1;
+  .candidate-actions {
+    @apply flex items-center gap-2;
   }
 
   .search-empty {

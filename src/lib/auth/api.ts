@@ -4,7 +4,6 @@ import { resolve } from "$app/paths";
 import {
   extraChainSourceProfiles,
   mockCurrentUserId,
-  mockFollowingByUserId,
   mockUsers,
   mockUsersById,
 } from "$lib/data/users";
@@ -663,7 +662,12 @@ const hasEthereumAddress = (user: ServicesUserRecord): boolean => {
 const hydrateServicesUsersById = async (
   users: ServicesUserRecord[],
 ): Promise<ServicesUserRecord[]> => {
-  const toHydrate = users.filter((user) => !hasEthereumAddress(user));
+  const toHydrate = users.filter((user) => {
+    if (hasEthereumAddress(user)) return false;
+    const id = typeof user.id === "string" ? user.id.trim() : "";
+    if (/^0x[0-9a-f]{40}$/i.test(id)) return false;
+    return true;
+  });
   if (toHydrate.length === 0) return users;
 
   const settled = await Promise.allSettled(
@@ -767,8 +771,23 @@ export type ToolboxLibraryProfile = {
 export type ToolboxItemKind = keyof ToolboxLibraryProfile;
 
 export type SocialPreferencesProfile = {
-  followedUserIds: string[];
-  followedFormatIds: string[];
+  followedUserAddresses: string[];
+  followedFormatHashes: string[];
+};
+
+export type CurrentUserProfileState = {
+  me: unknown | null;
+  userId: string | null;
+  social: SocialPreferencesProfile;
+  toolbox: ToolboxLibraryProfile;
+};
+
+export type UserSocialConnectionsStatus = "ok" | "address_not_indexed_in_services";
+
+export type UserSocialConnections = {
+  followingIds: string[];
+  followerIds: string[];
+  status: UserSocialConnectionsStatus;
 };
 
 const asRecord = (value: unknown): Record<string, unknown> =>
@@ -781,6 +800,23 @@ const asStringArray = (value: unknown): string[] =>
 
 const uniqueStrings = (values: string[]) =>
   Array.from(new Set(values.map((v) => v.trim()).filter(Boolean)));
+
+const ETH_ADDRESS_RE = /^0x[0-9a-f]{40}$/;
+const FORMAT_HASH_RE = /^0x[0-9a-f]{64}$/;
+
+const normalizeFollowAddress = (value: string): string => {
+  const trimmed = value.trim().toLowerCase();
+  if (!trimmed) return "";
+  const prefixed = trimmed.startsWith("0x") ? trimmed : `0x${trimmed}`;
+  return ETH_ADDRESS_RE.test(prefixed) ? prefixed : "";
+};
+
+const normalizeFollowFormatHash = (value: string): string => {
+  const trimmed = value.trim().toLowerCase();
+  if (!trimmed) return "";
+  const prefixed = trimmed.startsWith("0x") ? trimmed : `0x${trimmed}`;
+  return FORMAT_HASH_RE.test(prefixed) ? prefixed : "";
+};
 
 const normalizeConnectorToolboxId = (value: string) =>
   value
@@ -795,8 +831,8 @@ const defaultToolboxLibrary = (): ToolboxLibraryProfile => ({
 });
 
 const defaultSocialPreferences = (): SocialPreferencesProfile => ({
-  followedUserIds: [],
-  followedFormatIds: [],
+  followedUserAddresses: [],
+  followedFormatHashes: [],
 });
 
 const defaultToolboxLibraryForPrototype = (): ToolboxLibraryProfile => {
@@ -807,55 +843,6 @@ const defaultToolboxLibraryForPrototype = (): ToolboxLibraryProfile => {
     transformation: [],
     condition: [],
   };
-};
-
-const defaultSocialPreferencesForPrototype = (): SocialPreferencesProfile => {
-  const explicit = mockFollowingByUserId[mockCurrentUserId] ?? [];
-  const allMockUsers = mockUsers
-    .map((entry) => entry.id)
-    .filter((entry) => entry !== mockCurrentUserId);
-  const extraSources = extraChainSourceProfiles
-    .map((entry) => entry.id)
-    .filter((entry) => entry !== mockCurrentUserId);
-  const fallback = [...allMockUsers, ...extraSources];
-  return {
-    followedUserIds: uniqueStrings(explicit.length > 0 ? explicit : fallback),
-    followedFormatIds: [],
-  };
-};
-
-const deriveMockUserIdFromRecord = (userRecordRaw: unknown): string | null => {
-  const userRecord = asRecord(userRecordRaw);
-
-  const id = typeof userRecord.id === "string" ? userRecord.id.trim() : "";
-  if (id && mockUsers.some((entry) => entry.id === id)) return id;
-
-  const email = typeof userRecord.email === "string" ? userRecord.email.trim().toLowerCase() : "";
-  if (email.endsWith("@mock.decentralised.art")) {
-    const candidate = email.replace(/@mock\.decentralised\.art$/i, "");
-    if (mockUsers.some((entry) => entry.id === candidate)) return candidate;
-  }
-
-  const displayName =
-    typeof userRecord.display_name === "string"
-      ? userRecord.display_name.trim()
-      : typeof userRecord.displayName === "string"
-        ? userRecord.displayName.trim()
-        : "";
-  if (displayName) {
-    const matched = mockUsers.find((entry) => entry.nickname === displayName);
-    if (matched) return matched.id;
-  }
-
-  return null;
-};
-
-const resolveSocialUserIdFromRecord = (userRecordRaw: unknown): string => {
-  const userRecord = asRecord(userRecordRaw);
-  const alias = deriveMockUserIdFromRecord(userRecord);
-  if (alias) return alias;
-  const id = typeof userRecord.id === "string" ? userRecord.id.trim() : "";
-  return id;
 };
 
 const parseToolboxLibraryFromProfileJson = (profileJsonRaw: unknown): ToolboxLibraryProfile => {
@@ -887,21 +874,26 @@ const parseSocialPreferencesFromProfileJson = (
   const social = asRecord(profilePublic.social_preferences ?? profilePublic.socialPreferences);
 
   return {
-    followedUserIds: uniqueStrings([
-      ...asStringArray(social.followed_user_ids),
-      ...asStringArray(social.followedUserIds),
-      ...asStringArray(profilePublic.followed_user_ids),
-      ...asStringArray(profilePublic.followedUserIds),
-      ...asStringArray(profilePublic.following_users),
-    ]),
-    followedFormatIds: uniqueStrings([
-      ...asStringArray(social.followed_format_ids),
-      ...asStringArray(social.followedFormatIds),
-      ...asStringArray(social.followed_format_hashes),
-      ...asStringArray(profilePublic.followed_format_ids),
-      ...asStringArray(profilePublic.followedFormatIds),
-      ...asStringArray(profilePublic.followed_format_hashes),
-    ]),
+    followedUserAddresses: uniqueStrings(
+      [
+        ...asStringArray(social.followed_user_addresses),
+        ...asStringArray(social.followedUserAddresses),
+        ...asStringArray(profilePublic.followed_user_addresses),
+        ...asStringArray(profilePublic.followedUserAddresses),
+      ]
+        .map(normalizeFollowAddress)
+        .filter(Boolean),
+    ),
+    followedFormatHashes: uniqueStrings(
+      [
+        ...asStringArray(social.followed_format_hashes),
+        ...asStringArray(social.followedFormatHashes),
+        ...asStringArray(profilePublic.followed_format_hashes),
+        ...asStringArray(profilePublic.followedFormatHashes),
+      ]
+        .map(normalizeFollowFormatHash)
+        .filter(Boolean),
+    ),
   };
 };
 
@@ -959,29 +951,60 @@ const mergeSocialPreferencesIntoProfileJson = (
     ...existingProfileJson,
     public: {
       ...profilePublic,
-      followed_user_ids: [...socialPreferences.followedUserIds],
-      followed_format_ids: [...socialPreferences.followedFormatIds],
-      followed_format_hashes: [...socialPreferences.followedFormatIds],
+      followed_user_addresses: [...socialPreferences.followedUserAddresses],
+      followed_format_hashes: [...socialPreferences.followedFormatHashes],
       social_preferences: {
         ...existingSocial,
-        followed_user_ids: [...socialPreferences.followedUserIds],
-        followed_format_ids: [...socialPreferences.followedFormatIds],
-        followed_format_hashes: [...socialPreferences.followedFormatIds],
+        followed_user_addresses: [...socialPreferences.followedUserAddresses],
+        followed_format_hashes: [...socialPreferences.followedFormatHashes],
       },
     },
   };
 };
 
-export const getCurrentUserToolboxLibrary = async (): Promise<ToolboxLibraryProfile> => {
-  if (!getToken()) {
-    return defaultToolboxLibraryForPrototype();
-  }
-  const me = await getMe();
-  const envelope = extractUserEnvelope(me);
+const resolveProfileStateFromMePayload = (mePayload: unknown): CurrentUserProfileState => {
+  const envelope = extractUserEnvelope(mePayload);
   if (!envelope) {
-    return defaultToolboxLibrary();
+    return {
+      me: mePayload,
+      userId: null,
+      social: defaultSocialPreferences(),
+      toolbox: defaultToolboxLibrary(),
+    };
   }
-  return parseToolboxLibraryFromProfileJson(envelope.profileJson);
+
+  return {
+    me: mePayload,
+    userId: envelope.userId,
+    social: parseSocialPreferencesFromProfileJson(envelope.profileJson),
+    toolbox: parseToolboxLibraryFromProfileJson(envelope.profileJson),
+  };
+};
+
+export const getCurrentUserProfileState = async (options?: {
+  preferCached?: boolean;
+}): Promise<CurrentUserProfileState> => {
+  if (!getToken()) {
+    return {
+      me: null,
+      userId: null,
+      social: defaultSocialPreferences(),
+      toolbox: defaultToolboxLibraryForPrototype(),
+    };
+  }
+
+  if (options?.preferCached) {
+    const cachedPayload = readCachedMePayload();
+    if (cachedPayload) {
+      return resolveProfileStateFromMePayload(cachedPayload);
+    }
+  }
+
+  return resolveProfileStateFromMePayload(await getMe());
+};
+
+export const getCurrentUserToolboxLibrary = async (): Promise<ToolboxLibraryProfile> => {
+  return (await getCurrentUserProfileState()).toolbox;
 };
 
 export const saveCurrentUserToolboxLibrary = async (
@@ -1033,67 +1056,10 @@ export const addConditionToCurrentUserToolbox = async (conditionId: string): Pro
 export const addParticleToCurrentUserToolbox = async (particleId: string): Promise<void> =>
   addConnectorToCurrentUserToolbox(particleId);
 
-const getPrototypeDefaultFollowedUserIds = async (
-  currentSocialUserId: string,
-): Promise<string[]> => {
-  const followed = new Set<string>();
-
-  mockUsers.forEach((entry) => {
-    if (entry.id !== currentSocialUserId) followed.add(entry.id);
-  });
-  extraChainSourceProfiles.forEach((entry) => {
-    if (entry.id !== currentSocialUserId) followed.add(entry.id);
-  });
-
-  try {
-    const users = await listServicesUsers();
-    users.forEach((entry) => {
-      const rawId = typeof entry.id === "string" ? entry.id.trim() : "";
-      if (rawId && rawId !== currentSocialUserId) followed.add(rawId);
-      const socialId = resolveSocialUserIdFromRecord(entry);
-      if (socialId && socialId !== currentSocialUserId) followed.add(socialId);
-    });
-  } catch (error) {
-    console.warn("[Auth] Failed to load services users for prototype follow bootstrap.", error);
-  }
-
-  return uniqueStrings(Array.from(followed));
-};
-
-export const getCurrentUserSocialPreferences = async (options?: {
+export const getCurrentUserSocialPreferences = async (_options?: {
   bootstrapPrototypeIfEmpty?: boolean;
 }): Promise<SocialPreferencesProfile> => {
-  if (!getToken()) {
-    return defaultSocialPreferencesForPrototype();
-  }
-  const me = await getMe();
-  const envelope = extractUserEnvelope(me);
-  if (!envelope) {
-    return defaultSocialPreferences();
-  }
-
-  const socialUserId = resolveSocialUserIdFromRecord(envelope.rootUser) || envelope.userId;
-  let preferences = parseSocialPreferencesFromProfileJson(envelope.profileJson);
-  if (options?.bootstrapPrototypeIfEmpty && preferences.followedUserIds.length === 0) {
-    const defaults = await getPrototypeDefaultFollowedUserIds(socialUserId);
-    if (defaults.length > 0) {
-      preferences = {
-        ...preferences,
-        followedUserIds: defaults,
-      };
-      try {
-        const nextProfileJson = mergeSocialPreferencesIntoProfileJson(
-          envelope.profileJson,
-          preferences,
-        );
-        await updateUserById(envelope.userId, { profile_json: nextProfileJson });
-      } catch (error) {
-        console.warn("[Auth] Failed to persist prototype follow bootstrap.", error);
-      }
-    }
-  }
-
-  return preferences;
+  return (await getCurrentUserProfileState()).social;
 };
 
 export const saveCurrentUserSocialPreferences = async (
@@ -1107,126 +1073,142 @@ export const saveCurrentUserSocialPreferences = async (
   }
 
   const normalized: SocialPreferencesProfile = {
-    followedUserIds: uniqueStrings(preferences.followedUserIds),
-    followedFormatIds: uniqueStrings(preferences.followedFormatIds),
+    followedUserAddresses: uniqueStrings(
+      preferences.followedUserAddresses.map(normalizeFollowAddress).filter(Boolean),
+    ),
+    followedFormatHashes: uniqueStrings(
+      preferences.followedFormatHashes.map(normalizeFollowFormatHash).filter(Boolean),
+    ),
   };
 
   const nextProfileJson = mergeSocialPreferencesIntoProfileJson(envelope.profileJson, normalized);
   await updateUserById(envelope.userId, { profile_json: nextProfileJson });
 };
 
-export const followUserInProfile = async (userId: string): Promise<void> => {
-  const normalizedId = userId.trim();
-  if (!normalizedId) return;
+export const followUserInProfile = async (address: string): Promise<void> => {
+  const normalizedAddress = normalizeFollowAddress(address);
+  if (!normalizedAddress) return;
 
-  if (!getToken()) {
-    const current = mockFollowingByUserId[mockCurrentUserId] ?? [];
-    if (!current.includes(normalizedId)) {
-      mockFollowingByUserId[mockCurrentUserId] = [...current, normalizedId];
-    }
-    return;
-  }
-
-  const preferences = await getCurrentUserSocialPreferences();
-  if (preferences.followedUserIds.includes(normalizedId)) return;
-  await saveCurrentUserSocialPreferences({
-    ...preferences,
-    followedUserIds: [...preferences.followedUserIds, normalizedId],
-  });
-};
-
-export const unfollowUserInProfile = async (userId: string): Promise<void> => {
-  const normalizedId = userId.trim();
-  if (!normalizedId) return;
-
-  if (!getToken()) {
-    const current = mockFollowingByUserId[mockCurrentUserId] ?? [];
-    if (!current.includes(normalizedId)) return;
-    mockFollowingByUserId[mockCurrentUserId] = current.filter((id) => id !== normalizedId);
-    return;
-  }
-
-  const preferences = await getCurrentUserSocialPreferences();
-  if (!preferences.followedUserIds.includes(normalizedId)) return;
-  await saveCurrentUserSocialPreferences({
-    ...preferences,
-    followedUserIds: preferences.followedUserIds.filter((id) => id !== normalizedId),
-  });
-};
-
-export const followFormatInProfile = async (formatIdOrSlug: string): Promise<void> => {
   if (!getToken()) return;
-  const normalizedId = formatIdOrSlug.trim();
-  if (!normalizedId) return;
+
   const preferences = await getCurrentUserSocialPreferences();
-  if (preferences.followedFormatIds.includes(normalizedId)) return;
+  if (preferences.followedUserAddresses.includes(normalizedAddress)) return;
   await saveCurrentUserSocialPreferences({
     ...preferences,
-    followedFormatIds: [...preferences.followedFormatIds, normalizedId],
+    followedUserAddresses: [...preferences.followedUserAddresses, normalizedAddress],
   });
 };
 
-export const unfollowFormatInProfile = async (formatIdOrSlug: string): Promise<void> => {
+export const unfollowUserInProfile = async (address: string): Promise<void> => {
+  const normalizedAddress = normalizeFollowAddress(address);
+  if (!normalizedAddress) return;
+
   if (!getToken()) return;
-  const normalizedId = formatIdOrSlug.trim();
-  if (!normalizedId) return;
+
   const preferences = await getCurrentUserSocialPreferences();
-  if (!preferences.followedFormatIds.includes(normalizedId)) return;
+  if (!preferences.followedUserAddresses.includes(normalizedAddress)) return;
   await saveCurrentUserSocialPreferences({
     ...preferences,
-    followedFormatIds: preferences.followedFormatIds.filter((id) => id !== normalizedId),
+    followedUserAddresses: preferences.followedUserAddresses.filter(
+      (entry) => entry !== normalizedAddress,
+    ),
   });
 };
 
-export const getUserSocialConnections = async (
-  targetUserId: string,
-): Promise<{ followingIds: string[]; followerIds: string[] }> => {
-  if (!getToken()) {
-    const normalizedTarget = targetUserId.trim();
-    if (!normalizedTarget) return { followingIds: [], followerIds: [] };
-    const targetFollowing =
-      mockFollowingByUserId[normalizedTarget as keyof typeof mockFollowingByUserId];
-    const followerIds = Object.entries(mockFollowingByUserId)
-      .filter(([id, followed]) => id !== normalizedTarget && followed.includes(normalizedTarget))
-      .map(([id]) => id);
-    return {
-      followingIds: uniqueStrings([...(targetFollowing ?? [])]),
-      followerIds: uniqueStrings(followerIds),
-    };
-  }
-  const normalizedTarget = targetUserId.trim();
-  if (!normalizedTarget) return { followingIds: [], followerIds: [] };
+export const followFormatInProfile = async (formatHash: string): Promise<void> => {
+  if (!getToken()) return;
+  const normalizedHash = normalizeFollowFormatHash(formatHash);
+  if (!normalizedHash) return;
+  const preferences = await getCurrentUserSocialPreferences();
+  if (preferences.followedFormatHashes.includes(normalizedHash)) return;
+  await saveCurrentUserSocialPreferences({
+    ...preferences,
+    followedFormatHashes: [...preferences.followedFormatHashes, normalizedHash],
+  });
+};
 
-  const users = await listServicesUsers();
+export const unfollowFormatInProfile = async (formatHash: string): Promise<void> => {
+  if (!getToken()) return;
+  const normalizedHash = normalizeFollowFormatHash(formatHash);
+  if (!normalizedHash) return;
+  const preferences = await getCurrentUserSocialPreferences();
+  if (!preferences.followedFormatHashes.includes(normalizedHash)) return;
+  await saveCurrentUserSocialPreferences({
+    ...preferences,
+    followedFormatHashes: preferences.followedFormatHashes.filter(
+      (entry) => entry !== normalizedHash,
+    ),
+  });
+};
+
+export const computeUserSocialConnections = (
+  users: ServicesUserRecord[],
+  targetUserAddressOrId: string,
+): UserSocialConnections => {
+  const normalizedTarget = targetUserAddressOrId.trim();
+  if (!normalizedTarget) {
+    return { followingIds: [], followerIds: [], status: "ok" };
+  }
+
   const graph = users.map((entry) => {
     const rawId = typeof entry.id === "string" ? entry.id.trim() : "";
-    const socialId = resolveSocialUserIdFromRecord(entry);
+    const ethereumAddress = normalizeFollowAddress(
+      typeof entry.ethereum_address === "string"
+        ? entry.ethereum_address
+        : typeof entry.ethereumAddress === "string"
+          ? entry.ethereumAddress
+          : "",
+    );
     const profileJson = entry.profile_json;
     const preferences = parseSocialPreferencesFromProfileJson(profileJson);
     return {
       rawId,
-      socialId,
-      followedUserIds: preferences.followedUserIds,
+      ethereumAddress,
+      followedUserAddresses: preferences.followedUserAddresses,
     };
   });
 
+  const normalizedTargetAddress = normalizeFollowAddress(normalizedTarget);
   const targetEntry =
-    graph.find((entry) => entry.socialId === normalizedTarget) ??
-    graph.find((entry) => entry.rawId === normalizedTarget);
+    (normalizedTargetAddress
+      ? graph.find((entry) => entry.ethereumAddress === normalizedTargetAddress)
+      : null) ?? graph.find((entry) => entry.rawId === normalizedTarget);
 
-  if (!targetEntry) return { followingIds: [], followerIds: [] };
+  if (!targetEntry) {
+    return {
+      followingIds: [],
+      followerIds: [],
+      status: normalizedTargetAddress ? "address_not_indexed_in_services" : "ok",
+    };
+  }
 
-  const targetAliases = new Set([targetEntry.socialId, targetEntry.rawId, normalizedTarget]);
+  if (!targetEntry.ethereumAddress) {
+    return { followingIds: [], followerIds: [], status: "ok" };
+  }
+
   const followerIds = graph
-    .filter((entry) => entry.socialId && entry.socialId !== targetEntry.socialId)
-    .filter((entry) => entry.followedUserIds.some((followed) => targetAliases.has(followed)))
-    .map((entry) => entry.socialId || entry.rawId)
+    .filter((entry) => entry.rawId !== targetEntry.rawId)
+    .filter((entry) =>
+      entry.followedUserAddresses.some((followed) => followed === targetEntry.ethereumAddress),
+    )
+    .map((entry) => entry.ethereumAddress)
     .filter((id): id is string => Boolean(id));
 
   return {
-    followingIds: uniqueStrings(targetEntry.followedUserIds),
+    followingIds: uniqueStrings(targetEntry.followedUserAddresses),
     followerIds: uniqueStrings(followerIds),
+    status: "ok",
   };
+};
+
+export const getUserSocialConnections = async (
+  targetUserAddressOrId: string,
+): Promise<UserSocialConnections> => {
+  if (!getToken()) {
+    return { followingIds: [], followerIds: [], status: "ok" };
+  }
+
+  return computeUserSocialConnections(await listServicesUsers(), targetUserAddressOrId);
 };
 
 // Kept for compatibility with existing non-profile follow integrations.

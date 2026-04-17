@@ -1,9 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
   resolveChainAccountCursor,
+  resolveChainAccountsCursor,
   resolveChainFormatCursor,
+  resolveChainFormatsCursor,
   type ChainAccountResponse,
+  type ChainAccountsResponse,
   type ChainFormatResponse,
+  type ChainFormatsResponse,
 } from "../src/lib/chain/registryApi";
 
 describe("registryApi cursor compatibility", () => {
@@ -83,6 +87,26 @@ describe("registryApi cursor compatibility", () => {
     expect(resolveChainFormatCursor(payload)).toEqual({
       hasMore: true,
       nextAfter: "C4",
+    });
+  });
+
+  it("resolves accounts cursor from nested cursor object", () => {
+    const payload: ChainAccountsResponse = {
+      cursor: { has_more: true, next_after: "0xabc" },
+    };
+    expect(resolveChainAccountsCursor(payload)).toEqual({
+      hasMore: true,
+      nextAfter: "0xabc",
+    });
+  });
+
+  it("resolves formats cursor from nested cursor object", () => {
+    const payload: ChainFormatsResponse = {
+      cursor: { has_more: false, next_after: null },
+    };
+    expect(resolveChainFormatsCursor(payload)).toEqual({
+      hasMore: false,
+      nextAfter: null,
     });
   });
 });

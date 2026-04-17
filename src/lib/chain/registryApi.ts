@@ -148,6 +148,24 @@ export type ChainFormatResponse = {
   connectors?: string[];
 };
 
+export type ChainAccountsResponse = {
+  limit?: number;
+  total_accounts?: number;
+  accounts?: string[];
+  cursor?: ChainCursorResponse;
+  has_more?: boolean;
+  next_after?: string | null;
+};
+
+export type ChainFormatsResponse = {
+  limit?: number;
+  total_formats?: number;
+  formats?: string[];
+  cursor?: ChainCursorResponse;
+  has_more?: boolean;
+  next_after?: string | null;
+};
+
 const FORMAT_HASH_HEX_RE = /^[0-9a-f]{64}$/i;
 const CHAIN_CURSOR_PAGE_LIMIT_MAX = 256;
 
@@ -227,6 +245,24 @@ export const resolveChainAccountCursor = (
 };
 
 export const resolveChainFormatCursor = (payload: ChainFormatResponse): ChainResolvedCursor => {
+  const fromObject = resolveCursorFromObject(payload.cursor);
+  if (fromObject) return fromObject;
+  return {
+    hasMore: Boolean(payload.has_more),
+    nextAfter: normalizeCursorToken(payload.next_after),
+  };
+};
+
+export const resolveChainAccountsCursor = (payload: ChainAccountsResponse): ChainResolvedCursor => {
+  const fromObject = resolveCursorFromObject(payload.cursor);
+  if (fromObject) return fromObject;
+  return {
+    hasMore: Boolean(payload.has_more),
+    nextAfter: normalizeCursorToken(payload.next_after),
+  };
+};
+
+export const resolveChainFormatsCursor = (payload: ChainFormatsResponse): ChainResolvedCursor => {
   const fromObject = resolveCursorFromObject(payload.cursor);
   if (fromObject) return fromObject;
   return {
@@ -335,6 +371,21 @@ export const getChainAccount = async (
   );
 };
 
+export const getChainAccounts = async (
+  options: {
+    limit?: number;
+    after?: string | null;
+  } = {},
+) => {
+  const limit = normalizeCursorLimit(options.limit);
+  const query = new URLSearchParams({
+    limit: String(limit),
+  });
+  const after = options.after?.trim();
+  if (after) query.set("after", after);
+  return fetchJson<ChainAccountsResponse>(`/accounts?${query.toString()}`);
+};
+
 export const getChainConnector = async (name: string) =>
   fetchJson<ChainConnectorResponse>(`/connector/${encodeURIComponent(name)}`);
 
@@ -358,6 +409,16 @@ export const getChainFormat = async (
   return fetchJson<ChainFormatResponse>(
     `/format/${encodeURIComponent(normalizedHash)}?${query.toString()}`,
   );
+};
+
+export const getChainFormats = async (options: { limit?: number; after?: string | null } = {}) => {
+  const limit = normalizeCursorLimit(options.limit);
+  const query = new URLSearchParams({
+    limit: String(limit),
+  });
+  const after = options.after?.trim();
+  if (after) query.set("after", after);
+  return fetchJson<ChainFormatsResponse>(`/formats?${query.toString()}`);
 };
 
 export const postChainConnector = async (payload: ChainConnectorPayload) =>

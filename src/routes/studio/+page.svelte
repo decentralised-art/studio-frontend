@@ -90,6 +90,7 @@
     postChainExecuteDetailed,
     postChainTransformationDetailed,
   } from "$lib/chain/registryApi";
+  import { createEphemeralDeployName, isReservedCoreCollectionName } from "$lib/chain/deployNaming";
   import { mockPlugins, type LibraryItem } from "$lib/data/studioLibrary";
   import { mockCurrentUserId, mockUsersById } from "$lib/data/users";
   import type {
@@ -830,20 +831,20 @@
 
   const sanitizePersistedTabs = (value: unknown): StudioTab[] => {
     if (!Array.isArray(value)) return [];
-    return value
-      .map((item) => {
-        if (!item || typeof item !== "object") return null;
-        const record = item as Record<string, unknown>;
-        const id = typeof record.id === "string" ? record.id.trim() : "";
-        const label = typeof record.label === "string" ? record.label.trim() : "";
-        if (!id || !label) return null;
-        const particleId =
-          typeof record.particleId === "string" && record.particleId.trim().length > 0
-            ? record.particleId.trim()
-            : undefined;
-        return { id, label, particleId } satisfies StudioTab;
-      })
-      .filter((tab): tab is StudioTab => Boolean(tab));
+    const sanitized: StudioTab[] = [];
+    value.forEach((item) => {
+      if (!item || typeof item !== "object") return;
+      const record = item as Record<string, unknown>;
+      const id = typeof record.id === "string" ? record.id.trim() : "";
+      const label = typeof record.label === "string" ? record.label.trim() : "";
+      if (!id || !label) return;
+      const particleId =
+        typeof record.particleId === "string" && record.particleId.trim().length > 0
+          ? record.particleId.trim()
+          : undefined;
+      sanitized.push({ id, label, particleId });
+    });
+    return sanitized;
   };
 
   const sanitizePersistedGraph = (value: unknown): PersistedStudioGraph | null => {
@@ -1935,13 +1936,14 @@
       const previousPendingCollision = pendingNameCollision;
       commitNameChange(target);
 
+      const activePendingNameCollision = pendingNameCollision;
       const collisionForTarget =
-        pendingNameCollision &&
-        pendingNameCollision !== previousPendingCollision &&
-        pendingNameCollision.nodeId === target.id &&
-        normalizeKey(pendingNameCollision.desiredName) === normalizeKey(nextName);
+        activePendingNameCollision &&
+        activePendingNameCollision !== previousPendingCollision &&
+        activePendingNameCollision.nodeId === target.id &&
+        normalizeKey(activePendingNameCollision.desiredName) === normalizeKey(nextName);
       if (collisionForTarget) {
-        const existingName = pendingNameCollision.existingName;
+        const existingName = activePendingNameCollision.existingName;
         pendingNameCollision = null;
         throw new Error(
           `Name '${nextName}' is already deployed as '${existingName}'. Choose a different name.`,
@@ -3522,7 +3524,7 @@
     transformationEditorDimensionId = options.dimensionId ?? null;
     transformationEditorStatus = "draft";
     transformationEditorLocked = false;
-    transformationDraftName = createUniqueName("transformation", "new_transformation");
+    transformationDraftName = createEphemeralDeployName("transformation", { scope: "draft" });
     transformationDraftCode = defaultDraftCode;
     transformationDraftError = null;
     transformationAiAssistantOpen = false;
@@ -3545,7 +3547,7 @@
     conditionEditorStatus = "draft";
     conditionEditorLocked = false;
     conditionEditorDeployBusy = false;
-    conditionDraftName = createUniqueName("condition", "new_condition");
+    conditionDraftName = createEphemeralDeployName("condition", { scope: "draft" });
     conditionDraftCode = defaultConditionDraftCode;
     conditionDraftError = null;
     conditionAiAssistantOpen = false;
@@ -3565,6 +3567,16 @@
     openNewConditionEditor({
       targetConnectorId: resolvePreferredEditableConnectorId(),
     });
+  };
+
+  const generateTransformationTestName = () => {
+    transformationDraftName = createEphemeralDeployName("transformation", { scope: "manual" });
+    transformationDraftError = null;
+  };
+
+  const generateConditionTestName = () => {
+    conditionDraftName = createEphemeralDeployName("condition", { scope: "manual" });
+    conditionDraftError = null;
   };
 
   const requestClearCanvas = () => {
@@ -3766,9 +3778,7 @@
   }
 
   const syncSingleChainParticle = async (particleName: string) => {
-    const fetched = await fetchChainParticleForStudio(particleName, {
-      authorId: mockCurrentUserId,
-    });
+    const fetched = await fetchChainParticleForStudio(particleName);
     const connector = fetched.registry.connector;
     const feature = fetched.registry.feature;
     const particle = fetched.registry.particle;
@@ -3876,7 +3886,7 @@
 
   const syncChainOwnedRegistry = async () => {
     chainSyncError = null;
-    chainSyncStatus = "Fetching chain registry for all services users...";
+    chainSyncStatus = "Fetching chain registry from chain accounts...";
     chainSyncBusy = true;
     try {
       const sources = await listChainSyncSourcesForApp({ force: true });
@@ -5087,6 +5097,12 @@
       conditionDraftError = "Condition name is required.";
       return;
     }
+    if (isReservedCoreCollectionName("condition", trimmedName)) {
+      conditionDraftError =
+        `Name '${trimmedName}' is reserved for Core Collection publication. ` +
+        "Use a generated test name for experiments.";
+      return;
+    }
 
     const snippetParsed = parseSoliditySnippet(conditionDraftCode);
     if (!snippetParsed.ok) {
@@ -5246,6 +5262,12 @@
     const trimmedName = transformationDraftName.trim();
     if (!trimmedName) {
       transformationDraftError = "Transformation name is required.";
+      return;
+    }
+    if (isReservedCoreCollectionName("transformation", trimmedName)) {
+      transformationDraftError =
+        `Name '${trimmedName}' is reserved for Core Collection publication. ` +
+        "Use a generated test name for experiments.";
       return;
     }
 
@@ -10734,6 +10756,19 @@
               transformationDraftError = null;
             }}
           />
+          <div class="editor-name-tools">
+            <button
+              type="button"
+              class="editor-fork"
+              disabled={transformationEditorReadOnly || transformationEditorDeployBusy}
+              onclick={generateTransformationTestName}
+            >
+              Generate test name
+            </button>
+            <span class="editor-name-note">
+              Published names are permanent. Use generated test names for experiments.
+            </span>
+          </div>
           {#if transformationDraftError}
             <div class="editor-error">{transformationDraftError}</div>
           {/if}
@@ -10856,6 +10891,19 @@
               conditionDraftError = null;
             }}
           />
+          <div class="editor-name-tools">
+            <button
+              type="button"
+              class="editor-fork"
+              disabled={conditionEditorReadOnly || conditionEditorDeployBusy}
+              onclick={generateConditionTestName}
+            >
+              Generate test name
+            </button>
+            <span class="editor-name-note">
+              Published names are permanent. Use generated test names for experiments.
+            </span>
+          </div>
           {#if conditionDraftError}
             <div class="editor-error">{conditionDraftError}</div>
           {/if}
@@ -11879,6 +11927,14 @@
 
   .editor-fields {
     @apply grid gap-2;
+  }
+
+  .editor-name-tools {
+    @apply flex flex-wrap items-center gap-2;
+  }
+
+  .editor-name-note {
+    @apply text-[0.6rem] text-white/45;
   }
 
   .editor-label {

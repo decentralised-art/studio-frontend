@@ -1,7 +1,7 @@
 <script lang="ts">
   import { Background, SvelteFlow, type Edge, type NodeTypes } from "@xyflow/svelte";
   import { SvelteMap } from "svelte/reactivity";
-  import { tick } from "svelte";
+  import { onMount, tick } from "svelte";
   import "@xyflow/svelte/dist/style.css";
 
   import FlowInstanceBridge from "$lib/components/studio/FlowInstanceBridge.svelte";
@@ -60,6 +60,13 @@
   let fitSeq = 0;
   let flowReady = $state(false);
   let layoutFrame: number | null = null;
+  let fitTimeouts = $state<Array<ReturnType<typeof setTimeout>>>([]);
+
+  const clearPendingFitTimers = () => {
+    if (typeof clearTimeout !== "function") return;
+    fitTimeouts.forEach((timeoutId) => clearTimeout(timeoutId));
+    fitTimeouts = [];
+  };
 
   const handleNodeClick = (payload: { node?: StudioDependencyNode } | undefined) => {
     const node = payload?.node;
@@ -271,9 +278,17 @@
     }
 
     if (typeof setTimeout === "function") {
-      setTimeout(() => runFit(stablePadding), 80);
-      setTimeout(() => runFit(stablePadding), 220);
-      setTimeout(() => runFit(stablePadding), 420);
+      clearPendingFitTimers();
+      const registerFitTimeout = (delay: number) => {
+        const timeoutId = setTimeout(() => {
+          fitTimeouts = fitTimeouts.filter((entry) => entry !== timeoutId);
+          runFit(stablePadding);
+        }, delay);
+        fitTimeouts = [...fitTimeouts, timeoutId];
+      };
+      registerFitTimeout(80);
+      registerFitTimeout(220);
+      registerFitTimeout(420);
     }
   };
 
@@ -289,6 +304,18 @@
     if (!flowApi || !flowReady) return;
     scheduleLayout();
     void fitFlow();
+  });
+
+  onMount(() => {
+    return () => {
+      if (layoutFrame !== null && typeof cancelAnimationFrame === "function") {
+        cancelAnimationFrame(layoutFrame);
+        layoutFrame = null;
+      }
+      clearPendingFitTimers();
+      flowReady = false;
+      flowApi = null;
+    };
   });
 </script>
 

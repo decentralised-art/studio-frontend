@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { SvelteMap } from "svelte/reactivity";
   import { page } from "$app/stores";
   import { resolve } from "$app/paths";
 
@@ -8,32 +9,58 @@
     ensureParticleRecordLoadedById as ensureConnectorRecordLoadedById,
     getParticleRecordById as getConnectorRecordById,
     listParticlePostsReferencingParticle as listPostsReferencingConnector,
-    syncParticlePostDataFromChain as syncConnectorPostDataFromChain,
     type ParticlePostEvent as ConnectorPostEvent,
     type ParticleRecord as ConnectorRecord,
   } from "$lib/feed/particlePostData";
+  import { mapSnapshotParticlesToConnectorEvents } from "$lib/feed/networkEventMappers";
+  import { fetchChainOwnedStudioSnapshot } from "$lib/studio/chainStudioAdapter";
   import SocialConnectorDependencyFlow from "$lib/components/social/SocialConnectorDependencyFlow.svelte";
   import Button from "$lib/components/ui/Button.svelte";
   import SectionShell from "$lib/components/ui/SectionShell.svelte";
-  import { addConnectorToCurrentUserToolbox, getCurrentUserToolboxLibrary } from "$lib/auth/api";
-  import { displayUsersById, mockCurrentUserId, mockUsersById } from "$lib/data/users";
+  import {
+    addConnectorToCurrentUserToolbox,
+    getCurrentUserProfileState,
+    listServicesUsers,
+  } from "$lib/auth/api";
+  import {
+    buildAuthorLabelMapFromServicesUsers,
+    normalizeAuthorAddress,
+    shortAuthorAddress,
+  } from "$lib/social/authorLabels";
   import { getChainFormatDisplayName } from "$lib/formats/chainFormats";
 
-  let localToolboxConnectors = $state<string[]>([
-    ...(mockUsersById[mockCurrentUserId]?.toolbox ?? []),
-  ]);
+  let localToolboxConnectors = $state<string[]>([]);
+  let servicesUserLabels = $state<Record<string, string>>({});
   let connector = $state<ConnectorRecord | null>(null);
   let relatedConnectorEvents = $state<ConnectorPostEvent[]>([]);
   let connectorLoading = $state(true);
+  let connectorLoadRequestVersion = 0;
+  let profileLoadRequestVersion = 0;
+  let labelsLoadRequestVersion = 0;
 
   const toolboxConnectorIds = $derived.by(() => new Set(localToolboxConnectors));
   const connectorId = $derived.by(() => $page.params.id?.trim() ?? "");
-  const author = $derived.by(() =>
-    connector ? (displayUsersById[connector.authorId] ?? null) : null,
-  );
+  const connectorAuthorLabel = $derived.by(() => {
+    if (!connector) return "";
+    const exact = servicesUserLabels[connector.authorId]?.trim();
+    if (exact && exact.length > 0) return exact;
+    const normalized = normalizeAuthorAddress(connector.authorId);
+    const byNormalized = normalized ? servicesUserLabels[normalized]?.trim() : "";
+    if (byNormalized && byNormalized.length > 0) return byNormalized;
+    return shortAuthorAddress(connector.authorId) || connector.authorId;
+  });
+  const feedAuthorLabels = $derived.by(() => servicesUserLabels);
   const connectorFormatName = $derived.by(() =>
     connector?.formatHash ? getChainFormatDisplayName(connector.formatHash) : "",
   );
+
+  const beginConnectorLoadRequest = (): number => {
+    connectorLoadRequestVersion += 1;
+    return connectorLoadRequestVersion;
+  };
+
+  const isConnectorLoadRequestActive = (requestVersion: number): boolean =>
+    requestVersion === connectorLoadRequestVersion;
 
   const openConnectorInStudio = (targetConnectorId: string) => {
     const base = resolve("/studio");
@@ -47,39 +74,103 @@
     if (toolboxConnectorIds.has(targetConnectorId)) return;
     const previous = [...localToolboxConnectors];
     localToolboxConnectors = [...localToolboxConnectors, targetConnectorId];
-    const currentUser = mockUsersById[mockCurrentUserId];
-    if (currentUser && !currentUser.toolbox.includes(targetConnectorId)) {
-      currentUser.toolbox = [...currentUser.toolbox, targetConnectorId];
-    }
     void addConnectorToCurrentUserToolbox(targetConnectorId).catch((err) => {
       console.error("[Connector page] Failed to persist toolbox update.", err);
       localToolboxConnectors = previous;
     });
   };
 
-  const loadConnectorPageData = async () => {
+  const sortConnectorEvents = (events: ConnectorPostEvent[]) =>
+    [...events].sort((a, b) => {
+      const byCreatedAt = b.createdAt - a.createdAt;
+      if (byCreatedAt !== 0) return byCreatedAt;
+      return b.id.localeCompare(a.id);
+    });
+
+  const loadConnectorPageData = async (targetConnectorId: string) => {
+    const requestVersion = beginConnectorLoadRequest();
     connectorLoading = true;
-    try {
-      await syncConnectorPostDataFromChain();
-    } finally {
-      connector = getConnectorRecordById(connectorId);
-      if (!connector && connectorId) {
-        connector = await ensureConnectorRecordLoadedById(connectorId);
-      }
-      relatedConnectorEvents = listPostsReferencingConnector(connectorId);
+    const normalizedId = targetConnectorId.trim();
+    if (!normalizedId) {
+      connector = null;
+      relatedConnectorEvents = [];
       connectorLoading = false;
+      return;
+    }
+
+    const resolvedConnector =
+      getConnectorRecordById(normalizedId) ?? (await ensureConnectorRecordLoadedById(normalizedId));
+    if (!isConnectorLoadRequestActive(requestVersion)) return;
+
+    connector = resolvedConnector;
+    relatedConnectorEvents = sortConnectorEvents(listPostsReferencingConnector(normalizedId));
+
+    const ownerAddress = normalizeAuthorAddress(resolvedConnector?.authorId ?? "");
+    if (ownerAddress) {
+      try {
+        const snapshot = await fetchChainOwnedStudioSnapshot(ownerAddress, {
+          authorId: ownerAddress,
+          limit: 200,
+          includeRuntimeCode: false,
+        });
+        if (!isConnectorLoadRequestActive(requestVersion)) return;
+        const targeted = mapSnapshotParticlesToConnectorEvents(
+          ownerAddress,
+          snapshot.particles,
+        ).filter((event) => event.usedParticleIds.includes(normalizedId));
+        if (targeted.length > 0) {
+          const mergedById = new SvelteMap<string, ConnectorPostEvent>();
+          [...relatedConnectorEvents, ...targeted].forEach((event) => {
+            mergedById.set(event.id, event);
+          });
+          relatedConnectorEvents = sortConnectorEvents(Array.from(mergedById.values()));
+        }
+      } catch (error) {
+        if (!isConnectorLoadRequestActive(requestVersion)) return;
+        console.warn("[Connector page] Targeted account fetch failed.", error);
+      }
+    }
+
+    connectorLoading = false;
+  };
+
+  const hydrateViewerProfileState = async () => {
+    const requestVersion = ++profileLoadRequestVersion;
+    try {
+      const profileState = await getCurrentUserProfileState({ preferCached: true });
+      if (requestVersion !== profileLoadRequestVersion) return;
+      localToolboxConnectors = [...profileState.toolbox.connector];
+    } catch (error) {
+      if (requestVersion !== profileLoadRequestVersion) return;
+      console.warn("[Connector page] Failed to load toolbox from profile.", error);
     }
   };
 
+  const hydrateServicesAuthorLabels = async () => {
+    const requestVersion = ++labelsLoadRequestVersion;
+    try {
+      const labels = buildAuthorLabelMapFromServicesUsers(await listServicesUsers());
+      if (requestVersion !== labelsLoadRequestVersion) return;
+      servicesUserLabels = labels;
+    } catch (error) {
+      if (requestVersion !== labelsLoadRequestVersion) return;
+      console.warn("[Connector page] Failed to load services user labels.", error);
+    }
+  };
+
+  $effect(() => {
+    const routeConnectorId = connectorId;
+    void loadConnectorPageData(routeConnectorId);
+  });
+
   onMount(() => {
-    void getCurrentUserToolboxLibrary()
-      .then((toolbox) => {
-        localToolboxConnectors = [...toolbox.connector];
-      })
-      .catch((error) => {
-        console.warn("[Connector page] Failed to load toolbox from profile.", error);
-      });
-    void loadConnectorPageData();
+    void hydrateViewerProfileState();
+    void hydrateServicesAuthorLabels();
+    return () => {
+      connectorLoadRequestVersion += 1;
+      profileLoadRequestVersion += 1;
+      labelsLoadRequestVersion += 1;
+    };
   });
 </script>
 
@@ -107,13 +198,9 @@
           <p class="connector-meta">
             <span>{connector.createdLabel}</span>
             <span aria-hidden="true">•</span>
-            {#if author}
-              <a class="connector-author-link" href={resolve("/u/[id]", { id: author.id })}>
-                {author.nickname}
-              </a>
-            {:else}
-              <span>{connector.authorId}</span>
-            {/if}
+            <a class="connector-author-link" href={resolve("/u/[id]", { id: connector.authorId })}>
+              {connectorAuthorLabel}
+            </a>
             {#if connector.formatHash}
               <span aria-hidden="true">•</span>
               <a
@@ -161,6 +248,7 @@
         onConnectorOpen={openConnectorInStudio}
         onAddToToolbox={addConnectorToToolbox}
         {toolboxConnectorIds}
+        authorLabelById={feedAuthorLabels}
         emptyMessage={`No connectors reference ${connector.name} yet.`}
       />
     </div>

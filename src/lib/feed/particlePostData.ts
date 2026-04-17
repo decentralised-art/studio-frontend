@@ -88,6 +88,14 @@ const SOURCE_SNAPSHOT_CONCURRENCY = 4;
 const SOURCE_SNAPSHOT_TIMEOUT_MS = 10000;
 const DEPENDENCY_FETCH_CONCURRENCY = 8;
 const DEPENDENCY_FETCH_TIMEOUT_MS = 8000;
+const CHAIN_ADDRESS_RE = /^0x[0-9a-f]{40}$/;
+
+const normalizeSourceAddress = (value: string): string => {
+  const trimmed = value.trim().toLowerCase();
+  if (!trimmed) return "";
+  const withPrefix = trimmed.startsWith("0x") ? trimmed : `0x${trimmed}`;
+  return CHAIN_ADDRESS_RE.test(withPrefix) ? withPrefix : "";
+};
 
 const withTimeout = async <T>(promise: Promise<T>, timeoutMs: number, context: string) => {
   let timeoutId: ReturnType<typeof setTimeout> | null = null;
@@ -232,8 +240,19 @@ const mergeSnapshots = async (options?: {
   maxSources?: number;
   includeRuntimeCode?: boolean;
   includeDependencyExpansion?: boolean;
+  sourceAddresses?: string[];
 }): Promise<ParticlePostCache> => {
-  const allSources = await listChainSyncSourcesForApp({ force: options?.forceSources });
+  const explicitSourceAddresses = Array.from(
+    new Set((options?.sourceAddresses ?? []).map(normalizeSourceAddress).filter(Boolean)),
+  );
+  const allSources =
+    explicitSourceAddresses.length > 0
+      ? explicitSourceAddresses.map((address) => ({
+          address,
+          authorId: address,
+          label: address,
+        }))
+      : await listChainSyncSourcesForApp({ force: options?.forceSources });
   const chainSources =
     typeof options?.maxSources === "number" && Number.isFinite(options.maxSources)
       ? allSources.slice(0, Math.max(1, Math.trunc(options.maxSources)))
@@ -444,9 +463,16 @@ export const syncParticlePostDataFromChain = async (options?: {
   maxSources?: number;
   includeRuntimeCode?: boolean;
   includeDependencyExpansion?: boolean;
+  sourceAddresses?: string[];
 }) => {
   const requestedIncludesRuntimeCode = options?.includeRuntimeCode !== false;
-  const requestedIncludesDependencyExpansion = options?.includeDependencyExpansion !== false;
+  const requestedSourceAddresses = Array.from(
+    new Set((options?.sourceAddresses ?? []).map(normalizeSourceAddress).filter(Boolean)),
+  );
+  const hasExplicitSourceAddresses = requestedSourceAddresses.length > 0;
+  const requestedIncludesDependencyExpansion = hasExplicitSourceAddresses
+    ? options?.includeDependencyExpansion === true
+    : options?.includeDependencyExpansion !== false;
   const requestedMaxOwnedPerSource =
     typeof options?.maxOwnedPerSource === "number" && Number.isFinite(options.maxOwnedPerSource)
       ? Math.max(1, Math.trunc(options.maxOwnedPerSource))
@@ -458,6 +484,7 @@ export const syncParticlePostDataFromChain = async (options?: {
 
   const cacheSatisfiesRequest = (() => {
     if (!cache.loaded) return false;
+    if (hasExplicitSourceAddresses) return false;
     if (requestedIncludesRuntimeCode && !cachedIncludesRuntimeCode) return false;
     if (requestedIncludesDependencyExpansion && !cachedIncludesDependencyExpansion) return false;
     if (requestedMaxSources === null) {
@@ -479,6 +506,7 @@ export const syncParticlePostDataFromChain = async (options?: {
       forceSources: Boolean(options?.forceSources),
       includeRuntimeCode: requestedIncludesRuntimeCode,
       includeDependencyExpansion: requestedIncludesDependencyExpansion,
+      ...(hasExplicitSourceAddresses ? { sourceAddresses: requestedSourceAddresses } : {}),
       ...(requestedMaxSources !== null ? { maxSources: requestedMaxSources } : {}),
       ...(requestedMaxOwnedPerSource !== null
         ? { maxOwnedPerSource: requestedMaxOwnedPerSource }
