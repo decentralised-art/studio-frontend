@@ -83,9 +83,11 @@ let cachedMaxOwnedPerSource: number | null = null;
 let cachedMaxSources: number | null = null;
 let cachedIncludesRuntimeCode = false;
 let cachedIncludesDependencyExpansion = false;
+let cachedSourceAddresses: string[] | null = null;
 const terminalSetCache = new Map<string, string[]>();
 const SOURCE_SNAPSHOT_CONCURRENCY = 4;
-const SOURCE_SNAPSHOT_TIMEOUT_MS = 10000;
+const SOURCE_SNAPSHOT_TIMEOUT_MS = 6000;
+const EXPLICIT_SOURCE_SNAPSHOT_TIMEOUT_MS = 15000;
 const DEPENDENCY_FETCH_CONCURRENCY = 8;
 const DEPENDENCY_FETCH_TIMEOUT_MS = 8000;
 const CHAIN_ADDRESS_RE = /^0x[0-9a-f]{40}$/;
@@ -245,6 +247,10 @@ const mergeSnapshots = async (options?: {
   const explicitSourceAddresses = Array.from(
     new Set((options?.sourceAddresses ?? []).map(normalizeSourceAddress).filter(Boolean)),
   );
+  const sourceSnapshotTimeoutMs =
+    explicitSourceAddresses.length > 0
+      ? EXPLICIT_SOURCE_SNAPSHOT_TIMEOUT_MS
+      : SOURCE_SNAPSHOT_TIMEOUT_MS;
   const allSources =
     explicitSourceAddresses.length > 0
       ? explicitSourceAddresses.map((address) => ({
@@ -272,12 +278,15 @@ const mergeSnapshots = async (options?: {
             : {}),
           includeRuntimeCode,
         }),
-        SOURCE_SNAPSHOT_TIMEOUT_MS,
+        sourceSnapshotTimeoutMs,
         `snapshot ${source.address}`,
       ),
   );
   const successfulSnapshots = settled.filter((result) => result.status === "fulfilled").length;
   const failedSnapshots = settled.length - successfulSnapshots;
+  if (explicitSourceAddresses.length > 0 && failedSnapshots > 0) {
+    throw new Error("Failed to load one or more followed accounts. Check connection and retry.");
+  }
   if (chainSources.length > 0 && successfulSnapshots === 0) {
     throw new Error("Unable to load chain snapshots from available sources.");
   }
@@ -468,7 +477,7 @@ export const syncParticlePostDataFromChain = async (options?: {
   const requestedIncludesRuntimeCode = options?.includeRuntimeCode !== false;
   const requestedSourceAddresses = Array.from(
     new Set((options?.sourceAddresses ?? []).map(normalizeSourceAddress).filter(Boolean)),
-  );
+  ).sort((a, b) => a.localeCompare(b));
   const hasExplicitSourceAddresses = requestedSourceAddresses.length > 0;
   const requestedIncludesDependencyExpansion = hasExplicitSourceAddresses
     ? options?.includeDependencyExpansion === true
@@ -484,7 +493,17 @@ export const syncParticlePostDataFromChain = async (options?: {
 
   const cacheSatisfiesRequest = (() => {
     if (!cache.loaded) return false;
-    if (hasExplicitSourceAddresses) return false;
+    if (hasExplicitSourceAddresses) {
+      if (!cachedSourceAddresses) return false;
+      if (cachedSourceAddresses.length !== requestedSourceAddresses.length) return false;
+      if (
+        !cachedSourceAddresses.every((value, index) => value === requestedSourceAddresses[index])
+      ) {
+        return false;
+      }
+    } else if (cachedSourceAddresses !== null) {
+      return false;
+    }
     if (requestedIncludesRuntimeCode && !cachedIncludesRuntimeCode) return false;
     if (requestedIncludesDependencyExpansion && !cachedIncludesDependencyExpansion) return false;
     if (requestedMaxSources === null) {
@@ -514,6 +533,7 @@ export const syncParticlePostDataFromChain = async (options?: {
     })
       .then((next) => {
         cache = next;
+        cachedSourceAddresses = hasExplicitSourceAddresses ? [...requestedSourceAddresses] : null;
         cachedMaxOwnedPerSource = requestedMaxOwnedPerSource;
         cachedMaxSources = requestedMaxSources;
         cachedIncludesRuntimeCode = requestedIncludesRuntimeCode;
@@ -625,9 +645,21 @@ export const listParticleSearchEntities = () => cache.searchable;
 
 export const isParticlePostDataLoaded = () => cache.loaded;
 
+export const doesParticlePostCacheMatchSources = (sourceAddresses: string[]): boolean => {
+  if (!cache.loaded) return false;
+  const normalizedSources = Array.from(
+    new Set(sourceAddresses.map(normalizeSourceAddress).filter(Boolean)),
+  ).sort((a, b) => a.localeCompare(b));
+  if (normalizedSources.length === 0) return cachedSourceAddresses === null;
+  if (!cachedSourceAddresses) return false;
+  if (cachedSourceAddresses.length !== normalizedSources.length) return false;
+  return cachedSourceAddresses.every((value, index) => value === normalizedSources[index]);
+};
+
 export const resetParticlePostDataCacheForDebug = () => {
   cache = emptyCache();
   loadPromise = null;
+  cachedSourceAddresses = null;
   cachedMaxOwnedPerSource = null;
   cachedMaxSources = null;
   cachedIncludesRuntimeCode = false;

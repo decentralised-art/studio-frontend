@@ -279,7 +279,7 @@ const mapExploreParticle = (
   authorId,
   viewId: "midi",
   createdAt,
-  createdLabel: "just synced",
+  createdLabel: "",
   ingredients: [
     particle.featureName,
     ...particle.composites

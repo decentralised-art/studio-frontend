@@ -71,15 +71,16 @@
   import {
     fetchChainOwnedStudioSnapshot,
     fetchChainParticleForStudio,
-    listChainSyncSourcesForApp,
     type ChainStudioSyncResult,
   } from "$lib/studio/chainStudioAdapter";
   import {
+    getCurrentUserProfileState,
     getCurrentUserToolboxLibrary,
     getMe,
     loginWithMockChainAccount,
     saveCurrentUserToolboxLibrary,
   } from "$lib/auth/api";
+  import { computeFeedSourceAddresses, normalizeFeedSourceAddress } from "$lib/feed/feedSources";
   import { clearChainToken, getChainToken } from "$lib/auth/session";
   import {
     ChainApiRequestError,
@@ -3708,6 +3709,42 @@
     }, deployedParticles);
   };
 
+  const extractProfileEthereumAddress = (value: unknown): string => {
+    if (!value || typeof value !== "object") return "";
+    const root = value as Record<string, unknown>;
+    const nested =
+      root.user && typeof root.user === "object" ? (root.user as Record<string, unknown>) : root;
+    const raw =
+      typeof nested.ethereum_address === "string"
+        ? nested.ethereum_address
+        : typeof nested.ethereumAddress === "string"
+          ? nested.ethereumAddress
+          : "";
+    return normalizeFeedSourceAddress(raw);
+  };
+
+  const shortFeedAddress = (value: string): string => {
+    const normalized = normalizeFeedSourceAddress(value);
+    if (!normalized) return "";
+    if (normalized.length < 14) return normalized;
+    return `${normalized.slice(0, 8)}...${normalized.slice(-4)}`;
+  };
+
+  const resolveStudioChainSyncSources = async (): Promise<
+    Array<{ address: string; authorId: string; label: string }>
+  > => {
+    const profileState = await getCurrentUserProfileState({ preferCached: true });
+    const sourceAddresses = computeFeedSourceAddresses({
+      currentUserAddress: extractProfileEthereumAddress(profileState.me),
+      followedUserAddresses: profileState.social.followedUserAddresses,
+    });
+    return sourceAddresses.map((address) => ({
+      address,
+      authorId: address,
+      label: shortFeedAddress(address) || address,
+    }));
+  };
+
   const resolveCurrentMockChainUserId = async () => {
     try {
       const mePayload = (await getMe()) as Record<string, unknown>;
@@ -3889,7 +3926,13 @@
     chainSyncStatus = "Fetching chain registry from chain accounts...";
     chainSyncBusy = true;
     try {
-      const sources = await listChainSyncSourcesForApp({ force: true });
+      const sources = await resolveStudioChainSyncSources();
+      if (sources.length === 0) {
+        chainSyncStatus = null;
+        chainSyncError =
+          "Unable to resolve Studio network sources from your profile. Check connection and retry.";
+        return;
+      }
       const particleIds = new SvelteSet<string>();
       const connectorNames = new SvelteSet<string>();
       const transformationIds = new SvelteSet<string>();

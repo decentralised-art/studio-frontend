@@ -1,6 +1,6 @@
 <script lang="ts">
   import { Background, SvelteFlow, type Edge, type NodeTypes } from "@xyflow/svelte";
-  import { SvelteMap } from "svelte/reactivity";
+  import { SvelteMap, SvelteSet } from "svelte/reactivity";
   import { onMount, tick } from "svelte";
   import "@xyflow/svelte/dist/style.css";
 
@@ -13,6 +13,7 @@
     buildParticleDependencyGraph,
     type StudioDependencyNode,
   } from "$lib/studio/particleDependencyGraph";
+  import { ensureParticleRecordLoadedById } from "$lib/feed/particlePostData";
 
   const {
     particleId,
@@ -24,7 +25,11 @@
     displayMode?: "card" | "page";
   } = $props();
 
-  const graph = $derived.by(() => buildParticleDependencyGraph(particleId));
+  let graphRevision = $state(0);
+  const graph = $derived.by(() => {
+    void graphRevision;
+    return buildParticleDependencyGraph(particleId);
+  });
   const builtNodes = $derived.by(() => graph.nodes);
   const builtEdges = $derived.by(() => graph.edges);
   const flowId = $derived(`social-flow-${particleId}`);
@@ -61,6 +66,67 @@
   let flowReady = $state(false);
   let layoutFrame: number | null = null;
   let fitTimeouts = $state<Array<ReturnType<typeof setTimeout>>>([]);
+  let graphHydrationRequestVersion = 0;
+  let graphHydrationBusy = $state(false);
+  let graphHydrationRetryTimeout: ReturnType<typeof setTimeout> | null = null;
+  const GRAPH_HYDRATION_RETRY_DELAY_MS = 1800;
+
+  const beginGraphHydrationRequest = (): number => {
+    graphHydrationRequestVersion += 1;
+    return graphHydrationRequestVersion;
+  };
+
+  const isGraphHydrationRequestActive = (requestVersion: number): boolean =>
+    requestVersion === graphHydrationRequestVersion;
+
+  const graphNeedsHydration = (nodes: StudioDependencyNode[]): boolean =>
+    nodes.length === 0 || nodes.some((node) => node.data.placeholder === true);
+
+  const clearGraphHydrationRetryTimeout = () => {
+    if (graphHydrationRetryTimeout === null) return;
+    if (typeof clearTimeout === "function") {
+      clearTimeout(graphHydrationRetryTimeout);
+    }
+    graphHydrationRetryTimeout = null;
+  };
+
+  const scheduleGraphHydrationRetry = () => {
+    clearGraphHydrationRetryTimeout();
+    if (typeof setTimeout !== "function") {
+      graphRevision += 1;
+      return;
+    }
+    graphHydrationRetryTimeout = setTimeout(() => {
+      graphHydrationRetryTimeout = null;
+      graphRevision += 1;
+    }, GRAPH_HYDRATION_RETRY_DELAY_MS);
+  };
+
+  const hydrateParticleDependencyRecords = async (
+    rootParticleId: string,
+    requestVersion: number,
+  ): Promise<void> => {
+    const queue: string[] = [rootParticleId.trim()];
+    const seen = new SvelteSet<string>();
+    let guard = 0;
+
+    while (queue.length > 0 && guard < 96) {
+      const current = queue.shift()?.trim() ?? "";
+      if (!current || seen.has(current)) continue;
+      seen.add(current);
+      guard += 1;
+
+      const record = await ensureParticleRecordLoadedById(current);
+      if (!isGraphHydrationRequestActive(requestVersion)) return;
+      if (!record) continue;
+
+      record.dependencies.forEach((dependencyId) => {
+        const normalizedDependency = dependencyId.trim();
+        if (!normalizedDependency || seen.has(normalizedDependency)) return;
+        queue.push(normalizedDependency);
+      });
+    }
+  };
 
   const clearPendingFitTimers = () => {
     if (typeof clearTimeout !== "function") return;
@@ -306,8 +372,39 @@
     void fitFlow();
   });
 
+  $effect(() => {
+    const normalizedParticleId = particleId.trim();
+    if (!normalizedParticleId) return;
+    if (!graphNeedsHydration(builtNodes)) return;
+    if (graphHydrationBusy) return;
+    graphHydrationBusy = true;
+
+    const requestVersion = beginGraphHydrationRequest();
+    void hydrateParticleDependencyRecords(normalizedParticleId, requestVersion)
+      .then(() => {
+        if (!isGraphHydrationRequestActive(requestVersion)) return;
+        graphRevision += 1;
+        scheduleLayout();
+        graphHydrationBusy = false;
+
+        const hydratedNodes = buildParticleDependencyGraph(normalizedParticleId).nodes;
+        if (graphNeedsHydration(hydratedNodes)) {
+          scheduleGraphHydrationRetry();
+        }
+      })
+      .catch((error) => {
+        if (!isGraphHydrationRequestActive(requestVersion)) return;
+        console.warn("[Social flow] Failed to hydrate dependency graph records.", error);
+        graphHydrationBusy = false;
+        scheduleGraphHydrationRetry();
+      });
+  });
+
   onMount(() => {
     return () => {
+      graphHydrationRequestVersion += 1;
+      graphHydrationBusy = false;
+      clearGraphHydrationRetryTimeout();
       if (layoutFrame !== null && typeof cancelAnimationFrame === "function") {
         cancelAnimationFrame(layoutFrame);
         layoutFrame = null;

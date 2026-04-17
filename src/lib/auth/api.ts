@@ -759,6 +759,9 @@ export const updateUserById = async (
   if (!response.ok) {
     throw new Error(extractErrorMessage(payload));
   }
+  // Profile updates (social/toolbox/nickname) must invalidate /auth/me cache,
+  // otherwise cross-page state can remain stale until manual refresh.
+  clearCachedMePayload();
   return payload;
 };
 
@@ -1059,15 +1062,20 @@ export const addParticleToCurrentUserToolbox = async (particleId: string): Promi
 export const getCurrentUserSocialPreferences = async (_options?: {
   bootstrapPrototypeIfEmpty?: boolean;
 }): Promise<SocialPreferencesProfile> => {
-  return (await getCurrentUserProfileState()).social;
+  return (await getCurrentUserProfileState({ preferCached: true })).social;
 };
 
 export const saveCurrentUserSocialPreferences = async (
   preferences: SocialPreferencesProfile,
+  options?: { mePayload?: unknown },
 ): Promise<void> => {
-  if (!getToken()) return;
-  const me = await getMe();
-  const envelope = extractUserEnvelope(me);
+  if (!getToken()) {
+    throw new Error("Authentication required.");
+  }
+  const envelope =
+    extractUserEnvelope(options?.mePayload) ??
+    extractUserEnvelope(readCachedMePayload()) ??
+    extractUserEnvelope(await getMe());
   if (!envelope) {
     throw new Error("Unable to resolve current user for social preferences save.");
   }
@@ -1089,56 +1097,80 @@ export const followUserInProfile = async (address: string): Promise<void> => {
   const normalizedAddress = normalizeFollowAddress(address);
   if (!normalizedAddress) return;
 
-  if (!getToken()) return;
+  if (!getToken()) {
+    throw new Error("Authentication required.");
+  }
 
-  const preferences = await getCurrentUserSocialPreferences();
+  const profileState = await getCurrentUserProfileState({ preferCached: true });
+  const preferences = profileState.social;
   if (preferences.followedUserAddresses.includes(normalizedAddress)) return;
-  await saveCurrentUserSocialPreferences({
-    ...preferences,
-    followedUserAddresses: [...preferences.followedUserAddresses, normalizedAddress],
-  });
+  await saveCurrentUserSocialPreferences(
+    {
+      ...preferences,
+      followedUserAddresses: [...preferences.followedUserAddresses, normalizedAddress],
+    },
+    { mePayload: profileState.me },
+  );
 };
 
 export const unfollowUserInProfile = async (address: string): Promise<void> => {
   const normalizedAddress = normalizeFollowAddress(address);
   if (!normalizedAddress) return;
 
-  if (!getToken()) return;
+  if (!getToken()) {
+    throw new Error("Authentication required.");
+  }
 
-  const preferences = await getCurrentUserSocialPreferences();
+  const profileState = await getCurrentUserProfileState({ preferCached: true });
+  const preferences = profileState.social;
   if (!preferences.followedUserAddresses.includes(normalizedAddress)) return;
-  await saveCurrentUserSocialPreferences({
-    ...preferences,
-    followedUserAddresses: preferences.followedUserAddresses.filter(
-      (entry) => entry !== normalizedAddress,
-    ),
-  });
+  await saveCurrentUserSocialPreferences(
+    {
+      ...preferences,
+      followedUserAddresses: preferences.followedUserAddresses.filter(
+        (entry) => entry !== normalizedAddress,
+      ),
+    },
+    { mePayload: profileState.me },
+  );
 };
 
 export const followFormatInProfile = async (formatHash: string): Promise<void> => {
-  if (!getToken()) return;
+  if (!getToken()) {
+    throw new Error("Authentication required.");
+  }
   const normalizedHash = normalizeFollowFormatHash(formatHash);
   if (!normalizedHash) return;
-  const preferences = await getCurrentUserSocialPreferences();
+  const profileState = await getCurrentUserProfileState({ preferCached: true });
+  const preferences = profileState.social;
   if (preferences.followedFormatHashes.includes(normalizedHash)) return;
-  await saveCurrentUserSocialPreferences({
-    ...preferences,
-    followedFormatHashes: [...preferences.followedFormatHashes, normalizedHash],
-  });
+  await saveCurrentUserSocialPreferences(
+    {
+      ...preferences,
+      followedFormatHashes: [...preferences.followedFormatHashes, normalizedHash],
+    },
+    { mePayload: profileState.me },
+  );
 };
 
 export const unfollowFormatInProfile = async (formatHash: string): Promise<void> => {
-  if (!getToken()) return;
+  if (!getToken()) {
+    throw new Error("Authentication required.");
+  }
   const normalizedHash = normalizeFollowFormatHash(formatHash);
   if (!normalizedHash) return;
-  const preferences = await getCurrentUserSocialPreferences();
+  const profileState = await getCurrentUserProfileState({ preferCached: true });
+  const preferences = profileState.social;
   if (!preferences.followedFormatHashes.includes(normalizedHash)) return;
-  await saveCurrentUserSocialPreferences({
-    ...preferences,
-    followedFormatHashes: preferences.followedFormatHashes.filter(
-      (entry) => entry !== normalizedHash,
-    ),
-  });
+  await saveCurrentUserSocialPreferences(
+    {
+      ...preferences,
+      followedFormatHashes: preferences.followedFormatHashes.filter(
+        (entry) => entry !== normalizedHash,
+      ),
+    },
+    { mePayload: profileState.me },
+  );
 };
 
 export const computeUserSocialConnections = (

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { SvelteSet } from "svelte/reactivity";
+  import { SvelteMap, SvelteSet } from "svelte/reactivity";
   import { resolve } from "$app/paths";
   import ConnectorPostFeed from "$lib/components/feed/ConnectorPostFeed.svelte";
   import {
@@ -13,6 +13,7 @@
     unfollowFormatInProfile,
   } from "$lib/auth/api";
   import {
+    doesParticlePostCacheMatchSources,
     listParticlePosts as listConnectorPosts,
     listParticleSearchEntities as listConnectorSearchEntities,
     syncParticlePostDataFromChain as syncConnectorPostDataFromChain,
@@ -20,7 +21,9 @@
     type ParticlePostEvent as ConnectorPostEvent,
   } from "$lib/feed/particlePostData";
   import {
+    getChainAccounts,
     getChainFormats,
+    resolveChainAccountsCursor,
     normalizeFormatHash,
     resolveChainFormatsCursor,
   } from "$lib/chain/registryApi";
@@ -39,6 +42,11 @@
   const RUNTIME_SEARCH_MAX_OWNED_PER_SOURCE = 16;
   const CHAIN_DISCOVERY_FORMATS_PAGE_LIMIT = 256;
   const CHAIN_DISCOVERY_FORMATS_PAGE_GUARD = 128;
+  const CHAIN_DISCOVERY_ACCOUNTS_PAGE_LIMIT = 256;
+  const CHAIN_DISCOVERY_ACCOUNTS_PAGE_GUARD = 128;
+  const ETH_ADDRESS_RE = /^0x[0-9a-f]{40}$/;
+  const PROFILE_SOURCES_UNAVAILABLE_MESSAGE =
+    "Unable to resolve your profile network sources. Check connection and reload.";
 
   type DiscoveredUser = {
     address: string;
@@ -63,6 +71,7 @@
   let discoveredFormatHashesLoading = $state(false);
   let localFollowing = $state<string[]>([]);
   let localFollowedFormats = $state<string[]>([]);
+  let userFollowPendingByAddress = $state<Record<string, boolean>>({});
   let localToolboxConnectors = $state<string[]>([]);
   let currentUserAddress = $state("");
   let currentUserLabel = $state("");
@@ -76,6 +85,8 @@
     if (!trimmed) return "";
     return trimmed.startsWith("0x") ? trimmed : `0x${trimmed}`;
   };
+  const isChainAddress = (value: string): boolean =>
+    ETH_ADDRESS_RE.test(normalizeAddressForKey(value));
 
   const shortAddress = (address: string): string => {
     const normalized = normalizeAddressForKey(address);
@@ -186,8 +197,11 @@
     });
   });
 
+  const readConnectorFeedEventsFromCache = (): ConnectorPostEvent[] =>
+    listConnectorPosts().filter((event): event is ConnectorPostEvent => event.type === "connector");
+
   const refreshFeedStateFromCache = () => {
-    feedEvents = listConnectorPosts();
+    feedEvents = readConnectorFeedEventsFromCache();
     chainElements = listConnectorSearchEntities();
     if (feedEvents.length > 0) {
       feedLoadError = "";
@@ -196,9 +210,50 @@
 
   const userSearchResults = $derived.by(() => {
     if (!searchQuery) return [] as DiscoveredUser[];
-    return discoveredUsers
+
+    const byAddress = new SvelteMap<string, DiscoveredUser>();
+    discoveredUsers.forEach((user) => {
+      byAddress.set(user.address, user);
+    });
+    localFollowing.forEach((address) => {
+      const normalized = normalizeAddressForKey(address);
+      if (!normalized || byAddress.has(normalized)) return;
+      const knownLabel = discoveredUserLabelByAddress.get(normalized)?.trim() ?? "";
+      byAddress.set(normalized, {
+        address: normalized,
+        label: knownLabel || shortAddress(normalized) || normalized,
+      });
+    });
+    if (currentUserAddressKey && !byAddress.has(currentUserAddressKey)) {
+      byAddress.set(currentUserAddressKey, {
+        address: currentUserAddressKey,
+        label:
+          currentUserLabel.trim() || shortAddress(currentUserAddressKey) || currentUserAddressKey,
+      });
+    }
+
+    const candidates = Array.from(byAddress.values());
+
+    const matched = candidates
       .filter((user) => `${user.label} ${user.address}`.toLowerCase().includes(searchQuery))
       .slice(0, 8);
+
+    const normalizedAddressQuery = normalizeAddressForKey(searchQuery);
+    if (
+      isChainAddress(normalizedAddressQuery) &&
+      !matched.some((user) => user.address === normalizedAddressQuery)
+    ) {
+      const knownLabel = discoveredUserLabelByAddress.get(normalizedAddressQuery)?.trim() ?? "";
+      return [
+        {
+          address: normalizedAddressQuery,
+          label: knownLabel || shortAddress(normalizedAddressQuery) || normalizedAddressQuery,
+        },
+        ...matched,
+      ].slice(0, 8);
+    }
+
+    return matched;
   });
 
   const formatSearchResults = $derived.by(() => {
@@ -259,6 +314,9 @@
 
   const showSearchResults = $derived.by(() => searchQuery.length > 0);
 
+  const isUserFollowPending = (address: string): boolean =>
+    Boolean(userFollowPendingByAddress[normalizeAddressForKey(address)]);
+
   const getFeedSourceAddresses = (): string[] => {
     return computeFeedSourceAddresses({
       currentUserAddress: currentUserAddressKey,
@@ -269,8 +327,6 @@
   const loadChainFeed = async () => {
     const requestVersion = beginFeedSyncRequest();
     feedLoadError = "";
-    feedLoading = true;
-    feedSyncSettled = false;
     const sourceAddresses = getFeedSourceAddresses();
     if (import.meta.env.DEV) {
       console.info("[Network feed] Sync sources", sourceAddresses);
@@ -279,26 +335,63 @@
       if (sourceAddresses.length === 0) {
         feedEvents = [];
         chainElements = { connectors: [], transformations: [], conditions: [] };
+        feedLoading = false;
+        feedSyncSettled = true;
       } else {
-        await syncConnectorPostDataFromChain({
-          force: true,
+        const cacheMatchesCurrentSources = doesParticlePostCacheMatchSources(sourceAddresses);
+        let hasCachedFeed = false;
+
+        if (cacheMatchesCurrentSources) {
+          refreshFeedStateFromCache();
+          hasCachedFeed = feedEvents.length > 0;
+          feedLoading = !hasCachedFeed;
+          feedSyncSettled = hasCachedFeed;
+        } else {
+          // Avoid showing stale events from a previous source set while refreshing.
+          feedEvents = [];
+          chainElements = { connectors: [], transformations: [], conditions: [] };
+          feedLoading = true;
+          feedSyncSettled = false;
+        }
+
+        const syncOptions = {
           sourceAddresses,
           maxOwnedPerSource: FEED_SOURCE_MAX_OWNED_PER_SOURCE,
           includeRuntimeCode: false,
           includeDependencyExpansion: false,
-        });
+        } as const;
+
+        await syncConnectorPostDataFromChain(syncOptions);
         if (!isFeedSyncRequestActive(requestVersion)) return;
         refreshFeedStateFromCache();
+        feedLoading = false;
+        feedSyncSettled = true;
+
+        if (cacheMatchesCurrentSources && hasCachedFeed) {
+          void syncConnectorPostDataFromChain({ ...syncOptions, force: true })
+            .then(() => {
+              if (!isFeedSyncRequestActive(requestVersion)) return;
+              refreshFeedStateFromCache();
+            })
+            .catch((error) => {
+              if (!isFeedSyncRequestActive(requestVersion)) return;
+              console.warn("[Network feed] Background refresh failed.", error);
+            });
+        }
       }
       visibleEventCount = FEED_PAGE_SIZE;
     } catch (error) {
       if (!isFeedSyncRequestActive(requestVersion)) return;
       console.error("[Network feed] Failed to sync chain-backed connector posts.", error);
       feedLoadError = error instanceof Error ? error.message : "Unable to load network feed.";
+      feedLoading = false;
+      feedSyncSettled = true;
     } finally {
       if (isFeedSyncRequestActive(requestVersion)) {
-        feedLoading = false;
-        feedSyncSettled = true;
+        if (feedLoading) {
+          feedLoading = false;
+          feedSyncSettled = true;
+        }
       }
     }
   };
@@ -336,7 +429,7 @@
     })
       .then(() => {
         if (!isRuntimeHydrationRequestActive(requestVersion)) return;
-        feedEvents = listConnectorPosts();
+        feedEvents = readConnectorFeedEventsFromCache();
         chainElements = listConnectorSearchEntities();
         runtimeSearchHydrated = true;
       })
@@ -375,22 +468,34 @@
   const toggleUserFollow = async (address: string) => {
     const normalizedAddress = normalizeAddressForKey(address);
     if (!normalizedAddress) return;
-    const previous = [...localFollowing];
+    if (isUserFollowPending(normalizedAddress)) return;
+
     const isFollowing = localFollowing.includes(normalizedAddress);
-    localFollowing = isFollowing
-      ? localFollowing.filter((entry) => entry !== normalizedAddress)
-      : [...localFollowing, normalizedAddress];
+    userFollowPendingByAddress = {
+      ...userFollowPendingByAddress,
+      [normalizedAddress]: true,
+    };
+
     try {
       if (isFollowing) {
         await unfollowUserInProfile(normalizedAddress);
       } else {
         await followUserInProfile(normalizedAddress);
       }
+
+      const profileState = await getCurrentUserProfileState({ preferCached: true });
+      localFollowing = profileState.social.followedUserAddresses
+        .map(normalizeAddressForKey)
+        .filter(Boolean);
+
       runtimeSearchHydrated = false;
-      void loadChainFeed();
+      await loadChainFeed();
     } catch (error) {
       console.error("[Network feed] Failed to persist following state.", error);
-      localFollowing = previous;
+    } finally {
+      const nextPending = { ...userFollowPendingByAddress };
+      delete nextPending[normalizedAddress];
+      userFollowPendingByAddress = nextPending;
     }
   };
 
@@ -448,19 +553,58 @@
     return Array.from(discovered).sort((a, b) => a.localeCompare(b));
   };
 
-  const loadDiscoveredUsers = async (): Promise<DiscoveredUser[]> => {
-    const users = await listServicesUsers();
-    const nextUsers: DiscoveredUser[] = [];
-    users.forEach((user) => {
-      const address = getServicesUserEthereumAddress(user);
-      if (!address) return;
-      if (nextUsers.some((entry) => entry.address === address)) return;
-      nextUsers.push({
-        address,
-        label: resolveServicesUserDisplayLabel(user, address),
+  const loadDiscoveredUsers = async (options?: {
+    includeChainAccounts?: boolean;
+  }): Promise<DiscoveredUser[]> => {
+    const byAddress = new SvelteMap<string, DiscoveredUser>();
+
+    try {
+      const users = await listServicesUsers();
+      users.forEach((user) => {
+        const address = getServicesUserEthereumAddress(user);
+        if (!address) return;
+        const normalized = normalizeAddressForKey(address);
+        if (!isChainAddress(normalized)) return;
+        byAddress.set(normalized, {
+          address: normalized,
+          label: resolveServicesUserDisplayLabel(user, normalized),
+        });
       });
-    });
-    return nextUsers.sort((a, b) => a.address.localeCompare(b.address));
+    } catch (error) {
+      console.warn("[Network feed] Services user discovery failed.", error);
+    }
+
+    if (options?.includeChainAccounts !== false) {
+      try {
+        let after: string | null = null;
+        let guard = 0;
+        do {
+          const response = await getChainAccounts({
+            limit: CHAIN_DISCOVERY_ACCOUNTS_PAGE_LIMIT,
+            ...(after ? { after } : {}),
+          });
+          const accounts = Array.isArray(response.accounts) ? response.accounts : [];
+          accounts.forEach((rawAddress) => {
+            const normalized = normalizeAddressForKey(rawAddress);
+            if (!isChainAddress(normalized)) return;
+            if (byAddress.has(normalized)) return;
+            byAddress.set(normalized, {
+              address: normalized,
+              label: shortAddress(normalized) || normalized,
+            });
+          });
+
+          const cursor = resolveChainAccountsCursor(response);
+          if (!cursor.hasMore || !cursor.nextAfter) break;
+          after = cursor.nextAfter;
+          guard += 1;
+        } while (guard < CHAIN_DISCOVERY_ACCOUNTS_PAGE_GUARD);
+      } catch (error) {
+        console.warn("[Network feed] Chain account discovery failed.", error);
+      }
+    }
+
+    return Array.from(byAddress.values()).sort((a, b) => a.address.localeCompare(b.address));
   };
 
   const extractEthereumAddress = (value: unknown): string => {
@@ -495,8 +639,7 @@
     if (searchQuery.length === 0) return;
     if (discoveredUsersLoaded || discoveredUsersLoading) return;
     discoveredUsersLoading = true;
-    discoveredUsersLoading = true;
-    void loadDiscoveredUsers()
+    void loadDiscoveredUsers({ includeChainAccounts: false })
       .then((users) => {
         if (!pageMounted) return;
         discoveredUsers = [...users];
@@ -548,6 +691,12 @@
           .map(normalizeFormatHashForKey)
           .filter(Boolean);
         socialPreferencesHydrated = true;
+        if (!currentUserAddress && localFollowing.length === 0) {
+          feedLoadError = PROFILE_SOURCES_UNAVAILABLE_MESSAGE;
+          feedLoading = false;
+          feedSyncSettled = true;
+          return;
+        }
         void loadChainFeed();
       })
       .catch((error) => {
@@ -559,22 +708,9 @@
         localFollowing = [];
         localFollowedFormats = [];
         socialPreferencesHydrated = true;
-        void loadChainFeed();
-      });
-
-    void loadDiscoveredUsers()
-      .then((users) => {
-        if (!pageMounted) return;
-        discoveredUsers = [...users];
-        discoveredUsersLoaded = true;
-      })
-      .catch((error) => {
-        if (!pageMounted) return;
-        console.warn("[Network feed] Failed to pre-hydrate services user labels.", error);
-      })
-      .finally(() => {
-        if (!pageMounted) return;
-        discoveredUsersLoading = false;
+        feedLoadError = PROFILE_SOURCES_UNAVAILABLE_MESSAGE;
+        feedLoading = false;
+        feedSyncSettled = true;
       });
 
     return () => {
@@ -612,18 +748,28 @@
                   <div class="candidate-meta">
                     <div class="candidate-avatar candidate-avatar--glyph" aria-hidden="true">U</div>
                     <div class="candidate-text">
-                      <p class="candidate-name">{user.label}</p>
+                      <a
+                        class="candidate-name candidate-name-link"
+                        href={resolve("/u/[id]", { id: user.address })}
+                      >
+                        {user.label}
+                      </a>
                       <p class="candidate-kind">{user.address}</p>
                     </div>
                   </div>
                   <Button
                     variant={followedAuthorIds.has(user.address) ? "ghost" : "primary"}
+                    disabled={isUserFollowPending(user.address)}
                     onclick={() => {
                       void toggleUserFollow(user.address);
                     }}
                     className="follow-btn"
                   >
-                    {followedAuthorIds.has(user.address) ? "Following" : "Follow"}
+                    {#if isUserFollowPending(user.address)}
+                      {followedAuthorIds.has(user.address) ? "Unfollowing..." : "Following..."}
+                    {:else}
+                      {followedAuthorIds.has(user.address) ? "Following" : "Follow"}
+                    {/if}
                   </Button>
                 </div>
               {/each}
@@ -803,6 +949,15 @@
 
   .candidate-name {
     @apply text-sm font-medium text-white leading-tight;
+  }
+
+  .candidate-name-link {
+    @apply underline decoration-transparent underline-offset-2 transition;
+    text-decoration-thickness: 1px;
+  }
+
+  .candidate-name-link:hover {
+    @apply decoration-white/70;
   }
 
   .candidate-kind {

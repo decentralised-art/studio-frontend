@@ -189,15 +189,24 @@
     if (!targetAddress) return;
     followPending = true;
 
+    const wasFollowing = viewerFollowingIds.includes(targetAddress);
+    const previousFollowing = [...viewerFollowingIds];
+    viewerFollowingIds = wasFollowing
+      ? viewerFollowingIds.filter((entry) => entry !== targetAddress)
+      : [...viewerFollowingIds, targetAddress];
+
     try {
-      const isFollowing = viewerFollowingIds.includes(targetAddress);
-      if (isFollowing) {
+      if (wasFollowing) {
         await unfollowUserInProfile(targetAddress);
       } else {
         await followUserInProfile(targetAddress);
       }
-      await refreshFollowState(targetAddress);
+      // Refresh social counters in background to avoid blocking follow/unfollow button state.
+      void refreshFollowState(targetAddress).catch((err) => {
+        console.warn("[User page] Failed to refresh follow graph after toggle.", err);
+      });
     } catch (err) {
+      viewerFollowingIds = previousFollowing;
       actionError = err instanceof Error ? err.message : "Failed to update follow state.";
     } finally {
       followPending = false;
