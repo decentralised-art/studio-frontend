@@ -495,6 +495,21 @@ export const getOrCreateMockEthereumAccount = (
   return created;
 };
 
+export const getStoredMockEthereumAccount = (
+  accountAlias: string = DEFAULT_ACCOUNT_ALIAS,
+): MockEthereumAccount | null => {
+  if (!browser) return null;
+  const normalizedAlias = normalizeAccountAlias(accountAlias);
+  const accountMap = readStoredAccountMap();
+  return accountMap[normalizedAlias] ?? null;
+};
+
+export const listStoredMockEthereumAccounts = (): MockEthereumAccount[] => {
+  if (!browser) return [];
+  const accountMap = readStoredAccountMap();
+  return Object.values(accountMap);
+};
+
 export const clearStoredMockEthereumAccount = (accountAlias?: string): void => {
   if (!browser) return;
 

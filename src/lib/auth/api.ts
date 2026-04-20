@@ -8,7 +8,12 @@ import {
   mockUsersById,
 } from "$lib/data/users";
 import { buildChainApiUrl, buildServicesApiUrl } from "$lib/url/url";
-import { createChainAuthRequest, getOrCreateMockEthereumAccount } from "./mockEthereum";
+import {
+  createChainAuthRequest,
+  getOrCreateMockEthereumAccount,
+  getStoredMockEthereumAccount,
+  listStoredMockEthereumAccounts,
+} from "./mockEthereum";
 import {
   clearChainToken,
   clearToken,
@@ -783,6 +788,53 @@ export type CurrentUserProfileState = {
   userId: string | null;
   social: SocialPreferencesProfile;
   toolbox: ToolboxLibraryProfile;
+};
+
+export const resolveCurrentUserChainSourceAddresses = (mePayload: unknown): string[] => {
+  const envelope = extractUserEnvelope(mePayload);
+  if (!envelope) return [];
+
+  const sourceSet = new Set<string>();
+  const profileAddress = normalizeFollowAddress(
+    typeof envelope.rootUser.ethereum_address === "string"
+      ? envelope.rootUser.ethereum_address
+      : typeof envelope.rootUser.ethereumAddress === "string"
+        ? envelope.rootUser.ethereumAddress
+        : "",
+  );
+  if (profileAddress) sourceSet.add(profileAddress);
+
+  if (browser) {
+    const email =
+      typeof envelope.rootUser.email === "string"
+        ? envelope.rootUser.email.trim().toLowerCase()
+        : "";
+    if (email.endsWith("@mock.decentralised.art")) {
+      const mockUserId = email.replace(/@mock\.decentralised\.art$/i, "");
+      if (mockUserId) {
+        const mockChainAddress = normalizeFollowAddress(
+          getStoredMockEthereumAccount(`mock-user:${mockUserId}`)?.address ?? "",
+        );
+        if (mockChainAddress) sourceSet.add(mockChainAddress);
+      }
+
+      // Backward compatibility: older builds used the default alias for chain auth.
+      // Keep this in source resolution so previously-authored connectors remain visible.
+      const legacyDefaultMockChainAddress = normalizeFollowAddress(
+        getStoredMockEthereumAccount()?.address ?? "",
+      );
+      if (legacyDefaultMockChainAddress) sourceSet.add(legacyDefaultMockChainAddress);
+
+      // Additional legacy recovery: include all stored mock-chain accounts from this browser.
+      // This captures historical aliases used before user-id scoped aliases were introduced.
+      listStoredMockEthereumAccounts().forEach((account) => {
+        const normalized = normalizeFollowAddress(account.address);
+        if (normalized) sourceSet.add(normalized);
+      });
+    }
+  }
+
+  return Array.from(sourceSet);
 };
 
 export type UserSocialConnectionsStatus = "ok" | "address_not_indexed_in_services";

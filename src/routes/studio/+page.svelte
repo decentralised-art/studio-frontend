@@ -78,12 +78,14 @@
     getCurrentUserToolboxLibrary,
     getMe,
     loginWithMockChainAccount,
+    resolveCurrentUserChainSourceAddresses,
     saveCurrentUserToolboxLibrary,
   } from "$lib/auth/api";
   import { computeFeedSourceAddresses, normalizeFeedSourceAddress } from "$lib/feed/feedSources";
   import { clearChainToken, getChainToken } from "$lib/auth/session";
   import {
     ChainApiRequestError,
+    getChainConnector,
     type ChainApiPostResult,
     type ChainExecutePayload,
     postChainConnectorDetailed,
@@ -3709,20 +3711,6 @@
     }, deployedParticles);
   };
 
-  const extractProfileEthereumAddress = (value: unknown): string => {
-    if (!value || typeof value !== "object") return "";
-    const root = value as Record<string, unknown>;
-    const nested =
-      root.user && typeof root.user === "object" ? (root.user as Record<string, unknown>) : root;
-    const raw =
-      typeof nested.ethereum_address === "string"
-        ? nested.ethereum_address
-        : typeof nested.ethereumAddress === "string"
-          ? nested.ethereumAddress
-          : "";
-    return normalizeFeedSourceAddress(raw);
-  };
-
   const shortFeedAddress = (value: string): string => {
     const normalized = normalizeFeedSourceAddress(value);
     if (!normalized) return "";
@@ -3730,14 +3718,68 @@
     return `${normalized.slice(0, 8)}...${normalized.slice(-4)}`;
   };
 
+  const resolveToolboxConnectorOwnerAddresses = async (
+    connectorIds: string[],
+  ): Promise<string[]> => {
+    const normalizedConnectorIds = Array.from(
+      new Set(connectorIds.map((value) => value.trim()).filter((value) => value.length > 0)),
+    ).slice(0, 24);
+    if (normalizedConnectorIds.length === 0) return [];
+
+    const owners = await Promise.allSettled(
+      normalizedConnectorIds.map(async (connectorId) => {
+        const connector = await getChainConnector(connectorId);
+        return normalizeFeedSourceAddress(
+          typeof connector.owner === "string" ? connector.owner : "",
+        );
+      }),
+    );
+
+    if (import.meta.env.DEV) {
+      const rejectedCount = owners.filter((result) => result.status === "rejected").length;
+      if (rejectedCount > 0) {
+        console.warn("[Studio sync] Some toolbox connector owner lookups failed.", {
+          rejectedCount,
+          connectorCount: normalizedConnectorIds.length,
+        });
+      }
+    }
+
+    return Array.from(
+      new Set(
+        owners
+          .filter(
+            (result): result is PromiseFulfilledResult<string> => result.status === "fulfilled",
+          )
+          .map((result) => result.value)
+          .filter(Boolean),
+      ),
+    );
+  };
+
   const resolveStudioChainSyncSources = async (): Promise<
     Array<{ address: string; authorId: string; label: string }>
   > => {
-    const profileState = await getCurrentUserProfileState({ preferCached: true });
+    const profileState = await getCurrentUserProfileState();
+    const resolvedCurrentSources = resolveCurrentUserChainSourceAddresses(profileState.me);
+    const toolboxOwnerSources = await resolveToolboxConnectorOwnerAddresses(
+      profileState.toolbox.connector,
+    ).catch(() => []);
     const sourceAddresses = computeFeedSourceAddresses({
-      currentUserAddress: extractProfileEthereumAddress(profileState.me),
-      followedUserAddresses: profileState.social.followedUserAddresses,
+      currentUserAddress: resolvedCurrentSources[0] ?? "",
+      followedUserAddresses: [
+        ...profileState.social.followedUserAddresses,
+        ...resolvedCurrentSources.slice(1),
+        ...toolboxOwnerSources,
+      ],
     });
+    if (import.meta.env.DEV) {
+      console.info("[Studio sync] Source derivation", {
+        profileSources: resolvedCurrentSources,
+        toolboxOwners: toolboxOwnerSources,
+        mergedSources: sourceAddresses,
+      });
+    }
     return sourceAddresses.map((address) => ({
       address,
       authorId: address,
@@ -3792,11 +3834,16 @@
     return mockCurrentUserId;
   };
 
+  let chainTokenUserId = "";
   const ensureChainAuthForStudio = async (forceRefresh = false) => {
-    if (forceRefresh) clearChainToken();
-    if (getChainToken()) return;
     const userId = await resolveCurrentMockChainUserId();
+    if (forceRefresh) {
+      clearChainToken();
+      chainTokenUserId = "";
+    }
+    if (getChainToken() && chainTokenUserId === userId) return;
     await loginWithMockChainAccount(userId);
+    chainTokenUserId = userId;
   };
 
   const isInvalidChainTokenError = (error: unknown) => {

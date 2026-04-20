@@ -9,6 +9,7 @@
     followUserInProfile,
     getCurrentUserProfileState,
     listServicesUsers,
+    resolveCurrentUserChainSourceAddresses,
     unfollowUserInProfile,
     unfollowFormatInProfile,
   } from "$lib/auth/api";
@@ -22,6 +23,7 @@
   } from "$lib/feed/particlePostData";
   import {
     getChainAccounts,
+    getChainConnector,
     getChainFormats,
     resolveChainAccountsCursor,
     normalizeFormatHash,
@@ -74,6 +76,7 @@
   let userFollowPendingByAddress = $state<Record<string, boolean>>({});
   let localToolboxConnectors = $state<string[]>([]);
   let currentUserAddress = $state("");
+  let currentUserSourceAliases = $state<string[]>([]);
   let currentUserLabel = $state("");
   let socialPreferencesHydrated = $state(false);
   let pageMounted = false;
@@ -123,6 +126,16 @@
   const followedFormatKeys = $derived.by(() => new SvelteSet(localFollowedFormats));
   const toolboxConnectorIds = $derived.by(() => new SvelteSet(localToolboxConnectors));
   const currentUserAddressKey = $derived.by(() => normalizeAddressForKey(currentUserAddress));
+  const currentUserSourceAddressSet = $derived.by(() => {
+    const set = new SvelteSet<string>();
+    const primary = normalizeAddressForKey(currentUserAddress);
+    if (primary) set.add(primary);
+    currentUserSourceAliases.forEach((entry) => {
+      const normalized = normalizeAddressForKey(entry);
+      if (normalized) set.add(normalized);
+    });
+    return set;
+  });
   const feedUiLoading = $derived.by(
     () => feedLoading || !feedSyncSettled || !socialPreferencesHydrated,
   );
@@ -150,15 +163,21 @@
         labelMap[currentUserAddressKey] = label;
       }
     }
+    const currentUserFallbackLabel = currentUserLabel.trim();
+    if (currentUserFallbackLabel) {
+      currentUserSourceAliases.forEach((address) => {
+        const normalized = normalizeAddressForKey(address);
+        if (!normalized || labelMap[normalized]) return;
+        labelMap[normalized] = currentUserFallbackLabel;
+      });
+    }
     return labelMap;
   });
   const networkFeedEvents = $derived.by(() => {
     const combined = [...feedEvents] as NetworkFeedEvent[];
     const filtered = combined.filter((event) => {
       const authorAddress = normalizeAddressForKey(event.authorId);
-      const authoredByViewer = Boolean(
-        currentUserAddressKey && authorAddress === currentUserAddressKey,
-      );
+      const authoredByViewer = currentUserSourceAddressSet.has(authorAddress);
       if (event.type === "connector") {
         const connectorFormatHash = normalizeFormatHashForKey(event.formatHash ?? "");
         return (
@@ -185,9 +204,8 @@
   const canLoadMoreEvents = $derived.by(() => hasMoreVisibleEvents);
   const feedEmptyMessage = $derived.by(() => {
     const hasFollowTargets = localFollowing.length > 0 || localFollowedFormats.length > 0;
-    const hasOwnEvents = Boolean(
-      currentUserAddressKey &&
-      feedEvents.some((event) => normalizeAddressForKey(event.authorId) === currentUserAddressKey),
+    const hasOwnEvents = feedEvents.some((event) =>
+      currentUserSourceAddressSet.has(normalizeAddressForKey(event.authorId)),
     );
     return resolveNetworkFeedEmptyMessage({
       feedLoadError,
@@ -199,6 +217,67 @@
 
   const readConnectorFeedEventsFromCache = (): ConnectorPostEvent[] =>
     listConnectorPosts().filter((event): event is ConnectorPostEvent => event.type === "connector");
+
+  const resolveToolboxConnectorOwnerAddresses = async (
+    connectorIds: string[],
+  ): Promise<string[]> => {
+    const normalizedConnectorIds = Array.from(
+      new Set(connectorIds.map((value) => value.trim()).filter((value) => value.length > 0)),
+    ).slice(0, 24);
+    if (normalizedConnectorIds.length === 0) return [];
+
+    const owners = await Promise.allSettled(
+      normalizedConnectorIds.map(async (connectorId) => {
+        const connector = await getChainConnector(connectorId);
+        const owner =
+          typeof connector.owner === "string" ? normalizeAddressForKey(connector.owner) : "";
+        return owner && isChainAddress(owner) ? owner : "";
+      }),
+    );
+
+    if (import.meta.env.DEV) {
+      const rejectedCount = owners.filter((result) => result.status === "rejected").length;
+      if (rejectedCount > 0) {
+        console.warn("[Network feed] Some toolbox connector owner lookups failed.", {
+          rejectedCount,
+          connectorCount: normalizedConnectorIds.length,
+        });
+      }
+    }
+
+    return Array.from(
+      new Set(
+        owners
+          .filter(
+            (result): result is PromiseFulfilledResult<string> => result.status === "fulfilled",
+          )
+          .map((result) => result.value)
+          .filter(Boolean),
+      ),
+    );
+  };
+
+  const deriveCurrentSourceAddresses = async (
+    profileState: Awaited<ReturnType<typeof getCurrentUserProfileState>>,
+  ) => {
+    const resolvedProfileSources = resolveCurrentUserChainSourceAddresses(profileState.me)
+      .map(normalizeAddressForKey)
+      .filter(Boolean);
+    const toolboxOwnerSources = await resolveToolboxConnectorOwnerAddresses(
+      profileState.toolbox.connector,
+    ).catch(() => []);
+    const merged = Array.from(new Set([...resolvedProfileSources, ...toolboxOwnerSources]));
+
+    if (import.meta.env.DEV) {
+      console.info("[Network feed] Source derivation", {
+        profileSources: resolvedProfileSources,
+        toolboxOwners: toolboxOwnerSources,
+        mergedSources: merged,
+      });
+    }
+
+    return merged;
+  };
 
   const refreshFeedStateFromCache = () => {
     feedEvents = readConnectorFeedEventsFromCache();
@@ -318,9 +397,11 @@
     Boolean(userFollowPendingByAddress[normalizeAddressForKey(address)]);
 
   const getFeedSourceAddresses = (): string[] => {
+    const primary =
+      currentUserAddressKey || normalizeAddressForKey(currentUserSourceAliases[0] ?? "");
     return computeFeedSourceAddresses({
-      currentUserAddress: currentUserAddressKey,
-      followedUserAddresses: localFollowing,
+      currentUserAddress: primary,
+      followedUserAddresses: [...localFollowing, ...currentUserSourceAliases],
     });
   };
 
@@ -487,6 +568,9 @@
       localFollowing = profileState.social.followedUserAddresses
         .map(normalizeAddressForKey)
         .filter(Boolean);
+      const resolvedSourceAddresses = await deriveCurrentSourceAddresses(profileState);
+      currentUserAddress = resolvedSourceAddresses[0] ?? "";
+      currentUserSourceAliases = resolvedSourceAddresses.slice(1);
 
       runtimeSearchHydrated = false;
       await loadChainFeed();
@@ -607,20 +691,6 @@
     return Array.from(byAddress.values()).sort((a, b) => a.address.localeCompare(b.address));
   };
 
-  const extractEthereumAddress = (value: unknown): string => {
-    if (!value || typeof value !== "object") return "";
-    const root = value as Record<string, unknown>;
-    const nested =
-      root.user && typeof root.user === "object" ? (root.user as Record<string, unknown>) : root;
-    const raw =
-      typeof nested.ethereum_address === "string"
-        ? nested.ethereum_address
-        : typeof nested.ethereumAddress === "string"
-          ? nested.ethereumAddress
-          : "";
-    return normalizeAddressForKey(raw);
-  };
-
   const extractDisplayName = (value: unknown): string => {
     if (!value || typeof value !== "object") return "";
     const root = value as Record<string, unknown>;
@@ -678,11 +748,11 @@
   onMount(() => {
     pageMounted = true;
     socialPreferencesHydrated = false;
-    void getCurrentUserProfileState({ preferCached: true })
-      .then((profileState) => {
+    void getCurrentUserProfileState()
+      .then(async (profileState) => {
         if (!pageMounted) return;
         localToolboxConnectors = [...profileState.toolbox.connector];
-        currentUserAddress = extractEthereumAddress(profileState.me);
+        const resolvedSourceAddresses = await deriveCurrentSourceAddresses(profileState);
         currentUserLabel = extractDisplayName(profileState.me);
         localFollowing = profileState.social.followedUserAddresses
           .map(normalizeAddressForKey)
@@ -691,7 +761,9 @@
           .map(normalizeFormatHashForKey)
           .filter(Boolean);
         socialPreferencesHydrated = true;
-        if (!currentUserAddress && localFollowing.length === 0) {
+        currentUserAddress = resolvedSourceAddresses[0] ?? "";
+        currentUserSourceAliases = resolvedSourceAddresses.slice(1);
+        if (resolvedSourceAddresses.length === 0 && localFollowing.length === 0) {
           feedLoadError = PROFILE_SOURCES_UNAVAILABLE_MESSAGE;
           feedLoading = false;
           feedSyncSettled = true;
@@ -704,6 +776,7 @@
         console.warn("[Network feed] Failed to load profile state.", error);
         localToolboxConnectors = [];
         currentUserAddress = "";
+        currentUserSourceAliases = [];
         currentUserLabel = "";
         localFollowing = [];
         localFollowedFormats = [];
