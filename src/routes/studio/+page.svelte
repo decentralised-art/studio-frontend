@@ -4730,6 +4730,25 @@
     const compiled = compileDraftTransformations(nodes);
     warnings.push(...compiled.warnings);
 
+    const hasChainConnectorReference = (connectorName: string) => {
+      const trimmed = connectorName.trim();
+      if (!trimmed) return false;
+      if (deployedRegistry.connectors[trimmed]) return true;
+
+      const normalized = normalizeKey(trimmed);
+      if (!normalized) return false;
+
+      if (
+        Object.keys(deployedRegistry.connectors).some((name) => normalizeKey(name) === normalized)
+      )
+        return true;
+
+      return networkLibrary.feature.some((item) => {
+        const registryName = item.id.replace(/^feature-/, "");
+        return normalizeKey(registryName) === normalized || normalizeKey(item.name) === normalized;
+      });
+    };
+
     const hasLocalConnectors = nodes.some(
       (node) => isConnectorKind(node.data.kind) && !node.data.fromNetwork,
     );
@@ -4737,9 +4756,10 @@
     if (hasLocalConnectors) {
       const connectorName = activeTab.particleId ?? (slugify(activeTab.label) || activeTab.label);
       const connectorKey = normalizeKey(connectorName);
-      const networkConnectorKeys = new SvelteSet(
-        Object.keys(deployedRegistry.connectors).map(normalizeKey),
-      );
+      const networkConnectorKeys = new SvelteSet([
+        ...Object.keys(deployedRegistry.connectors).map(normalizeKey),
+        ...networkLibrary.feature.map((item) => normalizeKey(item.id.replace(/^feature-/, ""))),
+      ]);
       if (!activeTab.particleId && networkConnectorKeys.has(connectorKey)) {
         warnings.push(`Connector already exists in network: ${connectorName}.`);
       }
@@ -4815,7 +4835,7 @@
           rootDef.dimensions.forEach((dimension, index) => {
             const compositeName = dimension.composite ?? null;
             if (!compositeName) return;
-            if (!deployedRegistry.connectors[compositeName]) {
+            if (!hasChainConnectorReference(compositeName)) {
               warnings.push(
                 `Dependency connector is not available on chain (sync required): ${compositeName} (dimension ${index + 1}).`,
               );
@@ -6405,7 +6425,8 @@
     connectorTreeModelsByTab.set(tabId, graph);
     tabGraphs.set(tabId, tabGraphs.get(tabId) ?? { nodes: [], edges: [] });
     if (activeTabId === tabId) loadTabGraph(tabId);
-    if (graph.nodes.length) return true;
+    const hasPlaceholderNodes = graph.nodes.some((node) => Boolean(node.data.placeholder));
+    if (graph.nodes.length && !hasPlaceholderNodes) return true;
 
     try {
       chainSyncError = null;
@@ -6420,10 +6441,12 @@
       connectorTreeModelsByTab.set(tabId, graph);
       tabGraphs.set(tabId, tabGraphs.get(tabId) ?? { nodes: [], edges: [] });
       if (activeTabId === tabId) loadTabGraph(tabId);
-      chainSyncStatus = graph.nodes.length
+      const hasRenderableTree =
+        graph.nodes.length > 0 && !graph.nodes.some((node) => Boolean(node.data.placeholder));
+      chainSyncStatus = hasRenderableTree
         ? `Loaded ${connectorName} from chain.`
         : `Fetched ${connectorName}, but no tree could be rendered yet.`;
-      return graph.nodes.length > 0;
+      return hasRenderableTree;
     } catch (error) {
       chainSyncStatus = null;
       chainSyncError = error instanceof Error ? error.message : `Failed to fetch ${connectorName}.`;

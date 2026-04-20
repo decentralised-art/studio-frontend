@@ -71,7 +71,7 @@ const clamp = (value: number, min = 0, max = Number.POSITIVE_INFINITY) =>
 const mockTransformations = {
   add: {
     argc: 1,
-    run: (x: number, args: number[]) => x + (args[0] ?? 0),
+    run: (x: number, args: number[]) => x + args[0],
   },
   subtract: {
     argc: 1,

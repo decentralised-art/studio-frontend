@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { goto } from "$app/navigation";
   import { resolve } from "$app/paths";
+  import { dev } from "$app/environment";
   import { page } from "$app/state";
   import "$lib/styles/style.css";
   import { hasAuthSession } from "$lib/auth/session";
@@ -10,9 +11,11 @@
   let isAuthenticated = $state(false);
   let currentPath = $state("");
   let redirectInProgress = false;
+  const devBypass = dev && import.meta.env.VITE_DEV_BYPASS_AUTH === "true";
   const allowedRouteIds = new Set(["/", "/login"]);
   const guardRoute = (routeId: string | null) => {
     if (redirectInProgress) return;
+    if (devBypass) return;
     if (hasAuthSession()) return;
     if (routeId === null) return;
     if (allowedRouteIds.has(routeId)) return;
@@ -22,7 +25,7 @@
 
   onMount(() => {
     const syncAuth = () => {
-      isAuthenticated = hasAuthSession();
+      isAuthenticated = devBypass || hasAuthSession();
       currentPath = window.location.pathname;
       guardRoute(page.route.id);
     };
