@@ -2652,20 +2652,28 @@
     [...deployedParticles].sort((a, b) => b.createdAt - a.createdAt),
   );
 
-  const networkLibrary = $derived.by(() => ({
-    feature: [...deployedLibrary.features],
-    transformation: [
-      ...deployedLibrary.transformations,
-      ...standaloneDraftTransformations.map((item) => ({
-        id: `draft-transform-${item.id}`,
-        name: item.name,
-        kind: "transformation" as const,
-        authorId: mockCurrentUserId,
-        summary: "Unpublished in current tab (publish to chain before reuse).",
-      })),
-    ],
-    condition: [...deployedLibrary.conditions],
-  }));
+  type NetworkLibrary = {
+    feature: LibraryItem[];
+    transformation: LibraryItem[];
+    condition: LibraryItem[];
+  };
+
+  const networkLibrary = $derived.by(
+    (): NetworkLibrary => ({
+      feature: [...deployedLibrary.features],
+      transformation: [
+        ...deployedLibrary.transformations,
+        ...standaloneDraftTransformations.map((item) => ({
+          id: `draft-transform-${item.id}`,
+          name: item.name,
+          kind: "transformation" as const,
+          authorId: mockCurrentUserId,
+          summary: "Unpublished in current tab (publish to chain before reuse).",
+        })),
+      ],
+      condition: [...deployedLibrary.conditions],
+    }),
+  );
   const selectedNode = $derived.by(() => nodes.find((node) => node.id === selectedNodeId) ?? null);
   const selectedEdge = $derived.by(() => edges.find((edge) => edge.id === selectedEdgeId) ?? null);
   const inspectorNode = $derived.by(() => {
@@ -7037,7 +7045,9 @@
     pendingDimensionChange = null;
   };
 
-  const libraryKindForTab = (tab: typeof libraryTab): LibraryItem["kind"] | null => {
+  type NetworkLibraryKind = keyof NetworkLibrary;
+
+  const libraryKindForTab = (tab: typeof libraryTab): NetworkLibraryKind | null => {
     switch (tab) {
       case "connectors":
         return "feature";
@@ -7054,7 +7064,7 @@
     const kind = libraryKindForTab(libraryTab);
     if (!kind) return [];
 
-    const source = networkLibrary[kind] ?? [];
+    const source: LibraryItem[] = networkLibrary[kind] ?? [];
 
     if (explorerSource === "toolbox") {
       return source.filter((item) => isLibraryItemSavedInToolbox(item));
@@ -7066,7 +7076,7 @@
   const savedToolboxIdsForLibraryTab = $derived.by(() => {
     const kind = libraryKindForTab(libraryTab);
     if (!kind) return new SvelteSet<string>();
-    const source = networkLibrary[kind] ?? [];
+    const source: LibraryItem[] = networkLibrary[kind] ?? [];
     return new SvelteSet(
       source.filter((item) => isLibraryItemSavedInToolbox(item)).map((item) => item.id),
     );
