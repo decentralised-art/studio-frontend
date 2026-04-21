@@ -5,6 +5,7 @@ import {
   getChainCondition,
   getChainConnector,
   getChainTransformation,
+  resolveChainAccountCursor,
   resolveChainAccountsCursor,
   type ChainConnectorResponse,
 } from "$lib/chain/registryApi";
@@ -48,6 +49,8 @@ export type ChainOwnerSyncSource = {
 
 const CHAIN_ACCOUNTS_PAGE_LIMIT = 256;
 const CHAIN_ACCOUNTS_PAGE_GUARD = 128;
+const CHAIN_ACCOUNT_OWNED_PAGE_LIMIT = 256;
+const CHAIN_ACCOUNT_OWNED_PAGE_GUARD = 256;
 const ETH_ADDRESS_RE = /^0x[0-9a-f]{40}$/;
 
 const normalizeAddress = (value: string): string => {
@@ -292,8 +295,6 @@ const mapExploreParticle = (
   ...(formatHash ? { formatHash } : {}),
 });
 
-const uniqueStrings = (values: string[]) => Array.from(new Set(values.filter(Boolean)));
-
 export const fetchChainOwnedStudioSnapshot = async (
   address: string,
   options: { authorId: string; limit?: number; includeRuntimeCode?: boolean } = {
@@ -301,17 +302,60 @@ export const fetchChainOwnedStudioSnapshot = async (
     includeRuntimeCode: true,
   },
 ): Promise<ChainStudioSyncResult> => {
-  const account = await getChainAccount(address, {
-    limit: options.limit ?? 200,
-  });
+  const pageLimit = options.limit ?? CHAIN_ACCOUNT_OWNED_PAGE_LIMIT;
+  const ownedConnectors = new Set<string>();
+  const ownedTransformations = new Set<string>();
+  const ownedConditions = new Set<string>();
+  let afterConnectors: string | null = null;
+  let afterTransformations: string | null = null;
+  let afterConditions: string | null = null;
+  let guard = 0;
 
-  const ownedConnectors = uniqueStrings(account.owned_connectors ?? []);
-  const ownedTransformations = uniqueStrings(account.owned_transformations ?? []);
-  const ownedConditions = uniqueStrings(account.owned_conditions ?? []);
+  do {
+    const account = await getChainAccount(address, {
+      limit: pageLimit,
+      ...(afterConnectors ? { after_connectors: afterConnectors } : {}),
+      ...(afterTransformations ? { after_transformations: afterTransformations } : {}),
+      ...(afterConditions ? { after_conditions: afterConditions } : {}),
+    });
+
+    (account.owned_connectors ?? []).forEach((name) => {
+      const normalized = name.trim();
+      if (normalized) ownedConnectors.add(normalized);
+    });
+    (account.owned_transformations ?? []).forEach((name) => {
+      const normalized = name.trim();
+      if (normalized) ownedTransformations.add(normalized);
+    });
+    (account.owned_conditions ?? []).forEach((name) => {
+      const normalized = name.trim();
+      if (normalized) ownedConditions.add(normalized);
+    });
+
+    const connectorCursor = resolveChainAccountCursor(account, "connectors");
+    const transformationCursor = resolveChainAccountCursor(account, "transformations");
+    const conditionCursor = resolveChainAccountCursor(account, "conditions");
+
+    afterConnectors =
+      connectorCursor.hasMore && connectorCursor.nextAfter ? connectorCursor.nextAfter : null;
+    afterTransformations =
+      transformationCursor.hasMore && transformationCursor.nextAfter
+        ? transformationCursor.nextAfter
+        : null;
+    afterConditions =
+      conditionCursor.hasMore && conditionCursor.nextAfter ? conditionCursor.nextAfter : null;
+
+    guard += 1;
+  } while (
+    guard < CHAIN_ACCOUNT_OWNED_PAGE_GUARD &&
+    (afterConnectors || afterTransformations || afterConditions)
+  );
 
   const connectorPayloads = (
     await Promise.allSettled(
-      ownedConnectors.map(async (name) => [name, await getChainConnector(name)] as const),
+      Array.from(ownedConnectors).map(
+        async (name) => [name, await getChainConnector(name)] as const,
+      ),
     )
   )
     .filter(
@@ -323,7 +367,7 @@ export const fetchChainOwnedStudioSnapshot = async (
   const transformationPayloads = includeRuntimeCode
     ? (
         await Promise.allSettled(
-          ownedTransformations.map(
+          Array.from(ownedTransformations).map(
             async (name) => [name, await getChainTransformation(name)] as const,
           ),
         )
@@ -340,7 +384,9 @@ export const fetchChainOwnedStudioSnapshot = async (
   const conditionPayloads = includeRuntimeCode
     ? (
         await Promise.allSettled(
-          ownedConditions.map(async (name) => [name, await getChainCondition(name)] as const),
+          Array.from(ownedConditions).map(
+            async (name) => [name, await getChainCondition(name)] as const,
+          ),
         )
       )
         .filter(

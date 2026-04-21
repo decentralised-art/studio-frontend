@@ -39,7 +39,6 @@
   import { getChainFormatDisplayName } from "$lib/formats/chainFormats";
 
   const FEED_PAGE_SIZE = 10;
-  const FEED_SOURCE_MAX_OWNED_PER_SOURCE = 8;
   const RUNTIME_SEARCH_MAX_OWNED_PER_SOURCE = 16;
   const CHAIN_DISCOVERY_FORMATS_PAGE_LIMIT = 256;
   const CHAIN_DISCOVERY_FORMATS_PAGE_GUARD = 128;
@@ -214,8 +213,7 @@
     });
   });
 
-  const readConnectorFeedEventsFromCache = (): ConnectorPostEvent[] =>
-    listConnectorPosts().filter((event): event is ConnectorPostEvent => event.type === "connector");
+  const readConnectorFeedEventsFromCache = (): ConnectorPostEvent[] => listConnectorPosts();
 
   const deriveCurrentSourceAddresses = async (
     profileState: Awaited<ReturnType<typeof getCurrentUserProfileState>>,
@@ -393,8 +391,7 @@
 
         const syncOptions = {
           sourceAddresses,
-          maxOwnedPerSource: FEED_SOURCE_MAX_OWNED_PER_SOURCE,
-          includeRuntimeCode: false,
+          includeRuntimeCode: true,
           includeDependencyExpansion: false,
         } as const;
 
