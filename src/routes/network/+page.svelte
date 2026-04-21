@@ -23,7 +23,6 @@
   } from "$lib/feed/particlePostData";
   import {
     getChainAccounts,
-    getChainConnector,
     getChainFormats,
     resolveChainAccountsCursor,
     normalizeFormatHash,
@@ -218,60 +217,17 @@
   const readConnectorFeedEventsFromCache = (): ConnectorPostEvent[] =>
     listConnectorPosts().filter((event): event is ConnectorPostEvent => event.type === "connector");
 
-  const resolveToolboxConnectorOwnerAddresses = async (
-    connectorIds: string[],
-  ): Promise<string[]> => {
-    const normalizedConnectorIds = Array.from(
-      new Set(connectorIds.map((value) => value.trim()).filter((value) => value.length > 0)),
-    ).slice(0, 24);
-    if (normalizedConnectorIds.length === 0) return [];
-
-    const owners = await Promise.allSettled(
-      normalizedConnectorIds.map(async (connectorId) => {
-        const connector = await getChainConnector(connectorId);
-        const owner =
-          typeof connector.owner === "string" ? normalizeAddressForKey(connector.owner) : "";
-        return owner && isChainAddress(owner) ? owner : "";
-      }),
-    );
-
-    if (import.meta.env.DEV) {
-      const rejectedCount = owners.filter((result) => result.status === "rejected").length;
-      if (rejectedCount > 0) {
-        console.warn("[Network feed] Some toolbox connector owner lookups failed.", {
-          rejectedCount,
-          connectorCount: normalizedConnectorIds.length,
-        });
-      }
-    }
-
-    return Array.from(
-      new Set(
-        owners
-          .filter(
-            (result): result is PromiseFulfilledResult<string> => result.status === "fulfilled",
-          )
-          .map((result) => result.value)
-          .filter(Boolean),
-      ),
-    );
-  };
-
   const deriveCurrentSourceAddresses = async (
     profileState: Awaited<ReturnType<typeof getCurrentUserProfileState>>,
   ) => {
     const resolvedProfileSources = resolveCurrentUserChainSourceAddresses(profileState.me)
       .map(normalizeAddressForKey)
       .filter(Boolean);
-    const toolboxOwnerSources = await resolveToolboxConnectorOwnerAddresses(
-      profileState.toolbox.connector,
-    ).catch(() => []);
-    const merged = Array.from(new Set([...resolvedProfileSources, ...toolboxOwnerSources]));
+    const merged = Array.from(new Set(resolvedProfileSources));
 
     if (import.meta.env.DEV) {
       console.info("[Network feed] Source derivation", {
         profileSources: resolvedProfileSources,
-        toolboxOwners: toolboxOwnerSources,
         mergedSources: merged,
       });
     }

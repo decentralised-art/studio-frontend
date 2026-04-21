@@ -12,7 +12,6 @@ import {
   createChainAuthRequest,
   getOrCreateMockEthereumAccount,
   getStoredMockEthereumAccount,
-  listStoredMockEthereumAccounts,
 } from "./mockEthereum";
 import {
   clearChainToken,
@@ -463,10 +462,10 @@ export const loginWithMockChainAccount = async (
     throw new Error(`Mock user not found: ${userId}`);
   }
 
-  // Default login path should not perform services register/login side effects.
-  // This keeps chain auth fast and avoids noisy 500/409 errors when services is unstable.
+  // Keep Services profile ethereum_address aligned with active chain signer so
+  // account identity, feed source derivation, and authored ownership stay consistent.
   const result = await authenticateMockUserInChain(user.id, user.nickname, {
-    patchServicesProfile: false,
+    patchServicesProfile: true,
   });
   if (!result.success || !result.token) {
     throw new Error(result.error ?? "Mock chain login failed.");
@@ -790,11 +789,62 @@ export type CurrentUserProfileState = {
   toolbox: ToolboxLibraryProfile;
 };
 
-export const resolveCurrentUserChainSourceAddresses = (mePayload: unknown): string[] => {
-  const envelope = extractUserEnvelope(mePayload);
-  if (!envelope) return [];
+const decodeBase64Url = (value: string): string => {
+  const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
+  const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
+  if (typeof atob === "function") {
+    return atob(padded);
+  }
+  return "";
+};
 
+const tryParseJwtPayload = (token: string): Record<string, unknown> | null => {
+  const parts = token.split(".");
+  if (parts.length < 2) return null;
+  try {
+    const decoded = decodeBase64Url(parts[1]);
+    const parsed = JSON.parse(decoded);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+};
+
+const resolveAddressFromJwtPayload = (payload: Record<string, unknown>): string => {
+  const candidates = [
+    payload.address,
+    payload.wallet_address,
+    payload.walletAddress,
+    payload.ethereum_address,
+    payload.ethereumAddress,
+    payload.sub,
+  ];
+  for (const candidate of candidates) {
+    if (typeof candidate !== "string") continue;
+    const normalized = normalizeFollowAddress(candidate);
+    if (normalized) return normalized;
+  }
+  return "";
+};
+
+const resolveActiveChainSignerAddress = (): string => {
+  const token = getChainToken();
+  if (!token) return "";
+  const payload = tryParseJwtPayload(token);
+  if (!payload) return "";
+  return resolveAddressFromJwtPayload(payload);
+};
+
+export const resolveCurrentUserChainSourceAddresses = (mePayload: unknown): string[] => {
   const sourceSet = new Set<string>();
+  const activeSignerAddress = resolveActiveChainSignerAddress();
+  if (activeSignerAddress) sourceSet.add(activeSignerAddress);
+
+  const envelope = extractUserEnvelope(mePayload);
+  if (!envelope) return Array.from(sourceSet);
+
   const profileAddress = normalizeFollowAddress(
     typeof envelope.rootUser.ethereum_address === "string"
       ? envelope.rootUser.ethereum_address
@@ -802,7 +852,9 @@ export const resolveCurrentUserChainSourceAddresses = (mePayload: unknown): stri
         ? envelope.rootUser.ethereumAddress
         : "",
   );
-  if (profileAddress) sourceSet.add(profileAddress);
+  if (profileAddress && (!activeSignerAddress || profileAddress === activeSignerAddress)) {
+    sourceSet.add(profileAddress);
+  }
 
   if (browser) {
     const email =
@@ -815,22 +867,13 @@ export const resolveCurrentUserChainSourceAddresses = (mePayload: unknown): stri
         const mockChainAddress = normalizeFollowAddress(
           getStoredMockEthereumAccount(`mock-user:${mockUserId}`)?.address ?? "",
         );
-        if (mockChainAddress) sourceSet.add(mockChainAddress);
+        if (
+          mockChainAddress &&
+          (!activeSignerAddress || mockChainAddress === activeSignerAddress)
+        ) {
+          sourceSet.add(mockChainAddress);
+        }
       }
-
-      // Backward compatibility: older builds used the default alias for chain auth.
-      // Keep this in source resolution so previously-authored connectors remain visible.
-      const legacyDefaultMockChainAddress = normalizeFollowAddress(
-        getStoredMockEthereumAccount()?.address ?? "",
-      );
-      if (legacyDefaultMockChainAddress) sourceSet.add(legacyDefaultMockChainAddress);
-
-      // Additional legacy recovery: include all stored mock-chain accounts from this browser.
-      // This captures historical aliases used before user-id scoped aliases were introduced.
-      listStoredMockEthereumAccounts().forEach((account) => {
-        const normalized = normalizeFollowAddress(account.address);
-        if (normalized) sourceSet.add(normalized);
-      });
     }
   }
 

@@ -85,7 +85,6 @@
   import { clearChainToken, getChainToken } from "$lib/auth/session";
   import {
     ChainApiRequestError,
-    getChainConnector,
     type ChainApiPostResult,
     type ChainExecutePayload,
     postChainConnectorDetailed,
@@ -94,7 +93,7 @@
     postChainTransformationDetailed,
   } from "$lib/chain/registryApi";
   import { createEphemeralDeployName, isReservedCoreCollectionName } from "$lib/chain/deployNaming";
-  import { mockPlugins, type LibraryItem } from "$lib/data/studioLibrary";
+  import { type LibraryItem } from "$lib/data/studioLibrary";
   import { mockCurrentUserId, mockUsersById } from "$lib/data/users";
   import type {
     StudioConnectorDef,
@@ -318,9 +317,7 @@
     | null;
   let connectorDropTarget = $state<ConnectorDropTarget>(null);
   let explorerSource = $state<"network" | "toolbox">("network");
-  let libraryTab = $state<"connectors" | "transformations" | "conditions" | "plugins">(
-    "connectors",
-  );
+  let libraryTab = $state<"connectors" | "transformations" | "conditions">("connectors");
   let tooltipX = $state(0);
   let tooltipY = $state(0);
   let leftTabsEl = $state<HTMLDivElement | null>(null);
@@ -442,12 +439,10 @@
     features: LibraryItem[];
     transformations: LibraryItem[];
     conditions: LibraryItem[];
-    plugins: LibraryItem[];
   }>({
     features: [],
     transformations: [],
     conditions: [],
-    plugins: [],
   });
 
   let deployedParticles = $state<ExploreParticle[]>([]);
@@ -1188,7 +1183,7 @@
   };
 
   const resolveNetworkLibraryItem = (
-    kind: "connector" | "transformation" | "condition" | "plugin",
+    kind: "connector" | "transformation" | "condition",
     rawId: string,
   ): LibraryItem | null => {
     const target = rawId.trim();
@@ -1205,12 +1200,7 @@
           normalizeKey(registryName) === key ||
           normalizeKey(item.name) === key
         );
-      }) ??
-      (sourceKind === "plugin"
-        ? (networkLibrary.plugin.find(
-            (item) => item.viewId === target || normalizeKey(item.viewId ?? "") === key,
-          ) ?? null)
-        : null)
+      }) ?? null
     );
   };
 
@@ -1238,16 +1228,12 @@
       return;
     }
 
-    const kind =
-      rawKind === "output"
-        ? "plugin"
-        : ["feature", "connector", "transformation", "condition", "plugin"].includes(rawKind)
-          ? ((rawKind === "feature" ? "connector" : rawKind) as
-              | "connector"
-              | "transformation"
-              | "condition"
-              | "plugin")
-          : null;
+    const kind = ["feature", "connector", "transformation", "condition"].includes(rawKind)
+      ? ((rawKind === "feature" ? "connector" : rawKind) as
+          | "connector"
+          | "transformation"
+          | "condition")
+      : null;
     if (!kind) {
       clearNetworkIntentQuery();
       return;
@@ -1265,7 +1251,7 @@
       return;
     }
 
-    if (item.kind !== "plugin" && activeTabReadOnly) {
+    if (activeTabReadOnly) {
       createEmptyTab();
     }
     addLibraryNode(item, getCanvasCenter());
@@ -2679,7 +2665,6 @@
       })),
     ],
     condition: [...deployedLibrary.conditions],
-    plugin: [...mockPlugins, ...deployedLibrary.plugins],
   }));
   const selectedNode = $derived.by(() => nodes.find((node) => node.id === selectedNodeId) ?? null);
   const selectedEdge = $derived.by(() => edges.find((edge) => edge.id === selectedEdgeId) ?? null);
@@ -3702,7 +3687,6 @@
         deployedLibrary.transformations,
       ),
       conditions: snapshot.library.conditions.reduce(upsertLibraryItem, deployedLibrary.conditions),
-      plugins: deployedLibrary.plugins,
     };
 
     deployedParticles = snapshot.particles.reduce<ExploreParticle[]>((items, next) => {
@@ -3718,65 +3702,21 @@
     return `${normalized.slice(0, 8)}...${normalized.slice(-4)}`;
   };
 
-  const resolveToolboxConnectorOwnerAddresses = async (
-    connectorIds: string[],
-  ): Promise<string[]> => {
-    const normalizedConnectorIds = Array.from(
-      new Set(connectorIds.map((value) => value.trim()).filter((value) => value.length > 0)),
-    ).slice(0, 24);
-    if (normalizedConnectorIds.length === 0) return [];
-
-    const owners = await Promise.allSettled(
-      normalizedConnectorIds.map(async (connectorId) => {
-        const connector = await getChainConnector(connectorId);
-        return normalizeFeedSourceAddress(
-          typeof connector.owner === "string" ? connector.owner : "",
-        );
-      }),
-    );
-
-    if (import.meta.env.DEV) {
-      const rejectedCount = owners.filter((result) => result.status === "rejected").length;
-      if (rejectedCount > 0) {
-        console.warn("[Studio sync] Some toolbox connector owner lookups failed.", {
-          rejectedCount,
-          connectorCount: normalizedConnectorIds.length,
-        });
-      }
-    }
-
-    return Array.from(
-      new Set(
-        owners
-          .filter(
-            (result): result is PromiseFulfilledResult<string> => result.status === "fulfilled",
-          )
-          .map((result) => result.value)
-          .filter(Boolean),
-      ),
-    );
-  };
-
   const resolveStudioChainSyncSources = async (): Promise<
     Array<{ address: string; authorId: string; label: string }>
   > => {
     const profileState = await getCurrentUserProfileState();
     const resolvedCurrentSources = resolveCurrentUserChainSourceAddresses(profileState.me);
-    const toolboxOwnerSources = await resolveToolboxConnectorOwnerAddresses(
-      profileState.toolbox.connector,
-    ).catch(() => []);
     const sourceAddresses = computeFeedSourceAddresses({
       currentUserAddress: resolvedCurrentSources[0] ?? "",
       followedUserAddresses: [
         ...profileState.social.followedUserAddresses,
         ...resolvedCurrentSources.slice(1),
-        ...toolboxOwnerSources,
       ],
     });
     if (import.meta.env.DEV) {
       console.info("[Studio sync] Source derivation", {
         profileSources: resolvedCurrentSources,
-        toolboxOwners: toolboxOwnerSources,
         mergedSources: sourceAddresses,
       });
     }
@@ -3938,7 +3878,6 @@
           summary: "Fetched from chain on demand.",
         });
       }, deployedLibrary.conditions),
-      plugins: deployedLibrary.plugins,
     };
 
     if (fetched.particleMeta) {
@@ -5543,34 +5482,23 @@
   };
 
   const saveActiveGraph = () => {
-    if (isConnectorTreeTab(activeTabId)) {
-      const pluginNodeIds = new SvelteSet(
-        nodes.filter((node) => node.data.kind === "plugin").map((node) => node.id),
-      );
-      const pluginNodes = nodes
-        .filter((node) => pluginNodeIds.has(node.id))
-        .map((node) => ({
-          ...node,
-          position: { ...node.position },
-          data: { ...node.data },
-        }));
-      const pluginEdges = edges
-        .filter((edge) => pluginNodeIds.has(edge.source) || pluginNodeIds.has(edge.target))
-        .map((edge) => ({
-          ...edge,
-        }));
-      tabGraphs.set(activeTabId, { nodes: pluginNodes, edges: pluginEdges });
-      return;
-    }
-    tabGraphs.set(activeTabId, { nodes, edges });
+    const filteredNodes = nodes.filter((node) => node.data.kind !== "plugin");
+    const filteredNodeIds = new SvelteSet(filteredNodes.map((node) => node.id));
+    const filteredEdges = edges.filter(
+      (edge) => filteredNodeIds.has(edge.source) && filteredNodeIds.has(edge.target),
+    );
+    tabGraphs.set(activeTabId, { nodes: filteredNodes, edges: filteredEdges });
   };
 
   const loadTabGraph = (tabId: string) => {
     const projectedTree = projectConnectorTreeGraph(tabId);
     if (projectedTree) {
       const overlay = tabGraphs.get(tabId);
-      const overlayNodes = overlay?.nodes ?? [];
-      const overlayEdges = overlay?.edges ?? [];
+      const overlayNodes = (overlay?.nodes ?? []).filter((node) => node.data.kind !== "plugin");
+      const overlayNodeIds = new SvelteSet(overlayNodes.map((node) => node.id));
+      const overlayEdges = (overlay?.edges ?? []).filter(
+        (edge) => overlayNodeIds.has(edge.source) && overlayNodeIds.has(edge.target),
+      );
       const mergedNodes = [...projectedTree.nodes];
       const mergedNodeIdSet = new SvelteSet(mergedNodes.map((node) => node.id));
       overlayNodes.forEach((node) => {
@@ -5604,8 +5532,13 @@
       edges = mergedEdges;
     } else {
       const graph = tabGraphs.get(tabId);
-      nodes = graph?.nodes ?? [];
-      edges = graph?.edges ?? [];
+      const filteredNodes = (graph?.nodes ?? []).filter((node) => node.data.kind !== "plugin");
+      const filteredNodeIds = new SvelteSet(filteredNodes.map((node) => node.id));
+      const filteredEdges = (graph?.edges ?? []).filter(
+        (edge) => filteredNodeIds.has(edge.source) && filteredNodeIds.has(edge.target),
+      );
+      nodes = filteredNodes;
+      edges = filteredEdges;
       if (tabId === activeTabId) {
         ensureActiveDraftTabRootConnector();
       }
@@ -6543,7 +6476,7 @@
     })),
     transformation: networkLibrary.transformation.map((item) => ({ id: item.id, name: item.name })),
     condition: networkLibrary.condition.map((item) => ({ id: item.id, name: item.name })),
-    plugin: networkLibrary.plugin.map((item) => ({ id: item.id, name: item.name })),
+    plugin: [] as RegistryMatch[],
     agent: [] as RegistryMatch[],
     dimension: [] as RegistryMatch[],
   }));
@@ -7112,8 +7045,6 @@
         return "transformation";
       case "conditions":
         return "condition";
-      case "plugins":
-        return "plugin";
       default:
         return null;
     }
@@ -7149,8 +7080,6 @@
         return "Transformations";
       case "conditions":
         return "Conditions";
-      case "plugins":
-        return "Plugins";
       default:
         return "Library";
     }
@@ -7164,8 +7093,6 @@
         return "Transformations live on connector dimensions. Each dimension has its own ordered list of transformations that shape the values flowing through that dimension.";
       case "conditions":
         return "A connector only outputs values if its condition is met. Conditions can be financial (e.g., send funds to an address) or non-financial (artistic, contextual, etc.).";
-      case "plugins":
-        return "A plugin consumes the runner’s output streams and renders or sonifies them (MIDI, score, audio, image, etc.).";
       default:
         return "";
     }
@@ -7326,7 +7253,7 @@
   };
 
   const addLibraryNode = (item: LibraryItem, position: { x: number; y: number } | null = null) => {
-    if (activeTabReadOnly && item.kind !== "plugin") return;
+    if (activeTabReadOnly) return;
     if (item.kind === "transformation") {
       addTransformationToSelectedDimension(getLibraryTransformationName(item), "network");
       return;
@@ -7361,14 +7288,7 @@
       id: `${item.kind}-${item.id}-${crypto.randomUUID()}`,
       position: nodePosition,
       type:
-        item.kind === "feature"
-          ? "connector"
-          : item.kind === "plugin"
-            ? "plugin"
-            : item.kind === "condition"
-              ? "condition"
-              : undefined,
-      draggable: item.kind === "plugin" ? true : undefined,
+        item.kind === "feature" ? "connector" : item.kind === "condition" ? "condition" : undefined,
       data: {
         label: item.name,
         kind: item.kind === "feature" ? "connector" : item.kind,
@@ -7418,7 +7338,7 @@
     label: string,
     position: { x: number; y: number } | null = null,
   ) => {
-    if (activeTabReadOnly && kind !== "plugin") return;
+    if (activeTabReadOnly) return;
     if (kind === "transformation") {
       addTransformationToSelectedDimension(label);
       return;
@@ -7436,7 +7356,6 @@
       position: nodePosition,
       selected: true,
       type: kind === "feature" || kind === "connector" ? "connector" : kind,
-      draggable: kind === "plugin" ? true : undefined,
       data: {
         label,
         kind: kind === "feature" ? "connector" : kind,
@@ -7505,7 +7424,7 @@
           kind: QuickNodeKind;
           label: string;
         };
-        if (activeTabReadOnly && payload.kind !== "plugin") return;
+        if (activeTabReadOnly) return;
         if (payload.kind === "transformation") {
           if (dropTarget?.type === "dimension") {
             const targetDimension = getDimensionNodeForConnectorIndex(
@@ -7539,7 +7458,7 @@
     if (libraryPayload) {
       try {
         const item = JSON.parse(libraryPayload) as LibraryItem;
-        if (activeTabReadOnly && item.kind !== "plugin") return;
+        if (activeTabReadOnly) return;
         if (item.kind === "transformation") {
           if (dropTarget?.type === "dimension") {
             const targetDimension = getDimensionNodeForConnectorIndex(
@@ -7636,15 +7555,13 @@
   };
 
   const canDeleteNodeByPolicy = (node: StudioNode): boolean => {
-    if (activeTabReadOnly) return node.data.kind === "plugin";
+    if (activeTabReadOnly) return false;
     return !(isConnectorKind(node.data.kind) && Boolean(node.data.tabRoot));
   };
 
-  const canDeleteEdgeByPolicy = (edge: Edge): boolean => {
-    if (!activeTabReadOnly) return true;
-    const sourceNode = edge.source ? nodesById[edge.source] : null;
-    const targetNode = edge.target ? nodesById[edge.target] : null;
-    return sourceNode?.data.kind === "plugin" || targetNode?.data.kind === "plugin";
+  const canDeleteEdgeByPolicy = (_edge: Edge): boolean => {
+    if (activeTabReadOnly) return false;
+    return true;
   };
 
   const removeEdgeById = (edgeId: string): boolean => {
@@ -7741,17 +7658,7 @@
       if (!allowedNodes.length && !allowedEdges.length) return false;
       return { nodes: allowedNodes, edges: allowedEdges };
     }
-    const pluginIds = new SvelteSet(
-      toDelete.filter((node) => node.data.kind === "plugin").map((node) => node.id),
-    );
-    const allowedEdges = toDeleteEdges.filter(
-      (edge) => pluginIds.has(edge.source) || pluginIds.has(edge.target),
-    );
-    if (pluginIds.size === 0 && allowedEdges.length === 0) return false;
-    return {
-      nodes: toDelete.filter((node) => pluginIds.has(node.id)),
-      edges: allowedEdges,
-    };
+    return false;
   };
 
   const parseDimensionHandle = (handle?: string | null) => {
@@ -7845,26 +7752,13 @@
       return targetHandle === "in" || targetHandle === "condition";
     }
 
-    if (sourceNode.data.kind === "particle" && targetNode.data.kind === "plugin") {
-      return connection.sourceHandle === "out" && connection.targetHandle === "in";
-    }
-
     return false;
   };
 
   const handleConnect: OnConnect = (connection) => {
     if (!isValidConnection(connection)) return;
     if (!connection.source || !connection.target) return;
-    if (activeTabReadOnly) {
-      const sourceNode = nodesById[connection.source];
-      const targetNode = nodesById[connection.target];
-      const isPluginConnection =
-        sourceNode?.data.kind === "particle" &&
-        targetNode?.data.kind === "plugin" &&
-        connection.sourceHandle === "out" &&
-        connection.targetHandle === "in";
-      if (!isPluginConnection) return;
-    }
+    if (activeTabReadOnly) return;
     if (
       edges.some(
         (edge) =>
@@ -9410,13 +9304,6 @@
             >
               Conditions
             </Button>
-            <Button
-              variant="subtle"
-              selected={libraryTab === "plugins"}
-              onclick={() => (libraryTab = "plugins")}
-            >
-              Plugins
-            </Button>
           </div>
           <button
             type="button"
@@ -9500,20 +9387,6 @@
           </div>
           <StudioLibraryList
             title="Conditions"
-            items={libraryItems}
-            toolboxIds={savedToolboxIdsForLibraryTab}
-            loading={(explorerSource === "network" && chainSyncBusy) ||
-              (explorerSource === "toolbox" && toolboxLoadBusy)}
-            usersById={mockUsersById}
-            onAdd={(item) => addLibraryNode(item, null)}
-            onToolbox={toggleLibraryToolbox}
-            onDragStart={handleLibraryDragStart}
-            draggable
-            showHeader={false}
-          />
-        {:else}
-          <StudioLibraryList
-            title="Plugins"
             items={libraryItems}
             toolboxIds={savedToolboxIdsForLibraryTab}
             loading={(explorerSource === "network" && chainSyncBusy) ||

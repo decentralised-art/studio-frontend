@@ -128,37 +128,5 @@ export const mockConditions: LibraryItem[] = mockRegistrySnapshot.conditions.map
   };
 });
 
-export const mockPlugins: LibraryItem[] = [
-  {
-    id: "plugin-table",
-    name: "Table Visualiser",
-    kind: "plugin",
-    authorId: "agent-aurora",
-    viewId: "table",
-    summary: "Preview particle outputs in a data table.",
-  },
-  {
-    id: "plugin-midi",
-    name: "MIDI Visualiser",
-    kind: "plugin",
-    authorId: "agent-aurora",
-    viewId: "midi",
-    summary: "Piano-roll playback for MIDI particles.",
-  },
-  {
-    id: "plugin-score",
-    name: "Music Score Visualiser",
-    kind: "plugin",
-    authorId: "user-lyra",
-    viewId: "music-score",
-    summary: "Notation rendering for score particles.",
-  },
-  {
-    id: "plugin-audio",
-    name: "Audio File Visualiser",
-    kind: "plugin",
-    authorId: "user-nia",
-    viewId: "audio-file",
-    summary: "Playback for rendered audio outputs.",
-  },
-];
+// Legacy in-app plugins were retired from Studio explorer UI.
+export const mockPlugins: LibraryItem[] = [];
