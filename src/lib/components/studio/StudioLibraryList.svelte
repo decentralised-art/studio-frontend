@@ -15,6 +15,7 @@
     onSelect,
     onAdd,
     onToolbox,
+    onOpen,
     onDragStart,
   }: {
     title?: string;
@@ -28,6 +29,7 @@
     onSelect?: (id: LibraryItem["id"]) => void;
     onAdd?: (item: LibraryItem) => void;
     onToolbox?: (item: LibraryItem) => void;
+    onOpen?: (item: LibraryItem) => void;
     onDragStart?: (event: DragEvent, item: LibraryItem) => void;
   } = $props();
 
@@ -80,6 +82,7 @@
           {onSelect}
           {onAdd}
           {onToolbox}
+          {onOpen}
           {onDragStart}
         />
       {/each}

@@ -852,7 +852,7 @@ export const resolveCurrentUserChainSourceAddresses = (mePayload: unknown): stri
         ? envelope.rootUser.ethereumAddress
         : "",
   );
-  if (profileAddress && (!activeSignerAddress || profileAddress === activeSignerAddress)) {
+  if (profileAddress) {
     sourceSet.add(profileAddress);
   }
 
@@ -867,10 +867,7 @@ export const resolveCurrentUserChainSourceAddresses = (mePayload: unknown): stri
         const mockChainAddress = normalizeFollowAddress(
           getStoredMockEthereumAccount(`mock-user:${mockUserId}`)?.address ?? "",
         );
-        if (
-          mockChainAddress &&
-          (!activeSignerAddress || mockChainAddress === activeSignerAddress)
-        ) {
+        if (mockChainAddress) {
           sourceSet.add(mockChainAddress);
         }
       }

@@ -12,6 +12,7 @@
     onSelect,
     onAdd,
     onToolbox,
+    onOpen,
     onDragStart,
   }: {
     item: LibraryItem;
@@ -22,6 +23,7 @@
     onSelect?: (id: LibraryItem["id"]) => void;
     onAdd?: (item: LibraryItem) => void;
     onToolbox?: (item: LibraryItem) => void;
+    onOpen?: (item: LibraryItem) => void;
     onDragStart?: (event: DragEvent, item: LibraryItem) => void;
   } = $props();
 
@@ -37,6 +39,11 @@
   const handleToolbox = (event: MouseEvent) => {
     event.stopPropagation();
     onToolbox?.(item);
+  };
+
+  const handleOpen = (event: MouseEvent) => {
+    event.stopPropagation();
+    onOpen?.(item);
   };
 
   const handleKeydown = (event: KeyboardEvent) => {
@@ -81,6 +88,16 @@
           ></path>
         </svg>
       </button>
+      {#if item.kind === "feature"}
+        <button class="icon-button" type="button" title="Open in Studio" onclick={handleOpen}>
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M4 9V4h5"></path>
+            <path d="M15 4h5v5"></path>
+            <path d="M20 15v5h-5"></path>
+            <path d="M9 20H4v-5"></path>
+          </svg>
+        </button>
+      {/if}
       <button class="icon-button" type="button" title="Add to flow" onclick={handleAdd}>
         <svg viewBox="0 0 24 24" aria-hidden="true">
           <path d="M12 5v14M5 12h14"></path>
@@ -118,13 +135,13 @@
   }
 
   .icon-button {
-    @apply h-6 w-6 flex items-center justify-center
+    @apply h-5 w-5 flex items-center justify-center
       rounded-md border border-white/10 bg-white/5
       text-white/60 hover:text-white hover:border-white/30;
   }
 
   .icon-button svg {
-    @apply h-3.5 w-3.5;
+    @apply h-3 w-3;
     stroke: currentColor;
     stroke-width: 1.6;
     fill: none;

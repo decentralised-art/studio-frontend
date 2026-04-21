@@ -233,6 +233,24 @@
     return merged;
   };
 
+  const hydrateProfileStateForNetwork = async (options?: { preferCached?: boolean }) => {
+    const profileState = await getCurrentUserProfileState({
+      ...(options ? { preferCached: options.preferCached } : {}),
+    });
+    localToolboxConnectors = [...profileState.toolbox.connector];
+    const resolvedSourceAddresses = await deriveCurrentSourceAddresses(profileState);
+    currentUserLabel = extractDisplayName(profileState.me);
+    localFollowing = profileState.social.followedUserAddresses
+      .map(normalizeAddressForKey)
+      .filter(Boolean);
+    localFollowedFormats = profileState.social.followedFormatHashes
+      .map(normalizeFormatHashForKey)
+      .filter(Boolean);
+    currentUserAddress = resolvedSourceAddresses[0] ?? "";
+    currentUserSourceAliases = resolvedSourceAddresses.slice(1);
+    return resolvedSourceAddresses;
+  };
+
   const refreshFeedStateFromCache = () => {
     feedEvents = readConnectorFeedEventsFromCache();
     chainElements = listConnectorSearchEntities();
@@ -359,9 +377,20 @@
     });
   };
 
-  const loadChainFeed = async () => {
+  const loadChainFeed = async (options?: { refreshProfile?: boolean }) => {
     const requestVersion = beginFeedSyncRequest();
     feedLoadError = "";
+    if (options?.refreshProfile !== false) {
+      try {
+        await hydrateProfileStateForNetwork({ preferCached: false });
+      } catch (profileError) {
+        if (!isFeedSyncRequestActive(requestVersion)) return;
+        console.warn(
+          "[Network feed] Failed to refresh profile state before feed sync.",
+          profileError,
+        );
+      }
+    }
     const sourceAddresses = getFeedSourceAddresses();
     if (import.meta.env.DEV) {
       console.info("[Network feed] Sync sources", sourceAddresses);
@@ -517,16 +546,10 @@
         await followUserInProfile(normalizedAddress);
       }
 
-      const profileState = await getCurrentUserProfileState({ preferCached: true });
-      localFollowing = profileState.social.followedUserAddresses
-        .map(normalizeAddressForKey)
-        .filter(Boolean);
-      const resolvedSourceAddresses = await deriveCurrentSourceAddresses(profileState);
-      currentUserAddress = resolvedSourceAddresses[0] ?? "";
-      currentUserSourceAliases = resolvedSourceAddresses.slice(1);
+      await hydrateProfileStateForNetwork({ preferCached: false });
 
       runtimeSearchHydrated = false;
-      await loadChainFeed();
+      await loadChainFeed({ refreshProfile: false });
     } catch (error) {
       console.error("[Network feed] Failed to persist following state.", error);
     } finally {
@@ -701,28 +724,17 @@
   onMount(() => {
     pageMounted = true;
     socialPreferencesHydrated = false;
-    void getCurrentUserProfileState()
-      .then(async (profileState) => {
+    void hydrateProfileStateForNetwork({ preferCached: false })
+      .then(async (resolvedSourceAddresses) => {
         if (!pageMounted) return;
-        localToolboxConnectors = [...profileState.toolbox.connector];
-        const resolvedSourceAddresses = await deriveCurrentSourceAddresses(profileState);
-        currentUserLabel = extractDisplayName(profileState.me);
-        localFollowing = profileState.social.followedUserAddresses
-          .map(normalizeAddressForKey)
-          .filter(Boolean);
-        localFollowedFormats = profileState.social.followedFormatHashes
-          .map(normalizeFormatHashForKey)
-          .filter(Boolean);
         socialPreferencesHydrated = true;
-        currentUserAddress = resolvedSourceAddresses[0] ?? "";
-        currentUserSourceAliases = resolvedSourceAddresses.slice(1);
         if (resolvedSourceAddresses.length === 0 && localFollowing.length === 0) {
           feedLoadError = PROFILE_SOURCES_UNAVAILABLE_MESSAGE;
           feedLoading = false;
           feedSyncSettled = true;
           return;
         }
-        void loadChainFeed();
+        void loadChainFeed({ refreshProfile: false });
       })
       .catch((error) => {
         if (!pageMounted) return;

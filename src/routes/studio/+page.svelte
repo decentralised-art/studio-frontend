@@ -1,5 +1,6 @@
 <script lang="ts">
   import { browser } from "$app/environment";
+  import { resolve } from "$app/paths";
   import { onMount } from "svelte";
   import { SvelteMap, SvelteSet } from "svelte/reactivity";
 
@@ -87,6 +88,7 @@
     ChainApiRequestError,
     type ChainApiPostResult,
     type ChainExecutePayload,
+    normalizeFormatHash,
     postChainConnectorDetailed,
     postChainConditionDetailed,
     postChainExecuteDetailed,
@@ -99,6 +101,14 @@
     StudioConnectorDef,
     StudioRunningInstanceRef,
   } from "$lib/studio/domain/connectorModel";
+  import {
+    buildStudioPluginRuntimeData,
+    type StudioPluginRuntimeData,
+  } from "$lib/studio/plugins/runtime";
+  import {
+    listCompatibleStudioPlugins,
+    type StudioPluginDescriptor,
+  } from "$lib/studio/plugins/registry";
 
   type PanelMode = "open" | "hidden";
   type RightPanelMode = "assistant" | "inspector" | "runner" | "hidden";
@@ -268,6 +278,7 @@
     tabRoot?: boolean;
     hideOutlets?: boolean;
     pluginOutput?: PtOutputFeature[];
+    pluginData?: StudioPluginRuntimeData;
     pluginTargets?: string[];
     riStart?: number;
     riShift?: number;
@@ -316,7 +327,7 @@
     | { type: "condition"; connectorId: string }
     | null;
   let connectorDropTarget = $state<ConnectorDropTarget>(null);
-  let explorerSource = $state<"network" | "toolbox">("network");
+  let explorerSource = $state<"network" | "toolbox" | "plugins">("network");
   let libraryTab = $state<"connectors" | "transformations" | "conditions">("connectors");
   let tooltipX = $state(0);
   let tooltipY = $state(0);
@@ -340,6 +351,7 @@
   let chainSyncBusy = $state(false);
   let chainSyncStatus = $state<string | null>(null);
   let chainSyncError = $state<string | null>(null);
+  let lastStudioSyncedSourcesCount = $state(0);
   let toolboxLoadBusy = $state(true);
   let chainDeployBusy = $state(false);
   let chainDeployStatus = $state<string | null>(null);
@@ -414,6 +426,8 @@
   let conditionAiAssistantError = $state<string | null>(null);
   let conditionAiAssistantMessages = $state<PopupAssistantMessage[]>([]);
   let libraryCreateActionError = $state<string | null>(null);
+  let pluginAttachStatus = $state<string | null>(null);
+  let pluginAttachError = $state<string | null>(null);
   let standaloneDraftTransformations = $state<StandaloneTransformationDraft[]>([]);
   const conditionCodeById = new SvelteMap<string, string>();
 
@@ -2629,6 +2643,9 @@
       [kind]: [...toolboxLibrary[kind], normalizedId],
     };
     toolboxLibrary = next;
+    if (kind === "connector") {
+      void hydrateToolboxConnectorsIntoLibrary([normalizedId]);
+    }
     void persistToolboxLibrary(next);
   };
 
@@ -2641,6 +2658,7 @@
         transformation: normalizeToolboxListByKind("transformation", saved.transformation),
         condition: normalizeToolboxListByKind("condition", saved.condition),
       };
+      void hydrateToolboxConnectorsIntoLibrary(toolboxLibrary.connector);
     } catch (error) {
       console.warn("[Studio] Failed to load toolbox library from profile.", error);
     } finally {
@@ -3405,9 +3423,17 @@
   };
 
   $effect(() => {
-    const selectedConnector = getSelectedConnectorNode();
-    const rootConnectorId = selectedConnector?.id ?? null;
-    const rootConnectorName = selectedConnector ? resolveNodeName(selectedConnector) : "";
+    const tabRootConnector =
+      nodes.find((node) => isConnectorKind(node.data.kind) && Boolean(node.data.tabRoot)) ??
+      (activeTab?.particleId
+        ? (nodes.find(
+            (node) =>
+              isConnectorKind(node.data.kind) &&
+              normalizeKey(resolveNodeName(node)) === normalizeKey(activeTab.particleId!),
+          ) ?? null)
+        : null);
+    const rootConnectorId = tabRootConnector?.id ?? null;
+    const rootConnectorName = tabRootConnector ? resolveNodeName(tabRootConnector) : "";
     const directlyReferenced = rootConnectorName
       ? collectDirectDefinitionConnectorReferences(rootConnectorName)
       : {
@@ -3611,10 +3637,10 @@
     graphEdges: Edge[],
   ) => {
     const targets = graphEdges
-      .filter((item) => item.target === pluginId && item.source)
-      .map((item) => nodeLookup[item.source!])
+      .filter((item) => item.source === pluginId && item.target)
+      .map((item) => nodeLookup[item.target!])
       .filter((node): node is StudioNode => Boolean(node))
-      .filter((node) => node.data.kind === "particle")
+      .filter((node) => isConnectorKind(node.data.kind))
       .map((node) => resolveNodeName(node));
     return Array.from(new SvelteSet(targets));
   };
@@ -3635,16 +3661,27 @@
       if (!targetNames.length) {
         return {
           ...node,
-          data: { ...node.data, pluginOutput: [], pluginTargets: undefined },
+          data: {
+            ...node.data,
+            pluginOutput: [],
+            pluginData: undefined,
+            pluginTargets: undefined,
+          },
         };
       }
-      const needles = targetNames.map((target) => `/${target}`);
-      const filtered = output.filter((stream) =>
-        needles.some((needle) => stream.feature_path.includes(needle)),
+      const pluginData = buildStudioPluginRuntimeData(
+        node.data.sourceId ?? "",
+        targetNames,
+        output,
       );
       return {
         ...node,
-        data: { ...node.data, pluginOutput: filtered, pluginTargets: targetNames },
+        data: {
+          ...node.data,
+          pluginOutput: pluginData.streams,
+          pluginData,
+          pluginTargets: targetNames,
+        },
       };
     });
     nodes = updatedNodes;
@@ -3701,6 +3738,19 @@
       if (items.some((item) => item.id === next.id)) return items;
       return [...items, next];
     }, deployedParticles);
+  };
+
+  const buildStudioChainSyncSummary = (): string => {
+    const connectorRecordCount = deployedParticles.length;
+    const connectorCount = deployedLibrary.features.length;
+    const transformationCount = deployedLibrary.transformations.length;
+    const conditionCount = deployedLibrary.conditions.length;
+    return `Synced ${lastStudioSyncedSourcesCount} sources · ${connectorRecordCount} connector records · ${connectorCount} connectors · ${transformationCount} transformations · ${conditionCount} conditions.`;
+  };
+
+  const refreshStudioChainSyncSummary = () => {
+    if (lastStudioSyncedSourcesCount <= 0) return;
+    chainSyncStatus = buildStudioChainSyncSummary();
   };
 
   const shortFeedAddress = (value: string): string => {
@@ -3895,6 +3945,45 @@
     return true;
   };
 
+  const hydrateToolboxConnectorsIntoLibrary = async (connectorIds: string[]) => {
+    const normalizedConnectorIds = Array.from(
+      new Set(connectorIds.map((value) => normalizeConnectorToolboxId(value)).filter(Boolean)),
+    );
+    if (normalizedConnectorIds.length === 0) return;
+
+    const missing = normalizedConnectorIds.filter(
+      (connectorId) => !deployedRegistry.connectors[connectorId],
+    );
+    if (missing.length === 0) return;
+
+    const settled = await Promise.allSettled(
+      missing.map(
+        async (connectorId) => [connectorId, await syncSingleChainParticle(connectorId)] as const,
+      ),
+    );
+
+    const mergedCount = settled.filter(
+      (result): result is PromiseFulfilledResult<readonly [string, boolean]> =>
+        result.status === "fulfilled" && result.value[1],
+    ).length;
+    if (!chainSyncBusy && mergedCount > 0) {
+      refreshStudioChainSyncSummary();
+    }
+
+    if (import.meta.env.DEV) {
+      const failed = settled.filter(
+        (result) =>
+          result.status === "rejected" || (result.status === "fulfilled" && !result.value[1]),
+      ).length;
+      if (failed > 0) {
+        console.warn("[Studio] Some toolbox connectors could not be hydrated from chain.", {
+          failed,
+          requested: missing.length,
+        });
+      }
+    }
+  };
+
   const collectLocalConditionRuntime = (
     graphNodes: StudioNode[],
   ): Record<string, RuntimeConditionDef> => {
@@ -3927,38 +4016,46 @@
           "Unable to resolve Studio network sources from your profile. Check connection and retry.";
         return;
       }
-      const particleIds = new SvelteSet<string>();
-      const connectorNames = new SvelteSet<string>();
-      const transformationIds = new SvelteSet<string>();
-      const conditionIds = new SvelteSet<string>();
       let syncedSources = 0;
-
+      const failedSources: string[] = [];
       for (const source of sources) {
         const address = source.address;
-        if (!address) continue;
-        chainSyncStatus = `Fetching chain registry for ${source.label}...`;
-        const snapshot = await withChainAuthRetry(() =>
-          fetchChainOwnedStudioSnapshot(address, {
-            authorId: source.authorId,
-          }),
-        );
-        mergeChainSyncSnapshot(snapshot);
-        if (
-          isConnectorTreeTab(activeTabId) &&
-          nodes.some((node) => Boolean(node.data.placeholder))
-        ) {
-          refreshConnectorTreeTab(activeTabId);
+        if (!address) {
+          failedSources.push("Source address is empty.");
+          continue;
         }
-        syncedSources += 1;
-        snapshot.particles.forEach((particle) => particleIds.add(particle.id));
-        Object.keys(snapshot.registry.connectors).forEach((name) => connectorNames.add(name));
-        snapshot.library.transformations.forEach((item) => transformationIds.add(item.id));
-        snapshot.library.conditions.forEach((item) => conditionIds.add(item.id));
+        chainSyncStatus = `Fetching chain registry for ${source.label}...`;
+        try {
+          const snapshot = await withChainAuthRetry(() =>
+            fetchChainOwnedStudioSnapshot(address, {
+              authorId: source.authorId,
+            }),
+          );
+          mergeChainSyncSnapshot(snapshot);
+          syncedSources += 1;
+        } catch (error) {
+          failedSources.push(
+            error instanceof Error ? error.message : "Unknown source sync failure.",
+          );
+          continue;
+        }
+      }
+
+      if (syncedSources === 0) {
+        lastStudioSyncedSourcesCount = 0;
+        chainSyncStatus = null;
+        chainSyncError = failedSources[0] ?? "Failed to sync any Studio sources from chain.";
+        return;
       }
 
       refreshConnectorTreeTabs();
-
-      chainSyncStatus = `Synced ${syncedSources} sources · ${particleIds.size} connector records · ${connectorNames.size} connectors · ${transformationIds.size} transformations · ${conditionIds.size} conditions.`;
+      lastStudioSyncedSourcesCount = syncedSources;
+      chainSyncStatus = buildStudioChainSyncSummary();
+      if (failedSources.length > 0) {
+        chainSyncError = `Partial sync: ${failedSources.length} source(s) failed.`;
+      } else {
+        chainSyncError = null;
+      }
     } catch (error) {
       chainSyncError =
         error instanceof Error ? error.message : "Failed to sync owned chain registry.";
@@ -4490,6 +4587,24 @@
     return rootNode ? resolveNodeName(rootNode).trim() : "";
   };
 
+  const resolveActiveTabRootConnectorName = (graphNodes: StudioNode[] = nodes): string => {
+    if (!activeTab) return "";
+    if (isConnectorTreeTab(activeTabId)) {
+      const treeRoot = connectorTreeModelsByTab.get(activeTabId)?.rootConnectorName?.trim();
+      if (treeRoot) return treeRoot;
+    }
+
+    const fromTab = activeTab.particleId?.trim();
+    if (fromTab) return fromTab;
+
+    // Plugin discovery is strictly tab-root based: no fallback to arbitrary connector nodes.
+    const rootNode =
+      graphNodes.find(
+        (node) => isConnectorKind(node.data.kind) && node.data.definitionRole === "root",
+      ) ?? graphNodes.find((node) => isConnectorKind(node.data.kind) && Boolean(node.data.tabRoot));
+    return rootNode ? resolveNodeName(rootNode).trim() : "";
+  };
+
   const buildExecuteRequestPreview = (
     graphNodes: StudioNode[] = nodes,
     graphEdges: Edge[] = edges,
@@ -4586,6 +4701,157 @@
   const chainApiExecutePreviewError = $derived.by(() => executeRequestPreview.error);
   const chainApiExecutePreviewWarnings = $derived.by(() => executeRequestPreview.warnings);
   const chainApiExecutePreviewSummary = $derived.by(() => executeRequestPreview.summary);
+  const activePluginSourceRootConnectorName = $derived.by(() =>
+    resolveActiveTabRootConnectorName(nodes).trim(),
+  );
+  const activePluginSourceRootConnector = $derived.by(() => {
+    const connectorName = activePluginSourceRootConnectorName;
+    if (!connectorName) return null;
+    return deployedRegistry.connectors[connectorName] ?? null;
+  });
+  const activePluginSourceFormatHash = $derived.by(() => {
+    const formatHash = activePluginSourceRootConnector?.formatHash?.trim();
+    if (!formatHash) return "";
+    try {
+      return normalizeFormatHash(formatHash);
+    } catch {
+      return "";
+    }
+  });
+  const compatibleStudioPlugins = $derived.by<StudioPluginDescriptor[]>(() => {
+    const formatHash = activePluginSourceFormatHash;
+    if (!formatHash) return [];
+    return listCompatibleStudioPlugins(formatHash);
+  });
+  const pluginSourceInfoMessage = $derived.by(() => {
+    if (!activePluginSourceRootConnectorName) {
+      return "No root connector selected in this tab.";
+    }
+    if (!activePluginSourceRootConnector) {
+      return "Plugins are available only for deployed connectors. Deploy this connector first.";
+    }
+    if (!activePluginSourceFormatHash) {
+      return "This connector has no normalized format hash, so plugin compatibility cannot be resolved.";
+    }
+    if (!compatibleStudioPlugins.length) {
+      return `No installed plugins are compatible with format ${activePluginSourceFormatHash}.`;
+    }
+    return "";
+  });
+  const pluginAttachEnabled = $derived.by(
+    () => Boolean(activePluginSourceRootConnectorName) && Boolean(activePluginSourceRootConnector),
+  );
+
+  const resolvePluginAttachSourceNode = (): StudioNode | null => {
+    const rootConnectorName = activePluginSourceRootConnectorName.trim();
+    if (!rootConnectorName) return null;
+    const rootKey = normalizeKey(rootConnectorName);
+    const candidates = nodes.filter(
+      (node) => isConnectorKind(node.data.kind) && normalizeKey(resolveNodeName(node)) === rootKey,
+    );
+    if (!candidates.length) return null;
+    return (
+      candidates.find(
+        (node) => node.data.definitionRole === "root" || Boolean(node.data.tabRoot),
+      ) ?? candidates[0]
+    );
+  };
+
+  const attachStudioPluginToRoot = (
+    plugin: StudioPluginDescriptor,
+    options?: { position?: { x: number; y: number } | null },
+  ) => {
+    pluginAttachStatus = null;
+    pluginAttachError = null;
+
+    if (!pluginAttachEnabled) {
+      pluginAttachError =
+        "Plugins can be attached only when a deployed root connector is active in this tab.";
+      return;
+    }
+
+    const formatHash = activePluginSourceFormatHash;
+    if (!formatHash || !plugin.supportedFormatHashes.includes(formatHash)) {
+      pluginAttachError = `Plugin '${plugin.name}' is not compatible with the active root format.`;
+      return;
+    }
+
+    const sourceNode = resolvePluginAttachSourceNode();
+    if (!sourceNode) {
+      pluginAttachError = "Could not resolve root connector node for plugin attachment.";
+      return;
+    }
+
+    const existingPluginNode = nodes.find(
+      (node) =>
+        node.data.kind === "plugin" &&
+        node.data.sourceId === plugin.id &&
+        edges.some((edge) => edge.source === node.id && edge.target === sourceNode.id),
+    );
+    if (existingPluginNode) {
+      selectedNodeId = existingPluginNode.id;
+      selectedEdgeId = null;
+      pluginAttachStatus = `Plugin '${plugin.name}' is already attached to '${resolveNodeName(sourceNode)}'.`;
+      return;
+    }
+
+    const attachedPluginCount = edges
+      .filter((edge) => edge.target === sourceNode.id)
+      .filter((edge) => {
+        const sourcePluginNode = nodesById[edge.source] ?? null;
+        return sourcePluginNode?.data.kind === "plugin";
+      }).length;
+
+    const pluginNode: StudioNode = {
+      id: `plugin-${plugin.id}-${crypto.randomUUID()}`,
+      type: "plugin",
+      selected: true,
+      position: options?.position ?? {
+        x: sourceNode.position.x + attachedPluginCount * 26,
+        y: sourceNode.position.y - 220 - attachedPluginCount * 24,
+      },
+      data: {
+        label: plugin.name,
+        kind: "plugin",
+        sourceId: plugin.id,
+        networkId: resolveNodeName(sourceNode),
+        fromNetwork: false,
+      },
+    };
+
+    const pluginEdge: Edge = {
+      id: `edge-${pluginNode.id}-${sourceNode.id}-${crypto.randomUUID()}`,
+      source: pluginNode.id,
+      sourceHandle: "out",
+      target: sourceNode.id,
+      targetHandle: "plugin-in",
+      data: { relation: "plugin", pluginId: plugin.id },
+      label: "plugin",
+    };
+
+    const nextNodes: StudioNode[] = nodes.map((node) => ({
+      ...node,
+      selected: false,
+    }));
+    nextNodes.push(pluginNode);
+    const nextEdges = [...edges, pluginEdge];
+
+    nodes = nextNodes;
+    edges = nextEdges;
+    selectedNodeId = pluginNode.id;
+    selectedEdgeId = null;
+    setConnectorDropTarget(null);
+
+    if (activeRunOutput) {
+      refreshPluginOutputs(activeRunOutput, nextNodes, nextEdges);
+    } else {
+      refreshPluginOutputs([], nextNodes, nextEdges);
+    }
+
+    pluginAttachStatus = `Connected '${plugin.name}' to '${resolveNodeName(sourceNode)}'.`;
+    scheduleLayout();
+  };
+
   let executePreviewCopyStatus = $state<string | null>(null);
   let executePreviewCopyTimer = $state<ReturnType<typeof setTimeout> | null>(null);
 
@@ -5490,19 +5756,16 @@
   };
 
   const saveActiveGraph = () => {
-    const filteredNodes = nodes.filter((node) => node.data.kind !== "plugin");
-    const filteredNodeIds = new SvelteSet(filteredNodes.map((node) => node.id));
-    const filteredEdges = edges.filter(
-      (edge) => filteredNodeIds.has(edge.source) && filteredNodeIds.has(edge.target),
-    );
-    tabGraphs.set(activeTabId, { nodes: filteredNodes, edges: filteredEdges });
+    const nodeIds = new SvelteSet(nodes.map((node) => node.id));
+    const safeEdges = edges.filter((edge) => nodeIds.has(edge.source) && nodeIds.has(edge.target));
+    tabGraphs.set(activeTabId, { nodes, edges: safeEdges });
   };
 
   const loadTabGraph = (tabId: string) => {
     const projectedTree = projectConnectorTreeGraph(tabId);
     if (projectedTree) {
       const overlay = tabGraphs.get(tabId);
-      const overlayNodes = (overlay?.nodes ?? []).filter((node) => node.data.kind !== "plugin");
+      const overlayNodes = overlay?.nodes ?? [];
       const overlayNodeIds = new SvelteSet(overlayNodes.map((node) => node.id));
       const overlayEdges = (overlay?.edges ?? []).filter(
         (edge) => overlayNodeIds.has(edge.source) && overlayNodeIds.has(edge.target),
@@ -5540,13 +5803,13 @@
       edges = mergedEdges;
     } else {
       const graph = tabGraphs.get(tabId);
-      const filteredNodes = (graph?.nodes ?? []).filter((node) => node.data.kind !== "plugin");
-      const filteredNodeIds = new SvelteSet(filteredNodes.map((node) => node.id));
-      const filteredEdges = (graph?.edges ?? []).filter(
-        (edge) => filteredNodeIds.has(edge.source) && filteredNodeIds.has(edge.target),
+      const graphNodes = graph?.nodes ?? [];
+      const graphNodeIds = new SvelteSet(graphNodes.map((node) => node.id));
+      const graphEdges = (graph?.edges ?? []).filter(
+        (edge) => graphNodeIds.has(edge.source) && graphNodeIds.has(edge.target),
       );
-      nodes = filteredNodes;
-      edges = filteredEdges;
+      nodes = graphNodes;
+      edges = graphEdges;
       if (tabId === activeTabId) {
         ensureActiveDraftTabRootConnector();
       }
@@ -7403,6 +7666,12 @@
     if (event.dataTransfer) event.dataTransfer.effectAllowed = "copyMove";
   };
 
+  const handlePluginDragStart = (event: DragEvent, plugin: StudioPluginDescriptor) => {
+    event.dataTransfer?.setData("application/x-hypermusic-plugin", JSON.stringify(plugin));
+    event.dataTransfer?.setData("text/plain", plugin.name);
+    if (event.dataTransfer) event.dataTransfer.effectAllowed = "copy";
+  };
+
   const resolveConnectorDropTargetFromEvent = (
     event: MouseEvent | DragEvent | TouchEvent,
   ): ConnectorDropTarget => {
@@ -7427,6 +7696,19 @@
   const handleDrop = (event: DragEvent) => {
     event.preventDefault();
     const dropTarget = resolveConnectorDropTargetFromEvent(event);
+    const pluginPayload = event.dataTransfer?.getData("application/x-hypermusic-plugin");
+    if (pluginPayload) {
+      try {
+        const plugin = JSON.parse(pluginPayload) as StudioPluginDescriptor;
+        const position = screenToFlowPosition
+          ? screenToFlowPosition({ x: event.clientX, y: event.clientY })
+          : { x: event.clientX, y: event.clientY };
+        attachStudioPluginToRoot(plugin, { position });
+        return;
+      } catch (error) {
+        console.warn("Failed to parse dropped plugin payload", error);
+      }
+    }
     const quickPayload = event.dataTransfer?.getData("application/x-hypermusic-quick");
     if (quickPayload) {
       try {
@@ -7522,7 +7804,8 @@
     event.preventDefault();
     if (event.dataTransfer) {
       const types = Array.from(event.dataTransfer.types);
-      event.dataTransfer.dropEffect = types.includes("application/x-hypermusic-quick")
+      const copyTypes = ["application/x-hypermusic-quick", "application/x-hypermusic-plugin"];
+      event.dataTransfer.dropEffect = types.some((type) => copyTypes.includes(type))
         ? "copy"
         : "move";
     }
@@ -7565,11 +7848,15 @@
   };
 
   const canDeleteNodeByPolicy = (node: StudioNode): boolean => {
+    if (node.data.kind === "plugin") return true;
     if (activeTabReadOnly) return false;
     return !(isConnectorKind(node.data.kind) && Boolean(node.data.tabRoot));
   };
 
-  const canDeleteEdgeByPolicy = (_edge: Edge): boolean => {
+  const canDeleteEdgeByPolicy = (edge: Edge): boolean => {
+    const sourceNode = edge.source ? nodesById[edge.source] : null;
+    const targetNode = edge.target ? nodesById[edge.target] : null;
+    if (sourceNode?.data.kind === "plugin" || targetNode?.data.kind === "plugin") return true;
     if (activeTabReadOnly) return false;
     return true;
   };
@@ -7668,7 +7955,19 @@
       if (!allowedNodes.length && !allowedEdges.length) return false;
       return { nodes: allowedNodes, edges: allowedEdges };
     }
-    return false;
+    const pluginNodeIds = new SvelteSet(
+      toDelete.filter((node) => node.data.kind === "plugin").map((node) => node.id),
+    );
+    const pluginEdges = toDeleteEdges.filter((edge) => {
+      const sourceIsPlugin =
+        pluginNodeIds.has(edge.source) || nodesById[edge.source]?.data.kind === "plugin";
+      const targetIsPlugin =
+        pluginNodeIds.has(edge.target) || nodesById[edge.target]?.data.kind === "plugin";
+      return sourceIsPlugin || targetIsPlugin;
+    });
+    const pluginNodes = toDelete.filter((node) => node.data.kind === "plugin");
+    if (!pluginNodes.length && !pluginEdges.length) return false;
+    return { nodes: pluginNodes, edges: pluginEdges };
   };
 
   const parseDimensionHandle = (handle?: string | null) => {
@@ -7762,13 +8061,26 @@
       return targetHandle === "in" || targetHandle === "condition";
     }
 
+    if (sourceNode.data.kind === "plugin" && isConnectorKind(targetNode.data.kind)) {
+      if (!targetNode.data.tabRoot) return false;
+      return connection.sourceHandle === "out" && connection.targetHandle === "plugin-in";
+    }
+
     return false;
   };
 
   const handleConnect: OnConnect = (connection) => {
     if (!isValidConnection(connection)) return;
     if (!connection.source || !connection.target) return;
-    if (activeTabReadOnly) return;
+    const sourceNode = nodesById[connection.source];
+    const targetNode = nodesById[connection.target];
+    const isPluginConnection = Boolean(
+      sourceNode &&
+      targetNode &&
+      sourceNode.data.kind === "plugin" &&
+      isConnectorKind(targetNode.data.kind),
+    );
+    if (activeTabReadOnly && !isPluginConnection) return;
     if (
       edges.some(
         (edge) =>
@@ -7780,9 +8092,6 @@
     ) {
       return;
     }
-
-    const sourceNode = nodesById[connection.source];
-    const targetNode = nodesById[connection.target];
     const parseEdgeRelation = (edge: Edge): "composite" | "binding" | "unknown" => {
       if (edge.data && typeof edge.data === "object") {
         const relation = (edge.data as { relation?: unknown; kind?: unknown }).relation;
@@ -7924,7 +8233,7 @@
       scheduleLayout();
     }
 
-    if (sourceNode?.data.kind === "particle" && targetNode?.data.kind === "plugin") {
+    if (sourceNode?.data.kind === "plugin" && targetNode && isConnectorKind(targetNode.data.kind)) {
       if (activeRunOutput) {
         refreshPluginOutputs(activeRunOutput);
       }
@@ -9262,6 +9571,13 @@
           >
             Toolbox
           </button>
+          <button
+            type="button"
+            class={`source-tab ${explorerSource === "plugins" ? "is-active" : ""}`}
+            onclick={() => (explorerSource = "plugins")}
+          >
+            Plugins
+          </button>
         </div>
         {#if explorerSource === "network" && (chainSyncStatus || chainSyncError)}
           <div
@@ -9283,131 +9599,194 @@
             {/if}
           </div>
         {/if}
-        <div class="left-tabs">
-          <button
-            type="button"
-            class="scroll-arrow"
-            aria-label="Scroll element tabs left"
-            onclick={() => leftTabsEl?.scrollBy({ left: -120, behavior: "smooth" })}
-          >
-            ‹
-          </button>
-          <div class="left-tabs-track" bind:this={leftTabsEl}>
-            <Button
-              variant="subtle"
-              selected={libraryTab === "connectors"}
-              onclick={() => (libraryTab = "connectors")}
-            >
-              Connectors
-            </Button>
-            <Button
-              variant="subtle"
-              selected={libraryTab === "transformations"}
-              onclick={() => (libraryTab = "transformations")}
-            >
-              Transformations
-            </Button>
-            <Button
-              variant="subtle"
-              selected={libraryTab === "conditions"}
-              onclick={() => (libraryTab = "conditions")}
-            >
-              Conditions
-            </Button>
-          </div>
-          <button
-            type="button"
-            class="scroll-arrow"
-            aria-label="Scroll element tabs right"
-            onclick={() => leftTabsEl?.scrollBy({ left: 120, behavior: "smooth" })}
-          >
-            ›
-          </button>
-        </div>
-        <div class="list-header">
-          <div class="list-title">{listTitle}</div>
-          <button
-            class="info-dot"
-            type="button"
-            data-tooltip={listTooltip}
-            style={`--tooltip-x:${tooltipX}px; --tooltip-y:${tooltipY}px;`}
-            aria-label={`${listTitle} definition`}
-            onmousemove={(event) => {
-              tooltipX = event.clientX;
-              tooltipY = event.clientY;
-            }}
-          >
-            ?
-          </button>
-        </div>
-        {#if libraryTab === "connectors"}
-          <StudioLibraryList
-            title="Connectors"
-            items={libraryItems}
-            toolboxIds={savedToolboxIdsForLibraryTab}
-            loading={(explorerSource === "network" && chainSyncBusy) ||
-              (explorerSource === "toolbox" && toolboxLoadBusy)}
-            usersById={mockUsersById}
-            onAdd={(item) => addLibraryNode(item, null)}
-            onToolbox={toggleLibraryToolbox}
-            onDragStart={handleLibraryDragStart}
-            draggable
-            showHeader={false}
-          />
-        {:else if libraryTab === "transformations"}
-          <div class="library-create-actions">
-            <Button
-              variant="ghost"
+        {#if explorerSource !== "plugins"}
+          <div class="left-tabs">
+            <button
               type="button"
-              disabled={activeTabReadOnly}
-              onclick={openContextualTransformationEditor}
+              class="scroll-arrow"
+              aria-label="Scroll element tabs left"
+              onclick={() => leftTabsEl?.scrollBy({ left: -120, behavior: "smooth" })}
             >
-              New transformation
-            </Button>
-            {#if libraryCreateActionError}
-              <p class="library-create-error">{libraryCreateActionError}</p>
+              ‹
+            </button>
+            <div class="left-tabs-track" bind:this={leftTabsEl}>
+              <Button
+                variant="subtle"
+                selected={libraryTab === "connectors"}
+                onclick={() => (libraryTab = "connectors")}
+              >
+                Connectors
+              </Button>
+              <Button
+                variant="subtle"
+                selected={libraryTab === "transformations"}
+                onclick={() => (libraryTab = "transformations")}
+              >
+                Transformations
+              </Button>
+              <Button
+                variant="subtle"
+                selected={libraryTab === "conditions"}
+                onclick={() => (libraryTab = "conditions")}
+              >
+                Conditions
+              </Button>
+            </div>
+            <button
+              type="button"
+              class="scroll-arrow"
+              aria-label="Scroll element tabs right"
+              onclick={() => leftTabsEl?.scrollBy({ left: 120, behavior: "smooth" })}
+            >
+              ›
+            </button>
+          </div>
+          <div class="list-header">
+            <div class="list-title">{listTitle}</div>
+            <button
+              class="info-dot"
+              type="button"
+              data-tooltip={listTooltip}
+              style={`--tooltip-x:${tooltipX}px; --tooltip-y:${tooltipY}px;`}
+              aria-label={`${listTitle} definition`}
+              onmousemove={(event) => {
+                tooltipX = event.clientX;
+                tooltipY = event.clientY;
+              }}
+            >
+              ?
+            </button>
+          </div>
+          {#if libraryTab === "connectors"}
+            <StudioLibraryList
+              title="Connectors"
+              items={libraryItems}
+              toolboxIds={savedToolboxIdsForLibraryTab}
+              loading={(explorerSource === "network" && chainSyncBusy) ||
+                (explorerSource === "toolbox" && toolboxLoadBusy)}
+              usersById={mockUsersById}
+              onAdd={(item) => addLibraryNode(item, null)}
+              onToolbox={toggleLibraryToolbox}
+              onOpen={(item) => void openConnectorTab(getLibraryRegistryName(item))}
+              onDragStart={handleLibraryDragStart}
+              draggable
+              showHeader={false}
+            />
+          {:else if libraryTab === "transformations"}
+            <div class="library-create-actions">
+              <Button
+                variant="ghost"
+                type="button"
+                disabled={activeTabReadOnly}
+                onclick={openContextualTransformationEditor}
+              >
+                New transformation
+              </Button>
+              {#if libraryCreateActionError}
+                <p class="library-create-error">{libraryCreateActionError}</p>
+              {/if}
+            </div>
+            <StudioLibraryList
+              title="Transformations"
+              items={libraryItems}
+              toolboxIds={savedToolboxIdsForLibraryTab}
+              loading={(explorerSource === "network" && chainSyncBusy) ||
+                (explorerSource === "toolbox" && toolboxLoadBusy)}
+              usersById={mockUsersById}
+              onAdd={(item) => addLibraryNode(item, null)}
+              onToolbox={toggleLibraryToolbox}
+              onDragStart={handleLibraryDragStart}
+              draggable
+              showHeader={false}
+            />
+          {:else if libraryTab === "conditions"}
+            <div class="library-create-actions">
+              <Button
+                variant="ghost"
+                type="button"
+                disabled={activeTabReadOnly}
+                onclick={openContextualConditionEditor}
+              >
+                New condition
+              </Button>
+              {#if libraryCreateActionError}
+                <p class="library-create-error">{libraryCreateActionError}</p>
+              {/if}
+            </div>
+            <StudioLibraryList
+              title="Conditions"
+              items={libraryItems}
+              toolboxIds={savedToolboxIdsForLibraryTab}
+              loading={(explorerSource === "network" && chainSyncBusy) ||
+                (explorerSource === "toolbox" && toolboxLoadBusy)}
+              usersById={mockUsersById}
+              onAdd={(item) => addLibraryNode(item, null)}
+              onToolbox={toggleLibraryToolbox}
+              onDragStart={handleLibraryDragStart}
+              draggable
+              showHeader={false}
+            />
+          {/if}
+        {:else}
+          <div class="plugins-panel">
+            <div class="plugins-panel-header">
+              <div class="list-title">Plugins</div>
+              <div class="plugins-root">
+                Root: {activePluginSourceRootConnectorName || "Not selected"}
+              </div>
+            </div>
+            <div class="plugins-meta">
+              Format hash:
+              {#if activePluginSourceFormatHash}
+                <a
+                  class="plugins-format-link"
+                  href={resolve("/f/[slug]", { slug: activePluginSourceFormatHash })}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  {activePluginSourceFormatHash}
+                </a>
+              {:else}
+                Unavailable
+              {/if}
+            </div>
+            {#if pluginAttachStatus}
+              <p class="plugins-feedback">{pluginAttachStatus}</p>
+            {/if}
+            {#if pluginAttachError}
+              <p class="plugins-feedback is-error">{pluginAttachError}</p>
+            {/if}
+            {#if pluginSourceInfoMessage}
+              <p class="plugins-empty">{pluginSourceInfoMessage}</p>
+            {/if}
+            {#if compatibleStudioPlugins.length > 0}
+              <div class="plugins-list">
+                {#each compatibleStudioPlugins as plugin (plugin.id)}
+                  <article
+                    class="plugin-card"
+                    draggable
+                    ondragstart={(event) => handlePluginDragStart(event, plugin)}
+                  >
+                    <header class="plugin-card-header">
+                      <h4>{plugin.name}</h4>
+                    </header>
+                    <p>{plugin.summary}</p>
+                    <footer class="plugin-card-footer">
+                      <span>{plugin.id}</span>
+                      <Button
+                        variant="ghost"
+                        type="button"
+                        disabled={!pluginAttachEnabled}
+                        onclick={() => attachStudioPluginToRoot(plugin)}
+                      >
+                        +
+                      </Button>
+                    </footer>
+                  </article>
+                {/each}
+              </div>
             {/if}
           </div>
-          <StudioLibraryList
-            title="Transformations"
-            items={libraryItems}
-            toolboxIds={savedToolboxIdsForLibraryTab}
-            loading={(explorerSource === "network" && chainSyncBusy) ||
-              (explorerSource === "toolbox" && toolboxLoadBusy)}
-            usersById={mockUsersById}
-            onAdd={(item) => addLibraryNode(item, null)}
-            onToolbox={toggleLibraryToolbox}
-            onDragStart={handleLibraryDragStart}
-            draggable
-            showHeader={false}
-          />
-        {:else if libraryTab === "conditions"}
-          <div class="library-create-actions">
-            <Button
-              variant="ghost"
-              type="button"
-              disabled={activeTabReadOnly}
-              onclick={openContextualConditionEditor}
-            >
-              New condition
-            </Button>
-            {#if libraryCreateActionError}
-              <p class="library-create-error">{libraryCreateActionError}</p>
-            {/if}
-          </div>
-          <StudioLibraryList
-            title="Conditions"
-            items={libraryItems}
-            toolboxIds={savedToolboxIdsForLibraryTab}
-            loading={(explorerSource === "network" && chainSyncBusy) ||
-              (explorerSource === "toolbox" && toolboxLoadBusy)}
-            usersById={mockUsersById}
-            onAdd={(item) => addLibraryNode(item, null)}
-            onToolbox={toggleLibraryToolbox}
-            onDragStart={handleLibraryDragStart}
-            draggable
-            showHeader={false}
-          />
         {/if}
       </div>
     </DockPanel>
@@ -11207,6 +11586,79 @@
 
   .list-title {
     @apply text-[0.7rem] uppercase tracking-[0.28em] text-white/70;
+  }
+
+  .plugins-panel {
+    @apply mt-1 flex min-h-0 flex-1 flex-col gap-2;
+  }
+
+  .plugins-panel-header {
+    @apply flex flex-col gap-1;
+  }
+
+  .plugins-root {
+    @apply text-[0.65rem] text-white/60;
+    word-break: break-word;
+  }
+
+  .plugins-meta {
+    @apply rounded-md border border-white/10 bg-black/40 px-2 py-1 text-[0.62rem] text-white/55;
+    word-break: break-word;
+  }
+
+  .plugins-format-link {
+    @apply text-emerald-200/90 underline decoration-transparent underline-offset-2 transition;
+    text-decoration-thickness: 1px;
+    word-break: break-all;
+  }
+
+  .plugins-format-link:hover {
+    @apply decoration-emerald-200/80;
+  }
+
+  .plugins-feedback {
+    @apply rounded-md border border-emerald-300/20 bg-emerald-500/10 px-2 py-1 text-[0.62rem] text-emerald-100/90;
+  }
+
+  .plugins-feedback.is-error {
+    @apply border-rose-300/25 bg-rose-500/10 text-rose-100/90;
+  }
+
+  .plugins-empty {
+    @apply rounded-md border border-dashed border-white/15 bg-black/30 px-2 py-2 text-[0.64rem] text-white/55;
+  }
+
+  .plugins-list {
+    @apply flex min-h-0 flex-1 flex-col gap-2 overflow-auto pr-1;
+  }
+
+  .plugin-card {
+    @apply rounded-md border border-white/10 bg-black/70 p-2 cursor-grab;
+  }
+
+  .plugin-card:active {
+    cursor: grabbing;
+  }
+
+  .plugin-card-header {
+    @apply flex items-center justify-between gap-2;
+  }
+
+  .plugin-card-header h4 {
+    @apply m-0 text-[0.72rem] font-semibold text-white/90;
+  }
+
+  .plugin-card p {
+    @apply mt-2 text-[0.62rem] leading-5 text-white/70;
+  }
+
+  .plugin-card-footer {
+    @apply mt-2 flex items-center justify-between gap-2;
+  }
+
+  .plugin-card-footer span {
+    @apply text-[0.53rem] uppercase tracking-[0.16em] text-white/45;
+    word-break: break-all;
   }
 
   .studio :global(.svelte-flow__node) {

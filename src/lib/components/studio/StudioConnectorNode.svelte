@@ -57,7 +57,9 @@
   const definitionRole = $derived(data.definitionRole ?? null);
   const definitionClass = $derived(definitionRole ? `is-definition-${definitionRole}` : "");
   const tabRoot = $derived(Boolean(data.tabRoot));
+  const isRootConnector = $derived(tabRoot || definitionRole === "root");
   const showTopInlet = $derived(!tabRoot);
+  const showPluginInlet = $derived(tabRoot);
   const dimensionLabel = $derived(dimensionCount === 1 ? "dimension" : "dimensions");
   const connectorNameForTree = $derived((data.networkId ?? "").trim());
   const canOpenConnectorTree = $derived(!tabRoot && connectorNameForTree.length > 0);
@@ -102,7 +104,13 @@
   };
 
   $effect(() => {
-    touchDeps(connectorRowsFingerprint, showTopInlet, showBottomOutlets);
+    touchDeps(
+      connectorRowsFingerprint,
+      showTopInlet,
+      showPluginInlet,
+      showBottomOutlets,
+      isRootConnector,
+    );
     if (dimensionCount >= 0) {
       updateNodeInternals(id);
     }
@@ -112,6 +120,9 @@
 <div class="connector-node {selectedClass} {definitionClass} {staticRiClass}">
   {#if showTopInlet}
     <Handle type="target" position={Position.Top} id="in" />
+  {/if}
+  {#if showPluginInlet}
+    <Handle type="target" position={Position.Top} id="plugin-in" />
   {/if}
   <div class="connector-header">
     <div class="connector-title-row">
@@ -124,6 +135,9 @@
       {/if}
     </div>
     <div class="connector-actions">
+      {#if isRootConnector}
+        <span class="connector-root-chip">Root</span>
+      {/if}
       {#if !tabRoot}
         <button
           type="button"
@@ -269,41 +283,23 @@
   }
 
   .connector-node.is-definition-root {
-    @apply border-cyan-200/85 bg-cyan-300/[0.14] text-cyan-50;
-    box-shadow:
-      0 0 0 2px rgba(125, 211, 252, 0.55),
-      0 14px 30px rgba(0, 0, 0, 0.48);
+    @apply border-sky-300/30 bg-sky-500/[0.04] text-white/85;
+    box-shadow: 0 10px 22px rgba(0, 0, 0, 0.42);
   }
 
   .connector-node.is-definition-member {
-    @apply border-cyan-300/65 bg-cyan-500/[0.08] text-cyan-100/95;
-    box-shadow:
-      0 0 0 1px rgba(125, 211, 252, 0.28),
-      0 10px 20px rgba(0, 0, 0, 0.4);
+    @apply border-cyan-300/25 bg-cyan-500/[0.035] text-white/82;
+    box-shadow: 0 10px 20px rgba(0, 0, 0, 0.4);
   }
 
   .connector-node.is-definition-member .connector-row,
   .connector-node.is-definition-member .connector-condition-slot {
-    @apply border-cyan-300/30 bg-cyan-500/[0.07];
+    @apply border-cyan-300/15 bg-cyan-500/[0.035];
   }
 
   .connector-node.is-definition-root .connector-row,
   .connector-node.is-definition-root .connector-condition-slot {
-    @apply border-cyan-200/40 bg-cyan-300/[0.12];
-  }
-
-  .connector-node.is-selected.is-definition-member {
-    box-shadow:
-      0 0 0 2px rgba(52, 211, 153, 0.35),
-      0 0 0 3px rgba(125, 211, 252, 0.32),
-      0 14px 30px rgba(0, 0, 0, 0.46);
-  }
-
-  .connector-node.is-selected.is-definition-root {
-    box-shadow:
-      0 0 0 2px rgba(52, 211, 153, 0.4),
-      0 0 0 4px rgba(125, 211, 252, 0.48),
-      0 18px 34px rgba(0, 0, 0, 0.5);
+    @apply border-sky-300/18 bg-sky-500/[0.04];
   }
 
   .connector-node.has-static-ri:not(.is-selected):not(.is-definition-root):not(
@@ -431,6 +427,10 @@
 
   .connector-readonly-chip {
     @apply inline-flex w-fit rounded border border-cyan-300/30 bg-cyan-400/10 px-2 py-0.5 text-[0.5rem] uppercase tracking-[0.16em] text-cyan-100/85;
+  }
+
+  .connector-root-chip {
+    @apply inline-flex w-fit rounded border border-sky-300/35 bg-sky-400/12 px-2 py-0.5 text-[0.5rem] uppercase tracking-[0.16em] text-sky-100/95;
   }
 
   .connector-static-ri-chip {
