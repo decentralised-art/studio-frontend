@@ -7,7 +7,7 @@ import {
   getChainTransformation,
   resolveChainAccountCursor,
   resolveChainAccountsCursor,
-  type ChainConnectorResponse,
+  type RawChainConnectorResponse,
 } from "$lib/chain/registryApi";
 import type { ExploreParticle } from "$lib/data/exploreParticles";
 import type { LibraryItem } from "$lib/data/studioLibrary";
@@ -158,7 +158,7 @@ const extractCreatedAtFromRecord = (record: Record<string, unknown>): number | n
   return null;
 };
 
-const extractConnectorCreatedAt = (payload: ChainConnectorResponse): number | null =>
+const extractConnectorCreatedAt = (payload: RawChainConnectorResponse): number | null =>
   extractCreatedAtFromRecord(payload as Record<string, unknown>);
 
 const connectorToFeature = (connector: StudioConnectorDef): MockFeatureDef => ({
@@ -216,7 +216,7 @@ const cloneConnectorDef = (connector: StudioConnectorDef): StudioConnectorDef =>
   ...(connector.ownerAddress ? { ownerAddress: connector.ownerAddress } : {}),
 });
 
-const normalizeConnector = (payload: ChainConnectorResponse): StudioConnectorDef | null => {
+const normalizeConnector = (payload: RawChainConnectorResponse): StudioConnectorDef | null => {
   try {
     return cloneConnectorDef(fromProtocolConnectorPayload(payload));
   } catch {
@@ -359,7 +359,7 @@ export const fetchChainOwnedStudioSnapshot = async (
     )
   )
     .filter(
-      (result): result is PromiseFulfilledResult<readonly [string, ChainConnectorResponse]> =>
+      (result): result is PromiseFulfilledResult<readonly [string, RawChainConnectorResponse]> =>
         result.status === "fulfilled",
     )
     .map((result) => result.value);

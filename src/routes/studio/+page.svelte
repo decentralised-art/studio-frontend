@@ -4923,15 +4923,8 @@
         postChainExecuteDetailed(requestPreview.requestBody),
       );
       output = result.body.map((stream) => ({
-        feature_path:
-          typeof stream.feature_path === "string"
-            ? stream.feature_path
-            : typeof stream.path === "string"
-              ? stream.path
-              : "",
-        data: Array.isArray(stream.data)
-          ? stream.data.filter((value): value is number => typeof value === "number")
-          : [],
+        feature_path: stream.path,
+        data: [...stream.data],
       }));
 
       const responseJson = JSON.stringify(result.body, null, 2);

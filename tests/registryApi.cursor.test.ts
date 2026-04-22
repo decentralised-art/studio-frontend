@@ -4,15 +4,15 @@ import {
   resolveChainAccountsCursor,
   resolveChainFormatCursor,
   resolveChainFormatsCursor,
-  type ChainAccountResponse,
-  type ChainAccountsResponse,
-  type ChainFormatResponse,
-  type ChainFormatsResponse,
+  type RawChainAccountResponse,
+  type RawChainAccountsResponse,
+  type RawChainFormatResponse,
+  type RawChainFormatsResponse,
 } from "../src/lib/chain/registryApi";
 
 describe("registryApi cursor compatibility", () => {
   it("resolves account cursors from current nested cursor objects", () => {
-    const payload: ChainAccountResponse = {
+    const payload: RawChainAccountResponse = {
       cursor_connectors: { has_more: true, next_after: "C2" },
       cursor_transformations: { has_more: false, next_after: null },
       cursor_conditions: { has_more: true, next_after: "cond_alpha" },
@@ -33,7 +33,7 @@ describe("registryApi cursor compatibility", () => {
   });
 
   it("falls back to legacy account cursor fields", () => {
-    const payload: ChainAccountResponse = {
+    const payload: RawChainAccountResponse = {
       connectors_has_more: true,
       next_after_connectors: "C9",
       transformations_has_more: true,
@@ -57,7 +57,7 @@ describe("registryApi cursor compatibility", () => {
   });
 
   it("prefers current account cursor object over legacy fields", () => {
-    const payload: ChainAccountResponse = {
+    const payload: RawChainAccountResponse = {
       cursor_connectors: { has_more: false, next_after: null },
       connectors_has_more: true,
       next_after_connectors: "LEGACY_C1",
@@ -70,7 +70,7 @@ describe("registryApi cursor compatibility", () => {
   });
 
   it("resolves format cursor from current nested cursor object", () => {
-    const payload: ChainFormatResponse = {
+    const payload: RawChainFormatResponse = {
       cursor: { has_more: true, next_after: "C2" },
     };
     expect(resolveChainFormatCursor(payload)).toEqual({
@@ -80,7 +80,7 @@ describe("registryApi cursor compatibility", () => {
   });
 
   it("falls back to legacy format cursor fields", () => {
-    const payload: ChainFormatResponse = {
+    const payload: RawChainFormatResponse = {
       has_more: true,
       next_after: "C4",
     };
@@ -91,7 +91,7 @@ describe("registryApi cursor compatibility", () => {
   });
 
   it("resolves accounts cursor from nested cursor object", () => {
-    const payload: ChainAccountsResponse = {
+    const payload: RawChainAccountsResponse = {
       cursor: { has_more: true, next_after: "0xabc" },
     };
     expect(resolveChainAccountsCursor(payload)).toEqual({
@@ -101,7 +101,7 @@ describe("registryApi cursor compatibility", () => {
   });
 
   it("resolves formats cursor from nested cursor object", () => {
-    const payload: ChainFormatsResponse = {
+    const payload: RawChainFormatsResponse = {
       cursor: { has_more: false, next_after: null },
     };
     expect(resolveChainFormatsCursor(payload)).toEqual({

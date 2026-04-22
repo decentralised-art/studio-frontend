@@ -46,51 +46,73 @@ export type ChainConnectorPayload = {
   >;
 };
 
-export type ChainConnectorDimensionResponse = {
-  transformations?: Array<{ name?: string; args?: ChainTransformationArg[] }>;
+export type RawChainConnectorTransformationResponse = {
+  name?: string;
+  args?: ChainTransformationArg[];
+};
+
+export type RawChainConnectorDimensionResponse = {
+  transformations?: RawChainConnectorTransformationResponse[];
   composite?: string;
   bindings?: Record<string, string>;
 };
 
-export type ChainConnectorResponse = {
-  name?: string;
-  owner?: string;
-  dimensions?: ChainConnectorDimensionResponse[];
-  condition_name?: string;
+type RawChainLegacyConnectorResponseFields = {
+  // Legacy frontend/test fixtures may still use camelCase aliases.
   conditionName?: string;
-  condition_args?: number[];
   conditionArgs?: number[];
-  static_ri?: Record<
-    string,
-    {
-      start_point?: number;
-      transformation_shift?: number;
-    }
-  >;
   staticRi?: Record<
     string,
     {
       start_point?: number;
       transformation_shift?: number;
+      startPoint?: number;
+      transformationShift?: number;
+      transformShift?: number;
+    }
+  >;
+};
+
+export type RawChainConnectorResponse = {
+  name?: string;
+  owner?: string;
+  dimensions?: RawChainConnectorDimensionResponse[];
+  condition_name?: string;
+  condition_args?: number[];
+  static_ri?: Record<
+    string,
+    {
+      start_point?: number;
+      transformation_shift?: number;
+      startPoint?: number;
+      transformationShift?: number;
+      transformShift?: number;
     }
   >;
   address?: string;
   format_hash?: string;
-};
+} & RawChainLegacyConnectorResponseFields;
 
-export type ChainTransformationResponse = {
+export type ChainConnectorDimensionResponse = RawChainConnectorDimensionResponse;
+export type ChainConnectorResponse = RawChainConnectorResponse;
+
+export type RawChainTransformationResponse = {
   name?: string;
   owner?: string;
   sol_src?: string;
   address?: string;
 };
 
-export type ChainConditionResponse = {
+export type ChainTransformationResponse = RawChainTransformationResponse;
+
+export type RawChainConditionResponse = {
   name?: string;
   owner?: string;
   sol_src?: string;
   address?: string;
 };
+
+export type ChainConditionResponse = RawChainConditionResponse;
 
 export type ChainExecuteRunningInstancePayload = {
   start_point: number;
@@ -103,30 +125,32 @@ export type ChainExecutePayload = {
   dynamic_ri: Record<string, ChainExecuteRunningInstancePayload>;
 };
 
-export type ChainExecuteStreamResponse = {
-  path?: string;
+type RawChainLegacyExecuteStreamFields = {
+  // Legacy fallback for historical payloads and old fixtures.
   feature_path?: string;
-  data?: number[];
 };
 
-export type ChainExecuteResponse = ChainExecuteStreamResponse[];
+export type RawChainExecuteStreamResponse = {
+  path?: string;
+  data?: number[];
+} & RawChainLegacyExecuteStreamFields;
 
-export type ChainCursorResponse = {
+export type RawChainExecuteResponse = RawChainExecuteStreamResponse[];
+
+export type ChainExecuteStream = {
+  path: string;
+  data: number[];
+};
+
+export type ChainExecuteResponse = ChainExecuteStream[];
+
+export type RawChainCursorResponse = {
   has_more?: boolean;
   next_after?: string | null;
 };
 
-export type ChainAccountResponse = {
-  address?: string;
-  limit?: number;
-  owned_connectors?: string[];
-  owned_transformations?: string[];
-  owned_conditions?: string[];
-  // Cursor shape (current backend contract)
-  cursor_connectors?: ChainCursorResponse;
-  cursor_transformations?: ChainCursorResponse;
-  cursor_conditions?: ChainCursorResponse;
-  // Legacy fields (still accepted by frontend for compatibility)
+type RawChainLegacyAccountCursorFields = {
+  // Legacy compatibility accepted by the frontend only.
   connectors_has_more?: boolean;
   transformations_has_more?: boolean;
   conditions_has_more?: boolean;
@@ -135,36 +159,55 @@ export type ChainAccountResponse = {
   next_after_conditions?: string | null;
 };
 
-export type ChainFormatResponse = {
+export type RawChainAccountResponse = {
+  address?: string;
+  limit?: number;
+  owned_connectors?: string[];
+  owned_transformations?: string[];
+  owned_conditions?: string[];
+  cursor_connectors?: RawChainCursorResponse;
+  cursor_transformations?: RawChainCursorResponse;
+  cursor_conditions?: RawChainCursorResponse;
+} & RawChainLegacyAccountCursorFields;
+
+export type ChainAccountResponse = RawChainAccountResponse;
+
+type RawChainLegacyPageCursorFields = {
+  // Legacy flat cursor fields accepted for compatibility.
+  has_more?: boolean;
+  next_after?: string | null;
+};
+
+export type RawChainFormatResponse = {
   format_hash?: string;
   limit?: number;
   total_connectors?: number;
-  // Cursor shape (current backend contract)
-  cursor?: ChainCursorResponse;
-  // Legacy fields (still accepted by frontend for compatibility)
-  has_more?: boolean;
-  next_after?: string | null;
+  cursor?: RawChainCursorResponse;
   scalars?: string[];
   connectors?: string[];
-};
+} & RawChainLegacyPageCursorFields;
 
-export type ChainAccountsResponse = {
+export type ChainFormatResponse = RawChainFormatResponse;
+
+export type RawChainAccountsResponse = {
   limit?: number;
   total_accounts?: number;
   accounts?: string[];
-  cursor?: ChainCursorResponse;
-  has_more?: boolean;
-  next_after?: string | null;
-};
+  cursor?: RawChainCursorResponse;
+} & RawChainLegacyPageCursorFields;
 
-export type ChainFormatsResponse = {
+export type ChainAccountsResponse = RawChainAccountsResponse;
+
+export type RawChainFormatsResponse = {
   limit?: number;
   total_formats?: number;
   formats?: string[];
-  cursor?: ChainCursorResponse;
-  has_more?: boolean;
-  next_after?: string | null;
-};
+  cursor?: RawChainCursorResponse;
+} & RawChainLegacyPageCursorFields;
+
+export type ChainFormatsResponse = RawChainFormatsResponse;
+
+export type ChainCursorResponse = RawChainCursorResponse;
 
 const FORMAT_HASH_HEX_RE = /^[0-9a-f]{64}$/i;
 const CHAIN_CURSOR_PAGE_LIMIT_MAX = 256;
@@ -212,20 +255,10 @@ const resolveCursorFromObject = (cursor: unknown): ChainResolvedCursor | null =>
   };
 };
 
-export const resolveChainAccountCursor = (
-  payload: ChainAccountResponse,
+const resolveLegacyChainAccountCursor = (
+  payload: RawChainAccountResponse,
   kind: "connectors" | "transformations" | "conditions",
 ): ChainResolvedCursor => {
-  const cursorField =
-    kind === "connectors"
-      ? payload.cursor_connectors
-      : kind === "transformations"
-        ? payload.cursor_transformations
-        : payload.cursor_conditions;
-
-  const fromObject = resolveCursorFromObject(cursorField);
-  if (fromObject) return fromObject;
-
   if (kind === "connectors") {
     return {
       hasMore: Boolean(payload.connectors_has_more),
@@ -244,31 +277,95 @@ export const resolveChainAccountCursor = (
   };
 };
 
-export const resolveChainFormatCursor = (payload: ChainFormatResponse): ChainResolvedCursor => {
-  const fromObject = resolveCursorFromObject(payload.cursor);
-  if (fromObject) return fromObject;
-  return {
-    hasMore: Boolean(payload.has_more),
-    nextAfter: normalizeCursorToken(payload.next_after),
-  };
+const resolveLegacyChainPageCursor = (
+  payload: RawChainLegacyPageCursorFields,
+): ChainResolvedCursor => ({
+  hasMore: Boolean(payload.has_more),
+  nextAfter: normalizeCursorToken(payload.next_after),
+});
+
+const resolveRawChainExecuteStreamPath = (stream: RawChainExecuteStreamResponse): string => {
+  if (typeof stream.path === "string" && stream.path.trim().length > 0) {
+    return stream.path.trim();
+  }
+  if (typeof stream.feature_path === "string" && stream.feature_path.trim().length > 0) {
+    return stream.feature_path.trim();
+  }
+  return "";
 };
 
-export const resolveChainAccountsCursor = (payload: ChainAccountsResponse): ChainResolvedCursor => {
-  const fromObject = resolveCursorFromObject(payload.cursor);
-  if (fromObject) return fromObject;
-  return {
-    hasMore: Boolean(payload.has_more),
-    nextAfter: normalizeCursorToken(payload.next_after),
-  };
+export const normalizeChainExecuteResponse = (
+  payload: RawChainExecuteResponse,
+): ChainExecuteResponse => {
+  if (!Array.isArray(payload)) {
+    throw new Error("Invalid execute response payload: expected an array of streams.");
+  }
+
+  return payload.map((stream, index) => {
+    if (!stream || typeof stream !== "object") {
+      throw new Error(`Invalid execute response payload: stream ${index} must be an object.`);
+    }
+
+    const path = resolveRawChainExecuteStreamPath(stream);
+    if (!path) {
+      throw new Error(
+        `Invalid execute response payload: stream ${index} must include path or feature_path.`,
+      );
+    }
+
+    if (!Array.isArray(stream.data)) {
+      throw new Error(`Invalid execute response payload: stream ${index} must include data[].`);
+    }
+
+    if (stream.data.some((value) => typeof value !== "number")) {
+      throw new Error(
+        `Invalid execute response payload: stream ${index} data[] must contain only numbers.`,
+      );
+    }
+
+    return {
+      path,
+      data: [...stream.data],
+    };
+  });
 };
 
-export const resolveChainFormatsCursor = (payload: ChainFormatsResponse): ChainResolvedCursor => {
+export const resolveChainAccountCursor = (
+  payload: RawChainAccountResponse,
+  kind: "connectors" | "transformations" | "conditions",
+): ChainResolvedCursor => {
+  const cursorField =
+    kind === "connectors"
+      ? payload.cursor_connectors
+      : kind === "transformations"
+        ? payload.cursor_transformations
+        : payload.cursor_conditions;
+
+  const fromObject = resolveCursorFromObject(cursorField);
+  if (fromObject) return fromObject;
+  return resolveLegacyChainAccountCursor(payload, kind);
+};
+
+export const resolveChainFormatCursor = (payload: RawChainFormatResponse): ChainResolvedCursor => {
   const fromObject = resolveCursorFromObject(payload.cursor);
   if (fromObject) return fromObject;
-  return {
-    hasMore: Boolean(payload.has_more),
-    nextAfter: normalizeCursorToken(payload.next_after),
-  };
+  return resolveLegacyChainPageCursor(payload);
+};
+
+export const resolveChainAccountsCursor = (
+  payload: RawChainAccountsResponse,
+): ChainResolvedCursor => {
+  const fromObject = resolveCursorFromObject(payload.cursor);
+  if (fromObject) return fromObject;
+  return resolveLegacyChainPageCursor(payload);
+};
+
+export const resolveChainFormatsCursor = (
+  payload: RawChainFormatsResponse,
+): ChainResolvedCursor => {
+  const fromObject = resolveCursorFromObject(payload.cursor);
+  if (fromObject) return fromObject;
+  return resolveLegacyChainPageCursor(payload);
 };
 
 const looksLikeHtmlPayload = (value: string) =>
@@ -366,7 +463,7 @@ export const getChainAccount = async (
   const afterConditions = options.after_conditions?.trim();
   if (afterConditions) query.set("after_conditions", afterConditions);
 
-  return fetchJson<ChainAccountResponse>(
+  return fetchJson<RawChainAccountResponse>(
     `/account/${encodeURIComponent(address)}?${query.toString()}`,
   );
 };
@@ -383,17 +480,17 @@ export const getChainAccounts = async (
   });
   const after = options.after?.trim();
   if (after) query.set("after", after);
-  return fetchJson<ChainAccountsResponse>(`/accounts?${query.toString()}`);
+  return fetchJson<RawChainAccountsResponse>(`/accounts?${query.toString()}`);
 };
 
 export const getChainConnector = async (name: string) =>
-  fetchJson<ChainConnectorResponse>(`/connector/${encodeURIComponent(name)}`);
+  fetchJson<RawChainConnectorResponse>(`/connector/${encodeURIComponent(name)}`);
 
 export const getChainTransformation = async (name: string) =>
-  fetchJson<ChainTransformationResponse>(`/transformation/${encodeURIComponent(name)}`);
+  fetchJson<RawChainTransformationResponse>(`/transformation/${encodeURIComponent(name)}`);
 
 export const getChainCondition = async (name: string) =>
-  fetchJson<ChainConditionResponse>(`/condition/${encodeURIComponent(name)}`);
+  fetchJson<RawChainConditionResponse>(`/condition/${encodeURIComponent(name)}`);
 
 export const getChainFormat = async (
   formatHash: string,
@@ -406,7 +503,7 @@ export const getChainFormat = async (
   });
   const after = options.after?.trim();
   if (after) query.set("after", after);
-  return fetchJson<ChainFormatResponse>(
+  return fetchJson<RawChainFormatResponse>(
     `/format/${encodeURIComponent(normalizedHash)}?${query.toString()}`,
   );
 };
@@ -418,33 +515,46 @@ export const getChainFormats = async (options: { limit?: number; after?: string 
   });
   const after = options.after?.trim();
   if (after) query.set("after", after);
-  return fetchJson<ChainFormatsResponse>(`/formats?${query.toString()}`);
+  return fetchJson<RawChainFormatsResponse>(`/formats?${query.toString()}`);
 };
 
 export const postChainConnector = async (payload: ChainConnectorPayload) =>
-  postJsonWithChainAuth<ChainConnectorResponse>("/connector", payload);
+  postJsonWithChainAuth<RawChainConnectorResponse>("/connector", payload);
 
 export const postChainConnectorDetailed = async (payload: ChainConnectorPayload) =>
-  postJsonWithChainAuthDetailed<ChainConnectorResponse>("/connector", payload);
+  postJsonWithChainAuthDetailed<RawChainConnectorResponse>("/connector", payload);
 
 export const postChainTransformation = async (payload: { name: string; sol_src: string }) =>
-  postJsonWithChainAuth<ChainTransformationResponse>("/transformation", payload);
+  postJsonWithChainAuth<RawChainTransformationResponse>("/transformation", payload);
 
 export const postChainTransformationDetailed = async (payload: { name: string; sol_src: string }) =>
-  postJsonWithChainAuthDetailed<ChainTransformationResponse>("/transformation", payload);
+  postJsonWithChainAuthDetailed<RawChainTransformationResponse>("/transformation", payload);
 
 export const postChainCondition = async (payload: { name: string; sol_src: string }) =>
-  postJsonWithChainAuth<ChainConditionResponse>("/condition", payload);
+  postJsonWithChainAuth<RawChainConditionResponse>("/condition", payload);
 
 export const postChainConditionDetailed = async (payload: { name: string; sol_src: string }) =>
-  postJsonWithChainAuthDetailed<ChainConditionResponse>("/condition", payload);
+  postJsonWithChainAuthDetailed<RawChainConditionResponse>("/condition", payload);
 
 export const postChainExecute = async (payload: ChainExecutePayload) => {
   const result = await postChainExecuteDetailed(payload);
   return result.body;
 };
 export const postChainExecuteDetailed = async (payload: ChainExecutePayload) =>
-  postJsonWithChainAuthDetailed<ChainExecuteResponse>(
+  postJsonWithChainAuthDetailed<RawChainExecuteResponse>(
     "/execute",
     normalizeChainExecutePayload(payload),
-  );
+  ).then((result) => {
+    try {
+      return {
+        status: result.status,
+        body: normalizeChainExecuteResponse(result.body),
+      };
+    } catch (error) {
+      throw new ChainApiRequestError(
+        error instanceof Error ? error.message : "Invalid execute response payload.",
+        result.status,
+        result.body,
+      );
+    }
+  });

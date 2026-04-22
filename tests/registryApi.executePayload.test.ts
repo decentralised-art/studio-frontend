@@ -19,12 +19,12 @@ describe("registryApi execute payload contract", () => {
     chainAuthFetchMock.mockReset();
   });
 
-  it("posts /execute with dynamic_ri payload unchanged", async () => {
+  it("posts /execute with dynamic_ri payload unchanged and returns normalized current streams", async () => {
     chainAuthFetchMock.mockResolvedValue(
       new Response(
         JSON.stringify([
           {
-            feature_path: "pitch:0",
+            path: "pitch:0",
             data: [60, 61, 62],
           },
         ]),
@@ -53,7 +53,58 @@ describe("registryApi execute payload contract", () => {
     expect(JSON.parse(String(requestInit?.body))).toEqual(payload);
     expect(result.status).toBe(201);
     expect(Array.isArray(result.body)).toBe(true);
-    expect(result.body[0]?.feature_path).toBe("pitch:0");
+    expect(result.body[0]).toEqual({
+      path: "pitch:0",
+      data: [60, 61, 62],
+    });
+  });
+
+  it("normalizes legacy execute stream payloads that still use feature_path", async () => {
+    chainAuthFetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify([
+          {
+            feature_path: "time:0",
+            data: [0, 10, 20],
+          },
+        ]),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      ),
+    );
+
+    const result = await postChainExecuteDetailed({
+      connector_name: "root_connector",
+      particles_count: "3",
+      dynamic_ri: {},
+    });
+
+    expect(result.body[0]).toEqual({
+      path: "time:0",
+      data: [0, 10, 20],
+    });
+  });
+
+  it("rejects malformed success execute payloads instead of returning empty output", async () => {
+    chainAuthFetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ message: "unexpected envelope" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    await expect(
+      postChainExecuteDetailed({
+        connector_name: "root_connector",
+        particles_count: "3",
+        dynamic_ri: {},
+      }),
+    ).rejects.toMatchObject({
+      name: "ChainApiRequestError",
+      status: 200,
+    });
   });
 
   it("surfaces backend execute errors as ChainApiRequestError", async () => {

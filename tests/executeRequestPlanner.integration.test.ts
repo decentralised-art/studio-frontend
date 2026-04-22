@@ -86,4 +86,75 @@ describe("executeRequestPlanner integration", () => {
       transformation_shift: 0,
     });
   });
+
+  it("matches PT nested static_ri semantics for wrapped connectors", () => {
+    const wrapper = fromProtocolConnectorPayload({
+      name: "wrapper",
+      dimensions: [{ transformations: [], composite: "child", bindings: {} }],
+    });
+    const child = fromProtocolConnectorPayload({
+      name: "child",
+      dimensions: [
+        { transformations: [], composite: "pitch", bindings: {} },
+        { transformations: [], composite: "time", bindings: {} },
+      ],
+      static_ri: {
+        "0": { start_point: 11, transformation_shift: 0 },
+        "2": { start_point: 22, transformation_shift: 0 },
+        "4": { start_point: 44, transformation_shift: 0 },
+      },
+    });
+    const pitch = fromProtocolConnectorPayload({
+      name: "pitch",
+      dimensions: [{ transformations: [] }],
+    });
+    const time = fromProtocolConnectorPayload({
+      name: "time",
+      dimensions: [{ transformations: [] }],
+    });
+
+    const connectors = {
+      wrapper,
+      child,
+      pitch,
+      time,
+    };
+
+    const basePlan = buildExecuteRiPlan(connectors, "wrapper", {});
+    const childNode = basePlan.positioning.nodes.find((entry) => entry.connectorName === "child");
+    expect(childNode).toBeTruthy();
+    if (!childNode) {
+      throw new Error("Expected child connector position to exist in RI positioning.");
+    }
+
+    const nestedRootPosition = String(childNode.position);
+    const immediateNestedPosition = String(childNode.position + 2);
+    const ignoredNestedDeepPosition = String(childNode.position + 4);
+
+    const riPlan = buildExecuteRiPlan(connectors, "wrapper", {
+      [nestedRootPosition]: { startPoint: 101, transformationShift: 0 },
+      [ignoredNestedDeepPosition]: { startPoint: 404, transformationShift: 0 },
+    });
+
+    expect(riPlan.staticRiByPosition[nestedRootPosition]).toBeUndefined();
+    expect(riPlan.staticRiByPosition[immediateNestedPosition]?.connectorName).toBe("child");
+    expect(riPlan.staticRiByPosition[ignoredNestedDeepPosition]).toBeUndefined();
+    expect(
+      riPlan.blockedOverrides.some((entry) => entry.position === Number(nestedRootPosition)),
+    ).toBe(false);
+    expect(
+      riPlan.blockedOverrides.some((entry) => entry.position === Number(immediateNestedPosition)),
+    ).toBe(false);
+    expect(riPlan.dynamicRi[nestedRootPosition]).toEqual({
+      start_point: 101,
+      transformation_shift: 0,
+    });
+    expect(riPlan.dynamicRi[ignoredNestedDeepPosition]).toBeUndefined();
+    expect(
+      riPlan.warnings.some((warning) =>
+        /Ignoring nested static_ri position 4 on connector 'child'/.test(warning),
+      ),
+    ).toBe(true);
+    expect(riPlan.warnings.some((warning) => /unknown position/i.test(warning))).toBe(true);
+  });
 });

@@ -1,7 +1,7 @@
 import type {
   ChainConnectorPayload,
-  ChainConnectorResponse,
   ChainTransformationArg,
+  RawChainConnectorResponse,
 } from "$lib/chain/registryApi";
 import { normalizeFormatHash } from "$lib/chain/registryApi";
 import type {
@@ -90,6 +90,15 @@ const normalizeBindings = (bindings: unknown): Record<string, string> => {
   return out;
 };
 
+const extractLegacyCompatibleConditionName = (payload: RawChainConnectorResponse) =>
+  payload.condition_name ?? payload.conditionName;
+
+const extractLegacyCompatibleConditionArgs = (payload: RawChainConnectorResponse) =>
+  payload.condition_args ?? payload.conditionArgs;
+
+const extractLegacyCompatibleStaticRi = (payload: RawChainConnectorResponse) =>
+  payload.static_ri ?? payload.staticRi;
+
 const normalizeStaticRi = (
   value: unknown,
   label: string,
@@ -115,6 +124,7 @@ const normalizeStaticRi = (
       }
 
       const rec = rawEntry as Record<string, unknown>;
+      // Legacy frontend fixtures may still use camelCase RI field names.
       const startPointRaw = rec.start_point ?? rec.startPoint;
       const transformationShiftRaw =
         rec.transformation_shift ?? rec.transformationShift ?? rec.transformShift;
@@ -147,7 +157,9 @@ const normalizeStaticRi = (
   return out;
 };
 
-export function fromProtocolConnectorPayload(payload: ChainConnectorResponse): StudioConnectorDef {
+export function fromProtocolConnectorPayload(
+  payload: RawChainConnectorResponse,
+): StudioConnectorDef {
   const name = normalizeName(payload.name, "connector.name");
   const dimensionsRaw = payload.dimensions;
   if (!Array.isArray(dimensionsRaw) || dimensionsRaw.length === 0) {
@@ -179,9 +191,9 @@ export function fromProtocolConnectorPayload(payload: ChainConnectorResponse): S
     };
   });
 
-  const rawConditionName = payload.condition_name ?? payload.conditionName;
+  const rawConditionName = extractLegacyCompatibleConditionName(payload);
   const conditionName = normalizeOptionalName(rawConditionName);
-  const rawConditionArgs = payload.condition_args ?? payload.conditionArgs;
+  const rawConditionArgs = extractLegacyCompatibleConditionArgs(payload);
 
   let conditionArgs: number[] | undefined;
   if (rawConditionArgs !== undefined) {
@@ -194,7 +206,7 @@ export function fromProtocolConnectorPayload(payload: ChainConnectorResponse): S
 
   const formatHash = normalizeOptionalFormatHash(payload.format_hash);
   const ownerAddress = typeof payload.owner === "string" ? payload.owner.trim().toLowerCase() : "";
-  const staticRi = normalizeStaticRi(payload.static_ri ?? payload.staticRi, "static_ri");
+  const staticRi = normalizeStaticRi(extractLegacyCompatibleStaticRi(payload), "static_ri");
 
   return {
     name,

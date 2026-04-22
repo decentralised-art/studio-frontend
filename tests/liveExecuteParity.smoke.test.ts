@@ -11,7 +11,6 @@ type ExecutePayload = {
 
 type ExecuteResponseEntry = {
   path?: string;
-  feature_path?: string;
   data?: number[];
 };
 
@@ -87,7 +86,7 @@ describe("live execute parity smoke (manual, opt-in)", () => {
         rows.forEach((row) => {
           expect(typeof row).toBe("object");
           expect(Array.isArray(row.data)).toBe(true);
-          expect(typeof row.path === "string" || typeof row.feature_path === "string").toBe(true);
+          expect(typeof row.path).toBe("string");
         });
       }
     },

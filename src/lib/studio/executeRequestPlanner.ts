@@ -1,3 +1,4 @@
+import { normalizeChainExecutePayload } from "$lib/chain/executePayloadContract";
 import type {
   StudioConnectorDef,
   StudioRunningInstanceRef,
@@ -85,6 +86,8 @@ const resolveStaticRiPositions = (
     const connector = connectors[node.connectorName];
     const staticRi = connector?.staticRi;
     if (!staticRi) return;
+    const isRootNode = node.relation === "root";
+    const nestedDimensionPositionsMax = connector.dimensions.length;
     Object.entries(staticRi).forEach(([rawLocalPosition, rawValue]) => {
       const canonical = toCanonicalPositionKey(rawLocalPosition);
       const localPosition = canonical === null ? Number.NaN : Number(canonical);
@@ -94,15 +97,31 @@ const resolveStaticRiPositions = (
         );
         return;
       }
-      if (localPosition >= node.subtreeSize) {
-        warnings.push(
-          `Ignoring static_ri position ${localPosition} on connector '${connector.name}' at node '${node.key}' (outside connector subtree in current DFS projection, size ${node.subtreeSize}).`,
-        );
-        return;
+
+      if (isRootNode) {
+        if (localPosition >= node.subtreeSize) {
+          warnings.push(
+            `Ignoring static_ri position ${localPosition} on connector '${connector.name}' at node '${node.key}' (outside connector subtree in current DFS projection, size ${node.subtreeSize}).`,
+          );
+          return;
+        }
+      } else {
+        // PT only applies nested connector static_ri to:
+        // - key 0: child-root fallback (not an addressable DFS position)
+        // - keys 1..dimensions.length: immediate local dimension positions
+        if (localPosition === 0) {
+          return;
+        }
+        if (localPosition > nestedDimensionPositionsMax) {
+          warnings.push(
+            `Ignoring nested static_ri position ${localPosition} on connector '${connector.name}' at node '${node.key}' (PT applies nested static_ri only to immediate local dimensions 1..${nestedDimensionPositionsMax}; position 0 remains child-root fallback).`,
+          );
+          return;
+        }
       }
 
-      const value = toExecuteRiValue(rawValue);
       const position = node.position + localPosition;
+      const value = toExecuteRiValue(rawValue);
       const existing = staticByPosition.get(position);
       if (existing && existing.depth > node.depth) {
         warnings.push(
@@ -251,9 +270,9 @@ export const buildExecuteRequestBody = (input: {
     ]),
   );
 
-  return {
+  return normalizeChainExecutePayload({
     connector_name: input.connectorName,
     particles_count: String(clampUint32(Math.max(1, Math.trunc(input.particlesCount)), 1)),
     dynamic_ri: dynamicRi,
-  };
+  });
 };

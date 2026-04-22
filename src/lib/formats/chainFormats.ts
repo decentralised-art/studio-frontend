@@ -1,4 +1,4 @@
-import { normalizeFormatHash, type ChainFormatResponse } from "$lib/chain/registryApi";
+import { normalizeFormatHash, type RawChainFormatResponse } from "$lib/chain/registryApi";
 
 export type ChainFormatRecord = {
   formatHash: string;
@@ -25,7 +25,7 @@ const sortUniqueStrings = (values: string[]) =>
   );
 
 export const mapChainFormatResponseToRecord = (
-  response: ChainFormatResponse,
+  response: RawChainFormatResponse,
   options: { fetchedAt?: number } = {},
 ): ChainFormatRecord | null => {
   const rawHash = `${response.format_hash ?? ""}`.trim();
@@ -97,7 +97,7 @@ export const upsertChainFormatRecord = (record: ChainFormatRecord) => {
 };
 
 export const upsertChainFormatFromResponse = (
-  response: ChainFormatResponse,
+  response: RawChainFormatResponse,
   options?: { fetchedAt?: number },
 ) => {
   const record = mapChainFormatResponseToRecord(response, options);
