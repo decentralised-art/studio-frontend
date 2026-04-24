@@ -8,6 +8,15 @@ import {
   mockUsers,
   mockUsersById,
 } from "$lib/data/users";
+import {
+  createEmptyToolboxLibrary,
+  normalizeConnectorToolboxId,
+  normalizeToolboxIdByKind,
+  normalizeToolboxLibrary,
+  normalizeToolboxListByKind,
+  type ToolboxItemKind as ToolboxItemKindValue,
+  type ToolboxLibrary,
+} from "$lib/toolbox/toolboxLibrary";
 import { buildChainApiUrl, buildServicesApiUrl } from "$lib/url/url";
 import {
   createChainAuthRequest,
@@ -770,13 +779,9 @@ export const updateUserById = async (
   return payload;
 };
 
-export type ToolboxLibraryProfile = {
-  connector: string[];
-  transformation: string[];
-  condition: string[];
-};
+export type ToolboxLibraryProfile = ToolboxLibrary;
 
-export type ToolboxItemKind = keyof ToolboxLibraryProfile;
+export type ToolboxItemKind = ToolboxItemKindValue;
 
 export type SocialPreferencesProfile = {
   followedUserAddresses: string[];
@@ -997,17 +1002,7 @@ const normalizeFollowFormatHash = (value: string): string => {
   return FORMAT_HASH_RE.test(prefixed) ? prefixed : "";
 };
 
-const normalizeConnectorToolboxId = (value: string) =>
-  value
-    .trim()
-    .replace(/^particle-/, "")
-    .replace(/^feature-/, "");
-
-const defaultToolboxLibrary = (): ToolboxLibraryProfile => ({
-  connector: [],
-  transformation: [],
-  condition: [],
-});
+const defaultToolboxLibrary = (): ToolboxLibraryProfile => createEmptyToolboxLibrary();
 
 const defaultSocialPreferences = (): SocialPreferencesProfile => ({
   followedUserAddresses: [],
@@ -1018,7 +1013,7 @@ const defaultToolboxLibraryForPrototype = (): ToolboxLibraryProfile => {
   const fallbackUser = mockUsersById[mockCurrentUserId];
   if (!fallbackUser) return defaultToolboxLibrary();
   return {
-    connector: uniqueStrings(fallbackUser.toolbox.map(normalizeConnectorToolboxId)),
+    connector: normalizeToolboxListByKind("connector", fallbackUser.toolbox),
     transformation: [],
     condition: [],
   };
@@ -1031,17 +1026,16 @@ const parseToolboxLibraryFromProfileJson = (profileJsonRaw: unknown): ToolboxLib
   const legacyConnectors = asStringArray(profilePublic.toolbox);
 
   return {
-    connector: uniqueStrings(
-      [
-        ...asStringArray(toolboxLibrary.connector),
-        ...asStringArray(toolboxLibrary.feature),
-        ...legacyConnectors,
-      ]
-        .map(normalizeConnectorToolboxId)
-        .filter((value) => value.length > 0),
+    connector: normalizeToolboxListByKind("connector", [
+      ...asStringArray(toolboxLibrary.connector),
+      ...asStringArray(toolboxLibrary.feature),
+      ...legacyConnectors,
+    ]),
+    transformation: normalizeToolboxListByKind(
+      "transformation",
+      asStringArray(toolboxLibrary.transformation),
     ),
-    transformation: uniqueStrings(asStringArray(toolboxLibrary.transformation)),
-    condition: uniqueStrings(asStringArray(toolboxLibrary.condition)),
+    condition: normalizeToolboxListByKind("condition", asStringArray(toolboxLibrary.condition)),
   };
 };
 
@@ -1281,11 +1275,7 @@ export const saveCurrentUserToolboxLibrary = async (
     throw new Error("Unable to resolve current user for toolbox save.");
   }
 
-  const normalized: ToolboxLibraryProfile = {
-    connector: uniqueStrings(toolboxLibrary.connector),
-    transformation: uniqueStrings(toolboxLibrary.transformation),
-    condition: uniqueStrings(toolboxLibrary.condition),
-  };
+  const normalized: ToolboxLibraryProfile = normalizeToolboxLibrary(toolboxLibrary);
 
   const nextProfileJson = mergeToolboxIntoProfileJson(envelope.profileJson, normalized);
   await updateUserById(envelope.userId, { profile_json: nextProfileJson });
@@ -1296,7 +1286,7 @@ export const addItemToCurrentUserToolbox = async (
   itemId: string,
 ): Promise<void> => {
   if (!getToken()) return;
-  const normalizedId = itemId.trim();
+  const normalizedId = normalizeToolboxIdByKind(kind, itemId);
   if (!normalizedId) return;
   const toolbox = await getCurrentUserToolboxLibrary();
   if (toolbox[kind].includes(normalizedId)) return;

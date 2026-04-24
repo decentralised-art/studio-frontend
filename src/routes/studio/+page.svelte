@@ -36,7 +36,6 @@
   import { toProtocolConnectorPayload } from "$lib/chain/connectorContractAdapter";
   import { mockParticleViews, type ExploreParticle } from "$lib/data/exploreParticles";
   import type { PtOutputFeature } from "$lib/particles/ptMidiAdapter";
-  import { type MockFeatureDef, type MockParticleDef } from "$lib/particles/mockPtNetwork";
   import {
     buildExecuteRequestBody,
     buildExecuteRiPlan,
@@ -122,6 +121,31 @@
     restoreStudioTabsSessionPayload,
   } from "$lib/studio/studioTabsSession";
   import {
+    DEFAULT_CONDITION_DRAFT_CODE,
+    DEFAULT_TRANSFORMATION_DRAFT_CODE,
+    alwaysTrueConditionCheck,
+    compileConditionDraftCode as compileConditionCode,
+    compileTransformationDraftCode as compileTransformationCode,
+  } from "$lib/studio/solidityDraftRuntime";
+  import {
+    buildStudioChainSyncSources,
+    buildStudioChainSyncSummary as formatStudioChainSyncSummary,
+    isInvalidChainTokenError,
+    mergeChainSyncSnapshotIntoStudioState,
+    mergeFetchedChainParticleIntoStudioState,
+    mergeToolboxRuntimePayloadsIntoStudioState,
+    type DeployedStudioState,
+  } from "$lib/studio/studioChainSync";
+  import {
+    createEmptyDeployedLibrary,
+    createEmptyDeployedRegistry,
+    type DeployedLibrary,
+    type DeployedRegistry,
+    type RuntimeConditionDef,
+    type RuntimeTransformationDef,
+    upsertLibraryItem,
+  } from "$lib/studio/studioRegistryState";
+  import {
     clampPanelWidth,
     getStudioPanelBounds,
     getStudioPanelScale,
@@ -129,6 +153,20 @@
     resolveResponsivePanelWidth,
     type StudioPanelMode,
   } from "$lib/studio/studioPanels";
+  import {
+    isLibraryItemSavedInToolbox,
+    listToolboxLibraryItemsForKind,
+    toolboxEntryForLibraryItem,
+    type NetworkLibraryKind,
+  } from "$lib/studio/studioToolbox";
+  import {
+    addToolboxLibraryItem,
+    normalizeConnectorToolboxId,
+    normalizeToolboxIdByKind,
+    normalizeToolboxListByKind,
+    toggleToolboxLibraryItem,
+    type ToolboxLibrary,
+  } from "$lib/toolbox/toolboxLibrary";
   import { buildStudioRuntime } from "$lib/studio/studioRuntime";
   import {
     fetchChainOwnedStudioSnapshot,
@@ -143,7 +181,6 @@
     resolveCurrentUserChainSourceAddresses,
     saveCurrentUserToolboxLibrary,
   } from "$lib/auth/api";
-  import { computeFeedSourceAddresses, normalizeFeedSourceAddress } from "$lib/feed/feedSources";
   import { clearChainToken, getChainToken } from "$lib/auth/session";
   import {
     ChainApiRequestError,
@@ -341,24 +378,6 @@
     hidden?: boolean;
   };
 
-  type RuntimeTransformationDef = {
-    argc: number;
-    run: (x: number, args: number[]) => number;
-  };
-
-  type RuntimeConditionDef = {
-    argc: number;
-    check: (args: number[]) => boolean;
-  };
-
-  type DeployedRegistry = {
-    connectors: Record<string, StudioConnectorDef>;
-    features: Record<string, MockFeatureDef>;
-    particles: Record<string, MockParticleDef>;
-    transformations: Record<string, RuntimeTransformationDef>;
-    conditions: Record<string, RuntimeConditionDef>;
-  };
-
   let nodes = $state.raw<StudioNode[]>([]);
   let edges = $state.raw<Edge[]>([]);
   let selectedNodeId = $state<string | null>(null);
@@ -479,26 +498,12 @@
     () => conditionEditorStatus === "network" || conditionEditorLocked,
   );
 
-  let deployedRegistry = $state<DeployedRegistry>({
-    connectors: {},
-    features: {},
-    particles: {},
-    transformations: {},
-    conditions: {},
-  });
+  let deployedRegistry = $state<DeployedRegistry>(createEmptyDeployedRegistry());
   let deployedParticleRIs = $state<
     Record<string, { start: number; shift: number; locked: boolean }[]>
   >({});
 
-  let deployedLibrary = $state<{
-    features: LibraryItem[];
-    transformations: LibraryItem[];
-    conditions: LibraryItem[];
-  }>({
-    features: [],
-    transformations: [],
-    conditions: [],
-  });
+  let deployedLibrary = $state<DeployedLibrary>(createEmptyDeployedLibrary());
 
   let deployedParticles = $state<ExploreParticle[]>([]);
 
@@ -516,12 +521,6 @@
 
   const tabGraphs = new SvelteMap<string, { nodes: StudioNode[]; edges: Edge[] }>();
   const connectorTreeModelsByTab = new SvelteMap<string, ConnectorTreeModel>();
-
-  type ToolboxLibrary = {
-    connector: string[];
-    transformation: string[];
-    condition: string[];
-  };
 
   type QuickNodeKind =
     | "feature"
@@ -559,8 +558,8 @@
     });
   });
 
-  const defaultDraftCode = "return x + args[0];";
-  const defaultConditionDraftCode = "return true;";
+  const defaultDraftCode = DEFAULT_TRANSFORMATION_DRAFT_CODE;
+  const defaultConditionDraftCode = DEFAULT_CONDITION_DRAFT_CODE;
 
   const getTransformationCode = (id: string) => {
     const direct = transformationCodeById.get(id);
@@ -587,48 +586,6 @@
       baseImportPath: "../ConditionBase.sol",
     });
   });
-
-  const compileTransformationCode = (code: string) => {
-    const trimmed = code.trim();
-    if (!trimmed) return { ok: false as const, error: "Transformation code is empty." };
-    if (!/\breturn\b/.test(trimmed)) {
-      return {
-        ok: false as const,
-        error: "Mock compiler expects a return statement.",
-      };
-    }
-    try {
-      const fn = new Function("x", "args", `"use strict"; ${trimmed}`) as (
-        x: number,
-        args: number[],
-      ) => number;
-      return { ok: true as const, value: fn };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Invalid transformation code.";
-      return { ok: false as const, error: message };
-    }
-  };
-
-  const compileConditionCode = (code: string) => {
-    const trimmed = code.trim();
-    if (!trimmed) return { ok: false as const, error: "Condition code is empty." };
-    if (!/\breturn\b/.test(trimmed)) {
-      return {
-        ok: false as const,
-        error: "Mock compiler expects a return statement.",
-      };
-    }
-    try {
-      const fn = new Function("args", `"use strict"; ${trimmed}`) as (args: number[]) => unknown;
-      return {
-        ok: true as const,
-        value: (args: number[]) => Boolean(fn(args)),
-      };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Invalid condition code.";
-      return { ok: false as const, error: message };
-    }
-  };
 
   const createStudioTab = (label: string, particleId?: string): StudioTab => {
     const id = `tab-${crypto.randomUUID()}`;
@@ -2221,42 +2178,6 @@
     };
   });
 
-  const normalizeConnectorToolboxId = (id: string) =>
-    id
-      .trim()
-      .replace(/^particle-/, "")
-      .replace(/^feature-/, "");
-  const normalizeTransformationToolboxId = (id: string) => id.trim().replace(/^transform-/, "");
-  const normalizeConditionToolboxId = (id: string) => id.trim().replace(/^condition-/, "");
-  const normalizeToolboxIdByKind = (kind: keyof ToolboxLibrary, id: string) => {
-    if (kind === "connector") return normalizeConnectorToolboxId(id);
-    if (kind === "transformation") return normalizeTransformationToolboxId(id);
-    return normalizeConditionToolboxId(id);
-  };
-  const normalizeToolboxListByKind = (kind: keyof ToolboxLibrary, ids: string[]) =>
-    Array.from(
-      new Set(ids.map((id) => normalizeToolboxIdByKind(kind, id)).filter((id) => id.length > 0)),
-    );
-  const toolboxEntryForLibraryItem = (
-    item: LibraryItem,
-  ): { kind: keyof ToolboxLibrary; id: string } | null => {
-    if (item.kind === "feature") {
-      return { kind: "connector", id: normalizeConnectorToolboxId(item.id) };
-    }
-    if (item.kind === "transformation") {
-      return { kind: "transformation", id: normalizeTransformationToolboxId(item.id) };
-    }
-    if (item.kind === "condition") {
-      return { kind: "condition", id: normalizeConditionToolboxId(item.id) };
-    }
-    return null;
-  };
-  const isLibraryItemSavedInToolbox = (item: LibraryItem): boolean => {
-    const entry = toolboxEntryForLibraryItem(item);
-    if (!entry) return false;
-    return toolboxLibrary[entry.kind].includes(entry.id);
-  };
-
   const initialParticleToolbox = (mockUsersById[mockCurrentUserId]?.toolbox ?? []).map(
     normalizeConnectorToolboxId,
   );
@@ -2280,13 +2201,12 @@
   };
 
   const addItemToToolboxLibrary = (kind: keyof ToolboxLibrary, id: string) => {
-    const normalizedId = normalizeToolboxIdByKind(kind, id);
-    if (!normalizedId) return;
-    if (toolboxLibrary[kind].includes(normalizedId)) return;
-    const next = {
-      ...toolboxLibrary,
-      [kind]: [...toolboxLibrary[kind], normalizedId],
-    };
+    const {
+      library: next,
+      id: normalizedId,
+      added,
+    } = addToolboxLibraryItem(toolboxLibrary, kind, id);
+    if (!added) return;
     toolboxLibrary = next;
     if (kind === "connector") {
       void hydrateToolboxConnectorsIntoLibrary([normalizedId]);
@@ -2316,11 +2236,7 @@
     [...deployedParticles].sort((a, b) => b.createdAt - a.createdAt),
   );
 
-  type NetworkLibrary = {
-    feature: LibraryItem[];
-    transformation: LibraryItem[];
-    condition: LibraryItem[];
-  };
+  type NetworkLibrary = Record<NetworkLibraryKind, LibraryItem[]>;
 
   const networkLibrary = $derived.by(
     (): NetworkLibrary => ({
@@ -3333,77 +3249,37 @@
     nodes = updatedNodes;
   };
 
-  const identityTransformRun = (x: number, _args: number[]) => x;
-  const alwaysTrueConditionCheck = (_args: number[]) => true;
+  const getDeployedStudioState = (): DeployedStudioState => ({
+    registry: deployedRegistry,
+    library: deployedLibrary,
+    particles: deployedParticles,
+  });
+
+  const applyDeployedStudioState = (state: DeployedStudioState) => {
+    deployedRegistry = state.registry;
+    deployedLibrary = state.library;
+    deployedParticles = state.particles;
+  };
 
   const mergeChainSyncSnapshot = (snapshot: ChainStudioSyncResult) => {
-    deployedRegistry = {
-      ...deployedRegistry,
-      connectors: { ...deployedRegistry.connectors, ...snapshot.registry.connectors },
-      features: { ...deployedRegistry.features, ...snapshot.registry.features },
-      particles: { ...deployedRegistry.particles, ...snapshot.registry.particles },
-      transformations: {
-        ...deployedRegistry.transformations,
-        ...Object.fromEntries(
-          Object.entries(snapshot.registry.transformations).map(([name, def]) => [
-            name,
-            {
-              argc: def.argc,
-              // Placeholder runtime until chain execution is wired; keeps Studio graph/runtime stable.
-              run: identityTransformRun,
-            } satisfies RuntimeTransformationDef,
-          ]),
-        ),
-      },
-      conditions: {
-        ...deployedRegistry.conditions,
-        ...Object.fromEntries(
-          Object.entries(snapshot.registry.conditions).map(([name, def]) => [
-            name,
-            {
-              argc: def.argc,
-              // Placeholder runtime until chain condition execution is wired.
-              check: alwaysTrueConditionCheck,
-            } satisfies RuntimeConditionDef,
-          ]),
-        ),
-      },
-    };
-
-    deployedLibrary = {
-      ...deployedLibrary,
-      features: snapshot.library.features.reduce(upsertLibraryItem, deployedLibrary.features),
-      transformations: snapshot.library.transformations.reduce(
-        upsertLibraryItem,
-        deployedLibrary.transformations,
-      ),
-      conditions: snapshot.library.conditions.reduce(upsertLibraryItem, deployedLibrary.conditions),
-    };
-
-    deployedParticles = snapshot.particles.reduce<ExploreParticle[]>((items, next) => {
-      if (items.some((item) => item.id === next.id)) return items;
-      return [...items, next];
-    }, deployedParticles);
+    applyDeployedStudioState(
+      mergeChainSyncSnapshotIntoStudioState(getDeployedStudioState(), snapshot),
+    );
   };
 
   const buildStudioChainSyncSummary = (): string => {
-    const connectorRecordCount = deployedParticles.length;
-    const connectorCount = deployedLibrary.features.length;
-    const transformationCount = deployedLibrary.transformations.length;
-    const conditionCount = deployedLibrary.conditions.length;
-    return `Synced ${lastStudioSyncedSourcesCount} sources · ${connectorRecordCount} connector records · ${connectorCount} connectors · ${transformationCount} transformations · ${conditionCount} conditions.`;
+    return formatStudioChainSyncSummary({
+      sourceCount: lastStudioSyncedSourcesCount,
+      connectorRecordCount: deployedParticles.length,
+      connectorCount: deployedLibrary.features.length,
+      transformationCount: deployedLibrary.transformations.length,
+      conditionCount: deployedLibrary.conditions.length,
+    });
   };
 
   const refreshStudioChainSyncSummary = () => {
     if (lastStudioSyncedSourcesCount <= 0) return;
     chainSyncStatus = buildStudioChainSyncSummary();
-  };
-
-  const shortFeedAddress = (value: string): string => {
-    const normalized = normalizeFeedSourceAddress(value);
-    if (!normalized) return "";
-    if (normalized.length < 14) return normalized;
-    return `${normalized.slice(0, 8)}...${normalized.slice(-4)}`;
   };
 
   const resolveStudioChainSyncSources = async (): Promise<
@@ -3413,24 +3289,17 @@
       bootstrapPrototypeIfEmpty: true,
     });
     const resolvedCurrentSources = resolveCurrentUserChainSourceAddresses(profileState.me);
-    const sourceAddresses = computeFeedSourceAddresses({
-      currentUserAddress: resolvedCurrentSources[0] ?? "",
-      followedUserAddresses: [
-        ...profileState.social.followedUserAddresses,
-        ...resolvedCurrentSources.slice(1),
-      ],
+    const sources = buildStudioChainSyncSources({
+      currentUserChainSourceAddresses: resolvedCurrentSources,
+      followedUserAddresses: profileState.social.followedUserAddresses,
     });
     if (import.meta.env.DEV) {
       console.info("[Studio sync] Source derivation", {
         profileSources: resolvedCurrentSources,
-        mergedSources: sourceAddresses,
+        mergedSources: sources.map((source) => source.address),
       });
     }
-    return sourceAddresses.map((address) => ({
-      address,
-      authorId: address,
-      label: shortFeedAddress(address) || address,
-    }));
+    return sources;
   };
 
   const resolveCurrentMockChainUserId = async () => {
@@ -3492,11 +3361,6 @@
     chainTokenUserId = userId;
   };
 
-  const isInvalidChainTokenError = (error: unknown) => {
-    const message = error instanceof Error ? error.message : String(error ?? "");
-    return /invalid token/i.test(message) || /authentication error/i.test(message);
-  };
-
   async function withChainAuthRetry<T>(operation: () => Promise<T>): Promise<T> {
     try {
       return await operation();
@@ -3509,87 +3373,13 @@
 
   const syncSingleChainParticle = async (particleName: string) => {
     const fetched = await fetchChainParticleForStudio(particleName);
-    const connector = fetched.registry.connector;
-    const feature = fetched.registry.feature;
-    const particle = fetched.registry.particle;
-    if (!connector) return false;
-
-    const inferredTransformations: Record<string, RuntimeTransformationDef> = {};
-    connector.dimensions.forEach((dimension) => {
-      dimension.transformations.forEach((tx) => {
-        const name = String(tx.name);
-        inferredTransformations[name] ??= {
-          argc: tx.args.length,
-          run: identityTransformRun,
-        };
-      });
-    });
-
-    const inferredConditions: Record<string, RuntimeConditionDef> = {};
-    if (connector.conditionName) {
-      inferredConditions[connector.conditionName] = {
-        argc: connector.conditionArgs?.length ?? 0,
-        check: alwaysTrueConditionCheck,
-      };
-    }
-
-    deployedRegistry = {
-      ...deployedRegistry,
-      connectors: { ...deployedRegistry.connectors, [connector.name]: connector },
-      ...(feature
-        ? {
-            features: { ...deployedRegistry.features, [feature.name]: feature },
-          }
-        : {}),
-      ...(particle
-        ? {
-            particles: { ...deployedRegistry.particles, [particle.name]: particle },
-          }
-        : {}),
-      transformations: {
-        ...deployedRegistry.transformations,
-        ...inferredTransformations,
-      },
-      conditions: {
-        ...deployedRegistry.conditions,
-        ...inferredConditions,
-      },
-    };
-
-    deployedLibrary = {
-      ...deployedLibrary,
-      features: upsertLibraryItem(deployedLibrary.features, {
-        id: `feature-${connector.name}`,
-        name: connector.name,
-        kind: "feature",
-        authorId: fetched.particleMeta?.authorId ?? mockCurrentUserId,
-        summary: "Fetched from chain on demand.",
-        dimensions: connector.dimensions.length,
-      }),
-      transformations: Object.entries(inferredTransformations).reduce((items, [name]) => {
-        return upsertLibraryItem(items, {
-          id: `transform-${name}`,
-          name,
-          kind: "transformation",
-          authorId: fetched.particleMeta?.authorId ?? mockCurrentUserId,
-          summary: "Fetched from chain on demand.",
-        });
-      }, deployedLibrary.transformations),
-      conditions: Object.entries(inferredConditions).reduce((items, [name]) => {
-        return upsertLibraryItem(items, {
-          id: `condition-${name}`,
-          name,
-          kind: "condition",
-          authorId: fetched.particleMeta?.authorId ?? mockCurrentUserId,
-          summary: "Fetched from chain on demand.",
-        });
-      }, deployedLibrary.conditions),
-    };
-
-    if (fetched.particleMeta) {
-      deployedParticles = upsertParticleItem(fetched.particleMeta);
-    }
-
+    const merged = mergeFetchedChainParticleIntoStudioState(
+      getDeployedStudioState(),
+      fetched,
+      mockCurrentUserId,
+    );
+    if (!merged.merged) return false;
+    applyDeployedStudioState(merged.state);
     return true;
   };
 
@@ -3631,19 +3421,6 @@
       }
     }
   };
-
-  const extractToolboxRuntimeSnippet = (solSrc?: string): string | undefined => {
-    const firstLine = solSrc
-      ?.split(/\r?\n/g)
-      .map((line) => line.trim())
-      .find((line) => line.length > 0);
-    return firstLine;
-  };
-
-  const resolveToolboxRuntimeAuthorId = (owner: unknown): string =>
-    typeof owner === "string"
-      ? normalizeFeedSourceAddress(owner) || mockCurrentUserId
-      : mockCurrentUserId;
 
   const hydrateToolboxRuntimeItemsIntoLibrary = async (
     kind: "transformation" | "condition",
@@ -3689,98 +3466,14 @@
 
     if (fetched.length === 0) return;
 
-    if (kind === "transformation") {
-      const nextRegistryTransformations = Object.fromEntries(
-        fetched.map(([fallbackName, payload]) => {
-          const name =
-            typeof payload.name === "string" && payload.name.trim()
-              ? payload.name.trim()
-              : fallbackName;
-          const snippet = typeof payload.sol_src === "string" ? payload.sol_src : "";
-          const parsed = parseSoliditySnippet(snippet);
-          const argc = parsed.ok
-            ? Math.max(0, inferArgsCountFromSnippet(parsed.value).minArgsCount)
-            : 0;
-          return [
-            name,
-            {
-              argc,
-              run: identityTransformRun,
-            } satisfies RuntimeTransformationDef,
-          ];
-        }),
-      );
-      deployedRegistry = {
-        ...deployedRegistry,
-        transformations: {
-          ...deployedRegistry.transformations,
-          ...nextRegistryTransformations,
-        },
-      };
-      deployedLibrary = {
-        ...deployedLibrary,
-        transformations: fetched.reduce((items, [fallbackName, payload]) => {
-          const name =
-            typeof payload.name === "string" && payload.name.trim()
-              ? payload.name.trim()
-              : fallbackName;
-          return upsertLibraryItem(items, {
-            id: `transform-${name}`,
-            name,
-            kind: "transformation",
-            authorId: resolveToolboxRuntimeAuthorId(payload.owner),
-            summary: "Saved in toolbox.",
-            runtimeSnippet: extractToolboxRuntimeSnippet(payload.sol_src),
-          });
-        }, deployedLibrary.transformations),
-      };
-      return;
-    }
-
-    const nextRegistryConditions = Object.fromEntries(
-      fetched.map(([fallbackName, payload]) => {
-        const name =
-          typeof payload.name === "string" && payload.name.trim()
-            ? payload.name.trim()
-            : fallbackName;
-        const snippet = typeof payload.sol_src === "string" ? payload.sol_src : "";
-        const parsed = parseSoliditySnippet(snippet);
-        const argc = parsed.ok
-          ? Math.max(0, inferArgsCountFromSnippet(parsed.value).minArgsCount)
-          : 0;
-        return [
-          name,
-          {
-            argc,
-            check: alwaysTrueConditionCheck,
-          } satisfies RuntimeConditionDef,
-        ];
-      }),
+    applyDeployedStudioState(
+      mergeToolboxRuntimePayloadsIntoStudioState(
+        getDeployedStudioState(),
+        kind,
+        fetched,
+        mockCurrentUserId,
+      ),
     );
-    deployedRegistry = {
-      ...deployedRegistry,
-      conditions: {
-        ...deployedRegistry.conditions,
-        ...nextRegistryConditions,
-      },
-    };
-    deployedLibrary = {
-      ...deployedLibrary,
-      conditions: fetched.reduce((items, [fallbackName, payload]) => {
-        const name =
-          typeof payload.name === "string" && payload.name.trim()
-            ? payload.name.trim()
-            : fallbackName;
-        return upsertLibraryItem(items, {
-          id: `condition-${name}`,
-          name,
-          kind: "condition",
-          authorId: resolveToolboxRuntimeAuthorId(payload.owner),
-          summary: "Saved in toolbox.",
-          runtimeSnippet: extractToolboxRuntimeSnippet(payload.sol_src),
-        });
-      }, deployedLibrary.conditions),
-    };
   };
 
   const hydrateToolboxLibraryIntoNetwork = async (library: ToolboxLibrary) => {
@@ -6618,13 +6311,12 @@
   const toggleLibraryToolbox = (item: LibraryItem) => {
     const entry = toolboxEntryForLibraryItem(item);
     if (!entry) return;
-    const isSaved = toolboxLibrary[entry.kind].includes(entry.id);
-    const next = {
-      ...toolboxLibrary,
-      [entry.kind]: isSaved
-        ? toolboxLibrary[entry.kind].filter((id) => id !== entry.id)
-        : [...toolboxLibrary[entry.kind], entry.id],
-    };
+    const { library: next, changed } = toggleToolboxLibraryItem(
+      toolboxLibrary,
+      entry.kind,
+      entry.id,
+    );
+    if (!changed) return;
     toolboxLibrary = next;
     void persistToolboxLibrary(next);
   };
@@ -7078,43 +6770,6 @@
     pendingDimensionChange = null;
   };
 
-  type NetworkLibraryKind = keyof NetworkLibrary;
-
-  const toolboxKindForLibraryKind = (kind: NetworkLibraryKind): keyof ToolboxLibrary =>
-    kind === "feature" ? "connector" : kind;
-
-  const toolboxLibraryItemId = (kind: NetworkLibraryKind, id: string): string => {
-    if (kind === "feature") return `feature-${id}`;
-    if (kind === "transformation") return `transform-${id}`;
-    return `condition-${id}`;
-  };
-
-  const buildToolboxFallbackLibraryItem = (kind: NetworkLibraryKind, id: string): LibraryItem => ({
-    id: toolboxLibraryItemId(kind, id),
-    name: id,
-    kind,
-    authorId: mockCurrentUserId,
-    summary: "Saved in toolbox.",
-    ...(kind === "feature" ? { dimensions: 1 } : {}),
-  });
-
-  const listToolboxLibraryItemsForKind = (
-    kind: NetworkLibraryKind,
-    source: LibraryItem[],
-  ): LibraryItem[] => {
-    const toolboxKind = toolboxKindForLibraryKind(kind);
-    const sourceByToolboxId = new SvelteMap<string, LibraryItem>();
-    source.forEach((item) => {
-      const entry = toolboxEntryForLibraryItem(item);
-      if (!entry || entry.kind !== toolboxKind) return;
-      sourceByToolboxId.set(entry.id, item);
-    });
-
-    return toolboxLibrary[toolboxKind].map(
-      (id) => sourceByToolboxId.get(id) ?? buildToolboxFallbackLibraryItem(kind, id),
-    );
-  };
-
   const libraryKindForTab = (tab: typeof libraryTab): NetworkLibraryKind | null => {
     switch (tab) {
       case "connectors":
@@ -7135,7 +6790,12 @@
     const source: LibraryItem[] = networkLibrary[kind] ?? [];
 
     if (explorerSource === "toolbox") {
-      return listToolboxLibraryItemsForKind(kind, source);
+      return listToolboxLibraryItemsForKind({
+        kind,
+        source,
+        toolboxLibrary,
+        fallbackAuthorId: mockCurrentUserId,
+      });
     }
 
     return source;
@@ -7146,10 +6806,19 @@
     if (!kind) return new SvelteSet<string>();
     const source: LibraryItem[] = networkLibrary[kind] ?? [];
     if (explorerSource === "toolbox") {
-      return new SvelteSet(listToolboxLibraryItemsForKind(kind, source).map((item) => item.id));
+      return new SvelteSet(
+        listToolboxLibraryItemsForKind({
+          kind,
+          source,
+          toolboxLibrary,
+          fallbackAuthorId: mockCurrentUserId,
+        }).map((item) => item.id),
+      );
     }
     return new SvelteSet(
-      source.filter((item) => isLibraryItemSavedInToolbox(item)).map((item) => item.id),
+      source
+        .filter((item) => isLibraryItemSavedInToolbox(toolboxLibrary, item))
+        .map((item) => item.id),
     );
   });
 
@@ -7214,16 +6883,6 @@
       default:
         return id;
     }
-  };
-
-  const upsertLibraryItem = (items: LibraryItem[], next: LibraryItem) => {
-    if (items.some((item) => item.id === next.id)) return items;
-    return [...items, next];
-  };
-
-  const upsertParticleItem = (next: ExploreParticle) => {
-    if (deployedParticles.some((item) => item.id === next.id)) return deployedParticles;
-    return [...deployedParticles, next];
   };
 
   const addParticleNode = (
