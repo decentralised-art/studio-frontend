@@ -31,10 +31,13 @@ jobs:
           VITE_SERVICES_API_BASE_URL: ${{ vars.VITE_SERVICES_API_BASE_URL }}
           VITE_CHAIN_API_BASE_URL: ${{ vars.VITE_CHAIN_API_BASE_URL }}
 
+      - name: Prune to production dependencies
+        run: npm prune --omit=dev
+
       - name: Package build as tar.gz
         run: |
           mkdir -p dist
-          tar -czf dist/hypermusic-ai-svelte.tar.gz build package.json package-lock.json
+          tar -czf dist/hypermusic-ai-svelte.tar.gz build node_modules package.json package-lock.json .nvmrc
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4

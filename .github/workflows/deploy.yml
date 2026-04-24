@@ -84,5 +84,7 @@ jobs:
           script: |
             echo "Restarting hypermusic-ai systemd service..."
             sudo systemctl restart hypermusic-ai
+            sleep 2
             sudo systemctl status hypermusic-ai --no-pager
+            sudo systemctl is-active --quiet hypermusic-ai
             echo "Service restarted."
