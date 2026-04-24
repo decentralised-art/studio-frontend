@@ -43,6 +43,7 @@
     formatExecuteRiSummary,
     type ExecuteNodeOverrides,
   } from "$lib/studio/executeRequestPlanner";
+  import { extractExecuteErrorDetail } from "$lib/studio/executeErrorDetail";
   import {
     dispatchAssistantToolCall,
     type AssistantRuntimeBridge,
@@ -51,6 +52,19 @@
     DEFAULT_ASSISTANT_MODEL_SETTINGS,
     type AssistantModelSettings,
   } from "$lib/studio/assistant/modelClient";
+  import {
+    SOLIDITY_ASSISTANT_WELCOME_MESSAGE,
+    buildAssistantConversationTitle,
+    createAssistantConversation as createAssistantConversationState,
+    createAssistantMessage,
+    createPopupAssistantMessage,
+    getAssistantWelcomeMessage as resolveAssistantWelcomeMessage,
+    replaceAssistantWelcomeMessages,
+    type AssistantConversation,
+    type AssistantMessageDraft,
+    type AssistantPendingConfirmation,
+    type PopupAssistantMessage,
+  } from "$lib/studio/assistant/conversationState";
   import { requestSolidityEditorAssistant } from "$lib/studio/assistant/solidityEditorAssistant";
   import {
     buildAssistantRepairPrompt,
@@ -101,6 +115,20 @@
     toConditionContractName,
     toContractName,
   } from "$lib/studio/studioNaming";
+  import {
+    STUDIO_TABS_SESSION_STORAGE_KEY,
+    buildStudioTabsSessionPayload,
+    readStudioTabsSession,
+    restoreStudioTabsSessionPayload,
+  } from "$lib/studio/studioTabsSession";
+  import {
+    clampPanelWidth,
+    getStudioPanelBounds,
+    getStudioPanelScale,
+    panelSize,
+    resolveResponsivePanelWidth,
+    type StudioPanelMode,
+  } from "$lib/studio/studioPanels";
   import { buildStudioRuntime } from "$lib/studio/studioRuntime";
   import {
     fetchChainOwnedStudioSnapshot,
@@ -121,6 +149,8 @@
     ChainApiRequestError,
     type ChainApiPostResult,
     type ChainExecutePayload,
+    getChainCondition,
+    getChainTransformation,
     normalizeFormatHash,
     postChainConnectorDetailed,
     postChainConditionDetailed,
@@ -143,7 +173,7 @@
     type StudioPluginDescriptor,
   } from "$lib/studio/plugins/registry";
 
-  type PanelMode = "open" | "hidden";
+  type PanelMode = StudioPanelMode;
   type RightPanelMode = "assistant" | "inspector" | "runner" | "hidden";
   type InspectorTab = "node" | "api";
 
@@ -186,21 +216,6 @@
     | "run_failed"
     | "deploy_succeeded"
     | "deploy_failed";
-  type AssistantPendingConfirmation = {
-    id: string;
-    calls: AssistantToolCall[];
-    createdAt: number;
-    summary: string;
-  };
-  type AssistantConversation = {
-    id: string;
-    title: string;
-    createdAt: number;
-    updatedAt: number;
-    messages: AssistantMessage[];
-    pendingConfirmation: AssistantPendingConfirmation | null;
-    lastError: string | null;
-  };
   type AssistantContextSnapshot = {
     active_tab: {
       id: string;
@@ -244,13 +259,6 @@
       high_risk_tools_require_confirmation: string[];
     };
     network_connector_catalog: string[];
-  };
-
-  type PopupAssistantMessage = {
-    id: string;
-    at: number;
-    role: "system" | "user" | "assistant" | "error";
-    text: string;
   };
 
   type StudioNodeKind =
@@ -508,8 +516,6 @@
 
   const tabGraphs = new SvelteMap<string, { nodes: StudioNode[]; edges: Edge[] }>();
   const connectorTreeModelsByTab = new SvelteMap<string, ConnectorTreeModel>();
-  const STUDIO_TABS_SESSION_STORAGE_KEY = "dcn_studio_tabs_session_v1";
-  const STUDIO_TABS_SESSION_VERSION = 1 as const;
 
   type ToolboxLibrary = {
     connector: string[];
@@ -675,132 +681,16 @@
   const activeDeployTimestamp = $derived.by(() => deployTimestampByTab[activeTabId] ?? null);
   let tabsSessionRestoreReady = $state(false);
 
-  type PersistedStudioGraph = {
-    nodes: StudioNode[];
-    edges: Edge[];
-  };
-
-  type PersistedStudioTreeModel = {
-    rootConnectorName: string;
-    nodes: StudioNode[];
-    edges: Edge[];
-  };
-
-  type PersistedStudioTabsSession = {
-    version: number;
-    tabs: StudioTab[];
-    activeTabId: string;
-    tabGraphs: Record<string, PersistedStudioGraph>;
-    connectorTreeModels: Record<string, PersistedStudioTreeModel>;
-  };
-
-  const deepClone = <T,>(value: T): T => {
-    if (typeof structuredClone === "function") {
-      try {
-        return structuredClone(value);
-      } catch {
-        // Fallback below handles Proxy/DataCloneError cases.
-      }
-    }
-    return JSON.parse(JSON.stringify(value)) as T;
-  };
-
-  const cloneGraph = (graph: PersistedStudioGraph): PersistedStudioGraph => deepClone(graph);
-  const cloneTreeModel = (model: PersistedStudioTreeModel): PersistedStudioTreeModel =>
-    deepClone(model);
-
-  const readStudioTabsSession = (): PersistedStudioTabsSession | null => {
-    if (!browser) return null;
-    const raw = window.sessionStorage.getItem(STUDIO_TABS_SESSION_STORAGE_KEY);
-    if (!raw) return null;
-    try {
-      const parsed = JSON.parse(raw) as PersistedStudioTabsSession;
-      if (!parsed || typeof parsed !== "object") return null;
-      if (parsed.version !== STUDIO_TABS_SESSION_VERSION) return null;
-      return parsed;
-    } catch {
-      return null;
-    }
-  };
-
-  const sanitizePersistedTabs = (value: unknown): StudioTab[] => {
-    if (!Array.isArray(value)) return [];
-    const sanitized: StudioTab[] = [];
-    value.forEach((item) => {
-      if (!item || typeof item !== "object") return;
-      const record = item as Record<string, unknown>;
-      const id = typeof record.id === "string" ? record.id.trim() : "";
-      const label = typeof record.label === "string" ? record.label.trim() : "";
-      if (!id || !label) return;
-      const particleId =
-        typeof record.particleId === "string" && record.particleId.trim().length > 0
-          ? record.particleId.trim()
-          : undefined;
-      sanitized.push({ id, label, particleId });
-    });
-    return sanitized;
-  };
-
-  const sanitizePersistedGraph = (value: unknown): PersistedStudioGraph | null => {
-    if (!value || typeof value !== "object") return null;
-    const record = value as Record<string, unknown>;
-    if (!Array.isArray(record.nodes) || !Array.isArray(record.edges)) return null;
-    return {
-      nodes: deepClone(record.nodes as StudioNode[]),
-      edges: deepClone(record.edges as Edge[]),
-    };
-  };
-
-  const sanitizePersistedTreeModel = (value: unknown): PersistedStudioTreeModel | null => {
-    if (!value || typeof value !== "object") return null;
-    const record = value as Record<string, unknown>;
-    const rootConnectorName =
-      typeof record.rootConnectorName === "string" ? record.rootConnectorName.trim() : "";
-    if (!rootConnectorName) return null;
-    const graph = sanitizePersistedGraph(value);
-    if (!graph) return null;
-    return {
-      rootConnectorName,
-      nodes: graph.nodes,
-      edges: graph.edges,
-    };
-  };
-
-  const captureTabGraphsSnapshot = (): Record<string, PersistedStudioGraph> => {
-    const out: Record<string, PersistedStudioGraph> = {};
-    for (const [tabId, graph] of tabGraphs.entries()) {
-      out[tabId] = cloneGraph({ nodes: graph.nodes, edges: graph.edges });
-    }
-    return out;
-  };
-
-  const captureConnectorTreeModelsSnapshot = (): Record<string, PersistedStudioTreeModel> => {
-    const out: Record<string, PersistedStudioTreeModel> = {};
-    for (const [tabId, model] of connectorTreeModelsByTab.entries()) {
-      out[tabId] = cloneTreeModel({
-        rootConnectorName: model.rootConnectorName,
-        nodes: model.nodes,
-        edges: model.edges,
-      });
-    }
-    return out;
-  };
-
   const persistStudioTabsSession = () => {
     if (!browser) return;
     try {
       saveActiveGraph();
-      const payload: PersistedStudioTabsSession = {
-        version: STUDIO_TABS_SESSION_VERSION,
-        tabs: tabs.map((tab) => ({
-          id: tab.id,
-          label: tab.label,
-          particleId: tab.particleId?.trim() || undefined,
-        })),
+      const payload = buildStudioTabsSessionPayload<StudioTab, StudioNode, Edge>({
+        tabs,
         activeTabId,
-        tabGraphs: captureTabGraphsSnapshot(),
-        connectorTreeModels: captureConnectorTreeModelsSnapshot(),
-      };
+        tabGraphs: tabGraphs.entries(),
+        connectorTreeModels: connectorTreeModelsByTab.entries(),
+      });
       window.sessionStorage.setItem(STUDIO_TABS_SESSION_STORAGE_KEY, JSON.stringify(payload));
     } catch (error) {
       console.warn("[Studio] Failed to persist tabs session.", error);
@@ -808,53 +698,25 @@
   };
 
   const restoreStudioTabsSession = (): boolean => {
-    const persisted = readStudioTabsSession();
-    if (!persisted) return false;
-    const restoredTabs = sanitizePersistedTabs(persisted.tabs);
-    if (!restoredTabs.length) return false;
-    const tabIds = new SvelteSet(restoredTabs.map((tab) => tab.id));
+    if (!browser) return false;
+    const restored = restoreStudioTabsSessionPayload<StudioNode, Edge>(
+      readStudioTabsSession(window.sessionStorage),
+    );
+    if (!restored) return false;
 
     tabGraphs.clear();
     connectorTreeModelsByTab.clear();
 
-    restoredTabs.forEach((tab) => {
-      tabGraphs.set(tab.id, { nodes: [], edges: [] });
-    });
-
-    const persistedGraphs =
-      persisted.tabGraphs && typeof persisted.tabGraphs === "object" ? persisted.tabGraphs : {};
-    Object.entries(persistedGraphs).forEach(([tabId, graphRaw]) => {
-      if (!tabIds.has(tabId)) return;
-      const graph = sanitizePersistedGraph(graphRaw);
-      if (!graph) return;
+    Object.entries(restored.tabGraphs).forEach(([tabId, graph]) => {
       tabGraphs.set(tabId, graph);
     });
 
-    const persistedTreeModels =
-      persisted.connectorTreeModels && typeof persisted.connectorTreeModels === "object"
-        ? persisted.connectorTreeModels
-        : {};
-    Object.entries(persistedTreeModels).forEach(([tabId, modelRaw]) => {
-      if (!tabIds.has(tabId)) return;
-      const model = sanitizePersistedTreeModel(modelRaw);
-      if (!model) return;
+    Object.entries(restored.connectorTreeModels).forEach(([tabId, model]) => {
       connectorTreeModelsByTab.set(tabId, model);
     });
 
-    // Keep connector tree behavior for particle tabs even if only graph snapshots were persisted.
-    restoredTabs.forEach((tab) => {
-      if (!tab.particleId || connectorTreeModelsByTab.has(tab.id)) return;
-      const graph = tabGraphs.get(tab.id);
-      if (!graph || graph.nodes.length === 0) return;
-      connectorTreeModelsByTab.set(tab.id, {
-        rootConnectorName: tab.particleId,
-        nodes: deepClone(graph.nodes),
-        edges: deepClone(graph.edges),
-      });
-    });
-
-    tabs = restoredTabs;
-    activeTabId = tabIds.has(persisted.activeTabId) ? persisted.activeTabId : restoredTabs[0].id;
+    tabs = restored.tabs;
+    activeTabId = restored.activeTabId;
     loadTabGraph(activeTabId);
     return true;
   };
@@ -884,53 +746,36 @@
     schedulePersistStudioTabsSession();
   });
 
-  const panelSize = (mode: PanelMode, open: string) => (mode === "hidden" ? "0px" : open);
-
   const getNodeStatusLabel = (node: StudioNode) =>
     node.data.fromNetwork ? "Network (view-only)" : "Unpublished";
 
-  const getLeftPanelBounds = () => {
-    const compact = viewportWidthPx <= 900;
-    const min = compact ? 176 : 220;
-    const max = Math.max(min, Math.floor(viewportWidthPx * (compact ? 0.84 : 0.5)));
-    return { min, max };
-  };
-
-  const getRightPanelBounds = () => {
-    const compact = viewportWidthPx <= 900;
-    const min = compact ? 192 : 240;
-    const max = Math.max(min, Math.floor(viewportWidthPx * (compact ? 0.88 : 0.55)));
-    return { min, max };
-  };
-
-  const clampPanelWidth = (value: number, bounds: { min: number; max: number }) =>
-    Math.min(bounds.max, Math.max(bounds.min, Math.round(value)));
-
+  const getLeftPanelBounds = () => getStudioPanelBounds("left", viewportWidthPx);
+  const getRightPanelBounds = () => getStudioPanelBounds("right", viewportWidthPx);
   const clampLeftPanelWidth = (value: number) => clampPanelWidth(value, getLeftPanelBounds());
   const clampRightPanelWidth = (value: number) => clampPanelWidth(value, getRightPanelBounds());
 
   const applyResponsivePanelWidths = () => {
-    const defaultLeft = viewportWidthPx <= 900 ? 220 : 280;
-    const defaultRight = viewportWidthPx <= 900 ? 240 : 300;
-    leftPanelWidthPx = leftPanelUserSized
-      ? clampLeftPanelWidth(leftPanelWidthPx)
-      : clampLeftPanelWidth(defaultLeft);
-    rightPanelWidthPx = rightPanelUserSized
-      ? clampRightPanelWidth(rightPanelWidthPx)
-      : clampRightPanelWidth(defaultRight);
+    leftPanelWidthPx = resolveResponsivePanelWidth({
+      side: "left",
+      viewportWidthPx,
+      currentWidthPx: leftPanelWidthPx,
+      userSized: leftPanelUserSized,
+    });
+    rightPanelWidthPx = resolveResponsivePanelWidth({
+      side: "right",
+      viewportWidthPx,
+      currentWidthPx: rightPanelWidthPx,
+      userSized: rightPanelUserSized,
+    });
   };
 
-  const leftPanelScale = $derived.by(() => {
-    const compact = viewportWidthPx <= 900;
-    const baseline = compact ? 240 : 280;
-    return Math.max(0.74, Math.min(1.08, leftPanelWidthPx / baseline));
-  });
+  const leftPanelScale = $derived.by(() =>
+    getStudioPanelScale("left", viewportWidthPx, leftPanelWidthPx),
+  );
 
-  const rightPanelScale = $derived.by(() => {
-    const compact = viewportWidthPx <= 900;
-    const baseline = compact ? 260 : 300;
-    return Math.max(0.74, Math.min(1.08, rightPanelWidthPx / baseline));
-  });
+  const rightPanelScale = $derived.by(() =>
+    getStudioPanelScale("right", viewportWidthPx, rightPanelWidthPx),
+  );
 
   const leftSize = $derived.by(() =>
     leftMode === "hidden" ? "0px" : `${clampLeftPanelWidth(leftPanelWidthPx)}px`,
@@ -1170,62 +1015,18 @@
     }
   };
 
-  const ASSISTANT_WELCOME_MESSAGE_NEEDS_KEY =
-    "Studio assistant ready. Add API key in settings to enable actionable copilot mode.";
-  const ASSISTANT_WELCOME_MESSAGE_READY =
-    "Studio assistant ready. Ask me to inspect, edit, run, or deploy your flow.";
+  const getAssistantWelcomeMessage = () => resolveAssistantWelcomeMessage(assistantApiKey);
 
-  const getAssistantWelcomeMessage = () =>
-    assistantApiKey.trim() ? ASSISTANT_WELCOME_MESSAGE_READY : ASSISTANT_WELCOME_MESSAGE_NEEDS_KEY;
-
-  const buildAssistantConversationTitle = (messages: AssistantMessage[]): string => {
-    const firstUser = messages.find((message) => message.role === "user");
-    const seed = firstUser?.text?.trim();
-    if (!seed) return "New conversation";
-    return seed.length > 56 ? `${seed.slice(0, 56).trim()}...` : seed;
-  };
-
-  const createAssistantConversation = (): AssistantConversation => {
-    const id = `assistant-conv-${crypto.randomUUID()}`;
-    const createdAt = Date.now();
-    return {
-      id,
-      title: "New conversation",
-      createdAt,
-      updatedAt: createdAt,
-      messages: [
-        {
-          id: `assistant-msg-${crypto.randomUUID()}`,
-          at: createdAt,
-          role: "system",
-          text: getAssistantWelcomeMessage(),
-        },
-      ],
-      pendingConfirmation: null,
-      lastError: null,
-    };
-  };
+  const createAssistantConversation = (): AssistantConversation =>
+    createAssistantConversationState({ apiKey: assistantApiKey });
 
   const refreshAssistantWelcomeMessages = () => {
     const nextWelcome = getAssistantWelcomeMessage();
-    const knownWelcomeMessages = new SvelteSet([
-      ASSISTANT_WELCOME_MESSAGE_NEEDS_KEY,
-      ASSISTANT_WELCOME_MESSAGE_READY,
-    ]);
-
-    assistantMessages = assistantMessages.map((message) =>
-      message.role === "system" && knownWelcomeMessages.has(message.text)
-        ? { ...message, text: nextWelcome }
-        : message,
-    );
+    assistantMessages = replaceAssistantWelcomeMessages(assistantMessages, nextWelcome);
 
     assistantConversations = assistantConversations.map((conversation) => ({
       ...conversation,
-      messages: conversation.messages.map((message) =>
-        message.role === "system" && knownWelcomeMessages.has(message.text)
-          ? { ...message, text: nextWelcome }
-          : message,
-      ),
+      messages: replaceAssistantWelcomeMessages(conversation.messages, nextWelcome),
     }));
   };
 
@@ -1313,36 +1114,14 @@
     syncAssistantConversationRuntimeState();
   };
 
-  const appendAssistantMessage = (
-    message: Omit<AssistantMessage, "id" | "at"> & Partial<Pick<AssistantMessage, "id" | "at">>,
-  ) => {
-    const next: AssistantMessage = {
-      id: message.id ?? `assistant-msg-${crypto.randomUUID()}`,
-      at: message.at ?? Date.now(),
-      role: message.role,
-      text: message.text,
-      ...(message.toolCallId ? { toolCallId: message.toolCallId } : {}),
-      ...(message.pendingConfirmationId
-        ? { pendingConfirmationId: message.pendingConfirmationId }
-        : {}),
-    };
+  const appendAssistantMessage = (message: AssistantMessageDraft) => {
+    const next = createAssistantMessage(message);
     assistantMessages = [...assistantMessages, next];
     syncAssistantConversationRuntimeState();
   };
 
-  const appendAssistantTransientMessage = (
-    message: Omit<AssistantMessage, "id" | "at"> & Partial<Pick<AssistantMessage, "id" | "at">>,
-  ) => {
-    const next: AssistantMessage = {
-      id: message.id ?? `assistant-msg-transient-${crypto.randomUUID()}`,
-      at: message.at ?? Date.now(),
-      role: message.role,
-      text: message.text,
-      ...(message.toolCallId ? { toolCallId: message.toolCallId } : {}),
-      ...(message.pendingConfirmationId
-        ? { pendingConfirmationId: message.pendingConfirmationId }
-        : {}),
-    };
+  const appendAssistantTransientMessage = (message: AssistantMessageDraft) => {
+    const next = createAssistantMessage(message, { idPrefix: "assistant-msg-transient" });
     assistantTransientMessages = [...assistantTransientMessages, next];
   };
 
@@ -1350,16 +1129,6 @@
     if (!assistantTransientMessages.length) return;
     assistantTransientMessages = [];
   };
-
-  const createPopupAssistantMessage = (
-    role: PopupAssistantMessage["role"],
-    text: string,
-  ): PopupAssistantMessage => ({
-    id: `popup-assistant-msg-${crypto.randomUUID()}`,
-    at: Date.now(),
-    role,
-    text,
-  });
 
   const appendTransformationAiAssistantMessage = (
     role: PopupAssistantMessage["role"],
@@ -1381,20 +1150,14 @@
   const toggleTransformationAiAssistant = () => {
     transformationAiAssistantOpen = !transformationAiAssistantOpen;
     if (transformationAiAssistantOpen && transformationAiAssistantMessages.length === 0) {
-      appendTransformationAiAssistantMessage(
-        "system",
-        "Solidity assistant ready. Ask for code edits or guidance; accepted edits are applied directly to this draft.",
-      );
+      appendTransformationAiAssistantMessage("system", SOLIDITY_ASSISTANT_WELCOME_MESSAGE);
     }
   };
 
   const toggleConditionAiAssistant = () => {
     conditionAiAssistantOpen = !conditionAiAssistantOpen;
     if (conditionAiAssistantOpen && conditionAiAssistantMessages.length === 0) {
-      appendConditionAiAssistantMessage(
-        "system",
-        "Solidity assistant ready. Ask for code edits or guidance; accepted edits are applied directly to this draft.",
-      );
+      appendConditionAiAssistantMessage("system", SOLIDITY_ASSISTANT_WELCOME_MESSAGE);
     }
   };
 
@@ -2535,12 +2298,13 @@
     toolboxLoadBusy = true;
     try {
       const saved = await getCurrentUserToolboxLibrary();
-      toolboxLibrary = {
+      const nextToolboxLibrary = {
         connector: normalizeToolboxListByKind("connector", saved.connector),
         transformation: normalizeToolboxListByKind("transformation", saved.transformation),
         condition: normalizeToolboxListByKind("condition", saved.condition),
       };
-      void hydrateToolboxConnectorsIntoLibrary(toolboxLibrary.connector);
+      toolboxLibrary = nextToolboxLibrary;
+      await hydrateToolboxLibraryIntoNetwork(nextToolboxLibrary);
     } catch (error) {
       console.warn("[Studio] Failed to load toolbox library from profile.", error);
     } finally {
@@ -3645,7 +3409,9 @@
   const resolveStudioChainSyncSources = async (): Promise<
     Array<{ address: string; authorId: string; label: string }>
   > => {
-    const profileState = await getCurrentUserProfileState();
+    const profileState = await getCurrentUserProfileState({
+      bootstrapPrototypeIfEmpty: true,
+    });
     const resolvedCurrentSources = resolveCurrentUserChainSourceAddresses(profileState.me);
     const sourceAddresses = computeFeedSourceAddresses({
       currentUserAddress: resolvedCurrentSources[0] ?? "",
@@ -3864,6 +3630,165 @@
         });
       }
     }
+  };
+
+  const extractToolboxRuntimeSnippet = (solSrc?: string): string | undefined => {
+    const firstLine = solSrc
+      ?.split(/\r?\n/g)
+      .map((line) => line.trim())
+      .find((line) => line.length > 0);
+    return firstLine;
+  };
+
+  const resolveToolboxRuntimeAuthorId = (owner: unknown): string =>
+    typeof owner === "string"
+      ? normalizeFeedSourceAddress(owner) || mockCurrentUserId
+      : mockCurrentUserId;
+
+  const hydrateToolboxRuntimeItemsIntoLibrary = async (
+    kind: "transformation" | "condition",
+    ids: string[],
+  ) => {
+    const normalizedIds = normalizeToolboxListByKind(kind, ids);
+    if (normalizedIds.length === 0) return;
+
+    const existingIds = new Set(
+      (kind === "transformation"
+        ? deployedLibrary.transformations
+        : deployedLibrary.conditions
+      ).map((item) => normalizeToolboxIdByKind(kind, item.id)),
+    );
+    const missing = normalizedIds.filter((id) => !existingIds.has(id));
+    if (missing.length === 0) return;
+
+    const settled = await Promise.allSettled(
+      missing.map(async (name) => {
+        const payload =
+          kind === "transformation"
+            ? await getChainTransformation(name)
+            : await getChainCondition(name);
+        return [name, payload] as const;
+      }),
+    );
+
+    const fetched = settled
+      .filter(
+        (
+          result,
+        ): result is PromiseFulfilledResult<
+          readonly [
+            string,
+            (
+              | Awaited<ReturnType<typeof getChainTransformation>>
+              | Awaited<ReturnType<typeof getChainCondition>>
+            ),
+          ]
+        > => result.status === "fulfilled",
+      )
+      .map((result) => result.value);
+
+    if (fetched.length === 0) return;
+
+    if (kind === "transformation") {
+      const nextRegistryTransformations = Object.fromEntries(
+        fetched.map(([fallbackName, payload]) => {
+          const name =
+            typeof payload.name === "string" && payload.name.trim()
+              ? payload.name.trim()
+              : fallbackName;
+          const snippet = typeof payload.sol_src === "string" ? payload.sol_src : "";
+          const parsed = parseSoliditySnippet(snippet);
+          const argc = parsed.ok
+            ? Math.max(0, inferArgsCountFromSnippet(parsed.value).minArgsCount)
+            : 0;
+          return [
+            name,
+            {
+              argc,
+              run: identityTransformRun,
+            } satisfies RuntimeTransformationDef,
+          ];
+        }),
+      );
+      deployedRegistry = {
+        ...deployedRegistry,
+        transformations: {
+          ...deployedRegistry.transformations,
+          ...nextRegistryTransformations,
+        },
+      };
+      deployedLibrary = {
+        ...deployedLibrary,
+        transformations: fetched.reduce((items, [fallbackName, payload]) => {
+          const name =
+            typeof payload.name === "string" && payload.name.trim()
+              ? payload.name.trim()
+              : fallbackName;
+          return upsertLibraryItem(items, {
+            id: `transform-${name}`,
+            name,
+            kind: "transformation",
+            authorId: resolveToolboxRuntimeAuthorId(payload.owner),
+            summary: "Saved in toolbox.",
+            runtimeSnippet: extractToolboxRuntimeSnippet(payload.sol_src),
+          });
+        }, deployedLibrary.transformations),
+      };
+      return;
+    }
+
+    const nextRegistryConditions = Object.fromEntries(
+      fetched.map(([fallbackName, payload]) => {
+        const name =
+          typeof payload.name === "string" && payload.name.trim()
+            ? payload.name.trim()
+            : fallbackName;
+        const snippet = typeof payload.sol_src === "string" ? payload.sol_src : "";
+        const parsed = parseSoliditySnippet(snippet);
+        const argc = parsed.ok
+          ? Math.max(0, inferArgsCountFromSnippet(parsed.value).minArgsCount)
+          : 0;
+        return [
+          name,
+          {
+            argc,
+            check: alwaysTrueConditionCheck,
+          } satisfies RuntimeConditionDef,
+        ];
+      }),
+    );
+    deployedRegistry = {
+      ...deployedRegistry,
+      conditions: {
+        ...deployedRegistry.conditions,
+        ...nextRegistryConditions,
+      },
+    };
+    deployedLibrary = {
+      ...deployedLibrary,
+      conditions: fetched.reduce((items, [fallbackName, payload]) => {
+        const name =
+          typeof payload.name === "string" && payload.name.trim()
+            ? payload.name.trim()
+            : fallbackName;
+        return upsertLibraryItem(items, {
+          id: `condition-${name}`,
+          name,
+          kind: "condition",
+          authorId: resolveToolboxRuntimeAuthorId(payload.owner),
+          summary: "Saved in toolbox.",
+          runtimeSnippet: extractToolboxRuntimeSnippet(payload.sol_src),
+        });
+      }, deployedLibrary.conditions),
+    };
+  };
+
+  const hydrateToolboxLibraryIntoNetwork = async (library: ToolboxLibrary) => {
+    await Promise.all([
+      hydrateToolboxConnectorsIntoLibrary(library.connector),
+      hydrateToolboxRuntimeItemsIntoLibrary("transformation", library.transformation),
+      hydrateToolboxRuntimeItemsIntoLibrary("condition", library.condition),
+    ]);
   };
 
   const collectLocalConditionRuntime = (
@@ -4410,36 +4335,6 @@
         };
       });
     return overrides;
-  };
-
-  const extractExecuteErrorDetail = (error: unknown) => {
-    if (error instanceof ChainApiRequestError) {
-      let backendMessage = "";
-      const body = error.responseBody;
-      if (body && typeof body === "object" && !Array.isArray(body)) {
-        const candidate = (body as { message?: unknown }).message;
-        if (typeof candidate === "string" && candidate.trim().length) {
-          backendMessage = candidate.trim();
-        }
-      } else if (typeof body === "string" && body.trim().length) {
-        backendMessage = body.trim();
-      }
-      const responseDetails =
-        typeof body === "string" ? body : (JSON.stringify(body, null, 2) ?? String(body));
-      const headline = backendMessage
-        ? `POST /execute ${error.status} · ${backendMessage}`
-        : `POST /execute ${error.status} · ${error.message}`;
-      return {
-        headline,
-        details: responseDetails,
-      };
-    }
-
-    const message = error instanceof Error ? error.message : "Run failed.";
-    return {
-      headline: `POST /execute failed · ${message}`,
-      details: "",
-    };
   };
 
   type ExecuteRequestPreview = {
@@ -7185,6 +7080,41 @@
 
   type NetworkLibraryKind = keyof NetworkLibrary;
 
+  const toolboxKindForLibraryKind = (kind: NetworkLibraryKind): keyof ToolboxLibrary =>
+    kind === "feature" ? "connector" : kind;
+
+  const toolboxLibraryItemId = (kind: NetworkLibraryKind, id: string): string => {
+    if (kind === "feature") return `feature-${id}`;
+    if (kind === "transformation") return `transform-${id}`;
+    return `condition-${id}`;
+  };
+
+  const buildToolboxFallbackLibraryItem = (kind: NetworkLibraryKind, id: string): LibraryItem => ({
+    id: toolboxLibraryItemId(kind, id),
+    name: id,
+    kind,
+    authorId: mockCurrentUserId,
+    summary: "Saved in toolbox.",
+    ...(kind === "feature" ? { dimensions: 1 } : {}),
+  });
+
+  const listToolboxLibraryItemsForKind = (
+    kind: NetworkLibraryKind,
+    source: LibraryItem[],
+  ): LibraryItem[] => {
+    const toolboxKind = toolboxKindForLibraryKind(kind);
+    const sourceByToolboxId = new SvelteMap<string, LibraryItem>();
+    source.forEach((item) => {
+      const entry = toolboxEntryForLibraryItem(item);
+      if (!entry || entry.kind !== toolboxKind) return;
+      sourceByToolboxId.set(entry.id, item);
+    });
+
+    return toolboxLibrary[toolboxKind].map(
+      (id) => sourceByToolboxId.get(id) ?? buildToolboxFallbackLibraryItem(kind, id),
+    );
+  };
+
   const libraryKindForTab = (tab: typeof libraryTab): NetworkLibraryKind | null => {
     switch (tab) {
       case "connectors":
@@ -7205,7 +7135,7 @@
     const source: LibraryItem[] = networkLibrary[kind] ?? [];
 
     if (explorerSource === "toolbox") {
-      return source.filter((item) => isLibraryItemSavedInToolbox(item));
+      return listToolboxLibraryItemsForKind(kind, source);
     }
 
     return source;
@@ -7215,6 +7145,9 @@
     const kind = libraryKindForTab(libraryTab);
     if (!kind) return new SvelteSet<string>();
     const source: LibraryItem[] = networkLibrary[kind] ?? [];
+    if (explorerSource === "toolbox") {
+      return new SvelteSet(listToolboxLibraryItemsForKind(kind, source).map((item) => item.id));
+    }
     return new SvelteSet(
       source.filter((item) => isLibraryItemSavedInToolbox(item)).map((item) => item.id),
     );

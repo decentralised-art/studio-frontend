@@ -190,6 +190,51 @@ export const extraChainSourceProfiles: User[] = [
     },
     toolbox: [],
   },
+  {
+    id: "chain-source-71a6",
+    kind: "agent",
+    address: "0x71a60533defdc8e989392068f0d97c9e71974839",
+    nickname: "Chain Source 71a6",
+    avatarUrl: asset("/avatars/aurora.svg"),
+    bio: "External chain source mirrored into the network feed.",
+    authored: {
+      performativeTransactions: 0,
+      features: 0,
+      transformations: 2,
+      conditions: 0,
+    },
+    toolbox: [],
+  },
+  {
+    id: "chain-source-81da",
+    kind: "agent",
+    address: "0x81da631a0744b5b431ddade5636a5605d2d6c5cd",
+    nickname: "Chain Source 81da",
+    avatarUrl: asset("/avatars/aurora.svg"),
+    bio: "External chain source mirrored into the network feed.",
+    authored: {
+      performativeTransactions: 0,
+      features: 0,
+      transformations: 0,
+      conditions: 0,
+    },
+    toolbox: [],
+  },
+  {
+    id: "chain-source-7e5f",
+    kind: "agent",
+    address: "0x7e5f4552091a69125d5dfcb7b8c2659029395bdf",
+    nickname: "Logic Corpus Source",
+    avatarUrl: asset("/avatars/aurora.svg"),
+    bio: "External chain source for reusable logic conditions and math transformations.",
+    authored: {
+      performativeTransactions: 0,
+      features: 0,
+      transformations: 11,
+      conditions: 5,
+    },
+    toolbox: [],
+  },
 ];
 
 export const displayUsersById = Object.fromEntries(
@@ -199,7 +244,20 @@ export const displayUsersById = Object.fromEntries(
 export const mockCurrentUserId: User["id"] = "user-lyra";
 
 export const mockFollowingByUserId: Partial<Record<User["id"], User["id"][]>> = {
-  "user-lyra": ["user-jun", "user-iris", "agent-aurora"],
+  "user-lyra": [
+    "user-milo",
+    "user-rae",
+    "user-jun",
+    "user-iris",
+    "user-nia",
+    "agent-aurora",
+    "chain-source-da25",
+    "chain-source-fa71",
+    "chain-source-b530",
+    "chain-source-71a6",
+    "chain-source-81da",
+    "chain-source-7e5f",
+  ],
   "user-milo": ["user-lyra", "user-jun"],
   "user-rae": ["user-lyra", "user-nia"],
   "user-jun": ["user-lyra", "user-iris", "agent-aurora"],
@@ -223,5 +281,20 @@ export const extraChainSyncSources: ChainSyncSource[] = [
     id: "chain-source-b530",
     address: "0xb530bf08d76015080c67d6b5f00cdee53b45bdda",
     label: "Chain Source b530",
+  },
+  {
+    id: "chain-source-71a6",
+    address: "0x71a60533defdc8e989392068f0d97c9e71974839",
+    label: "Chain Source 71a6",
+  },
+  {
+    id: "chain-source-81da",
+    address: "0x81da631a0744b5b431ddade5636a5605d2d6c5cd",
+    label: "Chain Source 81da",
+  },
+  {
+    id: "chain-source-7e5f",
+    address: "0x7e5f4552091a69125d5dfcb7b8c2659029395bdf",
+    label: "Logic Corpus Source",
   },
 ];

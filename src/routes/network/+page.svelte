@@ -236,6 +236,7 @@
   const hydrateProfileStateForNetwork = async (options?: { preferCached?: boolean }) => {
     const profileState = await getCurrentUserProfileState({
       ...(options ? { preferCached: options.preferCached } : {}),
+      bootstrapPrototypeIfEmpty: true,
     });
     localToolboxConnectors = [...profileState.toolbox.connector];
     const resolvedSourceAddresses = await deriveCurrentSourceAddresses(profileState);
@@ -346,9 +347,12 @@
         }
       >
     )
-      .filter((item) =>
-        `${item.label} ${item.id} ${item.summary}`.toLowerCase().includes(searchQuery),
-      )
+      .filter((item) => {
+        const searchableKind = `${item.kind} ${item.kind}s`;
+        return `${searchableKind} ${item.label} ${item.id} ${item.summary}`
+          .toLowerCase()
+          .includes(searchQuery);
+      })
       .map((item) => ({
         id: `${item.kind}:${item.id}`,
         label: item.label,

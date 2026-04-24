@@ -4,6 +4,7 @@ import { resolve } from "$app/paths";
 import {
   extraChainSourceProfiles,
   mockCurrentUserId,
+  mockFollowingByUserId,
   mockUsers,
   mockUsersById,
 } from "$lib/data/users";
@@ -906,6 +907,89 @@ const normalizeFollowAddress = (value: string): string => {
   return ETH_ADDRESS_RE.test(prefixed) ? prefixed : "";
 };
 
+const resolveStoredMockUserAddress = (userId: string): string => {
+  if (!browser) return "";
+  return normalizeFollowAddress(getStoredMockEthereumAccount(`mock-user:${userId}`)?.address ?? "");
+};
+
+const resolveKnownPrototypeUserAddress = (userId: string): string => {
+  const target = userId.trim();
+  if (!target) return "";
+  const mockUser = mockUsers.find((entry) => entry.id === target);
+  if (mockUser) {
+    return resolveStoredMockUserAddress(target) || normalizeFollowAddress(mockUser.address);
+  }
+  const user = extraChainSourceProfiles.find((entry) => entry.id === target);
+  return normalizeFollowAddress(user?.address ?? "");
+};
+
+const normalizeFollowTarget = (value: string): string =>
+  normalizeFollowAddress(value) || resolveKnownPrototypeUserAddress(value);
+
+const resolveMockUserIdFromMePayload = (mePayload: unknown): string | null => {
+  const envelope = extractUserEnvelope(mePayload);
+  if (!envelope) return null;
+
+  const email =
+    typeof envelope.rootUser.email === "string" ? envelope.rootUser.email.trim().toLowerCase() : "";
+  if (email.endsWith("@mock.decentralised.art")) {
+    const fromEmail = email.replace(/@mock\.decentralised\.art$/i, "");
+    if (mockUsersById[fromEmail as keyof typeof mockUsersById]) return fromEmail;
+  }
+
+  const displayName =
+    typeof envelope.rootUser.display_name === "string"
+      ? envelope.rootUser.display_name.trim()
+      : typeof envelope.rootUser.displayName === "string"
+        ? envelope.rootUser.displayName.trim()
+        : "";
+  if (displayName) {
+    const byName = mockUsers.find((entry) => entry.nickname === displayName);
+    if (byName) return byName.id;
+  }
+
+  const address = normalizeFollowAddress(
+    typeof envelope.rootUser.ethereum_address === "string"
+      ? envelope.rootUser.ethereum_address
+      : typeof envelope.rootUser.ethereumAddress === "string"
+        ? envelope.rootUser.ethereumAddress
+        : "",
+  );
+  if (address) {
+    const byAddress = mockUsers.find((entry) => normalizeFollowAddress(entry.address) === address);
+    if (byAddress) return byAddress.id;
+  }
+
+  return null;
+};
+
+const resolveMockUserIdFromActiveChainSigner = (): string | null => {
+  if (!browser) return null;
+  const activeSignerAddress = resolveActiveChainSignerAddress();
+  if (!activeSignerAddress) return null;
+
+  for (const user of mockUsers) {
+    const storedAddress = normalizeFollowAddress(
+      getStoredMockEthereumAccount(`mock-user:${user.id}`)?.address ?? "",
+    );
+    if (storedAddress && storedAddress === activeSignerAddress) return user.id;
+  }
+
+  return null;
+};
+
+const defaultSocialPreferencesForPrototype = (userId: string): SocialPreferencesProfile => {
+  const followedIds = mockFollowingByUserId[userId as keyof typeof mockFollowingByUserId] ?? [];
+  const followedUserAddresses = uniqueStrings(
+    followedIds.map((id) => resolveKnownPrototypeUserAddress(id)).filter(Boolean),
+  );
+
+  return {
+    followedUserAddresses,
+    followedFormatHashes: [],
+  };
+};
+
 const normalizeFollowFormatHash = (value: string): string => {
   const trimmed = value.trim().toLowerCase();
   if (!trimmed) return "";
@@ -973,10 +1057,14 @@ const parseSocialPreferencesFromProfileJson = (
       [
         ...asStringArray(social.followed_user_addresses),
         ...asStringArray(social.followedUserAddresses),
+        ...asStringArray(social.followed_user_ids),
+        ...asStringArray(social.followedUserIds),
         ...asStringArray(profilePublic.followed_user_addresses),
         ...asStringArray(profilePublic.followedUserAddresses),
+        ...asStringArray(profilePublic.followed_user_ids),
+        ...asStringArray(profilePublic.followedUserIds),
       ]
-        .map(normalizeFollowAddress)
+        .map(normalizeFollowTarget)
         .filter(Boolean),
     ),
     followedFormatHashes: uniqueStrings(
@@ -1030,6 +1118,17 @@ const mergeToolboxIntoProfileJson = (
   };
 };
 
+const withoutSocialPreferenceAliases = (
+  record: Record<string, unknown>,
+): Record<string, unknown> => {
+  const next = { ...record };
+  delete next.followed_user_ids;
+  delete next.followedUserIds;
+  delete next.followedUserAddresses;
+  delete next.followedFormatHashes;
+  return next;
+};
+
 const mergeSocialPreferencesIntoProfileJson = (
   existingProfileJsonRaw: unknown,
   socialPreferences: SocialPreferencesProfile,
@@ -1041,15 +1140,17 @@ const mergeSocialPreferencesIntoProfileJson = (
   const existingSocial = asRecord(
     profilePublic.social_preferences ?? profilePublic.socialPreferences,
   );
+  const profilePublicCanonical = withoutSocialPreferenceAliases(profilePublic);
+  const existingSocialCanonical = withoutSocialPreferenceAliases(existingSocial);
 
   return {
     ...existingProfileJson,
     public: {
-      ...profilePublic,
+      ...profilePublicCanonical,
       followed_user_addresses: [...socialPreferences.followedUserAddresses],
       followed_format_hashes: [...socialPreferences.followedFormatHashes],
       social_preferences: {
-        ...existingSocial,
+        ...existingSocialCanonical,
         followed_user_addresses: [...socialPreferences.followedUserAddresses],
         followed_format_hashes: [...socialPreferences.followedFormatHashes],
       },
@@ -1076,26 +1177,94 @@ const resolveProfileStateFromMePayload = (mePayload: unknown): CurrentUserProfil
   };
 };
 
+const resolvePrototypeFallbackProfileState = (): CurrentUserProfileState | null => {
+  const mockUserId = resolveMockUserIdFromActiveChainSigner();
+  if (!mockUserId) return null;
+  return {
+    me: null,
+    userId: null,
+    social: defaultSocialPreferencesForPrototype(mockUserId),
+    toolbox: defaultToolboxLibraryForPrototype(),
+  };
+};
+
+const bootstrapPrototypeProfileState = async (
+  profileState: CurrentUserProfileState,
+  options?: { persist?: boolean },
+): Promise<CurrentUserProfileState> => {
+  if (profileState.social.followedUserAddresses.length > 0) return profileState;
+
+  const mockUserId =
+    resolveMockUserIdFromMePayload(profileState.me) ?? resolveMockUserIdFromActiveChainSigner();
+  if (!mockUserId) return profileState;
+
+  const prototypeSocial = defaultSocialPreferencesForPrototype(mockUserId);
+  if (prototypeSocial.followedUserAddresses.length === 0) return profileState;
+
+  const nextSocial: SocialPreferencesProfile = {
+    followedUserAddresses: uniqueStrings([
+      ...profileState.social.followedUserAddresses,
+      ...prototypeSocial.followedUserAddresses,
+    ]),
+    followedFormatHashes: profileState.social.followedFormatHashes,
+  };
+  const nextState = {
+    ...profileState,
+    social: nextSocial,
+  };
+
+  const envelope = extractUserEnvelope(profileState.me);
+  if (options?.persist !== false && envelope) {
+    try {
+      await updateUserById(envelope.userId, {
+        profile_json: mergeSocialPreferencesIntoProfileJson(envelope.profileJson, nextSocial),
+      });
+    } catch (error) {
+      console.warn("[Auth] Failed to persist prototype social bootstrap.", error);
+    }
+  }
+
+  return nextState;
+};
+
 export const getCurrentUserProfileState = async (options?: {
   preferCached?: boolean;
+  bootstrapPrototypeIfEmpty?: boolean;
 }): Promise<CurrentUserProfileState> => {
   if (!getToken()) {
-    return {
-      me: null,
-      userId: null,
-      social: defaultSocialPreferences(),
-      toolbox: defaultToolboxLibraryForPrototype(),
-    };
+    const prototypeFallback = options?.bootstrapPrototypeIfEmpty
+      ? resolvePrototypeFallbackProfileState()
+      : null;
+    return (
+      prototypeFallback ?? {
+        me: null,
+        userId: null,
+        social: defaultSocialPreferences(),
+        toolbox: defaultToolboxLibraryForPrototype(),
+      }
+    );
   }
 
   if (options?.preferCached) {
     const cachedPayload = readCachedMePayload();
     if (cachedPayload) {
-      return resolveProfileStateFromMePayload(cachedPayload);
+      const cachedState = resolveProfileStateFromMePayload(cachedPayload);
+      return options.bootstrapPrototypeIfEmpty
+        ? bootstrapPrototypeProfileState(cachedState, { persist: false })
+        : cachedState;
     }
   }
 
-  return resolveProfileStateFromMePayload(await getMe());
+  try {
+    const state = resolveProfileStateFromMePayload(await getMe());
+    return options?.bootstrapPrototypeIfEmpty ? bootstrapPrototypeProfileState(state) : state;
+  } catch (error) {
+    const prototypeFallback = options?.bootstrapPrototypeIfEmpty
+      ? resolvePrototypeFallbackProfileState()
+      : null;
+    if (prototypeFallback) return prototypeFallback;
+    throw error;
+  }
 };
 
 export const getCurrentUserToolboxLibrary = async (): Promise<ToolboxLibraryProfile> => {
@@ -1151,10 +1320,15 @@ export const addConditionToCurrentUserToolbox = async (conditionId: string): Pro
 export const addParticleToCurrentUserToolbox = async (particleId: string): Promise<void> =>
   addConnectorToCurrentUserToolbox(particleId);
 
-export const getCurrentUserSocialPreferences = async (_options?: {
+export const getCurrentUserSocialPreferences = async (options?: {
   bootstrapPrototypeIfEmpty?: boolean;
 }): Promise<SocialPreferencesProfile> => {
-  return (await getCurrentUserProfileState({ preferCached: true })).social;
+  return (
+    await getCurrentUserProfileState({
+      preferCached: true,
+      bootstrapPrototypeIfEmpty: options?.bootstrapPrototypeIfEmpty,
+    })
+  ).social;
 };
 
 export const saveCurrentUserSocialPreferences = async (
