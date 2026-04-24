@@ -1,9 +1,39 @@
 # Studio Connector-Centered Migration Spec
 
-Status: Updated after remote fetch
+Status: historical migration record; current code is connector-first at the chain boundary
 Owner: Frontend
 Repo: `hypermusic-frontend`
 Last updated: 2026-03-15
+Last reviewed: 2026-04-24
+
+## Current State Note (2026-04-24)
+
+This document records the original connector-centered migration plan. It is no longer a precise
+description of current frontend gaps.
+
+Implemented since this spec was written:
+
+- `src/lib/chain/registryApi.ts` has connector-first chain methods and no active Studio deploy path
+  posts `/chain/feature` or `/chain/particle`.
+- `src/lib/studio/domain/connectorModel.ts` and `src/lib/studio/domain/slotProjection.ts` exist.
+- `src/lib/chain/connectorContractAdapter.ts` round-trips current connector payloads.
+- `src/lib/studio/chainStudioAdapter.ts` reads `owned_connectors`,
+  `owned_transformations`, and `owned_conditions`.
+- Studio deploy order is transformations, conditions, then connectors.
+- Static/dynamic RI handling and execute payload construction are covered in
+  `docs/pt-ri-static-dynamic-integration-checklist.md`.
+
+Remaining frontend debt:
+
+- `src/routes/studio/+page.svelte` still carries most Studio state and behavior in one large route
+  module and should be split before major product expansion.
+- Compatibility types and names such as `feature`, `particle`, and `rootParticle` still exist inside
+  runtime/feed/map/mock-data layers. These are frontend compatibility shims around connector data,
+  not backend source-of-truth contracts.
+- Legacy/demo surfaces such as the old flow editor still reference `/feature`; they should either be
+  removed from active product paths or migrated separately.
+- Route names such as `/p/[id]` remain as compatibility routes even though UI copy now presents
+  connectors.
 
 ## 1. Objective
 
@@ -92,9 +122,9 @@ Studio must treat slot addressing as a projected index space, not a naive static
 - full feed/route rename migration
 - historical chain data reindexing
 
-## 6. Current Frontend Gaps (Code-Level)
+## 6. Original Frontend Gaps (Historical)
 
-Current frontend still assumes old model:
+At the time this spec was written, the frontend still assumed the old model:
 
 - `src/lib/studio/studioRuntime.ts`
   - registry uses `features + particles`

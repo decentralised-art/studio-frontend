@@ -2,7 +2,19 @@
 
 ## Developing
 
-Once you've created a project and installed dependencies with `npm install` (or `pnpm install` or `yarn`), start a development server:
+Use Node `22.12.0` as pinned in `.nvmrc`:
+
+```sh
+nvm use
+```
+
+If your shell does not auto-load `nvm`, use the installed local runtime explicitly:
+
+```sh
+PATH="$HOME/.nvm/versions/node/v22.12.0/bin:$PATH" npm run check
+```
+
+Once dependencies are installed with `npm install`, start a development server:
 
 ```sh
 npm run dev
@@ -15,6 +27,15 @@ Run linter
 
 ```sh
 npm run lint
+```
+
+Run the standard local verification set:
+
+```sh
+npm run check
+npm run lint
+npm test
+npm run build
 ```
 
 ## Building

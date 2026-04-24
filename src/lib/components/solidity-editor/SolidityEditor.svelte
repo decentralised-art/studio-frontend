@@ -1,7 +1,6 @@
 <script lang="ts">
-  import { onMount, onDestroy } from "svelte";
-  import * as monaco from "monaco-editor";
-  import { ensureSolidityLanguage } from "./monacoSolidity";
+  import { onDestroy, onMount } from "svelte";
+  import type * as Monaco from "monaco-editor/esm/vs/editor/editor.api.js";
   import type { LintIssue } from "./lintWorker";
   import { buildServicesApiUrl } from "$lib/url/url";
 
@@ -21,24 +20,31 @@
   }>();
 
   let el: HTMLDivElement;
-  let editor: monaco.editor.IStandaloneCodeEditor;
-  let model: monaco.editor.ITextModel;
+  let monaco: typeof Monaco | null = null;
+  let editor: Monaco.editor.IStandaloneCodeEditor | null = null;
+  let model: Monaco.editor.ITextModel | null = null;
 
-  let worker: Worker;
+  let worker: Worker | null = null;
+  let contentSubscription: { dispose: () => void } | null = null;
   let lintReqId = 0;
   let lastAppliedReqId = 0;
+  let destroyed = false;
+  let editorLoading = $state(true);
+  let editorError = $state<string | null>(null);
 
-  function toSeverity(s: LintIssue["severity"]): monaco.MarkerSeverity {
-    if (s === "error") return monaco.MarkerSeverity.Error;
-    if (s === "warning") return monaco.MarkerSeverity.Warning;
-    if (s === "info") return monaco.MarkerSeverity.Info;
-    return monaco.MarkerSeverity.Hint;
+  function toSeverity(s: LintIssue["severity"]) {
+    const monacoApi = monaco;
+    if (!monacoApi) return 1;
+    if (s === "error") return monacoApi.MarkerSeverity.Error;
+    if (s === "warning") return monacoApi.MarkerSeverity.Warning;
+    if (s === "info") return monacoApi.MarkerSeverity.Info;
+    return monacoApi.MarkerSeverity.Hint;
   }
 
   function applyMarkers(issues: LintIssue[]) {
-    if (!model) return;
+    if (!monaco || !model) return;
 
-    const markers: monaco.editor.IMarkerData[] = issues.map((i) => ({
+    const markers: Monaco.editor.IMarkerData[] = issues.map((i) => ({
       message: i.code ? `${i.message} (${i.code})` : i.message,
       severity: toSeverity(i.severity),
       startLineNumber: i.line,
@@ -61,98 +67,120 @@
     });
   }
 
-  onMount(() => {
-    ensureSolidityLanguage();
+  async function setupEditor() {
+    try {
+      const [monacoModule, solidityLanguage] = await Promise.all([
+        import("monaco-editor/esm/vs/editor/editor.api.js"),
+        import("./monacoSolidity"),
+      ]);
 
-    model = monaco.editor.createModel(value ?? "", "solidity");
+      if (destroyed || !el) return;
 
-    editor = monaco.editor.create(el, {
-      model,
-      readOnly,
-      automaticLayout: true,
+      const monacoApi = monacoModule;
+      monaco = monacoApi;
+      solidityLanguage.ensureSolidityLanguage();
 
-      stickyScroll: { enabled: !readOnly },
+      model = monacoApi.editor.createModel(value ?? "", "solidity");
 
-      minimap: { enabled: false },
-      fontSize: 13,
-      lineNumbers: "on",
-      tabSize: 2,
-      insertSpaces: true,
-      scrollBeyondLastLine: false,
-      wordWrap: "on",
-      renderValidationDecorations: "on",
-      suggestOnTriggerCharacters: true,
-      quickSuggestions: { other: true, comments: false, strings: false },
-    });
+      editor = monacoApi.editor.create(el, {
+        model,
+        readOnly,
+        automaticLayout: true,
 
-    // Completion items must include `range` (newer Monaco typings)
-    monaco.languages.registerCompletionItemProvider("solidity", {
-      triggerCharacters: [".", " "],
-      provideCompletionItems: (m, position) => {
-        const word = m.getWordUntilPosition(position);
-        const range: monaco.IRange = {
-          startLineNumber: position.lineNumber,
-          endLineNumber: position.lineNumber,
-          startColumn: word.startColumn,
-          endColumn: word.endColumn,
-        };
+        stickyScroll: { enabled: !readOnly },
 
-        return {
-          suggestions: [
-            {
-              label: "pragma solidity ^0.8.0;",
-              kind: monaco.languages.CompletionItemKind.Snippet,
-              insertText: "pragma solidity ^0.8.0;",
-              range,
-            },
-            {
-              label: "contract",
-              kind: monaco.languages.CompletionItemKind.Snippet,
-              insertText: "contract ${1:Name} {\n\t$0\n}\n",
-              insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
-              range,
-            },
-            {
-              label: "function",
-              kind: monaco.languages.CompletionItemKind.Snippet,
-              insertText: "function ${1:name}(${2:args}) ${3:public} ${4:returns ()} {\n\t$0\n}\n",
-              insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
-              range,
-            },
-          ],
-        };
-      },
-    });
+        minimap: { enabled: false },
+        fontSize: 13,
+        lineNumbers: "on",
+        tabSize: 2,
+        insertSpaces: true,
+        scrollBeyondLastLine: false,
+        wordWrap: "on",
+        renderValidationDecorations: "on",
+        suggestOnTriggerCharacters: true,
+        quickSuggestions: { other: true, comments: false, strings: false },
+      });
 
-    worker = new Worker(new URL("./lintWorker.ts", import.meta.url), {
-      type: "module",
-    });
+      // Completion items must include `range` (newer Monaco typings)
+      monacoApi.languages.registerCompletionItemProvider("solidity", {
+        triggerCharacters: [".", " "],
+        provideCompletionItems: (m, position) => {
+          const word = m.getWordUntilPosition(position);
+          const range: Monaco.IRange = {
+            startLineNumber: position.lineNumber,
+            endLineNumber: position.lineNumber,
+            startColumn: word.startColumn,
+            endColumn: word.endColumn,
+          };
 
-    worker.onmessage = (ev: MessageEvent<{ id: number; issues: LintIssue[] }>) => {
-      const { id, issues } = ev.data;
-      if (id < lastAppliedReqId) return; // ignore stale responses
-      lastAppliedReqId = id;
-      applyMarkers(issues);
-    };
+          return {
+            suggestions: [
+              {
+                label: "pragma solidity ^0.8.0;",
+                kind: monacoApi.languages.CompletionItemKind.Snippet,
+                insertText: "pragma solidity ^0.8.0;",
+                range,
+              },
+              {
+                label: "contract",
+                kind: monacoApi.languages.CompletionItemKind.Snippet,
+                insertText: "contract ${1:Name} {\n\t$0\n}\n",
+                insertTextRules: monacoApi.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+                range,
+              },
+              {
+                label: "function",
+                kind: monacoApi.languages.CompletionItemKind.Snippet,
+                insertText:
+                  "function ${1:name}(${2:args}) ${3:public} ${4:returns ()} {\n\t$0\n}\n",
+                insertTextRules: monacoApi.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+                range,
+              },
+            ],
+          };
+        },
+      });
 
-    requestLint();
+      worker = new Worker(new URL("./lintWorker.ts", import.meta.url), {
+        type: "module",
+      });
 
-    const sub = model.onDidChangeContent(() => {
-      const v = model.getValue();
-
-      // update bindable prop (enables bind:value)
-      value = v;
-
-      // optional callback prop
-      onChange?.(v);
+      worker.onmessage = (ev: MessageEvent<{ id: number; issues: LintIssue[] }>) => {
+        const { id, issues } = ev.data;
+        if (id < lastAppliedReqId) return; // ignore stale responses
+        lastAppliedReqId = id;
+        applyMarkers(issues);
+      };
 
       requestLint();
-    });
 
-    return () => sub.dispose();
+      contentSubscription = model.onDidChangeContent(() => {
+        if (!model) return;
+        const v = model.getValue();
+
+        // update bindable prop (enables bind:value)
+        value = v;
+
+        // optional callback prop
+        onChange?.(v);
+
+        requestLint();
+      });
+    } catch (error) {
+      if (!destroyed)
+        editorError = error instanceof Error ? error.message : "Editor failed to load.";
+    } finally {
+      if (!destroyed) editorLoading = false;
+    }
+  }
+
+  onMount(() => {
+    void setupEditor();
   });
 
   onDestroy(() => {
+    destroyed = true;
+    contentSubscription?.dispose();
     worker?.terminate();
     editor?.dispose();
     model?.dispose();
@@ -175,7 +203,13 @@
 </script>
 
 <div class="wrap" class:readonly={readOnly}>
-  <div class="editor" bind:this={el}></div>
+  <div class="editor" bind:this={el}>
+    {#if editorLoading}
+      <div class="editor-status">Loading editor...</div>
+    {:else if editorError}
+      <div class="editor-status error">{editorError}</div>
+    {/if}
+  </div>
 </div>
 
 <style>
@@ -206,5 +240,22 @@
     display: flex;
     flex-direction: row;
     overflow: hidden;
+    position: relative;
+  }
+
+  .editor-status {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    color: rgba(255, 255, 255, 0.62);
+    font-size: 0.875rem;
+  }
+
+  .editor-status.error {
+    color: #ffb4b4;
+    padding: 1rem;
+    text-align: center;
+    overflow-wrap: anywhere;
   }
 </style>

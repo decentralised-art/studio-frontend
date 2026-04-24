@@ -1,9 +1,10 @@
 # PT Static/Dynamic RI Frontend Integration Checklist
 
-Status: Planned  
+Status: Implemented and verified
 Owner: Frontend  
 Repo: `hypermusic-frontend`  
 Created: 2026-04-11
+Last verified: 2026-04-24
 
 ## Goal
 
@@ -164,9 +165,10 @@ Excluded:
 
 ### Acceptance
 
-- [ ] `npm run lint` passes
-- [ ] `npm test` passes
-- [ ] `npm run build` passes
+- [x] `npm run check` passes under Node `22.12.0`
+- [x] `npm run lint` passes under Node `22.12.0`
+- [x] `npm test` passes under Node `22.12.0`
+- [x] `npm run build` passes under Node `22.12.0`
 
 ## Execution Order
 
@@ -184,6 +186,16 @@ Excluded:
 Run from `hypermusic-frontend`:
 
 ```bash
+PATH="$HOME/.nvm/versions/node/v22.12.0/bin:$PATH" npm run check
+PATH="$HOME/.nvm/versions/node/v22.12.0/bin:$PATH" npm run lint
+PATH="$HOME/.nvm/versions/node/v22.12.0/bin:$PATH" npm test
+PATH="$HOME/.nvm/versions/node/v22.12.0/bin:$PATH" npm run build
+```
+
+If your shell already honors `.nvmrc`, the shorter commands are equivalent:
+
+```bash
+npm run check
 npm run lint
 npm test
 npm run build
@@ -198,6 +210,7 @@ rg -n "dynamic_ri|static_ri" src tests
 
 ## Notes
 
+- `.nvmrc` pins Node `22.12.0`. Older local Node versions can fail before project code is checked because current Svelte/Vite tooling imports `node:util.styleText`.
 - Keep naming and payload keys exactly as backend contracts (`dynamic_ri`, `static_ri`, `start_point`, `transformation_shift`).
 - Treat DFS positioning as protocol-facing behavior, not only UI state.
 - Prefer strict validation at edit-time and request-time to avoid backend roundtrips for obvious invalid states.

@@ -68,6 +68,39 @@
   import { projectRiPositionsToConnectorNodes } from "$lib/studio/riProjectionMapping";
   import { materializeReferencedRiIntoRootStatic } from "$lib/studio/riMaterialization";
   import { resolveConnectorRiMutability, resolveNextRiLocked } from "$lib/studio/riMutability";
+  import {
+    isApiPath,
+    isConnectorRequestBody,
+    isResolvedTreePreview,
+    normalizeDeployRequests,
+    parseTransformationPreview,
+    toConnectorBodyFromDef,
+    type ApiDraftPreview,
+    type ApiDraftRequest,
+    type ApiResolvedConnectorPreview,
+    type ApiResolvedTreePreview,
+  } from "$lib/studio/apiDraftPreview";
+  import {
+    cloneStaticRiMap,
+    parseConnectorEdgeBindingSlot,
+    parseConnectorEdgeRelation,
+    parseStaticRiPayload,
+    resolveConnectorSelfStaticRi,
+    toCanonicalPositionKey,
+    toInt,
+  } from "$lib/studio/connectorGraph";
+  import {
+    formatTransformationPreview,
+    formatTransformationPreviewLabel,
+    isConnectorKind,
+    isValidChainName,
+    normalizeKey,
+    parseArgsInput,
+    slugify,
+    titleize,
+    toConditionContractName,
+    toContractName,
+  } from "$lib/studio/studioNaming";
   import { buildStudioRuntime } from "$lib/studio/studioRuntime";
   import {
     fetchChainOwnedStudioSnapshot,
@@ -492,101 +525,7 @@
     | "plugin"
     | "agent";
 
-  const titleize = (value: string) =>
-    value
-      .split("-")
-      .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
-      .join(" ");
-
-  const normalizeKey = (value: string) => value.toLowerCase().replace(/[\s-_]+/g, "");
-
-  const slugify = (value: string) =>
-    value
-      .toLowerCase()
-      .replace(/[^a-z0-9_]+/g, "-")
-      .replace(/^-+|-+$/g, "");
   const touchDeps = (..._deps: unknown[]) => _deps.length;
-
-  const formatTransformationPreviewLabel = (name: string, args: number[] = []) => {
-    const trimmed = name.trim() || "Transformation";
-    if (!args.length) return trimmed;
-    return `${trimmed} (${args.join(", ")})`;
-  };
-
-  const formatTransformationPreview = (transformation: TransformationInstance) =>
-    formatTransformationPreviewLabel(transformation.name, transformation.args);
-
-  const isConnectorKind = (kind: StudioNodeKind) => kind === "feature" || kind === "connector";
-
-  const isValidChainName = (value: string) => /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(value);
-
-  const toInt = (value: number | string | null | undefined) => {
-    if (value === null || value === undefined) return undefined;
-    const num = Number(value);
-    if (!Number.isFinite(num)) return undefined;
-    return Math.max(0, Math.trunc(num));
-  };
-
-  const toCanonicalPositionKey = (value: number | string | null | undefined): string | null => {
-    if (value === null || value === undefined) return null;
-    const asNumber = typeof value === "number" ? value : Number(String(value).trim());
-    if (!Number.isInteger(asNumber) || asNumber < 0) return null;
-    return String(asNumber);
-  };
-
-  const parseConnectorEdgeRelation = (edge: Edge): "composite" | "binding" | "unknown" => {
-    if (edge.data && typeof edge.data === "object") {
-      const relation = (edge.data as { relation?: unknown; kind?: unknown }).relation;
-      if (relation === "composite" || relation === "binding") return relation;
-      const kind = (edge.data as { relation?: unknown; kind?: unknown }).kind;
-      if (kind === "composite" || kind === "binding") return kind;
-    }
-    const label = typeof edge.label === "string" ? edge.label.trim().toLowerCase() : "";
-    if (label.startsWith("composite")) return "composite";
-    if (label.startsWith("binding")) return "binding";
-    return "unknown";
-  };
-
-  const parseConnectorEdgeBindingSlot = (edge: Edge): number | null => {
-    if (edge.data && typeof edge.data === "object") {
-      const slot = (edge.data as { bindingSlot?: unknown; binding_slot?: unknown; slot?: unknown })
-        .bindingSlot;
-      if (Number.isInteger(slot) && Number(slot) >= 0) return Number(slot);
-      const alt = (edge.data as { bindingSlot?: unknown; binding_slot?: unknown; slot?: unknown })
-        .binding_slot;
-      if (Number.isInteger(alt) && Number(alt) >= 0) return Number(alt);
-      const legacy = (
-        edge.data as {
-          bindingSlot?: unknown;
-          binding_slot?: unknown;
-          slot?: unknown;
-        }
-      ).slot;
-      if (Number.isInteger(legacy) && Number(legacy) >= 0) return Number(legacy);
-    }
-    const label = typeof edge.label === "string" ? edge.label : "";
-    const match = label.match(/slot\s+(\d+)/i);
-    if (!match) return null;
-    const parsed = Number(match[1]);
-    return Number.isInteger(parsed) && parsed >= 0 ? parsed : null;
-  };
-
-  const cloneStaticRiMap = (
-    input: Record<string, StudioRunningInstanceRef> | null | undefined,
-  ): Record<string, StudioRunningInstanceRef> => {
-    if (!input || typeof input !== "object") return {};
-    const normalizedEntries = Object.entries(input)
-      .map(([rawKey, value]) => {
-        const key = toCanonicalPositionKey(rawKey);
-        if (!key || !value || typeof value !== "object") return null;
-        const startPoint = toInt(value.startPoint) ?? 0;
-        const transformationShift = toInt(value.transformationShift) ?? 0;
-        return [key, { startPoint, transformationShift }] as const;
-      })
-      .filter((entry): entry is readonly [string, StudioRunningInstanceRef] => Boolean(entry))
-      .sort((a, b) => Number(a[0]) - Number(b[0]));
-    return Object.fromEntries(normalizedEntries);
-  };
 
   const getConnectorStaticRi = (
     node: StudioNode | null | undefined,
@@ -594,63 +533,6 @@
     if (!node || !isConnectorKind(node.data.kind)) return {};
     return cloneStaticRiMap(node.data.staticRi);
   };
-
-  const parseStaticRiPayload = (input: unknown): Record<string, StudioRunningInstanceRef> => {
-    if (!input || typeof input !== "object" || Array.isArray(input)) return {};
-    const out: Record<string, StudioRunningInstanceRef> = {};
-    Object.entries(input as Record<string, unknown>).forEach(([rawKey, rawValue]) => {
-      const key = toCanonicalPositionKey(rawKey);
-      if (!key || !rawValue || typeof rawValue !== "object" || Array.isArray(rawValue)) return;
-      const value = rawValue as Record<string, unknown>;
-      const startPoint = toInt(value.start_point as number | string | null | undefined);
-      const transformationShift = toInt(
-        value.transformation_shift as number | string | null | undefined,
-      );
-      const startPointAlt = toInt(value.startPoint as number | string | null | undefined);
-      const transformationShiftAlt = toInt(
-        value.transformationShift as number | string | null | undefined,
-      );
-      out[key] = {
-        startPoint: startPoint ?? startPointAlt ?? 0,
-        transformationShift: transformationShift ?? transformationShiftAlt ?? 0,
-      };
-    });
-    return cloneStaticRiMap(out);
-  };
-
-  const resolveConnectorSelfStaticRi = (
-    staticRiInput: Record<string, StudioRunningInstanceRef> | null | undefined,
-    absolutePosition?: number | null,
-  ): StudioRunningInstanceRef | null => {
-    const staticRi = cloneStaticRiMap(staticRiInput);
-    if (!Object.keys(staticRi).length) return null;
-
-    if (staticRi["0"]) return staticRi["0"];
-    const absoluteKey = toCanonicalPositionKey(absolutePosition ?? null);
-    if (absoluteKey === "0" && staticRi[absoluteKey]) return staticRi[absoluteKey];
-    return null;
-  };
-
-  const toContractName = (label: string) => {
-    const cleaned = label.replace(/[^A-Za-z0-9]+/g, " ").trim();
-    const parts = cleaned.length ? cleaned.split(/\s+/) : [];
-    let name = parts.map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join("");
-    if (!name) name = "Transformation";
-    if (/^[0-9]/.test(name)) name = `Tx${name}`;
-    return name;
-  };
-
-  const toConditionContractName = (label: string) => {
-    const name = toContractName(label);
-    return name === "Transformation" ? "Condition" : name;
-  };
-
-  const parseArgsInput = (value: string) =>
-    value
-      .split(",")
-      .map((segment) => Number(segment.trim()))
-      .filter((num) => Number.isFinite(num))
-      .map((num) => Math.trunc(num));
 
   const transformationTemplate = $derived.by(() => {
     const contractName = toContractName(transformationDraftName);
@@ -8489,123 +8371,6 @@
   let apiEditorApplying = false;
   let chainAutoSyncStarted = false;
 
-  type ApiDraftRequest = {
-    method?: string;
-    path?: string;
-    body?: Record<string, unknown>;
-  };
-
-  type ApiConnectorRequestBody = {
-    name?: string;
-    dimensions?: Array<Record<string, unknown>>;
-    condition_name?: string;
-    condition_args?: number[];
-    static_ri?: Record<string, { start_point: number; transformation_shift: number }>;
-  };
-
-  type ApiDraftPreview = {
-    ok?: boolean;
-    warnings?: string[];
-    root_connector?: string | null;
-    deploy_requests?: ApiDraftRequest[];
-    requests?: {
-      conditions?: ApiDraftRequest[];
-      transformations?: ApiDraftRequest[];
-      connectors?: ApiDraftRequest[];
-    };
-  };
-
-  type ApiResolvedConnectorPreview = {
-    name?: string;
-    label?: string;
-    dimensions?: number;
-    connector_rows?: Array<{
-      dimension?: number;
-      transformations?: string[];
-    }>;
-    condition?: string;
-    from_network?: boolean;
-    static_ri?: Record<string, { start_point?: number; transformation_shift?: number }>;
-  };
-
-  type ApiResolvedLinkPreview = {
-    owner_connector?: string;
-    relation?: string;
-    to_connector?: string;
-    dimension?: number;
-    binding_slot?: number;
-  };
-
-  type ApiResolvedTreePreview = {
-    root_connector?: string | null;
-    root_connector_label?: string | null;
-    connectors?: ApiResolvedConnectorPreview[];
-    links?: ApiResolvedLinkPreview[];
-  };
-
-  const isConnectorRequestBody = (value: unknown): value is ApiConnectorRequestBody => {
-    if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-    const candidate = value as Record<string, unknown>;
-    return (
-      typeof candidate.name === "string" &&
-      Array.isArray(candidate.dimensions) &&
-      candidate.dimensions.every((dimension) => Boolean(dimension && typeof dimension === "object"))
-    );
-  };
-
-  const isResolvedTreePreview = (value: unknown): value is ApiResolvedTreePreview => {
-    if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-    const candidate = value as Record<string, unknown>;
-    return Array.isArray(candidate.connectors);
-  };
-
-  const parseTransformationPreview = (
-    rawValue: string,
-  ): { name: string; args: number[] } | null => {
-    const raw = rawValue.trim();
-    if (!raw) return null;
-    const match = raw.match(/^\s*([^()]+?)(?:\(([^)]*)\))?\s*$/);
-    const name = (match?.[1] ?? raw).trim();
-    if (!name) return null;
-    const argsRaw = (match?.[2] ?? "").trim();
-    const args = argsRaw
-      ? argsRaw
-          .split(",")
-          .map((value) => Number(value.trim()))
-          .filter((value) => Number.isFinite(value))
-      : [];
-    return { name, args };
-  };
-
-  const toConnectorBodyFromDef = (connector: StudioConnectorDef): Record<string, unknown> => ({
-    name: connector.name,
-    dimensions: connector.dimensions.map((dimension) => ({
-      transformations: dimension.transformations.map((tx) => ({
-        name: tx.name,
-        args: [...tx.args],
-      })),
-      ...(dimension.composite ? { composite: dimension.composite } : {}),
-      ...(Object.keys(dimension.bindings ?? {}).length
-        ? { bindings: { ...dimension.bindings } }
-        : {}),
-    })),
-    condition_name: connector.conditionName ?? "",
-    condition_args: connector.conditionName ? [...(connector.conditionArgs ?? [])] : [],
-    ...(connector.staticRi && Object.keys(connector.staticRi).length
-      ? {
-          static_ri: Object.fromEntries(
-            Object.entries(connector.staticRi).map(([key, value]) => [
-              key,
-              {
-                start_point: toInt(value.startPoint) ?? 0,
-                transformation_shift: toInt(value.transformationShift) ?? 0,
-              },
-            ]),
-          ),
-        }
-      : {}),
-  });
-
   const convertResolvedTreePreviewToDraft = (
     resolved: ApiResolvedTreePreview,
   ): {
@@ -8776,49 +8541,6 @@
       },
       readOnlyByName,
     };
-  };
-
-  const normalizeApiRequestPath = (path?: string) => {
-    const raw = typeof path === "string" ? path.trim() : "";
-    if (!raw) return "";
-    try {
-      if (raw.startsWith("http://") || raw.startsWith("https://")) {
-        return new URL(raw).pathname.replace(/\/+$/, "");
-      }
-    } catch {
-      // fall through to raw path
-    }
-    return raw.replace(/\/+$/, "");
-  };
-
-  const isApiPath = (path: string, expected: string) => {
-    const normalized = normalizeApiRequestPath(path);
-    return normalized === expected || normalized.endsWith(expected);
-  };
-
-  const normalizeDeployRequests = (
-    preview: ApiDraftPreview | ApiDraftRequest[],
-  ): ApiDraftRequest[] => {
-    if (Array.isArray(preview)) {
-      return preview.filter((request): request is ApiDraftRequest =>
-        Boolean(request && typeof request === "object"),
-      );
-    }
-
-    if (Array.isArray(preview.deploy_requests)) {
-      return preview.deploy_requests.filter((request): request is ApiDraftRequest =>
-        Boolean(request && typeof request === "object"),
-      );
-    }
-
-    const requests = preview.requests;
-    if (!requests || typeof requests !== "object") return [];
-    const conditions = Array.isArray(requests.conditions) ? requests.conditions : [];
-    const transformations = Array.isArray(requests.transformations) ? requests.transformations : [];
-    const connectors = Array.isArray(requests.connectors) ? requests.connectors : [];
-    return [...conditions, ...transformations, ...connectors].filter(
-      (request): request is ApiDraftRequest => Boolean(request && typeof request === "object"),
-    );
   };
 
   const applyApiPreviewJsonToStudio = (rawJson: string) => {

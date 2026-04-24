@@ -2,6 +2,13 @@ import { sveltekit } from "@sveltejs/kit/vite";
 import tailwindcss from "@tailwindcss/vite";
 import { defineConfig } from "vitest/config";
 
+const toBuildPath = (id: string) => id.replaceAll("\\", "/");
+const isExpectedDependencyWarning = (code: unknown, message = "") =>
+  ((code === "UNUSED_EXTERNAL_IMPORT" ||
+    (message.includes("never used") && message.includes("@xyflow/system"))) &&
+    message.includes("@xyflow/system")) ||
+  (code === "CIRCULAR_DEPENDENCY" && message.includes("node_modules/d3-"));
+
 export default defineConfig({
   plugins: [tailwindcss(), sveltekit()],
 
@@ -57,9 +64,26 @@ export default defineConfig({
     sourcemap: false,
     minify: "esbuild",
     rollupOptions: {
+      onLog(level, log, handler) {
+        if (level === "warn" && isExpectedDependencyWarning(log.code, log.message ?? "")) {
+          return;
+        }
+
+        handler(level, log);
+      },
+      onwarn(warning, warn) {
+        const message = warning.message ?? "";
+        if (isExpectedDependencyWarning(warning.code, message)) {
+          return;
+        }
+
+        warn(warning);
+      },
       output: {
         manualChunks(id) {
-          if (id.includes("node_modules/d3-")) return "d3";
+          const buildPath = toBuildPath(id);
+          if (buildPath.includes("node_modules/@xyflow/")) return "xyflow";
+          if (buildPath.includes("node_modules/d3-")) return "d3";
         },
       },
     },

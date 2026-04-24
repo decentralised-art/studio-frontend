@@ -1,7 +1,8 @@
-# Chain Format UX Contract (PR-1 Foundation)
+# Chain Format UX Contract
 
-Status: agreed for implementation
+Status: implemented
 Scope: frontend only (no backend changes in this step)
+Last verified: 2026-04-24
 
 ## 1) Canonical route
 
@@ -18,9 +19,10 @@ Scope: frontend only (no backend changes in this step)
 ## 3) Data authority
 
 - Chain format membership is sourced only from:
-  - `GET /chain/format/:hash?limit=:n&page=:n`
+  - `GET /chain/format/:hash?limit=:n`
+  - next pages use `after=:cursor` from `cursor.next_after`
 - Connector-level format identity is sourced only from:
-  - `GET /chain/connector/:name[/address] -> format_hash`
+  - `GET /chain/connector/:name -> format_hash`
 
 ## 4) Local formats vs chain formats
 
@@ -30,9 +32,16 @@ Scope: frontend only (no backend changes in this step)
 
 ## 5) Pagination requirements
 
-- `/chain/format` requires both query params:
+- `/chain/format/:hash` requires:
   - `limit`
-  - `page`
+- Further pages use:
+  - `after`
+- Cursor fields are resolved from the current backend response:
+  - `cursor.has_more`
+  - `cursor.next_after`
+- The frontend still accepts legacy flat cursor fields for compatibility:
+  - `has_more`
+  - `next_after`
 - Frontend must support full pagination to fetch complete connector membership sets.
 
 ## 6) Error behavior
