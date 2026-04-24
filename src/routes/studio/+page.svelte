@@ -82,26 +82,22 @@
   import { materializeReferencedRiIntoRootStatic } from "$lib/studio/riMaterialization";
   import { resolveConnectorRiMutability, resolveNextRiLocked } from "$lib/studio/riMutability";
   import {
-    isApiPath,
-    isConnectorRequestBody,
-    isResolvedTreePreview,
-    normalizeDeployRequests,
-    parseTransformationPreview,
-    toConnectorBodyFromDef,
-    type ApiDraftPreview,
-    type ApiDraftRequest,
-    type ApiResolvedConnectorPreview,
-    type ApiResolvedTreePreview,
-  } from "$lib/studio/apiDraftPreview";
+    buildApiConnectorRequestBodyPreview,
+    buildApiGraphFromPreviewJson,
+    buildApiResolvedConnectorTreePreview,
+  } from "$lib/studio/apiGraphConversion";
   import {
     cloneStaticRiMap,
     parseConnectorEdgeBindingSlot,
     parseConnectorEdgeRelation,
-    parseStaticRiPayload,
     resolveConnectorSelfStaticRi,
     toCanonicalPositionKey,
     toInt,
   } from "$lib/studio/connectorGraph";
+  import {
+    buildConnectorTreeGraph as buildConnectorTreeGraphFromRegistry,
+    computeConnectorOpenSlotsInRegistry,
+  } from "$lib/studio/connectorTreeGraph";
   import {
     formatTransformationPreview,
     formatTransformationPreviewLabel,
@@ -146,6 +142,14 @@
     upsertLibraryItem,
   } from "$lib/studio/studioRegistryState";
   import {
+    createStudioChainPostTracer,
+    extractChainDeployErrorMessage,
+    publishConditionWithTrace,
+    publishConnectorWithTrace,
+    publishTransformationWithTrace,
+    type DeployTraceEntry,
+  } from "$lib/studio/studioDeployTrace";
+  import {
     clampPanelWidth,
     getStudioPanelBounds,
     getStudioPanelScale,
@@ -184,15 +188,11 @@
   import { clearChainToken, getChainToken } from "$lib/auth/session";
   import {
     ChainApiRequestError,
-    type ChainApiPostResult,
     type ChainExecutePayload,
     getChainCondition,
     getChainTransformation,
     normalizeFormatHash,
-    postChainConnectorDetailed,
-    postChainConditionDetailed,
     postChainExecuteDetailed,
-    postChainTransformationDetailed,
   } from "$lib/chain/registryApi";
   import { createEphemeralDeployName, isReservedCoreCollectionName } from "$lib/chain/deployNaming";
   import { type LibraryItem } from "$lib/data/studioLibrary";
@@ -416,17 +416,14 @@
   let chainDeployBusy = $state(false);
   let chainDeployStatus = $state<string | null>(null);
   let chainDeployError = $state<string | null>(null);
-  type DeployTraceEntry = {
-    id: string;
-    method: "POST";
-    path: string;
-    requestBody: unknown;
-    responseStatus: number | null;
-    responseBody: unknown;
-    ok: boolean;
-    at: number;
-  };
   let deployTraceEntries = $state<DeployTraceEntry[]>([]);
+  const appendDeployTraceEntry = (entry: DeployTraceEntry) => {
+    deployTraceEntries = [...deployTraceEntries, entry];
+  };
+  const traceStudioChainPost = createStudioChainPostTracer({
+    withAuthRetry: withChainAuthRetry,
+    appendEntry: appendDeployTraceEntry,
+  });
   let apiEditorText = $state("");
   let apiEditorError = $state<string | null>(null);
   let apiEditorStatus = $state<string | null>(null);
@@ -3764,60 +3761,6 @@
     chainDeployStatus = "Authenticating with chain...";
     await ensureChainAuthForStudio();
 
-    const logDeployTraceEntryToConsole = (entry: DeployTraceEntry) => {
-      const label = `[Studio deploy] ${entry.method} ${entry.path} -> ${entry.responseStatus ?? "n/a"}`;
-      if (typeof console.groupCollapsed === "function") {
-        console.groupCollapsed(label);
-        console.log("Request body:", entry.requestBody);
-        console.log("Response body:", entry.responseBody);
-        console.groupEnd();
-        return;
-      }
-      console.log(label, { requestBody: entry.requestBody, responseBody: entry.responseBody });
-    };
-
-    async function traceChainPost<T>(
-      path: string,
-      requestBody: unknown,
-      operation: () => Promise<ChainApiPostResult<T>>,
-    ): Promise<T> {
-      try {
-        const result = await withChainAuthRetry(operation);
-        const entry: DeployTraceEntry = {
-          id: `deploy-trace-${crypto.randomUUID()}`,
-          method: "POST",
-          path,
-          requestBody,
-          responseStatus: result.status,
-          responseBody: result.body,
-          ok: true,
-          at: Date.now(),
-        };
-        deployTraceEntries = [...deployTraceEntries, entry];
-        logDeployTraceEntryToConsole(entry);
-        return result.body;
-      } catch (error) {
-        const entry: DeployTraceEntry = {
-          id: `deploy-trace-${crypto.randomUUID()}`,
-          method: "POST",
-          path,
-          requestBody,
-          responseStatus: error instanceof ChainApiRequestError ? error.status : null,
-          responseBody:
-            error instanceof ChainApiRequestError
-              ? error.responseBody
-              : error instanceof Error
-                ? { message: error.message }
-                : { message: "Unknown error" },
-          ok: false,
-          at: Date.now(),
-        };
-        deployTraceEntries = [...deployTraceEntries, entry];
-        logDeployTraceEntryToConsole(entry);
-        throw error;
-      }
-    }
-
     const draftSources = collectDraftTransformationSources(nodes);
     const localConditions = nodes.filter(
       (node) => node.data.kind === "condition" && !node.data.fromNetwork,
@@ -3830,9 +3773,7 @@
           name: conditionName,
           sol_src: getConditionCode(conditionNode.id),
         };
-        await traceChainPost("/chain/condition", requestBody, () =>
-          postChainConditionDetailed(requestBody),
-        );
+        await publishConditionWithTrace(traceStudioChainPost, requestBody);
         addItemToToolboxLibrary("condition", conditionName);
       }
     }
@@ -3844,9 +3785,7 @@
       const source = draftSources.get(name);
       if (!source) continue;
       const requestBody = { name, sol_src: source.code };
-      await traceChainPost("/chain/transformation", requestBody, () =>
-        postChainTransformationDetailed(requestBody),
-      );
+      await publishTransformationWithTrace(traceStudioChainPost, requestBody);
       addItemToToolboxLibrary("transformation", name);
     }
 
@@ -3872,9 +3811,7 @@
       const def = runtime.registry.connectors[connectorName];
       if (!def) continue;
       const requestBody = toProtocolConnectorPayload(def);
-      await traceChainPost("/chain/connector", requestBody, () =>
-        postChainConnectorDetailed(requestBody),
-      );
+      await publishConnectorWithTrace(traceStudioChainPost, requestBody);
       addItemToToolboxLibrary("connector", connectorName);
     }
 
@@ -4925,35 +4862,10 @@
     chainDeployError = null;
     chainDeployStatus = `Deploying condition ${trimmedName}...`;
 
-    const logDeployTraceEntryToConsole = (entry: DeployTraceEntry) => {
-      const label = `[Studio deploy] ${entry.method} ${entry.path} -> ${entry.responseStatus ?? "n/a"}`;
-      if (typeof console.groupCollapsed === "function") {
-        console.groupCollapsed(label);
-        console.log("Request body:", entry.requestBody);
-        console.log("Response body:", entry.responseBody);
-        console.groupEnd();
-        return;
-      }
-      console.log(label, { requestBody: entry.requestBody, responseBody: entry.responseBody });
-    };
-
     const requestBody = { name: trimmedName, sol_src: conditionDraftCode };
     try {
       await ensureChainAuthForStudio();
-      const result = await withChainAuthRetry(() => postChainConditionDetailed(requestBody));
-
-      const successEntry: DeployTraceEntry = {
-        id: `deploy-trace-${crypto.randomUUID()}`,
-        method: "POST",
-        path: "/chain/condition",
-        requestBody,
-        responseStatus: result.status,
-        responseBody: result.body,
-        ok: true,
-        at: Date.now(),
-      };
-      deployTraceEntries = [...deployTraceEntries, successEntry];
-      logDeployTraceEntryToConsole(successEntry);
+      await publishConditionWithTrace(traceStudioChainPost, requestBody);
 
       const inferredArgsCount = Math.max(
         0,
@@ -5002,34 +4914,7 @@
       chainDeployStatus = `Deployed condition ${trimmedName}.`;
       closeConditionEditor();
     } catch (error) {
-      const errorEntry: DeployTraceEntry = {
-        id: `deploy-trace-${crypto.randomUUID()}`,
-        method: "POST",
-        path: "/chain/condition",
-        requestBody,
-        responseStatus: error instanceof ChainApiRequestError ? error.status : null,
-        responseBody:
-          error instanceof ChainApiRequestError
-            ? error.responseBody
-            : error instanceof Error
-              ? { message: error.message }
-              : { message: "Unknown error" },
-        ok: false,
-        at: Date.now(),
-      };
-      deployTraceEntries = [...deployTraceEntries, errorEntry];
-      logDeployTraceEntryToConsole(errorEntry);
-
-      const responseBody = error instanceof ChainApiRequestError ? error.responseBody : undefined;
-      const responseMessage =
-        responseBody &&
-        typeof responseBody === "object" &&
-        "message" in responseBody &&
-        typeof (responseBody as { message?: unknown }).message === "string"
-          ? ((responseBody as { message: string }).message ?? "").trim()
-          : "";
-      const message =
-        responseMessage || (error instanceof Error ? error.message : "Failed to deploy condition.");
+      const message = extractChainDeployErrorMessage(error, "Failed to deploy condition.");
       conditionDraftError = message;
       chainDeployError = message;
       chainDeployStatus = null;
@@ -5085,35 +4970,10 @@
     chainDeployError = null;
     chainDeployStatus = `Deploying transformation ${trimmedName}...`;
 
-    const logDeployTraceEntryToConsole = (entry: DeployTraceEntry) => {
-      const label = `[Studio deploy] ${entry.method} ${entry.path} -> ${entry.responseStatus ?? "n/a"}`;
-      if (typeof console.groupCollapsed === "function") {
-        console.groupCollapsed(label);
-        console.log("Request body:", entry.requestBody);
-        console.log("Response body:", entry.responseBody);
-        console.groupEnd();
-        return;
-      }
-      console.log(label, { requestBody: entry.requestBody, responseBody: entry.responseBody });
-    };
-
     const requestBody = { name: trimmedName, sol_src: transformationDraftCode };
     try {
       await ensureChainAuthForStudio();
-      const result = await withChainAuthRetry(() => postChainTransformationDetailed(requestBody));
-
-      const successEntry: DeployTraceEntry = {
-        id: `deploy-trace-${crypto.randomUUID()}`,
-        method: "POST",
-        path: "/chain/transformation",
-        requestBody,
-        responseStatus: result.status,
-        responseBody: result.body,
-        ok: true,
-        at: Date.now(),
-      };
-      deployTraceEntries = [...deployTraceEntries, successEntry];
-      logDeployTraceEntryToConsole(successEntry);
+      await publishTransformationWithTrace(traceStudioChainPost, requestBody);
 
       deployedRegistry = {
         ...deployedRegistry,
@@ -5152,35 +5012,7 @@
       chainDeployStatus = `Deployed transformation ${trimmedName}.`;
       closeTransformationEditor();
     } catch (error) {
-      const errorEntry: DeployTraceEntry = {
-        id: `deploy-trace-${crypto.randomUUID()}`,
-        method: "POST",
-        path: "/chain/transformation",
-        requestBody,
-        responseStatus: error instanceof ChainApiRequestError ? error.status : null,
-        responseBody:
-          error instanceof ChainApiRequestError
-            ? error.responseBody
-            : error instanceof Error
-              ? { message: error.message }
-              : { message: "Unknown error" },
-        ok: false,
-        at: Date.now(),
-      };
-      deployTraceEntries = [...deployTraceEntries, errorEntry];
-      logDeployTraceEntryToConsole(errorEntry);
-
-      const responseBody = error instanceof ChainApiRequestError ? error.responseBody : undefined;
-      const responseMessage =
-        responseBody &&
-        typeof responseBody === "object" &&
-        "message" in responseBody &&
-        typeof (responseBody as { message?: unknown }).message === "string"
-          ? ((responseBody as { message: string }).message ?? "").trim()
-          : "";
-      const message =
-        responseMessage ||
-        (error instanceof Error ? error.message : "Failed to deploy transformation.");
+      const message = extractChainDeployErrorMessage(error, "Failed to deploy transformation.");
       transformationDraftError = message;
       chainDeployError = message;
       chainDeployStatus = null;
@@ -5449,172 +5281,6 @@
     networkLibrary.feature.find((item) => getLibraryRegistryName(item) === connectorName)?.name ??
     connectorName;
 
-  type IncomingBindingDescriptor = {
-    targetName: string;
-    kind: "static" | "forwarded";
-    fromSlot: number;
-    ownerConnectorName: string;
-    forwarded: Map<number, IncomingBindingDescriptor>;
-  };
-
-  const getSortedCanonicalBindingEntries = (bindings: Record<string, string> = {}) => {
-    const entries = Object.entries(bindings)
-      .map(([slotRaw, targetRaw]) => {
-        const slot = String(slotRaw).trim();
-        if (!/^\d+$/.test(slot)) return null;
-        const slotId = Number.parseInt(slot, 10);
-        if (!Number.isInteger(slotId) || slotId < 0) return null;
-        if (String(slotId) !== slot) return null;
-        const targetName = String(targetRaw ?? "").trim();
-        if (!targetName) return null;
-        return { slotId, targetName };
-      })
-      .filter((value): value is { slotId: number; targetName: string } => Boolean(value));
-    entries.sort((lhs, rhs) => lhs.slotId - rhs.slotId);
-    return entries;
-  };
-
-  const cloneIncomingBindingDescriptor = (
-    binding: IncomingBindingDescriptor | null | undefined,
-    fallbackSlot = 0,
-  ): IncomingBindingDescriptor | null => {
-    if (!binding) return null;
-    const targetName = String(binding.targetName ?? "").trim();
-    if (!targetName) return null;
-    const fromSlot = Number.isInteger(binding.fromSlot) ? binding.fromSlot : fallbackSlot;
-    const ownerConnectorName = String(binding.ownerConnectorName ?? "").trim();
-    return {
-      targetName,
-      kind: binding.kind === "static" ? "static" : "forwarded",
-      fromSlot,
-      ownerConnectorName,
-      forwarded: cloneIncomingBindingMap(binding.forwarded),
-    };
-  };
-
-  const cloneIncomingBindingAsForwarded = (
-    binding: IncomingBindingDescriptor | null | undefined,
-    fallbackSlot = 0,
-  ): IncomingBindingDescriptor | null => {
-    const cloned = cloneIncomingBindingDescriptor(binding, fallbackSlot);
-    if (!cloned) return null;
-    cloned.kind = "forwarded";
-    return cloned;
-  };
-
-  const cloneIncomingBindingMap = (
-    bindings: Map<number, IncomingBindingDescriptor> | null | undefined,
-  ) => {
-    const cloned = new SvelteMap<number, IncomingBindingDescriptor>();
-    if (!(bindings instanceof Map)) return cloned;
-    for (const [slotId, binding] of bindings.entries()) {
-      if (!Number.isInteger(slotId) || slotId < 0) continue;
-      const clonedBinding = cloneIncomingBindingDescriptor(binding, slotId);
-      if (!clonedBinding) continue;
-      cloned.set(slotId, clonedBinding);
-    }
-    return cloned;
-  };
-
-  const getSortedIncomingBindingEntries = (bindings: Map<number, IncomingBindingDescriptor>) =>
-    Array.from(bindings.entries())
-      .filter(([slotId, binding]) => Number.isInteger(slotId) && slotId >= 0 && Boolean(binding))
-      .sort((lhs, rhs) => lhs[0] - rhs[0]);
-
-  type OpenSlotComputationOptions = {
-    tolerant?: boolean;
-  };
-
-  const computeConnectorOpenSlotsInRegistry = (
-    connectorRegistry: Record<string, StudioConnectorDef>,
-    connectorName: string,
-    cache = new SvelteMap<string, number>(),
-    visiting = new SvelteSet<string>(),
-    options: OpenSlotComputationOptions = {},
-  ): number => {
-    const tolerant = options.tolerant === true;
-    if (cache.has(connectorName)) return cache.get(connectorName) ?? 0;
-    if (visiting.has(connectorName)) {
-      if (tolerant) return 1;
-      throw new Error(`Connector cycle detected at '${connectorName}'.`);
-    }
-    const connector = connectorRegistry[connectorName];
-    if (!connector) {
-      if (tolerant) return 1;
-      throw new Error(`Missing connector '${connectorName}'.`);
-    }
-
-    visiting.add(connectorName);
-    try {
-      let openSlots = 0;
-      connector.dimensions.forEach((dimension, dimIndex) => {
-        if (!dimension.composite) {
-          openSlots += 1;
-          return;
-        }
-
-        const childOpenSlots = computeConnectorOpenSlotsInRegistry(
-          connectorRegistry,
-          dimension.composite,
-          cache,
-          visiting,
-          options,
-        );
-        openSlots += childOpenSlots;
-
-        const staticTargetsByChildSlot = new SvelteMap<number, string>();
-        getSortedCanonicalBindingEntries(dimension.bindings ?? {}).forEach(
-          ({ slotId, targetName }) => {
-            if (slotId >= childOpenSlots) {
-              if (tolerant) return;
-              throw new Error(
-                `Connector '${connectorName}' has out-of-range binding slot ${slotId} at dimension ${dimIndex} (child '${dimension.composite}' exports ${childOpenSlots} slots).`,
-              );
-            }
-            if (staticTargetsByChildSlot.has(slotId)) {
-              if (tolerant) return;
-              throw new Error(
-                `Connector '${connectorName}' has duplicate canonical binding slot ${slotId} at dimension ${dimIndex}.`,
-              );
-            }
-            staticTargetsByChildSlot.set(slotId, targetName);
-          },
-        );
-
-        for (const targetName of staticTargetsByChildSlot.values()) {
-          openSlots += computeConnectorOpenSlotsInRegistry(
-            connectorRegistry,
-            targetName,
-            cache,
-            visiting,
-            options,
-          );
-        }
-
-        openSlots -= staticTargetsByChildSlot.size;
-      });
-
-      cache.set(connectorName, openSlots);
-      return openSlots;
-    } finally {
-      visiting.delete(connectorName);
-    }
-  };
-
-  const computeConnectorOpenSlots = (
-    connectorName: string,
-    cache = new SvelteMap<string, number>(),
-    visiting = new SvelteSet<string>(),
-    options: OpenSlotComputationOptions = {},
-  ) =>
-    computeConnectorOpenSlotsInRegistry(
-      deployedRegistry.connectors,
-      connectorName,
-      cache,
-      visiting,
-      options,
-    );
-
   const computeOpenSlotsForBindingTarget = (connectorName: string): number => {
     const trimmed = connectorName.trim();
     if (!trimmed) throw new Error("Connector name is required.");
@@ -5636,485 +5302,23 @@
       // Fall through to deployed registry lookup.
     }
 
-    return computeConnectorOpenSlots(trimmed);
+    return computeConnectorOpenSlotsInRegistry(deployedRegistry.connectors, trimmed);
   };
 
   const buildConnectorTreeGraph = (
     rootConnectorName: string,
     origin: { x: number; y: number },
     options: { hideReadOnlyLeafOutlets?: boolean; markRootAsTabRoot?: boolean } = {},
-  ): ConnectorTreeModel => {
-    const root = deployedRegistry.connectors[rootConnectorName];
-    if (!root) return { rootConnectorName, nodes: [], edges: [] };
-
-    const resolvedStaticByPosition = new SvelteMap<number, StudioRunningInstanceRef>();
-    try {
-      const staticPlan = buildExecuteRiPlan(deployedRegistry.connectors, rootConnectorName, {});
-      Object.values(staticPlan.staticRiByPosition).forEach((entry) => {
-        resolvedStaticByPosition.set(entry.position, {
-          startPoint: entry.startPoint,
-          transformationShift: entry.transformationShift,
-        });
-      });
-    } catch {
-      // Keep zero/open defaults when RI projection is unavailable.
-    }
-
-    const graphNodes: StudioNode[] = [];
-    const graphEdges: Edge[] = [];
-    const edgeKeySet = new SvelteSet<string>();
-    const openSlotCache = new SvelteMap<string, number>();
-    const treeInfo = new SvelteMap<string, { depth: number; children: string[] }>();
-    const conditionParentById = new SvelteMap<string, string>();
-    const horizontalSpacing = 380;
-    const verticalSpacing = 340;
-    let leafCursor = 0;
-    let riPositionCursor = 0;
-
-    const pushEdge = (
-      sourceId: string,
-      sourceHandle: string,
-      targetId: string,
-      targetHandle: string,
-      options?: {
-        label?: string;
-        kind?: "composite" | "binding" | "open";
-        bindingOwnerName?: string | null;
-        bindingSlot?: number | null;
+  ): ConnectorTreeModel =>
+    buildConnectorTreeGraphFromRegistry({
+      connectorRegistry: deployedRegistry.connectors,
+      rootConnectorName,
+      origin,
+      options: {
+        ...options,
+        labelForConnector: getConnectorLibraryLabel,
       },
-    ) => {
-      const key = `${sourceId}|${sourceHandle}|${targetId}|${targetHandle}|${options?.kind ?? "plain"}|${options?.label ?? ""}|${options?.bindingOwnerName ?? ""}|${options?.bindingSlot ?? ""}`;
-      if (edgeKeySet.has(key)) return;
-      edgeKeySet.add(key);
-      const isBinding = options?.kind === "binding";
-      const isOpen = options?.kind === "open";
-      graphEdges.push({
-        id: `edge-${crypto.randomUUID()}`,
-        source: sourceId,
-        sourceHandle,
-        target: targetId,
-        targetHandle,
-        ...(options?.label ? { label: options.label } : {}),
-        ...(options?.kind === "composite" || options?.kind === "binding"
-          ? {
-              data: {
-                relation: options.kind,
-                ...(isBinding && options?.bindingOwnerName
-                  ? { bindingOwnerName: options.bindingOwnerName }
-                  : {}),
-                ...(isBinding && typeof options?.bindingSlot === "number"
-                  ? { bindingSlot: options.bindingSlot }
-                  : {}),
-              },
-            }
-          : {}),
-        ...(isBinding
-          ? {
-              style: "stroke:#c97500;stroke-dasharray:8 5;",
-            }
-          : isOpen
-            ? {
-                style: "stroke:#7b8794;stroke-dasharray:4 6;",
-              }
-            : {}),
-      });
-    };
-
-    const createOpenSlotPlaceholder = (
-      name: string,
-      detail: string,
-      depth: number,
-      kind: "missing" | "cycle" = "missing",
-    ) => {
-      const id = `placeholder-${kind}-${crypto.randomUUID()}`;
-      graphNodes.push({
-        id,
-        type: "particle",
-        draggable: true,
-        position: { x: origin.x, y: origin.y + depth * verticalSpacing },
-        data: {
-          label: kind === "cycle" ? "Connector cycle" : "Loading connector...",
-          kind: "particle",
-          fromNetwork: true,
-          placeholder: true,
-          placeholderDetail: kind === "cycle" ? detail : `waiting for chain sync: ${detail}`,
-          placeholderState: kind === "cycle" ? "warning" : "loading",
-        },
-      });
-      treeInfo.set(id, { depth, children: [] });
-      return id;
-    };
-
-    const expandConnector = (
-      input: {
-        connectorName: string;
-        incomingBindings: Map<number, IncomingBindingDescriptor>;
-        depth: number;
-        boundDescriptor?: {
-          kind: "static" | "forwarded";
-          slotLabel: string;
-          ownerConnectorName?: string | null;
-        } | null;
-      },
-      visiting = new SvelteSet<string>(),
-    ): string => {
-      const connectorName = input.connectorName.trim();
-      if (!connectorName) {
-        return createOpenSlotPlaceholder("Open slot", "Unnamed connector reference", input.depth);
-      }
-
-      if (visiting.has(connectorName)) {
-        return createOpenSlotPlaceholder(
-          "Cycle",
-          `Connector cycle at ${connectorName}`,
-          input.depth,
-          "cycle",
-        );
-      }
-
-      const def = deployedRegistry.connectors[connectorName];
-      if (!def) {
-        return createOpenSlotPlaceholder(
-          "Missing connector",
-          connectorName,
-          input.depth,
-          "missing",
-        );
-      }
-
-      const connectorId = `connector-${connectorName}-${crypto.randomUUID()}`;
-      const connectorRiPosition = riPositionCursor;
-      riPositionCursor += 1;
-      const connectorStaticRi = cloneStaticRiMap(def.staticRi);
-      const connectorSelfStaticRi = resolvedStaticByPosition.get(connectorRiPosition) ?? null;
-      const connectorNode: StudioNode = {
-        id: connectorId,
-        type: "connector",
-        draggable: true,
-        position: { x: origin.x, y: origin.y + input.depth * verticalSpacing },
-        data: {
-          label: getConnectorLibraryLabel(connectorName),
-          kind: "connector",
-          dimensions: def.dimensions.length,
-          connectorRows: def.dimensions.map((dimension, dimIndex) => ({
-            dimension: dimIndex + 1,
-            transformations: dimension.transformations.map((transformation) =>
-              formatTransformationPreviewLabel(transformation.name, transformation.args),
-            ),
-          })),
-          conditionLabel: def.conditionName ? def.conditionName : null,
-          boundKind: input.boundDescriptor?.kind ?? null,
-          boundSlotLabel: input.boundDescriptor?.slotLabel ?? null,
-          boundOwnerName: input.boundDescriptor?.ownerConnectorName ?? null,
-          sourceId: `feature-${connectorName}`,
-          networkId: connectorName,
-          fromNetwork: true,
-          tabRoot: options.markRootAsTabRoot === false ? false : input.depth === 0,
-          hideOutlets: false,
-          riPosition: connectorRiPosition,
-          riStart: connectorSelfStaticRi?.startPoint ?? 0,
-          riShift: connectorSelfStaticRi?.transformationShift ?? 0,
-          riLocked: Boolean(connectorSelfStaticRi),
-          staticRi: connectorStaticRi,
-        },
-      };
-      graphNodes.push(connectorNode);
-      treeInfo.set(connectorId, { depth: input.depth, children: [] });
-
-      if (def.conditionName) {
-        const conditionNodeId = `condition-${connectorName}-${crypto.randomUUID()}`;
-        graphNodes.push({
-          id: conditionNodeId,
-          type: "condition",
-          draggable: true,
-          position: { x: origin.x, y: origin.y + input.depth * verticalSpacing - 120 },
-          data: {
-            label: def.conditionName,
-            kind: "condition",
-            networkId: def.conditionName,
-            fromNetwork: true,
-          },
-        });
-        conditionParentById.set(conditionNodeId, connectorId);
-        pushEdge(conditionNodeId, "out", connectorId, "in");
-      }
-
-      const nextVisiting = new SvelteSet(visiting);
-      nextVisiting.add(connectorName);
-      let openSlotId = 0;
-
-      for (let dimId = 0; dimId < def.dimensions.length; dimId += 1) {
-        const dimension = def.dimensions[dimId];
-        const dimNode = createDimensionNode(connectorNode, dimId, def.dimensions.length);
-        dimNode.data = {
-          ...dimNode.data,
-          transformations: dimension.transformations.map((transformation) =>
-            createTransformationInstance(
-              transformation.name,
-              transformation.args,
-              connectorNode.data.fromNetwork ? "network" : "draft",
-            ),
-          ),
-        };
-        graphNodes.push(dimNode);
-        pushEdge(connectorId, `dim-${dimId}`, dimNode.id, "in");
-
-        if (!dimension.composite) {
-          const replacement = input.incomingBindings.get(openSlotId) ?? null;
-          if (replacement) {
-            const slotLabel =
-              replacement.kind === "forwarded"
-                ? `slot ${openSlotId} (from slot ${replacement.fromSlot})`
-                : `slot ${openSlotId}`;
-            const childId = expandConnector(
-              {
-                connectorName: replacement.targetName,
-                incomingBindings: cloneIncomingBindingMap(replacement.forwarded),
-                depth: input.depth + 1,
-                boundDescriptor: {
-                  kind: replacement.kind,
-                  slotLabel,
-                  ownerConnectorName: replacement.ownerConnectorName,
-                },
-              },
-              nextVisiting,
-            );
-            treeInfo.get(connectorId)?.children.push(childId);
-            pushEdge(connectorId, `dim-${dimId}`, childId, "in", {
-              kind: "binding",
-              label: `binding · slot ${openSlotId}`,
-              bindingOwnerName: replacement.ownerConnectorName,
-              bindingSlot: openSlotId,
-            });
-          } else {
-            // Mirror backend DFS RI indexing: each unbound terminal slot consumes one position.
-            riPositionCursor += 1;
-          }
-
-          openSlotId += 1;
-          continue;
-        }
-
-        const childOpenSlots = computeConnectorOpenSlots(
-          dimension.composite,
-          openSlotCache,
-          new SvelteSet(nextVisiting),
-          { tolerant: true },
-        );
-        const staticTargetsByChildSlot = new SvelteMap<number, string>();
-        getSortedCanonicalBindingEntries(dimension.bindings ?? {}).forEach(
-          ({ slotId, targetName }) => {
-            if (slotId >= childOpenSlots || staticTargetsByChildSlot.has(slotId)) return;
-            staticTargetsByChildSlot.set(slotId, targetName);
-          },
-        );
-
-        const slotProjectedStarts = new Array(childOpenSlots).fill(0);
-        const slotProjectedWidths = new Array(childOpenSlots).fill(0);
-        const slotStaticTargets = new Array<string>(childOpenSlots).fill("");
-        const slotSelectedBindings = new Array<IncomingBindingDescriptor | null>(
-          childOpenSlots,
-        ).fill(null);
-        const slotForwardedInternalBindings = Array.from(
-          { length: childOpenSlots },
-          () => new SvelteMap<number, IncomingBindingDescriptor>(),
-        );
-        let childOpenSlotsInParent = 0;
-
-        for (let childSlotId = 0; childSlotId < childOpenSlots; childSlotId += 1) {
-          slotProjectedStarts[childSlotId] = childOpenSlotsInParent;
-          const staticTarget = staticTargetsByChildSlot.get(childSlotId);
-          if (staticTarget) {
-            const staticTargetOpenSlots = computeConnectorOpenSlots(
-              staticTarget,
-              openSlotCache,
-              new SvelteSet(nextVisiting),
-              { tolerant: true },
-            );
-            slotStaticTargets[childSlotId] = staticTarget;
-            slotSelectedBindings[childSlotId] = {
-              targetName: staticTarget,
-              kind: "static",
-              fromSlot: childSlotId,
-              ownerConnectorName: connectorName,
-              forwarded: new SvelteMap<number, IncomingBindingDescriptor>(),
-            };
-            slotProjectedWidths[childSlotId] = staticTargetOpenSlots;
-            childOpenSlotsInParent += staticTargetOpenSlots;
-            continue;
-          }
-          slotProjectedWidths[childSlotId] = 1;
-          childOpenSlotsInParent += 1;
-        }
-
-        for (const [parentSlotId, parentBinding] of getSortedIncomingBindingEntries(
-          input.incomingBindings,
-        )) {
-          if (parentSlotId < openSlotId) continue;
-          const localSlotId = parentSlotId - openSlotId;
-          if (localSlotId >= childOpenSlotsInParent) continue;
-
-          for (let childSlotId = 0; childSlotId < childOpenSlots; childSlotId += 1) {
-            const rangeStart = slotProjectedStarts[childSlotId];
-            const rangeWidth = slotProjectedWidths[childSlotId];
-            if (rangeWidth <= 0) continue;
-            const rangeEndExclusive = rangeStart + rangeWidth;
-            if (localSlotId < rangeStart || localSlotId >= rangeEndExclusive) continue;
-
-            const staticTarget = slotStaticTargets[childSlotId];
-            if (!staticTarget) {
-              const forwardedBinding = cloneIncomingBindingAsForwarded(parentBinding, parentSlotId);
-              if (forwardedBinding) slotSelectedBindings[childSlotId] = forwardedBinding;
-              break;
-            }
-
-            const offset = localSlotId - rangeStart;
-            const forwardedInternal = cloneIncomingBindingAsForwarded(parentBinding, parentSlotId);
-            if (forwardedInternal) {
-              slotForwardedInternalBindings[childSlotId].set(offset, forwardedInternal);
-            }
-            break;
-          }
-        }
-
-        const childBindings = new SvelteMap<number, IncomingBindingDescriptor>();
-        for (let childSlotId = 0; childSlotId < childOpenSlots; childSlotId += 1) {
-          const selectedBinding = slotSelectedBindings[childSlotId];
-          if (!selectedBinding) continue;
-          const finalized = cloneIncomingBindingDescriptor(selectedBinding, childSlotId);
-          if (!finalized) continue;
-          if (slotStaticTargets[childSlotId]) {
-            finalized.forwarded = cloneIncomingBindingMap(
-              slotForwardedInternalBindings[childSlotId],
-            );
-          }
-          childBindings.set(childSlotId, finalized);
-        }
-
-        const compositeChildId = expandConnector(
-          {
-            connectorName: dimension.composite,
-            incomingBindings: childBindings,
-            depth: input.depth + 1,
-            boundDescriptor: null,
-          },
-          nextVisiting,
-        );
-        treeInfo.get(connectorId)?.children.push(compositeChildId);
-        pushEdge(connectorId, `dim-${dimId}`, compositeChildId, "in", {
-          kind: "composite",
-          label: `composite · D${dimId + 1}`,
-        });
-
-        openSlotId += childOpenSlotsInParent;
-      }
-
-      return connectorId;
-    };
-
-    const rootId = expandConnector({
-      connectorName: rootConnectorName,
-      incomingBindings: new SvelteMap<number, IncomingBindingDescriptor>(),
-      depth: 0,
-      boundDescriptor: null,
     });
-
-    const xByNodeId = new SvelteMap<string, number>();
-    const computeTreeX = (nodeId: string): number => {
-      const existing = xByNodeId.get(nodeId);
-      if (typeof existing === "number") return existing;
-      const info = treeInfo.get(nodeId);
-      if (!info || info.children.length === 0) {
-        const x = origin.x + leafCursor * horizontalSpacing;
-        leafCursor += 1;
-        xByNodeId.set(nodeId, x);
-        return x;
-      }
-      const childrenX = info.children.map((childId) => computeTreeX(childId));
-      const x = childrenX.reduce((sum, item) => sum + item, 0) / childrenX.length;
-      xByNodeId.set(nodeId, x);
-      return x;
-    };
-
-    const rootX = computeTreeX(rootId);
-    const xShift = origin.x - rootX;
-
-    const minLevelGap = 390;
-    const levelSortedNodeIds = Array.from(treeInfo.entries())
-      .map(([nodeId, info]) => ({ nodeId, depth: info.depth }))
-      .sort(
-        (a, b) =>
-          a.depth - b.depth || (xByNodeId.get(a.nodeId) ?? 0) - (xByNodeId.get(b.nodeId) ?? 0),
-      );
-    let currentDepth: number | null = null;
-    let previousX = 0;
-    levelSortedNodeIds.forEach(({ nodeId, depth }) => {
-      if (currentDepth !== depth) {
-        currentDepth = depth;
-        previousX = -Infinity;
-      }
-      const currentX = xByNodeId.get(nodeId) ?? 0;
-      const nextX = Number.isFinite(previousX)
-        ? Math.max(currentX, previousX + minLevelGap)
-        : currentX;
-      xByNodeId.set(nodeId, nextX);
-      previousX = nextX;
-    });
-
-    const connectorPositionById = new SvelteMap<string, { x: number; y: number }>();
-    graphNodes.forEach((node) => {
-      const info = treeInfo.get(node.id);
-      if (info) {
-        const x = (xByNodeId.get(node.id) ?? origin.x) + xShift;
-        const y = origin.y + info.depth * verticalSpacing;
-        node.position = { x, y };
-        if (isConnectorKind(node.data.kind)) {
-          connectorPositionById.set(node.id, { x, y });
-        }
-      }
-    });
-
-    graphNodes.forEach((node) => {
-      if (node.data.kind !== "dimension") return;
-      const parentId = node.data.parentFeatureId ?? "";
-      const parentPos = connectorPositionById.get(parentId);
-      if (!parentPos) return;
-      const parent = graphNodes.find((candidate) => candidate.id === parentId);
-      const dimensions = Math.max(1, Math.round(parent?.data.dimensions ?? 1));
-      const dimIndex = Math.max(0, Math.round(node.data.dimensionIndex ?? 0));
-      const spacing = 200;
-      const startX = parentPos.x - ((dimensions - 1) * spacing) / 2;
-      node.position = {
-        x: startX + dimIndex * spacing,
-        y: parentPos.y + 160,
-      };
-    });
-
-    conditionParentById.forEach((parentId, conditionId) => {
-      const parentPos = connectorPositionById.get(parentId);
-      const conditionNode = graphNodes.find((candidate) => candidate.id === conditionId);
-      if (!parentPos || !conditionNode) return;
-      conditionNode.position = {
-        x: parentPos.x,
-        y: parentPos.y - 120,
-      };
-    });
-
-    const graphNodeById = new SvelteMap<string, StudioNode>();
-    graphNodes.forEach((node) => graphNodeById.set(node.id, node));
-    graphNodes.forEach((node) => {
-      if (!isConnectorKind(node.data.kind) || !node.data.fromNetwork) return;
-      const info = treeInfo.get(node.id);
-      if (!info) return;
-      const hasRenderableChild = info.children.some((childId) => graphNodeById.has(childId));
-      node.data = {
-        ...node.data,
-        hideOutlets: options.hideReadOnlyLeafOutlets === false ? false : !hasRenderableChild,
-      };
-    });
-
-    return { rootConnectorName, nodes: graphNodes, edges: graphEdges };
-  };
 
   const refreshConnectorTreeTab = (tabId: string) => {
     const tab = tabs.find((candidate) => candidate.id === tabId);
@@ -7750,211 +6954,27 @@
   };
 
   const buildChainConnectorRequestBodyPreview = () => {
-    if (!activeTab) return {};
-
-    try {
-      const compiled = compileDraftTransformations(nodes);
-      const connectorNodesInGraph = nodes.filter((node) => isConnectorKind(node.data.kind));
-      const hasConnectorGraph = connectorNodesInGraph.length > 0;
-      const selectedConnectorNode = getSelectedConnectorNode();
-      const selectedConnectorName = selectedConnectorNode
-        ? resolveNodeName(selectedConnectorNode)
-        : "";
-      const runtime = hasConnectorGraph
-        ? buildStudioRuntime(
-            { nodes, edges },
-            { rootLabel: activeTab.label, rootParticleId: activeTab.particleId },
-            buildRuntimeOverrides(compiled.registry),
-          )
-        : null;
-
-      const connectorName =
-        selectedConnectorName ||
-        runtime?.rootConnector ||
-        activeTab.particleId ||
-        (connectorNodesInGraph[0] ? resolveNodeName(connectorNodesInGraph[0]) : "");
-      if (!connectorName) return {};
-
-      const fromGraphNetworkNode =
-        Boolean(selectedConnectorNode?.data.fromNetwork) ||
-        connectorNodesInGraph.some(
-          (node) => resolveNodeName(node) === connectorName && Boolean(node.data.fromNetwork),
-        );
-      const def =
-        (fromGraphNetworkNode ? deployedRegistry.connectors[connectorName] : undefined) ??
-        runtime?.registry.connectors[connectorName] ??
-        deployedRegistry.connectors[connectorName] ??
-        null;
-      if (!def) return {};
-
-      return toProtocolConnectorPayload(def);
-    } catch {
-      return {};
-    }
+    const compiled = compileDraftTransformations(nodes);
+    return buildApiConnectorRequestBodyPreview({
+      activeTab,
+      nodes,
+      edges,
+      selectedConnectorNode: getSelectedConnectorNode(),
+      deployedConnectors: deployedRegistry.connectors,
+      runtimeOverrides: buildRuntimeOverrides(compiled.registry),
+    });
   };
 
   const chainApiProtocolJson = $derived.by(() =>
     JSON.stringify(buildChainConnectorRequestBodyPreview(), null, 2),
   );
 
-  const buildResolvedConnectorTreePreview = () => {
-    const visibleNodes = nodes.filter((node) => !node.hidden);
-    const connectorNodes = visibleNodes.filter((node) => isConnectorKind(node.data.kind));
-    if (!connectorNodes.length) {
-      return {
-        root_connector: null,
-        connectors: [],
-        links: [],
-        terminals: [],
-      };
-    }
-
-    const rootNode =
-      connectorNodes.find(
-        (node) =>
-          activeTab?.particleId &&
-          normalizeKey(resolveNodeName(node)) === normalizeKey(activeTab.particleId),
-      ) ??
-      connectorNodes.find((node) => node.data.definitionRole === "root") ??
-      connectorNodes[0];
-    const rootConnectorName = resolveNodeName(rootNode);
-    const links: Array<Record<string, unknown>> = [];
-    const linkKeySet = new SvelteSet<string>();
-
-    const pushLink = (link: Record<string, unknown>) => {
-      const key = JSON.stringify(link);
-      if (linkKeySet.has(key)) return;
-      linkKeySet.add(key);
-      links.push(link);
-    };
-
-    edges.forEach((edge) => {
-      if (!edge.source || !edge.target) return;
-      const sourceNode = nodesById[edge.source] ?? null;
-      const targetNode = nodesById[edge.target] ?? null;
-      if (!sourceNode || !targetNode) return;
-
-      if (isConnectorKind(sourceNode.data.kind) && isConnectorKind(targetNode.data.kind)) {
-        const sourceConnectorName = resolveNodeName(sourceNode);
-        const targetConnectorName = resolveNodeName(targetNode);
-        const label = typeof edge.label === "string" ? edge.label.trim() : "";
-        const relationFromData =
-          edge.data && typeof edge.data === "object"
-            ? `${(edge.data as { relation?: unknown; kind?: unknown }).relation ?? (edge.data as { relation?: unknown; kind?: unknown }).kind ?? ""}`
-                .trim()
-                .toLowerCase()
-            : "";
-        const relation =
-          relationFromData === "binding" || relationFromData === "composite"
-            ? relationFromData
-            : label.toLowerCase().startsWith("binding")
-              ? "binding"
-              : label.toLowerCase().startsWith("composite")
-                ? "composite"
-                : "connector_link";
-        const dimension =
-          parseDimensionHandle(edge.sourceHandle ?? null) !== null
-            ? (parseDimensionHandle(edge.sourceHandle ?? null) ?? 0) + 1
-            : null;
-        const bindingSlotFromData =
-          edge.data && typeof edge.data === "object"
-            ? ((edge.data as { bindingSlot?: unknown; binding_slot?: unknown; slot?: unknown })
-                .bindingSlot ??
-              (edge.data as { bindingSlot?: unknown; binding_slot?: unknown; slot?: unknown })
-                .binding_slot ??
-              (edge.data as { bindingSlot?: unknown; binding_slot?: unknown; slot?: unknown }).slot)
-            : null;
-        const bindingSlotNumber =
-          Number.isInteger(bindingSlotFromData) && Number(bindingSlotFromData) >= 0
-            ? Number(bindingSlotFromData)
-            : null;
-        const bindingSlotMatch = label.match(/slot\s+(\d+)/i);
-        pushLink({
-          owner_connector: sourceConnectorName,
-          from_connector: sourceConnectorName,
-          to_connector: targetConnectorName,
-          relation,
-          ...(dimension !== null ? { dimension } : {}),
-          ...(bindingSlotNumber !== null
-            ? { binding_slot: bindingSlotNumber }
-            : bindingSlotMatch
-              ? { binding_slot: Number(bindingSlotMatch[1]) }
-              : {}),
-          ...(label ? { label } : {}),
-        });
-        return;
-      }
-
-      if (
-        sourceNode.data.kind === "dimension" &&
-        (isConnectorKind(targetNode.data.kind) || targetNode.data.kind === "particle")
-      ) {
-        const ownerConnector = sourceNode.data.parentFeatureId
-          ? (nodesById[sourceNode.data.parentFeatureId] ?? null)
-          : null;
-        if (!ownerConnector || !isConnectorKind(ownerConnector.data.kind)) return;
-        const ownerConnectorName = resolveNodeName(ownerConnector);
-        const targetName = isConnectorKind(targetNode.data.kind)
-          ? resolveNodeName(targetNode)
-          : (targetNode.data.particleId ?? resolveNodeName(targetNode));
-        const dimension =
-          typeof sourceNode.data.dimensionIndex === "number"
-            ? sourceNode.data.dimensionIndex + 1
-            : null;
-        pushLink({
-          owner_connector: ownerConnectorName,
-          from_connector: ownerConnectorName,
-          to: targetName,
-          to_type: isConnectorKind(targetNode.data.kind) ? "connector" : "terminal_particle",
-          relation: isConnectorKind(targetNode.data.kind) ? "composite_or_binding" : "terminal",
-          ...(dimension !== null ? { dimension } : {}),
-        });
-      }
+  const buildResolvedConnectorTreePreview = () =>
+    buildApiResolvedConnectorTreePreview({
+      nodes,
+      edges,
+      rootParticleId: activeTab?.particleId ?? null,
     });
-
-    return {
-      root_connector: rootConnectorName,
-      root_connector_label: rootNode.data.label,
-      connectors: connectorNodes.map((node) => ({
-        ...(() => {
-          const staticRi = cloneStaticRiMap(node.data.staticRi);
-          const staticRiOut =
-            Object.keys(staticRi).length > 0
-              ? {
-                  static_ri: Object.fromEntries(
-                    Object.entries(staticRi).map(([key, value]) => [
-                      key,
-                      {
-                        start_point: toInt(value.startPoint) ?? 0,
-                        transformation_shift: toInt(value.transformationShift) ?? 0,
-                      },
-                    ]),
-                  ),
-                }
-              : {};
-          return {
-            node_id: node.id,
-            name: resolveNodeName(node),
-            label: node.data.label,
-            dimensions: Math.max(1, Math.round(node.data.dimensions ?? 1)),
-            connector_rows: node.data.connectorRows ?? [],
-            condition: node.data.conditionLabel ?? "",
-            from_network: Boolean(node.data.fromNetwork),
-            definition_role: node.data.definitionRole ?? null,
-            ...staticRiOut,
-          };
-        })(),
-      })),
-      links,
-      terminals: visibleNodes
-        .filter((node) => node.data.kind === "particle")
-        .map((node) => ({
-          node_id: node.id,
-          id: node.data.particleId ?? resolveNodeName(node),
-          label: node.data.label,
-        })),
-    };
-  };
 
   const chainApiResolvedJson = $derived.by(() =>
     JSON.stringify(buildResolvedConnectorTreePreview(), null, 2),
@@ -7963,678 +6983,36 @@
   let apiEditorApplying = false;
   let chainAutoSyncStarted = false;
 
-  const convertResolvedTreePreviewToDraft = (
-    resolved: ApiResolvedTreePreview,
-  ): {
-    preview: ApiDraftPreview;
-    readOnlyByName: Map<string, boolean>;
-  } => {
-    const currentResolved = buildResolvedConnectorTreePreview() as ApiResolvedTreePreview;
-
-    const connectorByName = new SvelteMap<string, ApiResolvedConnectorPreview>();
-    const readOnlyByName = new SvelteMap<string, boolean>();
-
-    (resolved.connectors ?? []).forEach((connector) => {
-      const name = `${connector.name ?? ""}`.trim();
-      if (!name) return;
-      connectorByName.set(name, connector);
-      if (connector.from_network) {
-        readOnlyByName.set(name, true);
-      }
-    });
-
-    (currentResolved.connectors ?? []).forEach((connector) => {
-      const name = `${connector.name ?? ""}`.trim();
-      if (!name || !connector.from_network) return;
-      readOnlyByName.set(name, true);
-      connectorByName.set(name, connector);
-    });
-
-    const readOnlyOwners = new SvelteSet<string>(
-      Array.from(readOnlyByName.entries())
-        .filter(([, flag]) => flag)
-        .map(([name]) => name),
-    );
-
-    const inputLinks = (resolved.links ?? []).filter((link) =>
-      Boolean(link && typeof link === "object"),
-    );
-    const currentReadOnlyLinks = (currentResolved.links ?? []).filter((link) => {
-      const owner = `${link.owner_connector ?? ""}`.trim();
-      return owner.length > 0 && readOnlyOwners.has(owner);
-    });
-    const mutableInputLinks = inputLinks.filter((link) => {
-      const owner = `${link.owner_connector ?? ""}`.trim();
-      return owner.length === 0 || !readOnlyOwners.has(owner);
-    });
-    const mergedLinks = [...mutableInputLinks, ...currentReadOnlyLinks];
-
-    const connectorBodyByName = new SvelteMap<string, Record<string, unknown>>();
-    connectorByName.forEach((connector, name) => {
-      const isReadOnly = readOnlyByName.get(name) ?? false;
-      if (isReadOnly && deployedRegistry.connectors[name]) {
-        connectorBodyByName.set(name, toConnectorBodyFromDef(deployedRegistry.connectors[name]));
-        return;
-      }
-
-      const rows = Array.isArray(connector.connector_rows) ? connector.connector_rows : [];
-      const inferredDimensionsFromRows = rows.reduce((max, row) => {
-        const dim = Number(row?.dimension ?? 0);
-        return Number.isFinite(dim) ? Math.max(max, Math.trunc(dim)) : max;
-      }, 0);
-      const configuredDimensions = Math.max(
-        1,
-        Math.trunc(Number(connector.dimensions ?? inferredDimensionsFromRows ?? 1)),
-      );
-      const dimensions = Array.from({ length: configuredDimensions }, () => ({
-        transformations: [] as Array<{ name: string; args: number[] }>,
-        composite: "",
-        bindings: {} as Record<string, string>,
-      }));
-
-      rows.forEach((row) => {
-        const dim = Number(row?.dimension ?? 0);
-        const dimIndex = Number.isFinite(dim) ? Math.trunc(dim) - 1 : -1;
-        if (dimIndex < 0 || dimIndex >= dimensions.length) return;
-        const txLabels = Array.isArray(row?.transformations) ? row.transformations : [];
-        const parsed = txLabels
-          .map((label) => parseTransformationPreview(`${label ?? ""}`))
-          .filter((value): value is { name: string; args: number[] } => Boolean(value));
-        dimensions[dimIndex].transformations = parsed;
-      });
-
-      const staticRi = parseStaticRiPayload(connector.static_ri);
-      const staticRiBody =
-        Object.keys(staticRi).length > 0
-          ? {
-              static_ri: Object.fromEntries(
-                Object.entries(staticRi).map(([key, value]) => [
-                  key,
-                  {
-                    start_point: toInt(value.startPoint) ?? 0,
-                    transformation_shift: toInt(value.transformationShift) ?? 0,
-                  },
-                ]),
-              ),
-            }
-          : {};
-
-      connectorBodyByName.set(name, {
-        name,
-        dimensions: dimensions.map((dimension) => ({
-          transformations: dimension.transformations.map((tx) => ({
-            name: tx.name,
-            args: [...tx.args],
-          })),
-          ...(dimension.composite ? { composite: dimension.composite } : {}),
-          ...(Object.keys(dimension.bindings).length
-            ? { bindings: { ...dimension.bindings } }
-            : {}),
-        })),
-        condition_name: `${connector.condition ?? ""}`.trim(),
-        condition_args: [],
-        ...staticRiBody,
-      });
-    });
-
-    mergedLinks.forEach((link) => {
-      const owner = `${link.owner_connector ?? ""}`.trim();
-      if (!owner || readOnlyByName.get(owner)) return;
-      const body = connectorBodyByName.get(owner);
-      if (!body) return;
-
-      const dimensions = Array.isArray(body.dimensions)
-        ? (body.dimensions as Array<Record<string, unknown>>)
-        : [];
-      const dimensionNumber = Number(link.dimension ?? 0);
-      const dimensionIndex = Number.isFinite(dimensionNumber)
-        ? Math.trunc(dimensionNumber) - 1
-        : -1;
-      if (dimensionIndex < 0 || dimensionIndex >= dimensions.length) return;
-      const relation = `${link.relation ?? ""}`.trim().toLowerCase();
-      const target = `${link.to_connector ?? ""}`.trim();
-      if (!target) return;
-
-      if (relation === "composite") {
-        dimensions[dimensionIndex].composite = target;
-        return;
-      }
-
-      if (relation === "binding") {
-        const slot = Number(link.binding_slot);
-        if (!Number.isInteger(slot) || slot < 0) return;
-        const bindings =
-          dimensions[dimensionIndex].bindings &&
-          typeof dimensions[dimensionIndex].bindings === "object" &&
-          !Array.isArray(dimensions[dimensionIndex].bindings)
-            ? (dimensions[dimensionIndex].bindings as Record<string, string>)
-            : {};
-        bindings[String(slot)] = target;
-        dimensions[dimensionIndex].bindings = bindings;
-      }
-    });
-
-    const connectorBodies = Array.from(connectorBodyByName.values());
-    const rootConnector = `${resolved.root_connector ?? ""}`.trim();
-    const fallbackRoot =
-      rootConnector ||
-      (connectorBodies.length
-        ? `${(connectorBodies[0] as Record<string, unknown>).name ?? ""}`.trim()
-        : "");
-
-    return {
-      preview: {
-        root_connector: fallbackRoot || null,
-        deploy_requests: connectorBodies.map((body) => ({
-          method: "POST",
-          path: "/chain/connector",
-          body,
-        })),
-      },
-      readOnlyByName,
-    };
-  };
-
   const applyApiPreviewJsonToStudio = (rawJson: string) => {
     if (!activeTab) throw new Error("No active tab.");
-    let parsedRaw: unknown;
-    try {
-      parsedRaw = JSON.parse(rawJson) as unknown;
-    } catch (error) {
-      throw new Error(error instanceof Error ? error.message : "Invalid JSON.");
-    }
-
-    let connectorReadOnlyByName = new Map<string, boolean>();
-    let connectorLabelByName = new Map<string, string>();
-    let requestedRootLabelFromResolved = "";
-    if (isResolvedTreePreview(parsedRaw)) {
-      requestedRootLabelFromResolved =
-        typeof parsedRaw.root_connector_label === "string"
-          ? parsedRaw.root_connector_label.trim()
-          : "";
-      connectorLabelByName = new SvelteMap(
-        (parsedRaw.connectors ?? [])
-          .map((connector) => {
-            const name = `${connector.name ?? ""}`.trim();
-            const label = `${connector.label ?? ""}`.trim();
-            return name && label ? ([name, label] as const) : null;
-          })
-          .filter((entry): entry is readonly [string, string] => Boolean(entry)),
-      );
-      const converted = convertResolvedTreePreviewToDraft(parsedRaw);
-      parsedRaw = converted.preview;
-      connectorReadOnlyByName = converted.readOnlyByName;
-    }
-
-    const parsed: ApiDraftPreview = isConnectorRequestBody(parsedRaw)
-      ? ({
-          root_connector: parsedRaw.name?.trim() ?? "",
-          deploy_requests: [
-            {
-              method: "POST",
-              path: "/chain/connector",
-              body: parsedRaw as Record<string, unknown>,
-            },
-          ],
-        } satisfies ApiDraftPreview)
-      : Array.isArray(parsedRaw)
-        ? ({ deploy_requests: parsedRaw as ApiDraftRequest[] } satisfies ApiDraftPreview)
-        : ((parsedRaw as ApiDraftPreview) ?? {});
-
-    const deployRequests = normalizeDeployRequests(parsed);
-    if (!deployRequests.length) {
-      throw new Error(
-        "JSON must be a connector body or include deploy_requests (or legacy requests.conditions/transformations/connectors).",
-      );
-    }
-
-    const connectorReqs = deployRequests.filter((request) =>
-      isApiPath(request.path ?? "", "/chain/connector"),
-    );
-    const connectorBodies = connectorReqs
-      .map((request) =>
-        request?.body && typeof request.body === "object"
-          ? (request.body as Record<string, unknown>)
-          : null,
-      )
-      .filter((body): body is Record<string, unknown> => Boolean(body));
-    if (!connectorBodies.length) {
-      throw new Error("deploy_requests must include at least one POST /chain/connector body.");
-    }
-
-    const connectorBodyByName = new SvelteMap<string, Record<string, unknown>>();
-    connectorBodies.forEach((body) => {
-      const name = String(body.name ?? "").trim();
-      if (!name) return;
-      connectorBodyByName.set(name, body);
-    });
-
-    const requestedRootConnector =
-      typeof parsed.root_connector === "string" ? parsed.root_connector.trim() : "";
-    const connectorNames = connectorBodies
-      .map((body) => String(body.name ?? "").trim())
-      .filter((name) => name.length > 0);
-    if (!connectorNames.length) {
-      throw new Error("Each connector request body must include a connector name.");
-    }
-
-    const referencedConnectorNames = new SvelteSet<string>();
-    connectorBodies.forEach((body) => {
-      const dimensions = Array.isArray(body.dimensions)
-        ? (body.dimensions as Array<Record<string, unknown>>)
-        : [];
-      dimensions.forEach((dimension) => {
-        const compositeName =
-          typeof dimension.composite === "string" ? dimension.composite.trim() : "";
-        if (compositeName) referencedConnectorNames.add(compositeName);
-        const bindings =
-          dimension.bindings && typeof dimension.bindings === "object"
-            ? (dimension.bindings as Record<string, unknown>)
-            : {};
-        Object.values(bindings).forEach((targetRaw) => {
-          const targetName = typeof targetRaw === "string" ? targetRaw.trim() : "";
-          if (targetName) referencedConnectorNames.add(targetName);
-        });
-      });
-    });
-
-    const inferredRootConnector =
-      connectorNames.find((name) => !referencedConnectorNames.has(name)) ?? connectorNames[0];
-
-    let rootConnectorName = requestedRootConnector || inferredRootConnector;
-    let requestedRootLabelFallback = "";
-    if (requestedRootConnector && !connectorBodyByName.has(requestedRootConnector)) {
-      // If user typed a human title into `root_connector`, treat it as a label override
-      // and keep the inferred/valid root id.
-      rootConnectorName = inferredRootConnector;
-      requestedRootLabelFallback = requestedRootConnector;
-    }
-    if (!rootConnectorName) {
-      throw new Error("root_connector is required (or inferable from connector dependencies).");
-    }
-    const rootConnectorBody = connectorBodyByName.get(rootConnectorName);
-    if (!rootConnectorBody) {
-      throw new Error(`Connector request for "${rootConnectorName}" is required.`);
-    }
-
-    const conditionReqs = deployRequests.filter((request) =>
-      isApiPath(request.path ?? "", "/chain/condition"),
-    );
-    const conditionSourceByName = new SvelteMap<string, string>();
-    conditionReqs.forEach((req) => {
-      if (!req?.body || typeof req.body !== "object") return;
-      const body = req.body as Record<string, unknown>;
-      const name = typeof body.name === "string" ? body.name.trim() : "";
-      const src = typeof body.sol_src === "string" ? body.sol_src : "";
-      if (!name) return;
-      conditionSourceByName.set(name, src);
-    });
-
-    const transformationReqs = deployRequests.filter((request) =>
-      isApiPath(request.path ?? "", "/chain/transformation"),
-    );
-    const transformationSourceByName = new SvelteMap<string, string>();
-    transformationReqs.forEach((req) => {
-      if (!req?.body || typeof req.body !== "object") return;
-      const body = req.body as Record<string, unknown>;
-      const name = typeof body.name === "string" ? body.name.trim() : "";
-      const src = typeof body.sol_src === "string" ? body.sol_src : "";
-      if (!name) return;
-      transformationSourceByName.set(name, src);
-    });
-
-    const nextNodes: StudioNode[] = [];
-    const nextEdges: Edge[] = [];
-    const connectorNodeByName = new SvelteMap<string, StudioNode>();
-    const particleNodeByName = new SvelteMap<string, StudioNode>();
-    const conditionNodeByName = new SvelteMap<string, StudioNode>();
-    const edgeKeySet = new SvelteSet<string>();
-
-    const adjacency = new SvelteMap<string, string[]>();
-    connectorNames.forEach((name) => adjacency.set(name, []));
-    connectorBodies.forEach((body) => {
-      const sourceName = String(body.name ?? "").trim();
-      if (!sourceName) return;
-      const dimensions = Array.isArray(body.dimensions)
-        ? (body.dimensions as Array<Record<string, unknown>>)
-        : [];
-      const children: string[] = [];
-      dimensions.forEach((dimension) => {
-        const compositeName =
-          typeof dimension.composite === "string" ? dimension.composite.trim() : "";
-        if (compositeName && connectorBodyByName.has(compositeName)) {
-          children.push(compositeName);
-        }
-        const bindings =
-          dimension.bindings && typeof dimension.bindings === "object"
-            ? (dimension.bindings as Record<string, unknown>)
-            : {};
-        Object.values(bindings).forEach((targetRaw) => {
-          const targetName = typeof targetRaw === "string" ? targetRaw.trim() : "";
-          if (targetName && connectorBodyByName.has(targetName)) {
-            children.push(targetName);
-          }
-        });
-      });
-      adjacency.set(sourceName, Array.from(new SvelteSet(children)));
-    });
-
-    const connectorLevel = new SvelteMap<string, number>();
-    const queue: string[] = [];
-    const queued = new SvelteSet<string>();
-    const orderedConnectorNames: string[] = [];
-    const pushConnector = (name: string) => {
-      if (!name || queued.has(name)) return;
-      queued.add(name);
-      queue.push(name);
-    };
-    pushConnector(rootConnectorName);
-    while (queue.length) {
-      const current = queue.shift()!;
-      orderedConnectorNames.push(current);
-      const level = connectorLevel.has(current) ? (connectorLevel.get(current) ?? 0) : 0;
-      connectorLevel.set(current, level);
-      (adjacency.get(current) ?? []).forEach((childName) => {
-        const nextLevel = level + 1;
-        if (!connectorLevel.has(childName) || (connectorLevel.get(childName) ?? 0) > nextLevel) {
-          connectorLevel.set(childName, nextLevel);
-        }
-        pushConnector(childName);
-      });
-    }
-    connectorNames.forEach((name) => {
-      if (!orderedConnectorNames.includes(name)) orderedConnectorNames.push(name);
-      if (!connectorLevel.has(name)) connectorLevel.set(name, 0);
-    });
-
-    const levelCounters = new SvelteMap<number, number>();
-    orderedConnectorNames.forEach((connectorName) => {
-      const connectorBody = connectorBodyByName.get(connectorName);
-      if (!connectorBody) return;
-      const connectorIsReadOnly = connectorReadOnlyByName.get(connectorName) ?? false;
-      const dimensionsRaw = Array.isArray(connectorBody.dimensions)
-        ? (connectorBody.dimensions as Array<Record<string, unknown>>)
-        : [];
-      if (!dimensionsRaw.length) return;
-      const level = connectorLevel.get(connectorName) ?? 0;
-      const rowIndex = levelCounters.get(level) ?? 0;
-      levelCounters.set(level, rowIndex + 1);
-
-      const connectorRowsFromApi: ConnectorRowPreview[] = dimensionsRaw.map(
-        (dimension, dimIndex) => {
-          const txDefs = Array.isArray(dimension.transformations)
-            ? (dimension.transformations as Array<Record<string, unknown>>)
-            : [];
-          const transformations = txDefs
-            .map((tx) => {
-              const name = typeof tx.name === "string" ? tx.name.trim() : "";
-              if (!name) return null;
-              const args = Array.isArray(tx.args)
-                ? tx.args.map((arg) => Number(arg)).filter((arg) => Number.isFinite(arg))
-                : [];
-              return formatTransformationPreviewLabel(name, args);
-            })
-            .filter((value): value is string => Boolean(value));
-          return {
-            dimension: dimIndex + 1,
-            transformations,
-          };
-        },
-      );
-      const staticRiFromApi = parseStaticRiPayload(
-        (connectorBody as { static_ri?: unknown }).static_ri,
-      );
-      const selfStaticRiFromApi = resolveConnectorSelfStaticRi(staticRiFromApi);
-
-      const connectorNode: StudioNode = {
-        id: `feature-${crypto.randomUUID()}`,
-        type: "connector",
-        draggable: false,
-        position: { x: 260 + level * 360, y: 80 + rowIndex * 320 },
-        data: {
-          label:
-            (connectorName === rootConnectorName
-              ? requestedRootLabelFromResolved || requestedRootLabelFallback
-              : "") ||
-            connectorLabelByName.get(connectorName) ||
-            connectorName,
-          kind: "connector",
-          dimensions: dimensionsRaw.length,
-          connectorRows: connectorRowsFromApi,
-          fromNetwork: connectorIsReadOnly,
-          tabRoot: connectorName === rootConnectorName,
-          hideOutlets: connectorIsReadOnly && (adjacency.get(connectorName)?.length ?? 0) === 0,
-          riStart: selfStaticRiFromApi?.startPoint ?? 0,
-          riShift: selfStaticRiFromApi?.transformationShift ?? 0,
-          riLocked: Boolean(selfStaticRiFromApi),
-          riPosition: undefined,
-          staticRi: staticRiFromApi,
-        },
-      };
-      connectorNodeByName.set(connectorName, connectorNode);
-      nextNodes.push(connectorNode);
-    });
-
-    const addEdgeIfMissing = (edge: Omit<Edge, "id">) => {
-      const relationPart =
-        edge.data && typeof edge.data === "object"
-          ? `${(edge.data as { relation?: unknown; kind?: unknown }).relation ?? (edge.data as { relation?: unknown; kind?: unknown }).kind ?? ""}`
-          : "";
-      const bindingSlotPart =
-        edge.data && typeof edge.data === "object"
-          ? `${(edge.data as { bindingSlot?: unknown; binding_slot?: unknown; slot?: unknown }).bindingSlot ?? (edge.data as { bindingSlot?: unknown; binding_slot?: unknown; slot?: unknown }).binding_slot ?? (edge.data as { bindingSlot?: unknown; binding_slot?: unknown; slot?: unknown }).slot ?? ""}`
-          : "";
-      const key = `${edge.source}|${edge.sourceHandle ?? ""}|${edge.target}|${edge.targetHandle ?? ""}|${relationPart}|${bindingSlotPart}|${edge.label ?? ""}`;
-      if (edgeKeySet.has(key)) return;
-      edgeKeySet.add(key);
-      nextEdges.push({
-        id: `edge-${crypto.randomUUID()}`,
-        ...edge,
-      });
-    };
-
-    connectorBodies.forEach((connectorBody) => {
-      const connectorName = String(connectorBody.name ?? "").trim();
-      const connectorNode = connectorNodeByName.get(connectorName) ?? null;
-      if (!connectorNode) return;
-      const connectorIsReadOnly = connectorReadOnlyByName.get(connectorName) ?? false;
-
-      const conditionName =
-        typeof connectorBody.condition_name === "string" ? connectorBody.condition_name.trim() : "";
-      if (conditionName) {
-        let conditionNode = conditionNodeByName.get(conditionName) ?? null;
-        if (!conditionNode) {
-          const isDraftCondition = conditionSourceByName.has(conditionName);
-          conditionNode = {
-            id: `condition-${crypto.randomUUID()}`,
-            type: "condition",
-            draggable: false,
-            position: {
-              x: connectorNode.position.x,
-              y: connectorNode.position.y - 120,
-            },
-            data: {
-              label: conditionName,
-              kind: "condition",
-              fromNetwork: !isDraftCondition,
-              ...(isDraftCondition ? {} : { networkId: conditionName }),
-            },
-          };
-          conditionNodeByName.set(conditionName, conditionNode);
-          nextNodes.push(conditionNode);
-          if (isDraftCondition) {
-            conditionCodeById.set(conditionNode.id, conditionSourceByName.get(conditionName) ?? "");
-          }
-        }
-        addEdgeIfMissing({
-          source: conditionNode.id,
-          sourceHandle: "out",
-          target: connectorNode.id,
-          targetHandle: "in",
-        });
-      }
-
-      const dimensionsRaw = Array.isArray(connectorBody.dimensions)
-        ? (connectorBody.dimensions as Array<Record<string, unknown>>)
-        : [];
-      dimensionsRaw.forEach((dimension, dimIndex) => {
-        const dimNode = createDimensionNode(connectorNode, dimIndex, dimensionsRaw.length);
-        const txDefs = Array.isArray(dimension.transformations)
-          ? (dimension.transformations as Array<Record<string, unknown>>)
-          : [];
-        const txInstances = txDefs
-          .map((tx) => {
-            const name = typeof tx.name === "string" ? tx.name.trim() : "";
-            if (!name) return null;
-            const args = Array.isArray(tx.args)
-              ? tx.args.map((arg) => Number(arg)).filter((arg) => Number.isFinite(arg))
-              : [];
-            const isDraft = transformationSourceByName.has(name) || !connectorIsReadOnly;
-            return createTransformationInstance(name, args, isDraft ? "draft" : "network");
-          })
-          .filter((value): value is TransformationInstance => Boolean(value));
-
-        dimNode.data = {
-          ...dimNode.data,
-          transformations: txInstances,
-        };
-        nextNodes.push(dimNode);
-        addEdgeIfMissing({
-          source: connectorNode.id,
-          sourceHandle: `dim-${dimIndex}`,
-          target: dimNode.id,
-          targetHandle: "in",
-        });
-
-        txInstances.forEach((tx) => {
-          if (tx.status !== "draft") return;
-          const source = transformationSourceByName.get(tx.name);
-          if (source) transformationCodeById.set(tx.id, source);
-        });
-
-        const bindingEntries =
-          dimension.bindings && typeof dimension.bindings === "object"
-            ? Object.entries(dimension.bindings as Record<string, unknown>)
-                .filter(([slot]) => /^\d+$/.test(slot.trim()))
-                .sort((a, b) => Number(a[0]) - Number(b[0]))
-                .map(([slot, targetRaw]) => ({
-                  slotId: Number(slot),
-                  targetName: typeof targetRaw === "string" ? targetRaw.trim() : "",
-                }))
-                .filter(
-                  (value) =>
-                    Number.isInteger(value.slotId) && value.slotId >= 0 && value.targetName,
-                )
-            : [];
-        const compositeName =
-          typeof dimension.composite === "string" ? dimension.composite.trim() : "";
-        const targets: Array<{
-          relation: "composite" | "binding";
-          targetName: string;
-          slotId?: number;
-        }> = [
-          ...(compositeName ? [{ relation: "composite" as const, targetName: compositeName }] : []),
-          ...bindingEntries.map((binding) => ({
-            relation: "binding" as const,
-            targetName: binding.targetName,
-            slotId: binding.slotId,
-          })),
-        ];
-
-        targets.forEach((item, targetIndex) => {
-          const targetName = item.targetName;
-          const targetConnectorNode = connectorNodeByName.get(targetName) ?? null;
-          if (targetConnectorNode) {
-            addEdgeIfMissing({
-              source: connectorNode.id,
-              sourceHandle: `dim-${dimIndex}`,
-              target: targetConnectorNode.id,
-              targetHandle: "in",
-              ...(item.relation === "composite"
-                ? {
-                    label: `composite · D${dimIndex + 1}`,
-                    data: { relation: "composite" },
-                  }
-                : {
-                    label: `binding · slot ${item.slotId ?? 0}`,
-                    data: {
-                      relation: "binding",
-                      bindingSlot: item.slotId ?? 0,
-                      bindingOwnerName: connectorName,
-                    },
-                    style: "stroke:#c97500;stroke-dasharray:8 5;",
-                  }),
-            });
-            return;
-          }
-
-          let particleNode = particleNodeByName.get(targetName) ?? null;
-          if (!particleNode) {
-            const particleMeta = networkParticles.find((item) => item.id === targetName);
-            particleNode = {
-              id: `particle-${crypto.randomUUID()}`,
-              type: "particle",
-              draggable: false,
-              position: {
-                x: dimNode.position.x + targetIndex * 120,
-                y: dimNode.position.y + 180,
-              },
-              data: {
-                label: particleMeta?.name ?? targetName,
-                kind: "particle",
-                particleId: targetName,
-                networkId: targetName,
-                fromNetwork: true,
-              },
-            };
-            particleNodeByName.set(targetName, particleNode);
-            nextNodes.push(particleNode);
-          }
-
-          addEdgeIfMissing({
-            source: connectorNode.id,
-            sourceHandle: `dim-${dimIndex}`,
-            target: particleNode.id,
-            targetHandle: "in",
-            ...(item.relation === "composite"
-              ? {
-                  label: `composite · D${dimIndex + 1}`,
-                  data: { relation: "composite" },
-                }
-              : {
-                  label: `binding · slot ${item.slotId ?? 0}`,
-                  data: {
-                    relation: "binding",
-                    bindingSlot: item.slotId ?? 0,
-                    bindingOwnerName: connectorName,
-                  },
-                  style: "stroke:#c97500;stroke-dasharray:8 5;",
-                }),
-          });
-        });
-      });
+    const applied = buildApiGraphFromPreviewJson({
+      rawJson,
+      currentResolved: buildResolvedConnectorTreePreview(),
+      deployedConnectors: deployedRegistry.connectors,
+      networkParticles,
     });
 
     apiEditorApplying = true;
     try {
-      const rootConnectorLabel =
-        requestedRootLabelFromResolved ||
-        requestedRootLabelFallback ||
-        connectorLabelByName.get(rootConnectorName) ||
-        rootConnectorName;
-      nodes = nextNodes;
-      edges = nextEdges;
+      applied.conditionCodeByNodeId.forEach((source, nodeId) => {
+        conditionCodeById.set(nodeId, source);
+      });
+      applied.transformationCodeById.forEach((source, transformationId) => {
+        transformationCodeById.set(transformationId, source);
+      });
+      nodes = applied.nodes;
+      edges = applied.edges;
       selectedNodeId = null;
       tabs = tabs.map((tab) =>
         tab.id === activeTabId
           ? {
               ...tab,
-              label: rootConnectorLabel,
+              label: applied.rootConnectorLabel,
               particleId: undefined,
             }
           : tab,
       );
-      tabGraphs.set(activeTabId, { nodes: nextNodes, edges: nextEdges });
+      tabGraphs.set(activeTabId, { nodes: applied.nodes, edges: applied.edges });
       scheduleLayout();
     } finally {
       apiEditorApplying = false;

@@ -1,0 +1,214 @@
+import { describe, expect, it } from "vitest";
+
+import {
+  buildConnectorTreeGraph,
+  computeConnectorOpenSlotsInRegistry,
+  type ConnectorTreeModel,
+  type ConnectorTreeNode,
+} from "../src/lib/studio/connectorTreeGraph";
+import type { StudioConnectorDef } from "../src/lib/studio/domain/connectorModel";
+
+const ids = () => {
+  let index = 0;
+  return () => {
+    index += 1;
+    return `id-${index}`;
+  };
+};
+
+const connector = (
+  name: string,
+  dimensions: Array<{
+    transformations?: Array<{ name: string; args?: number[] }>;
+    composite?: string;
+    bindings?: Record<string, string>;
+  }>,
+  extra: Partial<StudioConnectorDef> = {},
+): StudioConnectorDef => ({
+  name,
+  dimensions: dimensions.map((dimension) => ({
+    transformations: (dimension.transformations ?? []).map((tx) => ({
+      name: tx.name,
+      args: [...(tx.args ?? [])],
+    })),
+    ...(dimension.composite ? { composite: dimension.composite } : {}),
+    bindings: { ...(dimension.bindings ?? {}) },
+  })),
+  ...extra,
+});
+
+const build = (
+  connectorRegistry: Record<string, StudioConnectorDef>,
+  rootConnectorName: string,
+): ConnectorTreeModel =>
+  buildConnectorTreeGraph({
+    connectorRegistry,
+    rootConnectorName,
+    origin: { x: 100, y: 50 },
+    options: {
+      idFactory: ids(),
+      labelForConnector: (name) => `Label ${name}`,
+    },
+  });
+
+const connectorNode = (model: ConnectorTreeModel, name: string): ConnectorTreeNode => {
+  const node = model.nodes.find(
+    (candidate) => candidate.data.kind === "connector" && candidate.data.networkId === name,
+  );
+  if (!node) throw new Error(`Missing connector node ${name}`);
+  return node;
+};
+
+const edgeData = (edge: ConnectorTreeModel["edges"][number]) =>
+  (edge.data ?? {}) as {
+    relation?: string;
+    bindingOwnerName?: string;
+    bindingSlot?: number;
+  };
+
+describe("connectorTreeGraph", () => {
+  it("renders nested composites with connector rows and RI positions", () => {
+    const registry = {
+      root: connector(
+        "root",
+        [
+          { transformations: [{ name: "root_tx", args: [1, 2] }], composite: "child" },
+          { transformations: [{ name: "terminal_tx" }] },
+        ],
+        {
+          staticRi: {
+            "0": { startPoint: 7, transformationShift: 2 },
+            "1": { startPoint: 11, transformationShift: 3 },
+          },
+        },
+      ),
+      child: connector("child", [{ transformations: [{ name: "child_tx", args: [5] }] }]),
+    };
+
+    const model = build(registry, "root");
+    const root = connectorNode(model, "root");
+    const child = connectorNode(model, "child");
+
+    expect(root.data).toMatchObject({
+      label: "Label root",
+      tabRoot: true,
+      riPosition: 0,
+      riStart: 7,
+      riShift: 2,
+      riLocked: true,
+      hideOutlets: false,
+    });
+    expect(root.data.connectorRows?.[0]?.transformations).toEqual(["root_tx (1, 2)"]);
+    expect(child.data).toMatchObject({
+      label: "Label child",
+      riPosition: 1,
+      riStart: 11,
+      riShift: 3,
+      riLocked: true,
+      hideOutlets: true,
+    });
+    expect(
+      model.edges.some(
+        (edge) =>
+          edge.source === root.id &&
+          edge.target === child.id &&
+          edgeData(edge).relation === "composite",
+      ),
+    ).toBe(true);
+    expect(computeConnectorOpenSlotsInRegistry(registry, "root")).toBe(2);
+  });
+
+  it("projects static bindings and forwarded bindings through nested slots", () => {
+    const registry = {
+      parent: connector("parent", [{ composite: "root", bindings: { "1": "forwardB" } }]),
+      root: connector("root", [{ composite: "child", bindings: { "0": "staticA" } }]),
+      child: connector("child", [{}]),
+      staticA: connector("staticA", [{}, {}]),
+      forwardB: connector("forwardB", [{}]),
+    };
+
+    const model = build(registry, "parent");
+    const child = connectorNode(model, "child");
+    const staticA = connectorNode(model, "staticA");
+    const forwardB = connectorNode(model, "forwardB");
+
+    expect(staticA.data).toMatchObject({
+      boundKind: "static",
+      boundSlotLabel: "slot 0",
+      boundOwnerName: "root",
+    });
+    expect(forwardB.data).toMatchObject({
+      boundKind: "forwarded",
+      boundSlotLabel: "slot 1 (from slot 1)",
+      boundOwnerName: "parent",
+    });
+
+    const staticBindingEdge = model.edges.find(
+      (edge) =>
+        edge.source === child.id &&
+        edge.target === staticA.id &&
+        edgeData(edge).relation === "binding",
+    );
+    expect(edgeData(staticBindingEdge!)).toMatchObject({
+      bindingOwnerName: "root",
+      bindingSlot: 0,
+    });
+
+    const forwardedBindingEdge = model.edges.find(
+      (edge) =>
+        edge.source === staticA.id &&
+        edge.target === forwardB.id &&
+        edgeData(edge).relation === "binding",
+    );
+    expect(edgeData(forwardedBindingEdge!)).toMatchObject({
+      bindingOwnerName: "parent",
+      bindingSlot: 1,
+    });
+    expect(computeConnectorOpenSlotsInRegistry(registry, "root")).toBe(2);
+    expect(computeConnectorOpenSlotsInRegistry(registry, "parent")).toBe(2);
+  });
+
+  it("renders loading placeholders for missing composite connectors", () => {
+    const registry = {
+      root: connector("root", [{ composite: "missing_child" }]),
+    };
+
+    const model = build(registry, "root");
+    const placeholder = model.nodes.find((node) => node.data.placeholder);
+
+    expect(placeholder?.data).toMatchObject({
+      label: "Loading connector...",
+      kind: "particle",
+      placeholderState: "loading",
+      placeholderDetail: "waiting for chain sync: missing_child",
+    });
+    expect(
+      model.edges.some(
+        (edge) =>
+          edge.target === placeholder?.id &&
+          edge.label === "composite · D1" &&
+          edgeData(edge).relation === "composite",
+      ),
+    ).toBe(true);
+  });
+
+  it("renders warning placeholders for connector cycles", () => {
+    const registry = {
+      root: connector("root", [{ composite: "child" }]),
+      child: connector("child", [{ composite: "root" }]),
+    };
+
+    const model = build(registry, "root");
+    const placeholder = model.nodes.find((node) => node.data.placeholder);
+
+    expect(placeholder?.data).toMatchObject({
+      label: "Connector cycle",
+      kind: "particle",
+      placeholderState: "warning",
+      placeholderDetail: "Connector cycle at root",
+    });
+    expect(() => computeConnectorOpenSlotsInRegistry(registry, "root")).toThrowError(
+      /Connector cycle/,
+    );
+  });
+});
