@@ -4,6 +4,7 @@
   import { resolve } from "$app/paths";
 
   import SectionShell from "$lib/components/ui/SectionShell.svelte";
+  import { DEFAULT_AUTHENTICATED_ROUTE, LOGIN_ROUTE } from "$lib/auth/routeAccess";
   import { hasAuthSession } from "$lib/auth/session";
 
   let message = $state("Opening app...");
@@ -11,12 +12,12 @@
   onMount(async () => {
     if (hasAuthSession()) {
       message = "Opening network...";
-      await goto(resolve("/network"), { replaceState: true });
+      await goto(resolve(DEFAULT_AUTHENTICATED_ROUTE), { replaceState: true });
       return;
     }
 
     message = "Opening login...";
-    await goto(resolve("/login"), { replaceState: true });
+    await goto(resolve(LOGIN_ROUTE), { replaceState: true });
   });
 </script>
 

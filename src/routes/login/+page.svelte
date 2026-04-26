@@ -8,6 +8,7 @@
   import SectionShell from "$lib/components/ui/SectionShell.svelte";
 
   import { login, loginOrRegisterUser, loginWithMockChainAccount } from "$lib/auth/api";
+  import { DEFAULT_AUTHENTICATED_ROUTE } from "$lib/auth/routeAccess";
   import { hasAuthSession } from "$lib/auth/session";
   import { mockUsers } from "$lib/data/users";
 
@@ -100,7 +101,7 @@
 
   onMount(() => {
     if (hasAuthSession()) {
-      goto(resolve("/network"));
+      goto(resolve(DEFAULT_AUTHENTICATED_ROUTE));
       return;
     }
   });

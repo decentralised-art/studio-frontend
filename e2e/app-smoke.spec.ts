@@ -45,6 +45,39 @@ test("redirects anonymous root visitors to login", async ({ page }) => {
   assertNoPageErrors();
 });
 
+const protectedRouteCases = [
+  "/studio",
+  "/network",
+  "/account",
+  "/map",
+  "/create",
+  "/explore",
+  "/social",
+  "/c/pitch",
+  "/f/pitch",
+  "/u/user-lyra",
+  "/p/pitch",
+];
+
+protectedRouteCases.forEach((path) => {
+  test(`redirects anonymous ${path} visitors to login`, async ({ page }) => {
+    const assertNoPageErrors = collectPageErrors(page);
+    await stubRemoteApis(page);
+
+    await page.goto(path);
+
+    await expect(page).toHaveURL(/\/login$/);
+    await expect(page.getByRole("heading", { name: "Log in" })).toBeVisible();
+    if (path === "/studio") {
+      await expect(page.getByRole("application", { name: "Flow canvas" })).toHaveCount(0);
+    }
+    if (path === "/network") {
+      await expect(page.getByRole("region", { name: "Activity feed" })).toHaveCount(0);
+    }
+    assertNoPageErrors();
+  });
+});
+
 test("renders the login prototype entry point", async ({ page }) => {
   const assertNoPageErrors = collectPageErrors(page);
 
@@ -53,6 +86,18 @@ test("renders the login prototype entry point", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "Log in" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Preview Prototype" })).toBeVisible();
   await expect(page.getByPlaceholder("you@hypermusic.ai")).toBeVisible();
+  assertNoPageErrors();
+});
+
+test("redirects authenticated login visitors to Network", async ({ page }) => {
+  const assertNoPageErrors = collectPageErrors(page);
+  await stubRemoteApis(page);
+  await authenticatePrototypeSession(page);
+
+  await page.goto("/login");
+
+  await expect(page).toHaveURL(/\/network$/);
+  await expect(page.getByRole("region", { name: "Activity feed" })).toBeVisible();
   assertNoPageErrors();
 });
 

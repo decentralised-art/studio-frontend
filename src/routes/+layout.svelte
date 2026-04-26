@@ -5,27 +5,31 @@
   import { dev } from "$app/environment";
   import { page } from "$app/state";
   import "$lib/styles/style.css";
+  import { isPublicRouteId, LOGIN_ROUTE } from "$lib/auth/routeAccess";
   import { hasAuthSession } from "$lib/auth/session";
 
-  let { children } = $props();
-  let isAuthenticated = $state(false);
+  let { children, data } = $props();
+  let authRevision = $state(0);
   let currentPath = $state("");
-  let redirectInProgress = false;
   const devBypass = dev && import.meta.env.VITE_DEV_BYPASS_AUTH === "true";
-  const allowedRouteIds = new Set(["/", "/login"]);
+  const hasCurrentAuthSession = $derived.by(() => {
+    const revision = authRevision;
+    return revision >= 0 && hasAuthSession();
+  });
+  const isAuthenticated = $derived.by(() => {
+    return devBypass || Boolean(data.isAuthenticated) || hasCurrentAuthSession;
+  });
+  const canRenderRoute = $derived(isAuthenticated || devBypass || isPublicRouteId(page.route.id));
   const guardRoute = (routeId: string | null) => {
-    if (redirectInProgress) return;
     if (devBypass) return;
-    if (hasAuthSession()) return;
-    if (routeId === null) return;
-    if (allowedRouteIds.has(routeId)) return;
-    redirectInProgress = true;
-    goto(resolve("/login"), { replaceState: true });
+    if (isAuthenticated) return;
+    if (isPublicRouteId(routeId)) return;
+    goto(resolve(LOGIN_ROUTE), { replaceState: true });
   };
 
   onMount(() => {
     const syncAuth = () => {
-      isAuthenticated = devBypass || hasAuthSession();
+      authRevision += 1;
       currentPath = window.location.pathname;
       guardRoute(page.route.id);
     };
@@ -69,7 +73,11 @@
   </header>
 
   <main class="flex-1 min-h-0 overflow-hidden flex flex-col">
-    {@render children()}
+    {#if canRenderRoute}
+      {@render children()}
+    {:else}
+      <div class="auth-redirect-page" aria-live="polite">Opening login...</div>
+    {/if}
   </main>
 
   {#if currentPath !== resolve("/studio") && currentPath !== resolve("/network")}
@@ -90,3 +98,11 @@
     </footer>
   {/if}
 </div>
+
+<style lang="postcss">
+  @reference "$lib/styles/style.css";
+
+  .auth-redirect-page {
+    @apply flex-1 min-h-0 flex items-center justify-center px-4 py-10 text-sm text-white/70;
+  }
+</style>
