@@ -3,19 +3,48 @@ import tailwindcss from "@tailwindcss/vite";
 import { defineConfig } from "vitest/config";
 
 const toBuildPath = (id: string) => id.replaceAll("\\", "/");
+const toMonacoChunkName = (buildPath: string) => {
+  const monacoPrefix = "node_modules/monaco-editor/esm/vs/";
+  const monacoIndex = buildPath.indexOf(monacoPrefix);
+  if (monacoIndex === -1) return null;
+
+  const monacoPath = buildPath.slice(monacoIndex + monacoPrefix.length);
+  if (monacoPath.startsWith("base/browser/")) return "monaco-base-browser";
+  if (monacoPath.startsWith("base/common/")) return "monaco-base-common";
+  if (monacoPath.startsWith("base/")) return "monaco-base";
+  if (monacoPath.startsWith("platform/")) return "monaco-platform";
+  if (monacoPath.startsWith("editor/contrib/")) return "monaco-editor-contrib";
+  if (monacoPath.startsWith("editor/browser/widget/")) return "monaco-editor-widgets";
+  if (monacoPath.startsWith("editor/browser/gpu/")) return "monaco-editor-gpu";
+  if (monacoPath.startsWith("editor/browser/config/")) return "monaco-editor-browser-config";
+  if (monacoPath.startsWith("editor/browser/")) return "monaco-editor-browser";
+  if (monacoPath.startsWith("editor/common/config/")) return "monaco-editor-config";
+  if (monacoPath.startsWith("editor/common/model/")) return "monaco-editor-model";
+  if (monacoPath.startsWith("editor/common/viewModel/")) return "monaco-editor-view-model";
+  if (monacoPath.startsWith("editor/common/cursor/")) return "monaco-editor-cursor";
+  if (monacoPath.startsWith("editor/common/languages/")) return "monaco-editor-common";
+  if (monacoPath.startsWith("editor/common/services/")) return "monaco-editor-model";
+  if (monacoPath.startsWith("editor/common/diff/")) return "monaco-editor-diff";
+  if (monacoPath.startsWith("editor/common/core/")) return "monaco-editor-common-core";
+  if (monacoPath.startsWith("editor/common/tokens/")) return "monaco-editor-common";
+  if (monacoPath.startsWith("editor/common/viewLayout/")) return "monaco-editor-view-layout";
+  if (monacoPath.startsWith("editor/common/standalone/")) return "monaco-editor-common-standalone";
+  if (monacoPath.startsWith("editor/common/")) return "monaco-editor-common";
+  if (monacoPath.startsWith("editor/standalone/")) return "monaco-editor-standalone";
+  if (monacoPath.startsWith("editor/")) return "monaco-editor-core";
+  if (monacoPath.startsWith("language/")) return "monaco-language";
+  if (monacoPath.startsWith("basic-languages/")) return "monaco-basic-languages";
+
+  return "monaco";
+};
 const isExpectedDependencyWarning = (code: unknown, message = "") =>
   ((code === "UNUSED_EXTERNAL_IMPORT" ||
     (message.includes("never used") && message.includes("@xyflow/system"))) &&
     message.includes("@xyflow/system")) ||
   (code === "CIRCULAR_DEPENDENCY" && message.includes("node_modules/d3-"));
 
-export default defineConfig({
+export default defineConfig(({ isSsrBuild }) => ({
   plugins: [tailwindcss(), sveltekit()],
-
-  // --- SSR ---
-  ssr: {
-    noExternal: ["monaco-editor"],
-  },
 
   // --- Dev / deps ---
   optimizeDeps: {
@@ -82,6 +111,10 @@ export default defineConfig({
       output: {
         manualChunks(id) {
           const buildPath = toBuildPath(id);
+          if (!isSsrBuild) {
+            const monacoChunkName = toMonacoChunkName(buildPath);
+            if (monacoChunkName) return monacoChunkName;
+          }
           if (buildPath.includes("node_modules/@xyflow/")) return "xyflow";
           if (buildPath.includes("node_modules/d3-")) return "d3";
         },
@@ -102,4 +135,4 @@ export default defineConfig({
         conditions: ["browser"],
       }
     : undefined,
-});
+}));

@@ -94,6 +94,7 @@
     toCanonicalPositionKey,
     toInt,
   } from "$lib/studio/connectorGraph";
+  import { mergeRuntimeRiOverridesIntoProjectedNode } from "$lib/studio/runtimeRiOverrides";
   import {
     buildConnectorTreeGraph as buildConnectorTreeGraphFromRegistry,
     computeConnectorOpenSlotsInRegistry,
@@ -5065,7 +5066,11 @@
       const overlayEdges = (overlay?.edges ?? []).filter(
         (edge) => overlayNodeIds.has(edge.source) && overlayNodeIds.has(edge.target),
       );
-      const mergedNodes = [...projectedTree.nodes];
+      const overlayNodeById = new Map(overlayNodes.map((node) => [node.id, node]));
+      const mergedNodes = projectedTree.nodes.map((node) => {
+        const overlayNode = overlayNodeById.get(node.id);
+        return overlayNode ? mergeRuntimeRiOverridesIntoProjectedNode(node, overlayNode) : node;
+      });
       const mergedNodeIdSet = new SvelteSet(mergedNodes.map((node) => node.id));
       overlayNodes.forEach((node) => {
         if (mergedNodeIdSet.has(node.id)) return;
