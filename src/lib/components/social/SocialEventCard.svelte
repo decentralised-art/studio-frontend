@@ -10,6 +10,7 @@
     onParticleOpen,
     onAddToToolbox,
     authorLabelById,
+    authorAvatarUrlById,
     inToolbox = false,
   }: {
     event: ConnectorPostEvent;
@@ -17,6 +18,7 @@
     onParticleOpen?: ((particleId: string) => void) | undefined;
     onAddToToolbox?: ((particleId: string) => void) | undefined;
     authorLabelById?: Readonly<Record<string, string>>;
+    authorAvatarUrlById?: Readonly<Record<string, string>>;
     inToolbox?: boolean;
   } = $props();
 
@@ -47,6 +49,15 @@
   const authorLabel = $derived.by(
     () => mappedAuthorLabel || author?.nickname || shortAddress(event.authorId) || event.authorId,
   );
+  const mappedAuthorAvatarUrl = $derived.by(() => {
+    const exact = authorAvatarUrlById?.[event.authorId]?.trim();
+    if (exact && exact.length > 0) return exact;
+    const normalized = normalizeAddress(event.authorId);
+    const byNormalized = authorAvatarUrlById?.[normalized]?.trim();
+    if (byNormalized && byNormalized.length > 0) return byNormalized;
+    return "";
+  });
+  const authorAvatarUrl = $derived.by(() => mappedAuthorAvatarUrl || author?.avatarUrl || "");
   const dependencies = $derived.by(() =>
     event.usedParticleIds.map((id, index) => ({
       id,
@@ -81,8 +92,8 @@
 
     <header class="event-header">
       <div class="event-author">
-        {#if author}
-          <img class="author-avatar" src={author.avatarUrl} alt={`${authorLabel} avatar`} />
+        {#if authorAvatarUrl}
+          <img class="author-avatar" src={authorAvatarUrl} alt={`${authorLabel} avatar`} />
         {:else}
           <div class="author-avatar author-avatar--fallback" aria-hidden="true">?</div>
         {/if}

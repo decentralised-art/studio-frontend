@@ -94,11 +94,11 @@
     toCanonicalPositionKey,
     toInt,
   } from "$lib/studio/connectorGraph";
-  import { mergeRuntimeRiOverridesIntoProjectedNode } from "$lib/studio/runtimeRiOverrides";
   import {
     buildConnectorTreeGraph as buildConnectorTreeGraphFromRegistry,
     computeConnectorOpenSlotsInRegistry,
   } from "$lib/studio/connectorTreeGraph";
+  import { mergeConnectorTreeProjectionWithOverlay } from "$lib/studio/connectorTreeOverlay";
   import {
     formatTransformationPreview,
     formatTransformationPreviewLabel,
@@ -182,6 +182,7 @@
     getCurrentUserProfileState,
     getCurrentUserToolboxLibrary,
     getMe,
+    listServicesUsers,
     loginWithMockChainAccount,
     resolveCurrentUserChainSourceAddresses,
     saveCurrentUserToolboxLibrary,
@@ -197,7 +198,11 @@
   } from "$lib/chain/registryApi";
   import { createEphemeralDeployName, isReservedCoreCollectionName } from "$lib/chain/deployNaming";
   import { type LibraryItem } from "$lib/data/studioLibrary";
-  import { mockCurrentUserId, mockUsersById } from "$lib/data/users";
+  import { displayUsersById, mockCurrentUserId, mockUsersById, type User } from "$lib/data/users";
+  import {
+    buildStudioUsersById,
+    mapServicesUserToStudioAuthor,
+  } from "$lib/studio/studioAuthorUsers";
   import type {
     StudioConnectorDef,
     StudioRunningInstanceRef,
@@ -210,10 +215,17 @@
     listCompatibleStudioPlugins,
     type StudioPluginDescriptor,
   } from "$lib/studio/plugins/registry";
+  import {
+    bindStudioCanvasDragDrop,
+    readStudioPluginDropData,
+    writeStudioPluginDragData,
+  } from "$lib/studio/studioPluginDragDrop";
 
   type PanelMode = StudioPanelMode;
   type RightPanelMode = "assistant" | "inspector" | "runner" | "hidden";
   type InspectorTab = "node" | "api";
+
+  const STUDIO_FLOW_MIN_ZOOM = 0.05;
 
   let leftMode = $state<PanelMode>("open");
   let rightMode = $state<RightPanelMode>("hidden");
@@ -226,12 +238,20 @@
   let rightPanelWidthPx = $state(300);
   let leftPanelUserSized = $state(false);
   let rightPanelUserSized = $state(false);
+  let servicesAuthorUsersById = $state<Record<string, User>>({});
   let savedModes = $state<{
     left: PanelMode;
     right: RightPanelMode;
     top: PanelMode;
     bottom: PanelMode;
   } | null>(null);
+
+  const studioUsersById = $derived.by(() =>
+    buildStudioUsersById({
+      baseUsersById: displayUsersById,
+      servicesAuthorUsersById,
+    }),
+  );
 
   const ASSISTANT_SETTINGS_STORAGE_KEY = "dcn_studio_assistant_settings_v1";
   type AssistantSettingsSnapshot = {
@@ -2047,6 +2067,22 @@
     syncAssistantConversationRuntimeState();
   };
 
+  const loadStudioAuthorUsers = async () => {
+    try {
+      const users = await listServicesUsers();
+      const nextUsersById: Record<string, User> = {};
+      users.forEach((user) => {
+        const author = mapServicesUserToStudioAuthor(user);
+        if (!author) return;
+        nextUsersById[author.address] = author;
+        if (user.id.trim()) nextUsersById[user.id.trim()] = author;
+      });
+      servicesAuthorUsersById = nextUsersById;
+    } catch (error) {
+      console.warn("[Studio] Failed to load services author labels.", error);
+    }
+  };
+
   onMount(() => {
     viewportWidthPx = window.innerWidth;
     applyResponsivePanelWidths();
@@ -2057,13 +2093,6 @@
       loadAssistantConversation(conversation.id);
       assistantConversationView = "list";
     }
-
-    const handleDragOverCapture = (event: DragEvent) => {
-      handleDragOver(event);
-    };
-    const handleDropCapture = (event: DragEvent) => {
-      handleDrop(event);
-    };
 
     const handleKey = (event: KeyboardEvent) => {
       if (transformationEditorOpen || conditionEditorOpen) return;
@@ -2122,11 +2151,6 @@
     window.addEventListener("resize", handleWindowResize);
     window.addEventListener("studio-ri-update", handleStudioRiUpdate as EventListener);
     window.addEventListener("beforeunload", handleBeforeUnload);
-    if (canvasEl) {
-      canvasEl.addEventListener("dragover", handleDragOverCapture, { capture: true });
-      canvasEl.addEventListener("drop", handleDropCapture, { capture: true });
-    }
-
     const resizeObserver = new ResizeObserver(() => {
       scheduleLayout();
     });
@@ -2149,6 +2173,7 @@
     tabsSessionRestoreReady = true;
     void loadNetworkSelectionFromQuery();
     void loadToolboxLibraryFromProfile();
+    void loadStudioAuthorUsers();
     void ensureChainAuthForStudio().catch(() => {
       // Non-blocking warmup: run/deploy paths handle auth errors explicitly.
     });
@@ -2162,10 +2187,6 @@
       window.removeEventListener("resize", handleWindowResize);
       window.removeEventListener("studio-ri-update", handleStudioRiUpdate as EventListener);
       window.removeEventListener("beforeunload", handleBeforeUnload);
-      if (canvasEl) {
-        canvasEl.removeEventListener("dragover", handleDragOverCapture, { capture: true });
-        canvasEl.removeEventListener("drop", handleDropCapture, { capture: true });
-      }
       resizeObserver.disconnect();
       mutationObserver.disconnect();
       if (persistStudioTabsSessionTimer) {
@@ -2545,7 +2566,7 @@
     const el = canvasEl.querySelector<HTMLElement>(`.svelte-flow__node[data-id="${nodeId}"]`);
     if (!el) return fallback;
     const rect = el.getBoundingClientRect();
-    const zoom = Math.max(0.1, getZoom?.() ?? 1);
+    const zoom = Math.max(STUDIO_FLOW_MIN_ZOOM, getZoom?.() ?? 1);
     return {
       width: rect.width / zoom,
       height: rect.height / zoom,
@@ -5061,44 +5082,10 @@
     const projectedTree = projectConnectorTreeGraph(tabId);
     if (projectedTree) {
       const overlay = tabGraphs.get(tabId);
-      const overlayNodes = overlay?.nodes ?? [];
-      const overlayNodeIds = new SvelteSet(overlayNodes.map((node) => node.id));
-      const overlayEdges = (overlay?.edges ?? []).filter(
-        (edge) => overlayNodeIds.has(edge.source) && overlayNodeIds.has(edge.target),
+      const { nodes: mergedNodes, edges: mergedEdges } = mergeConnectorTreeProjectionWithOverlay(
+        projectedTree,
+        overlay,
       );
-      const overlayNodeById = new Map(overlayNodes.map((node) => [node.id, node]));
-      const mergedNodes = projectedTree.nodes.map((node) => {
-        const overlayNode = overlayNodeById.get(node.id);
-        return overlayNode ? mergeRuntimeRiOverridesIntoProjectedNode(node, overlayNode) : node;
-      });
-      const mergedNodeIdSet = new SvelteSet(mergedNodes.map((node) => node.id));
-      overlayNodes.forEach((node) => {
-        if (mergedNodeIdSet.has(node.id)) return;
-        mergedNodes.push({
-          ...node,
-          position: { ...node.position },
-          data: { ...node.data },
-        });
-        mergedNodeIdSet.add(node.id);
-      });
-      const mergedEdges = [...projectedTree.edges];
-      overlayEdges.forEach((edge) => {
-        if (!mergedNodeIdSet.has(edge.source) || !mergedNodeIdSet.has(edge.target)) return;
-        if (
-          mergedEdges.some(
-            (existing) =>
-              existing.source === edge.source &&
-              existing.target === edge.target &&
-              (existing.sourceHandle ?? "") === (edge.sourceHandle ?? "") &&
-              (existing.targetHandle ?? "") === (edge.targetHandle ?? ""),
-          )
-        ) {
-          return;
-        }
-        mergedEdges.push({
-          ...edge,
-        });
-      });
       nodes = mergedNodes;
       edges = mergedEdges;
     } else {
@@ -5314,16 +5301,20 @@
     rootConnectorName: string,
     origin: { x: number; y: number },
     options: { hideReadOnlyLeafOutlets?: boolean; markRootAsTabRoot?: boolean } = {},
-  ): ConnectorTreeModel =>
-    buildConnectorTreeGraphFromRegistry({
+  ): ConnectorTreeModel => {
+    let idIndex = 0;
+    const idPrefix = slugify(rootConnectorName) || "connector";
+    return buildConnectorTreeGraphFromRegistry({
       connectorRegistry: deployedRegistry.connectors,
       rootConnectorName,
       origin,
       options: {
         ...options,
+        idFactory: () => `${idPrefix}-${idIndex++}`,
         labelForConnector: getConnectorLibraryLabel,
       },
     });
+  };
 
   const refreshConnectorTreeTab = (tabId: string) => {
     const tab = tabs.find((candidate) => candidate.id === tabId);
@@ -6343,9 +6334,13 @@
   };
 
   const handlePluginDragStart = (event: DragEvent, plugin: StudioPluginDescriptor) => {
-    event.dataTransfer?.setData("application/x-hypermusic-plugin", JSON.stringify(plugin));
-    event.dataTransfer?.setData("text/plain", plugin.name);
-    if (event.dataTransfer) event.dataTransfer.effectAllowed = "copy";
+    if (!pluginAttachEnabled) {
+      event.preventDefault();
+      pluginAttachError =
+        "Plugins can be dragged only when a deployed root connector is active in this tab.";
+      return;
+    }
+    writeStudioPluginDragData(event.dataTransfer, plugin);
   };
 
   const resolveConnectorDropTargetFromEvent = (
@@ -6371,19 +6366,15 @@
 
   const handleDrop = (event: DragEvent) => {
     event.preventDefault();
+    event.stopPropagation();
     const dropTarget = resolveConnectorDropTargetFromEvent(event);
-    const pluginPayload = event.dataTransfer?.getData("application/x-hypermusic-plugin");
-    if (pluginPayload) {
-      try {
-        const plugin = JSON.parse(pluginPayload) as StudioPluginDescriptor;
-        const position = screenToFlowPosition
-          ? screenToFlowPosition({ x: event.clientX, y: event.clientY })
-          : { x: event.clientX, y: event.clientY };
-        attachStudioPluginToRoot(plugin, { position });
-        return;
-      } catch (error) {
-        console.warn("Failed to parse dropped plugin payload", error);
-      }
+    const plugin = readStudioPluginDropData(event.dataTransfer);
+    if (plugin) {
+      const position = screenToFlowPosition
+        ? screenToFlowPosition({ x: event.clientX, y: event.clientY })
+        : { x: event.clientX, y: event.clientY };
+      attachStudioPluginToRoot(plugin, { position });
+      return;
     }
     const quickPayload = event.dataTransfer?.getData("application/x-hypermusic-quick");
     if (quickPayload) {
@@ -6486,6 +6477,16 @@
         : "move";
     }
   };
+
+  $effect(() => {
+    const el = canvasEl;
+    if (!el) return;
+
+    return bindStudioCanvasDragDrop(el, {
+      onDragOver: handleDragOver,
+      onDrop: handleDrop,
+    });
+  });
 
   const handleTabDragOver = (event: DragEvent) => {
     event.preventDefault();
@@ -7354,7 +7355,7 @@
               toolboxIds={savedToolboxIdsForLibraryTab}
               loading={(explorerSource === "network" && chainSyncBusy) ||
                 (explorerSource === "toolbox" && toolboxLoadBusy)}
-              usersById={mockUsersById}
+              usersById={studioUsersById}
               onAdd={(item) => addLibraryNode(item, null)}
               onToolbox={toggleLibraryToolbox}
               onOpen={(item) => void openConnectorTab(getLibraryRegistryName(item))}
@@ -7382,7 +7383,7 @@
               toolboxIds={savedToolboxIdsForLibraryTab}
               loading={(explorerSource === "network" && chainSyncBusy) ||
                 (explorerSource === "toolbox" && toolboxLoadBusy)}
-              usersById={mockUsersById}
+              usersById={studioUsersById}
               onAdd={(item) => addLibraryNode(item, null)}
               onToolbox={toggleLibraryToolbox}
               onDragStart={handleLibraryDragStart}
@@ -7409,7 +7410,7 @@
               toolboxIds={savedToolboxIdsForLibraryTab}
               loading={(explorerSource === "network" && chainSyncBusy) ||
                 (explorerSource === "toolbox" && toolboxLoadBusy)}
-              usersById={mockUsersById}
+              usersById={studioUsersById}
               onAdd={(item) => addLibraryNode(item, null)}
               onToolbox={toggleLibraryToolbox}
               onDragStart={handleLibraryDragStart}
@@ -7454,7 +7455,8 @@
                 {#each compatibleStudioPlugins as plugin (plugin.id)}
                   <article
                     class="plugin-card"
-                    draggable
+                    draggable={pluginAttachEnabled}
+                    data-disabled={!pluginAttachEnabled}
                     ondragstart={(event) => handlePluginDragStart(event, plugin)}
                   >
                     <header class="plugin-card-header">
@@ -7508,6 +7510,7 @@
         onnodeclick={handleNodeClick}
         onedgeclick={handleEdgeClick}
         fitView
+        minZoom={STUDIO_FLOW_MIN_ZOOM}
         nodesDraggable
         nodesConnectable
         deleteKey={activeTabReadOnly ? null : ["Backspace", "Delete"]}
@@ -9328,6 +9331,10 @@
 
   .plugin-card:active {
     cursor: grabbing;
+  }
+
+  .plugin-card[data-disabled="true"] {
+    @apply cursor-not-allowed opacity-60;
   }
 
   .plugin-card-header {

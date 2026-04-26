@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { SvelteSet } from "svelte/reactivity";
+  import { SvelteMap, SvelteSet } from "svelte/reactivity";
   import { goto } from "$app/navigation";
   import { resolve } from "$app/paths";
 
@@ -17,6 +17,7 @@
     getCachedMe,
     getCurrentUserProfileState,
     logout,
+    resolveCurrentUserChainSourceAddresses,
     updateUserById,
   } from "$lib/auth/api";
   import { getToken, hasAuthSession } from "$lib/auth/session";
@@ -33,12 +34,29 @@
   let saveSuccess = $state("");
   let localToolboxConnectors = $state<string[]>([]);
   let accountFeedEvents = $state<NetworkFeedEvent[]>([]);
+  let accountFeedSourceAddresses = $state<string[]>([]);
   let accountLoadRequestVersion = 0;
+  const ETH_ADDRESS_RE = /^0x[0-9a-f]{40}$/;
 
   const normalizeAddressForKey = (value: string): string => {
     const trimmed = value.trim().toLowerCase();
     if (!trimmed) return "";
     return trimmed.startsWith("0x") ? trimmed : `0x${trimmed}`;
+  };
+  const normalizeChainAddress = (value: string): string => {
+    const normalized = normalizeAddressForKey(value);
+    return ETH_ADDRESS_RE.test(normalized) ? normalized : "";
+  };
+  const uniqueStrings = (values: string[]) =>
+    Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
+
+  const compareFeedEventsNewestFirst = (
+    a: { createdAt: number; id: string },
+    b: { createdAt: number; id: string },
+  ): number => {
+    const byCreatedAt = b.createdAt - a.createdAt;
+    if (byCreatedAt !== 0) return byCreatedAt;
+    return b.id.localeCompare(a.id);
   };
 
   type Eip1193Provider = {
@@ -55,11 +73,39 @@
       ? (value as Record<string, unknown>)
       : {};
 
-  const applyResolvedProfile = (user: ProfileViewUser) => {
+  const resolveAccountFeedSourceAddresses = (user: ProfileViewUser, mePayload: unknown): string[] =>
+    uniqueStrings(
+      [...resolveCurrentUserChainSourceAddresses(mePayload), user.address]
+        .map(normalizeChainAddress)
+        .filter(Boolean),
+    );
+
+  const resolveAccountFeedAuthorKeys = (
+    user: ProfileViewUser,
+    sourceAddresses = accountFeedSourceAddresses,
+  ): string[] =>
+    uniqueStrings([
+      ...sourceAddresses.map(normalizeChainAddress).filter(Boolean),
+      normalizeChainAddress(user.address),
+      user.id,
+    ]);
+
+  const listAccountFeedEventsForAuthors = (authorKeys: string[]): NetworkFeedEvent[] => {
+    const eventsById = new SvelteMap<string, NetworkFeedEvent>();
+    authorKeys.forEach((authorKey) => {
+      listNetworkFeedEventsByAuthor(authorKey).forEach((event) => {
+        eventsById.set(event.id, event);
+      });
+    });
+    return Array.from(eventsById.values()).sort(compareFeedEventsNewestFirst);
+  };
+
+  const applyResolvedProfile = (user: ProfileViewUser, sourceAddresses: string[]) => {
     currentUser = user;
     localToolboxConnectors = [...user.toolbox];
-    accountFeedEvents = listNetworkFeedEventsByAuthor(
-      normalizeAddressForKey(user.address) || user.id,
+    accountFeedSourceAddresses = sourceAddresses;
+    accountFeedEvents = listAccountFeedEventsForAuthors(
+      resolveAccountFeedAuthorKeys(user, sourceAddresses),
     );
   };
 
@@ -71,31 +117,40 @@
   const isAccountLoadRequestActive = (requestVersion: number): boolean =>
     requestVersion === accountLoadRequestVersion;
 
-  const refreshAccountFeedWithTargetedSnapshot = async (
+  const refreshAccountFeedWithTargetedSnapshots = async (
     activeUserId: string,
-    activeUserAddress: string,
+    sourceAddresses: string[],
     requestVersion: number,
   ) => {
     if (!isAccountLoadRequestActive(requestVersion)) return;
-    accountFeedEvents = listNetworkFeedEventsByAuthor(
-      normalizeAddressForKey(activeUserAddress) || activeUserId,
+    const normalizedSources = uniqueStrings(
+      sourceAddresses.map(normalizeChainAddress).filter(Boolean),
     );
+    const activeUser = currentUser;
+    if (!activeUser || activeUser.id !== activeUserId) return;
 
-    const normalizedAddress = normalizeAddressForKey(activeUserAddress);
-    if (!normalizedAddress) return;
+    accountFeedSourceAddresses = normalizedSources;
+    accountFeedEvents = listAccountFeedEventsForAuthors(
+      resolveAccountFeedAuthorKeys(activeUser, normalizedSources),
+    );
+    if (normalizedSources.length === 0) return;
 
     try {
-      const snapshot = await fetchChainOwnedStudioSnapshot(normalizedAddress, {
-        authorId: normalizedAddress,
-        limit: 200,
-        includeRuntimeCode: false,
-      });
+      const snapshots = await Promise.allSettled(
+        normalizedSources.map(async (sourceAddress) => {
+          const snapshot = await fetchChainOwnedStudioSnapshot(sourceAddress, {
+            authorId: sourceAddress,
+            limit: 200,
+            includeRuntimeCode: false,
+          });
+          return mapSnapshotParticlesToConnectorEvents(sourceAddress, snapshot.particles);
+        }),
+      );
       if (!isAccountLoadRequestActive(requestVersion)) return;
       if (currentUser?.id !== activeUserId) return;
-      const targetedEvents = mapSnapshotParticlesToConnectorEvents(
-        normalizedAddress,
-        snapshot.particles,
-      );
+      const targetedEvents = snapshots
+        .flatMap((result) => (result.status === "fulfilled" ? result.value : []))
+        .sort(compareFeedEventsNewestFirst);
       if (targetedEvents.length > 0) {
         accountFeedEvents = targetedEvents;
       }
@@ -131,11 +186,12 @@
       if (cachedMe) {
         try {
           const cachedUser = normalizeProfileUser(cachedMe);
-          applyResolvedProfile(cachedUser);
+          const sourceAddresses = resolveAccountFeedSourceAddresses(cachedUser, cachedMe);
+          applyResolvedProfile(cachedUser, sourceAddresses);
           const activeUserId = cachedUser.id;
-          void refreshAccountFeedWithTargetedSnapshot(
+          void refreshAccountFeedWithTargetedSnapshots(
             activeUserId,
-            cachedUser.address,
+            sourceAddresses,
             requestVersion,
           );
           hydratedFromCache = true;
@@ -151,14 +207,11 @@
         throw new Error("Failed to load account profile.");
       }
       const resolvedUser = normalizeProfileUser(profileState.me);
-      applyResolvedProfile(resolvedUser);
+      const sourceAddresses = resolveAccountFeedSourceAddresses(resolvedUser, profileState.me);
+      applyResolvedProfile(resolvedUser, sourceAddresses);
       localToolboxConnectors = [...profileState.toolbox.connector];
       const activeUserId = resolvedUser.id;
-      void refreshAccountFeedWithTargetedSnapshot(
-        activeUserId,
-        resolvedUser.address,
-        requestVersion,
-      );
+      void refreshAccountFeedWithTargetedSnapshots(activeUserId, sourceAddresses, requestVersion);
     } catch (err) {
       if (!isAccountLoadRequestActive(requestVersion)) return;
       if (!hydratedFromCache || !currentUser) {
@@ -190,11 +243,22 @@
     const nickname = currentUser.nickname.trim();
     if (!nickname) return labels;
     labels[currentUser.id] = nickname;
-    const normalizedAddress = normalizeAddressForKey(currentUser.address);
-    if (normalizedAddress) {
-      labels[normalizedAddress] = nickname;
-    }
+    accountFeedSourceAddresses.forEach((address) => {
+      const normalizedAddress = normalizeChainAddress(address);
+      if (normalizedAddress) labels[normalizedAddress] = nickname;
+    });
     return labels;
+  });
+  const accountFeedAuthorAvatars = $derived.by(() => {
+    const avatars: Record<string, string> = {};
+    if (!currentUser?.avatarUrl) return avatars;
+    const avatarUrl = currentUser.avatarUrl;
+    avatars[currentUser.id] = avatarUrl;
+    accountFeedSourceAddresses.forEach((address) => {
+      const normalizedAddress = normalizeChainAddress(address);
+      if (normalizedAddress) avatars[normalizedAddress] = avatarUrl;
+    });
+    return avatars;
   });
   const openConnectorInStudio = (connectorId: string) => {
     const base = resolve("/studio");
@@ -230,7 +294,6 @@
           ...publicProfile,
           nickname,
           bio,
-          avatar_url: currentUser.avatarUrl,
           kind: currentUser.kind,
         },
       };
@@ -364,6 +427,7 @@
           onAddToToolbox={addConnectorToToolbox}
           {toolboxConnectorIds}
           authorLabelById={accountFeedAuthorLabels}
+          authorAvatarUrlById={accountFeedAuthorAvatars}
           emptyMessage="No activity by this user yet."
         />
       </div>

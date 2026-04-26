@@ -1,4 +1,5 @@
 import type { ServicesUserRecord } from "$lib/auth/api";
+import { resolveProfileAvatarUrl } from "$lib/user/profileModel";
 
 const ETH_ADDRESS_RE = /^0x[0-9a-f]{40}$/;
 
@@ -47,6 +48,32 @@ export const resolveServicesUserDisplayLabel = (
   return shortAuthorAddress(fallbackAddress);
 };
 
+const asRecord = (value: unknown): Record<string, unknown> =>
+  value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+
+export const resolveServicesUserAvatarUrl = (user: ServicesUserRecord): string => {
+  const profileJson = asRecord(user.profile_json ?? user.profileJson);
+  const profilePublic = asRecord(profileJson.public ?? profileJson.profile ?? profileJson);
+
+  const candidates = [
+    profilePublic.avatar_url,
+    profilePublic.avatarUrl,
+    profilePublic.avatar,
+    user.avatar_url,
+    user.avatarUrl,
+  ];
+
+  for (const candidate of candidates) {
+    if (typeof candidate !== "string") continue;
+    const resolved = resolveProfileAvatarUrl(candidate);
+    if (resolved) return resolved;
+  }
+
+  return "";
+};
+
 export const buildAuthorLabelMapFromServicesUsers = (
   users: ServicesUserRecord[],
 ): Record<string, string> => {
@@ -61,4 +88,20 @@ export const buildAuthorLabelMapFromServicesUsers = (
   });
 
   return labelMap;
+};
+
+export const buildAuthorAvatarMapFromServicesUsers = (
+  users: ServicesUserRecord[],
+): Record<string, string> => {
+  const avatarMap: Record<string, string> = {};
+
+  users.forEach((user) => {
+    const address = getServicesUserEthereumAddress(user);
+    if (!address) return;
+    const avatarUrl = resolveServicesUserAvatarUrl(user);
+    if (!avatarUrl) return;
+    avatarMap[address] = avatarUrl;
+  });
+
+  return avatarMap;
 };

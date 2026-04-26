@@ -7,7 +7,12 @@
   const {
     event,
     authorLabelById,
-  }: { event: FormatFeedEvent; authorLabelById?: Readonly<Record<string, string>> } = $props();
+    authorAvatarUrlById,
+  }: {
+    event: FormatFeedEvent;
+    authorLabelById?: Readonly<Record<string, string>>;
+    authorAvatarUrlById?: Readonly<Record<string, string>>;
+  } = $props();
 
   const normalizeAddress = (value: string) => {
     const trimmed = value.trim().toLowerCase();
@@ -34,14 +39,23 @@
   const authorLabel = $derived.by(
     () => mappedAuthorLabel || author?.nickname || shortAddress(event.authorId) || event.authorId,
   );
+  const mappedAuthorAvatarUrl = $derived.by(() => {
+    const exact = authorAvatarUrlById?.[event.authorId]?.trim();
+    if (exact && exact.length > 0) return exact;
+    const normalized = normalizeAddress(event.authorId);
+    const byNormalized = authorAvatarUrlById?.[normalized]?.trim();
+    if (byNormalized && byNormalized.length > 0) return byNormalized;
+    return "";
+  });
+  const authorAvatarUrl = $derived.by(() => mappedAuthorAvatarUrl || author?.avatarUrl || "");
 </script>
 
 <Card variant="soft">
   <article class="social-format-card">
     <header class="event-header">
       <div class="event-author">
-        {#if author}
-          <img class="author-avatar" src={author.avatarUrl} alt={`${authorLabel} avatar`} />
+        {#if authorAvatarUrl}
+          <img class="author-avatar" src={authorAvatarUrl} alt={`${authorLabel} avatar`} />
         {:else}
           <div class="author-avatar author-avatar--fallback" aria-hidden="true">?</div>
         {/if}

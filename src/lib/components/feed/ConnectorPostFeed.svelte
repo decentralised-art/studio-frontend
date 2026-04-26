@@ -15,6 +15,7 @@
     toolboxConnectorIds,
     toolboxParticleIds,
     authorLabelById,
+    authorAvatarUrlById,
     emptyMessage = "No events to display yet.",
   }: {
     events: NetworkFeedEvent[];
@@ -28,6 +29,7 @@
     toolboxConnectorIds?: ReadonlySet<string>;
     toolboxParticleIds?: ReadonlySet<string>;
     authorLabelById?: Readonly<Record<string, string>>;
+    authorAvatarUrlById?: Readonly<Record<string, string>>;
     emptyMessage?: string;
   } = $props();
 
@@ -47,5 +49,6 @@
   {onAddToToolbox}
   toolboxParticleIds={resolvedToolboxIds}
   {authorLabelById}
+  {authorAvatarUrlById}
   {emptyMessage}
 />

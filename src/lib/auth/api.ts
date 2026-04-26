@@ -862,6 +862,13 @@ export const resolveCurrentUserChainSourceAddresses = (mePayload: unknown): stri
     sourceSet.add(profileAddress);
   }
 
+  resolveProfileChainSourceAddresses(envelope.profileJson).forEach((address) => {
+    sourceSet.add(address);
+  });
+  resolvePrototypeAccountChainSourceAddresses(envelope).forEach((address) => {
+    sourceSet.add(address);
+  });
+
   if (browser) {
     const email =
       typeof envelope.rootUser.email === "string"
@@ -904,12 +911,57 @@ const uniqueStrings = (values: string[]) =>
 
 const ETH_ADDRESS_RE = /^0x[0-9a-f]{40}$/;
 const FORMAT_HASH_RE = /^0x[0-9a-f]{64}$/;
+// Public demo content authored by the prototype account before local mock signers were regenerated.
+const PROTOTYPE_TEST_ACCOUNT_CHAIN_SOURCE_ADDRESS = "0xb584a15f38c2014cff54fdb1b417428b51999276";
 
 const normalizeFollowAddress = (value: string): string => {
   const trimmed = value.trim().toLowerCase();
   if (!trimmed) return "";
   const prefixed = trimmed.startsWith("0x") ? trimmed : `0x${trimmed}`;
   return ETH_ADDRESS_RE.test(prefixed) ? prefixed : "";
+};
+
+const resolveProfileChainSourceAddresses = (profileJsonRaw: unknown): string[] => {
+  const profileJson = asRecord(profileJsonRaw);
+  const profilePublic = asRecord(profileJson.public ?? profileJson.profile ?? profileJson);
+  const sourceAliases = asRecord(
+    profilePublic.source_aliases ?? profilePublic.sourceAliases ?? profilePublic.chain_sources,
+  );
+
+  return uniqueStrings(
+    [
+      ...asStringArray(profilePublic.chain_source_addresses),
+      ...asStringArray(profilePublic.chainSourceAddresses),
+      ...asStringArray(profilePublic.source_addresses),
+      ...asStringArray(profilePublic.sourceAddresses),
+      ...asStringArray(profilePublic.author_source_addresses),
+      ...asStringArray(profilePublic.authorSourceAddresses),
+      ...asStringArray(sourceAliases.chain_source_addresses),
+      ...asStringArray(sourceAliases.chainSourceAddresses),
+      ...asStringArray(sourceAliases.addresses),
+    ]
+      .map(normalizeFollowAddress)
+      .filter(Boolean),
+  );
+};
+
+const resolvePrototypeAccountChainSourceAddresses = (envelope: {
+  rootUser: Record<string, unknown>;
+}): string[] => {
+  const email =
+    typeof envelope.rootUser.email === "string" ? envelope.rootUser.email.trim().toLowerCase() : "";
+  const displayName =
+    typeof envelope.rootUser.display_name === "string"
+      ? envelope.rootUser.display_name.trim()
+      : typeof envelope.rootUser.displayName === "string"
+        ? envelope.rootUser.displayName.trim()
+        : "";
+
+  if (email !== "user-lyra@mock.decentralised.art" && displayName !== "prototype_test_account") {
+    return [];
+  }
+
+  return [PROTOTYPE_TEST_ACCOUNT_CHAIN_SOURCE_ADDRESS];
 };
 
 const resolveStoredMockUserAddress = (userId: string): string => {

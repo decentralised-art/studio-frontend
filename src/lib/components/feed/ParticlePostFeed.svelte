@@ -14,6 +14,7 @@
     onAddToToolbox,
     toolboxParticleIds = new Set<string>(),
     authorLabelById,
+    authorAvatarUrlById,
     emptyMessage = "No events to display yet.",
   }: {
     events: NetworkFeedEvent[];
@@ -25,6 +26,7 @@
     onAddToToolbox?: ((particleId: string) => void) | undefined;
     toolboxParticleIds?: ReadonlySet<string>;
     authorLabelById?: Readonly<Record<string, string>>;
+    authorAvatarUrlById?: Readonly<Record<string, string>>;
     emptyMessage?: string;
   } = $props();
 
@@ -82,12 +84,13 @@
             {onParticleOpen}
             {onAddToToolbox}
             {authorLabelById}
+            {authorAvatarUrlById}
             inToolbox={toolboxParticleIds.has(event.particleId)}
           />
         {:else if event.type === "format"}
-          <SocialFormatEventCard {event} {authorLabelById} />
+          <SocialFormatEventCard {event} {authorLabelById} {authorAvatarUrlById} />
         {:else}
-          <SocialCodeEventCard {event} {authorLabelById} />
+          <SocialCodeEventCard {event} {authorLabelById} {authorAvatarUrlById} />
         {/if}
       </div>
     {/each}

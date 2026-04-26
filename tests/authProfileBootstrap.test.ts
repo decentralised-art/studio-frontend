@@ -49,6 +49,48 @@ describe("auth profile source bootstrap", () => {
     );
   });
 
+  it("resolves current user chain source aliases from profile json", async () => {
+    const { resolveCurrentUserChainSourceAddresses } = await import("../src/lib/auth/api");
+
+    expect(
+      resolveCurrentUserChainSourceAddresses({
+        user: {
+          id: "real-user",
+          ethereum_address: "0x17a67177af1a698205f30affce83cafb0c0e0bc4",
+          profile_json: {
+            public: {
+              chain_source_addresses: ["0xb584a15f38c2014cff54fdb1b417428b51999276"],
+            },
+          },
+        },
+      }),
+    ).toEqual([
+      "0x17a67177af1a698205f30affce83cafb0c0e0bc4",
+      "0xb584a15f38c2014cff54fdb1b417428b51999276",
+    ]);
+  });
+
+  it("keeps the canonical prototype account chain source as an authored alias", async () => {
+    const { resolveCurrentUserChainSourceAddresses } = await import("../src/lib/auth/api");
+
+    expect(
+      resolveCurrentUserChainSourceAddresses({
+        user: {
+          id: "real-lyra",
+          email: "user-lyra@mock.decentralised.art",
+          display_name: "prototype_test_account",
+          ethereum_address: "0x17a67177af1a698205f30affce83cafb0c0e0bc4",
+          profile_json: { public: {} },
+        },
+      }),
+    ).toEqual(
+      expect.arrayContaining([
+        "0x17a67177af1a698205f30affce83cafb0c0e0bc4",
+        "0xb584a15f38c2014cff54fdb1b417428b51999276",
+      ]),
+    );
+  });
+
   it("canonicalizes saved follows so legacy user ids cannot rehydrate unfollows", async () => {
     window.localStorage.setItem("hypermusic_token", "services-token");
     const junAddress = mockUsersById["user-jun"].address.toLowerCase();

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import Card from "$lib/components/ui/Card.svelte";
+  import { resolve } from "$app/paths";
   import type { LibraryItem } from "$lib/data/studioLibrary";
   import type { User } from "$lib/data/users";
 
@@ -9,7 +9,6 @@
     inToolbox = false,
     selected = false,
     draggable = false,
-    onSelect,
     onAdd,
     onToolbox,
     onOpen,
@@ -20,16 +19,11 @@
     inToolbox?: boolean;
     selected?: boolean;
     draggable?: boolean;
-    onSelect?: (id: LibraryItem["id"]) => void;
     onAdd?: (item: LibraryItem) => void;
     onToolbox?: (item: LibraryItem) => void;
     onOpen?: (item: LibraryItem) => void;
     onDragStart?: (event: DragEvent, item: LibraryItem) => void;
   } = $props();
-
-  const handleSelect = () => {
-    onSelect?.(item.id);
-  };
 
   const handleAdd = (event: MouseEvent) => {
     event.stopPropagation();
@@ -46,92 +40,156 @@
     onOpen?.(item);
   };
 
-  const handleKeydown = (event: KeyboardEvent) => {
-    if (event.key === "Enter" || event.key === " ") {
-      event.preventDefault();
-      handleSelect();
-    }
-  };
-
   const handleDragStart = (event: DragEvent) => {
     onDragStart?.(event, item);
   };
+
+  const authorLabel = $derived.by(() => {
+    const nickname = author.nickname.trim();
+    if (nickname && nickname.toLowerCase() !== "unknown") return nickname;
+    return author.address.trim() || author.id.trim() || "Unknown";
+  });
+
+  const authorLabelParts = $derived.by(() => {
+    const tailLength = 8;
+    if (authorLabel.length <= tailLength * 2) {
+      return { head: authorLabel, tail: "" };
+    }
+
+    return {
+      head: authorLabel.slice(0, -tailLength),
+      tail: authorLabel.slice(-tailLength),
+    };
+  });
+
+  const registryName = $derived.by(() => {
+    switch (item.kind) {
+      case "feature":
+        return item.id.replace(/^feature-/, "");
+      case "transformation":
+        return item.id.replace(/^transform-/, "");
+      case "condition":
+        return item.id.replace(/^condition-/, "");
+      default:
+        return item.id;
+    }
+  });
+
+  const authorRouteId = $derived.by(
+    () => author.address.trim() || author.id.trim() || item.authorId.trim(),
+  );
 </script>
 
-<Card
-  variant="compact"
-  tabindex={0}
-  ariaPressed={selected}
-  onclick={handleSelect}
-  onkeydown={handleKeydown}
+<div
+  class={`library-card ${selected ? "card-selected" : ""}`}
+  role="listitem"
   ondragstart={handleDragStart}
   {draggable}
-  {selected}
 >
-  <div class="card-row">
-    <div class="card-text">
+  <div class="card-content">
+    {#if item.kind === "feature"}
+      <a class="item-name item-link" href={resolve("/c/[id]", { id: registryName })}>
+        {item.name}
+      </a>
+    {:else}
       <span class="item-name">{item.name}</span>
-      <span class="by-label">by</span>
-      <span class="author">{author.nickname}</span>
-    </div>
+    {/if}
 
-    <div class="card-actions">
-      <button
-        class={`icon-button ${inToolbox ? "is-saved" : ""}`}
-        type="button"
-        title={inToolbox ? "Remove from toolbox" : "Add to toolbox"}
-        onclick={handleToolbox}
+    <div class="card-meta-row">
+      <a
+        class="author author-link"
+        href={resolve("/u/[id]", { id: authorRouteId })}
+        title={authorLabel}
+        aria-label={authorLabel}
       >
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path
-            d="M19.5 12.572 12 20l-7.5-7.428a4.5 4.5 0 0 1 6.364-6.364L12 7.5l1.136-1.292a4.5 4.5 0 0 1 6.364 6.364Z"
-          ></path>
-        </svg>
-      </button>
-      {#if item.kind === "feature"}
-        <button class="icon-button" type="button" title="Open in Studio" onclick={handleOpen}>
+        <span class="author-head">{authorLabelParts.head}</span>
+        {#if authorLabelParts.tail}
+          <span class="author-tail">{authorLabelParts.tail}</span>
+        {/if}
+      </a>
+
+      <div class="card-actions">
+        <button
+          class={`icon-button ${inToolbox ? "is-saved" : ""}`}
+          type="button"
+          title={inToolbox ? "Remove from toolbox" : "Add to toolbox"}
+          onclick={handleToolbox}
+        >
           <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M4 9V4h5"></path>
-            <path d="M15 4h5v5"></path>
-            <path d="M20 15v5h-5"></path>
-            <path d="M9 20H4v-5"></path>
+            <path
+              d="M19.5 12.572 12 20l-7.5-7.428a4.5 4.5 0 0 1 6.364-6.364L12 7.5l1.136-1.292a4.5 4.5 0 0 1 6.364 6.364Z"
+            ></path>
           </svg>
         </button>
-      {/if}
-      <button class="icon-button" type="button" title="Add to flow" onclick={handleAdd}>
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M12 5v14M5 12h14"></path>
-        </svg>
-      </button>
+        {#if item.kind === "feature"}
+          <button class="icon-button" type="button" title="Open in Studio" onclick={handleOpen}>
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M4 9V4h5"></path>
+              <path d="M15 4h5v5"></path>
+              <path d="M20 15v5h-5"></path>
+              <path d="M9 20H4v-5"></path>
+            </svg>
+          </button>
+        {/if}
+        <button class="icon-button" type="button" title="Add to flow" onclick={handleAdd}>
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 5v14M5 12h14"></path>
+          </svg>
+        </button>
+      </div>
     </div>
   </div>
-</Card>
+</div>
 
 <style lang="postcss">
   @reference "$lib/styles/style.css";
 
-  .card-row {
-    @apply flex items-center justify-between gap-2;
+  .library-card {
+    @apply w-full rounded-2xl border border-white/10 bg-white/5 p-2 transition
+      hover:border-emerald-400 hover:shadow-lg;
   }
 
-  .card-text {
-    @apply min-w-0 flex items-center gap-2 text-[0.72rem] text-white/70;
+  .card-selected {
+    @apply border border-emerald-500/60 bg-emerald-500/10 text-emerald-300;
+  }
+
+  .card-content {
+    @apply flex min-w-0 w-full flex-col gap-1 text-left;
+  }
+
+  .card-meta-row {
+    @apply flex min-w-0 items-center justify-between gap-2 text-[0.66rem] text-white/70;
   }
 
   .item-name {
-    @apply min-w-0 font-semibold text-white truncate;
+    @apply block min-w-0 w-full max-w-full text-[0.78rem] font-semibold leading-snug text-left text-white;
+    overflow-wrap: anywhere;
   }
 
-  .by-label {
-    @apply text-[0.6rem] uppercase tracking-[0.2em] text-white/40 whitespace-nowrap;
+  .item-link {
+    @apply rounded-sm hover:text-cyan-200 focus-visible:outline-none focus-visible:ring-2
+      focus-visible:ring-cyan-300/70;
   }
 
   .author {
-    @apply min-w-0 text-white/60 truncate;
+    @apply inline-flex min-w-0 max-w-full text-white/60;
+  }
+
+  .author-link {
+    @apply rounded-sm hover:text-cyan-200 focus-visible:outline-none focus-visible:ring-2
+      focus-visible:ring-cyan-300/70;
+  }
+
+  .author-head {
+    @apply min-w-0 truncate;
+  }
+
+  .author-tail {
+    @apply shrink-0 whitespace-nowrap;
   }
 
   .card-actions {
-    @apply flex items-center gap-1;
+    @apply flex shrink-0 items-center gap-1;
   }
 
   .icon-button {

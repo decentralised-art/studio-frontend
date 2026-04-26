@@ -22,7 +22,10 @@
     unfollowUserInProfile,
   } from "$lib/auth/api";
   import { getToken, hasAuthSession } from "$lib/auth/session";
-  import { buildAuthorLabelMapFromServicesUsers } from "$lib/social/authorLabels";
+  import {
+    buildAuthorAvatarMapFromServicesUsers,
+    buildAuthorLabelMapFromServicesUsers,
+  } from "$lib/social/authorLabels";
   import type { ProfileViewUser } from "$lib/user/profileModel";
   import { normalizeProfileUser } from "$lib/user/profileModel";
 
@@ -40,6 +43,7 @@
   let localToolboxConnectors = $state<string[]>([]);
   let userFeedEvents = $state<NetworkFeedEvent[]>([]);
   let servicesUserLabels = $state<Record<string, string>>({});
+  let servicesUserAvatars = $state<Record<string, string>>({});
   let userLoadRequestVersion = 0;
 
   const normalizeAddressForKey = (value: string): string => {
@@ -265,6 +269,16 @@
     }
     return labels;
   });
+  const userFeedAuthorAvatars = $derived.by(() => {
+    const avatars: Record<string, string> = { ...servicesUserAvatars };
+    if (!user?.avatarUrl) return avatars;
+    avatars[user.id] = user.avatarUrl;
+    const normalizedAddress = normalizeAddressForKey(user.address);
+    if (normalizedAddress) {
+      avatars[normalizedAddress] = user.avatarUrl;
+    }
+    return avatars;
+  });
   const openConnectorInStudio = (connectorId: string) => {
     const base = resolve("/studio");
     const target = new URL(base, window.location.origin);
@@ -292,6 +306,7 @@
     void listServicesUsers()
       .then((users) => {
         servicesUserLabels = buildAuthorLabelMapFromServicesUsers(users);
+        servicesUserAvatars = buildAuthorAvatarMapFromServicesUsers(users);
       })
       .catch((error) => {
         console.warn("[User page] Failed to load services user labels.", error);
@@ -391,6 +406,7 @@
           onAddToToolbox={addConnectorToToolbox}
           {toolboxConnectorIds}
           authorLabelById={userFeedAuthorLabels}
+          authorAvatarUrlById={userFeedAuthorAvatars}
           emptyMessage="No activity by this user yet."
         />
       </div>

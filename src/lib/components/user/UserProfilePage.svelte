@@ -4,6 +4,7 @@
   import SectionShell from "$lib/components/ui/SectionShell.svelte";
   import SelectInput from "$lib/components/ui/SelectInput.svelte";
   import UserProfileView from "$lib/components/user/UserProfileView.svelte";
+  import { getUserAvatarInitials } from "$lib/user/avatarInitials";
   import type { ProfileViewUser } from "$lib/user/profileModel";
 
   type ProfileMode = "self" | "public";
@@ -110,7 +111,13 @@
       <form class="form" onsubmit={handleSubmit}>
         <div class="avatar-row">
           <div class="avatar">
-            <img src={profile.avatarUrl} alt={profile.nickname} class="avatar-img" />
+            {#if profile.avatarUrl}
+              <img src={profile.avatarUrl} alt={profile.nickname} class="avatar-img" />
+            {:else}
+              <span class="avatar-fallback" aria-hidden="true">
+                {getUserAvatarInitials(profile.nickname)}
+              </span>
+            {/if}
           </div>
 
           <div class="avatar-meta">
@@ -233,6 +240,10 @@
 
   .avatar-img {
     @apply h-full w-full object-cover;
+  }
+
+  .avatar-fallback {
+    @apply flex h-full w-full items-center justify-center text-xl font-semibold text-[#22c55e];
   }
 
   .avatar-meta {

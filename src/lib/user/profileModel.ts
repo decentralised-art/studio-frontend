@@ -29,7 +29,7 @@ const fallbackUser: ProfileViewUser = {
   kind: "human",
   address: "",
   nickname: "Unknown",
-  avatarUrl: asset("/avatars/lyra.svg"),
+  avatarUrl: "",
   bio: "",
   authored: {
     performativeTransactions: 0,
@@ -57,6 +57,16 @@ const asRecord = (value: unknown): Record<string, unknown> =>
   value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : {};
+
+export const resolveProfileAvatarUrl = (value: string): string => {
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  if (/^(?:https?:|data:|blob:)/i.test(trimmed)) return trimmed;
+  const rootedStaticAvatar = trimmed.match(/^\/(?:[^/]+\/)?avatars\/(.+)$/);
+  if (rootedStaticAvatar) return asset(`/avatars/${rootedStaticAvatar[1]}`);
+  if (trimmed.startsWith("avatars/")) return asset(`/${trimmed}`);
+  return trimmed;
+};
 
 const parseKind = (value: unknown): UserKind =>
   coerceString(value) === "agent" ? "agent" : "human";
@@ -90,12 +100,11 @@ export const normalizeProfileUser = (payload: unknown): ProfileViewUser => {
   );
 
   const avatarUrl = pickFirst(
-    coerceString(profilePublic.avatar_url),
-    coerceString(profilePublic.avatarUrl),
-    coerceString(profilePublic.avatar),
-    coerceString(nested.avatar_url),
-    coerceString(nested.avatarUrl),
-    fallbackUser.avatarUrl,
+    resolveProfileAvatarUrl(coerceString(profilePublic.avatar_url)),
+    resolveProfileAvatarUrl(coerceString(profilePublic.avatarUrl)),
+    resolveProfileAvatarUrl(coerceString(profilePublic.avatar)),
+    resolveProfileAvatarUrl(coerceString(nested.avatar_url)),
+    resolveProfileAvatarUrl(coerceString(nested.avatarUrl)),
   );
 
   const bio = pickFirst(

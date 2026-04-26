@@ -33,10 +33,12 @@
   import {
     getServicesUserEthereumAddress,
     resolveServicesUserDisplayLabel,
+    resolveServicesUserAvatarUrl,
   } from "$lib/social/authorLabels";
   import Button from "$lib/components/ui/Button.svelte";
   import Input from "$lib/components/ui/Input.svelte";
   import { getChainFormatDisplayName } from "$lib/formats/chainFormats";
+  import { normalizeProfileUser } from "$lib/user/profileModel";
 
   const FEED_PAGE_SIZE = 10;
   const RUNTIME_SEARCH_MAX_OWNED_PER_SOURCE = 16;
@@ -51,6 +53,7 @@
   type DiscoveredUser = {
     address: string;
     label: string;
+    avatarUrl: string;
   };
 
   let followSearch = $state("");
@@ -76,6 +79,7 @@
   let currentUserAddress = $state("");
   let currentUserSourceAliases = $state<string[]>([]);
   let currentUserLabel = $state("");
+  let currentUserAvatarUrl = $state("");
   let socialPreferencesHydrated = $state(false);
   let pageMounted = false;
   let feedSyncRequestVersion = 0;
@@ -171,6 +175,27 @@
     }
     return labelMap;
   });
+  const feedAuthorAvatarUrls = $derived.by(() => {
+    const avatarMap: Record<string, string> = {};
+    discoveredUsers.forEach((entry) => {
+      const normalized = normalizeAddressForKey(entry.address);
+      const avatarUrl = entry.avatarUrl.trim();
+      if (!normalized || !avatarUrl) return;
+      avatarMap[normalized] = avatarUrl;
+    });
+    const currentAvatarUrl = currentUserAvatarUrl.trim();
+    if (currentAvatarUrl) {
+      if (currentUserAddressKey) {
+        avatarMap[currentUserAddressKey] = currentAvatarUrl;
+      }
+      currentUserSourceAliases.forEach((address) => {
+        const normalized = normalizeAddressForKey(address);
+        if (!normalized || avatarMap[normalized]) return;
+        avatarMap[normalized] = currentAvatarUrl;
+      });
+    }
+    return avatarMap;
+  });
   const networkFeedEvents = $derived.by(() => {
     const combined = [...feedEvents] as NetworkFeedEvent[];
     const filtered = combined.filter((event) => {
@@ -240,7 +265,12 @@
     });
     localToolboxConnectors = [...profileState.toolbox.connector];
     const resolvedSourceAddresses = await deriveCurrentSourceAddresses(profileState);
-    currentUserLabel = extractDisplayName(profileState.me);
+    const currentProfileUser = profileState.me ? normalizeProfileUser(profileState.me) : null;
+    const currentProfileNickname = currentProfileUser?.nickname.trim() ?? "";
+    currentUserLabel =
+      extractDisplayName(profileState.me) ||
+      (currentProfileNickname !== "Unknown" ? currentProfileNickname : "");
+    currentUserAvatarUrl = currentProfileUser?.avatarUrl ?? "";
     localFollowing = profileState.social.followedUserAddresses
       .map(normalizeAddressForKey)
       .filter(Boolean);
@@ -274,6 +304,7 @@
       byAddress.set(normalized, {
         address: normalized,
         label: knownLabel || shortAddress(normalized) || normalized,
+        avatarUrl: "",
       });
     });
     if (currentUserAddressKey && !byAddress.has(currentUserAddressKey)) {
@@ -281,6 +312,7 @@
         address: currentUserAddressKey,
         label:
           currentUserLabel.trim() || shortAddress(currentUserAddressKey) || currentUserAddressKey,
+        avatarUrl: currentUserAvatarUrl,
       });
     }
 
@@ -300,6 +332,7 @@
         {
           address: normalizedAddressQuery,
           label: knownLabel || shortAddress(normalizedAddressQuery) || normalizedAddressQuery,
+          avatarUrl: "",
         },
         ...matched,
       ].slice(0, 8);
@@ -632,6 +665,7 @@
         byAddress.set(normalized, {
           address: normalized,
           label: resolveServicesUserDisplayLabel(user, normalized),
+          avatarUrl: resolveServicesUserAvatarUrl(user),
         });
       });
     } catch (error) {
@@ -655,6 +689,7 @@
             byAddress.set(normalized, {
               address: normalized,
               label: shortAddress(normalized) || normalized,
+              avatarUrl: "",
             });
           });
 
@@ -747,6 +782,7 @@
         currentUserAddress = "";
         currentUserSourceAliases = [];
         currentUserLabel = "";
+        currentUserAvatarUrl = "";
         localFollowing = [];
         localFollowedFormats = [];
         socialPreferencesHydrated = true;
@@ -922,6 +958,7 @@
     onAddToToolbox={addConnectorToToolbox}
     {toolboxConnectorIds}
     authorLabelById={feedAuthorLabels}
+    authorAvatarUrlById={feedAuthorAvatarUrls}
   />
 </div>
 

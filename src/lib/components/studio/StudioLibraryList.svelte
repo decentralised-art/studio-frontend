@@ -12,7 +12,6 @@
     selectedId,
     draggable = false,
     showHeader = true,
-    onSelect,
     onAdd,
     onToolbox,
     onOpen,
@@ -26,7 +25,6 @@
     selectedId?: LibraryItem["id"];
     draggable?: boolean;
     showHeader?: boolean;
-    onSelect?: (id: LibraryItem["id"]) => void;
     onAdd?: (item: LibraryItem) => void;
     onToolbox?: (item: LibraryItem) => void;
     onOpen?: (item: LibraryItem) => void;
@@ -61,7 +59,7 @@
     </div>
   {/if}
 
-  <div class="list">
+  <div class="list" role="list">
     {#if loading && items.length === 0}
       {#each Array.from({ length: 5 }) as _, index (`library-skeleton-${index}`)}
         <div class="skeleton-card" aria-hidden="true">
@@ -79,7 +77,6 @@
           inToolbox={toolboxIds.has(item.id)}
           selected={item.id === selectedId}
           {draggable}
-          {onSelect}
           {onAdd}
           {onToolbox}
           {onOpen}

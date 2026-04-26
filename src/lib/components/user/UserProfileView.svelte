@@ -2,6 +2,7 @@
   import Input from "$lib/components/ui/Input.svelte";
   import SectionShell from "$lib/components/ui/SectionShell.svelte";
   import SelectInput from "$lib/components/ui/SelectInput.svelte";
+  import { getUserAvatarInitials } from "$lib/user/avatarInitials";
   import type { ProfileViewUser } from "$lib/user/profileModel";
 
   const {
@@ -49,7 +50,13 @@
   <div class="profile-main">
     <div class="avatar-row">
       <div class="avatar">
-        <img src={user.avatarUrl} alt={user.nickname} class="avatar-img" />
+        {#if user.avatarUrl}
+          <img src={user.avatarUrl} alt={user.nickname} class="avatar-img" />
+        {:else}
+          <span class="avatar-fallback" aria-hidden="true">
+            {getUserAvatarInitials(user.nickname)}
+          </span>
+        {/if}
       </div>
 
       <div class="avatar-meta">
@@ -134,6 +141,10 @@
 
   .avatar-img {
     @apply h-full w-full object-cover;
+  }
+
+  .avatar-fallback {
+    @apply flex h-full w-full items-center justify-center text-xl font-semibold text-[#22c55e];
   }
 
   .avatar-meta {
