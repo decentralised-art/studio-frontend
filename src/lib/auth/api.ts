@@ -500,8 +500,6 @@ export const authFetch = async (path: string, init: RequestInit = {}) => {
   const headers = new Headers(init.headers);
   const token = getToken();
   if (!token) {
-    // Chain-only prototype sessions are valid for Studio/Network flows.
-    // Avoid forced login redirects when services auth is unavailable.
     return new Response(JSON.stringify({ message: "Missing services auth token." }), {
       status: 401,
       headers: { "Content-Type": "application/json" },

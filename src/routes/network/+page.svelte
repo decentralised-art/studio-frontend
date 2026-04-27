@@ -31,7 +31,7 @@
   import { computeFeedSourceAddresses } from "$lib/feed/feedSources";
   import { resolveNetworkFeedEmptyMessage } from "$lib/feed/networkFeedUi";
   import {
-    getServicesUserEthereumAddress,
+    getServicesUserChainSourceAddresses,
     resolveServicesUserDisplayLabel,
     resolveServicesUserAvatarUrl,
   } from "$lib/social/authorLabels";
@@ -658,14 +658,15 @@
     try {
       const users = await listServicesUsers();
       users.forEach((user) => {
-        const address = getServicesUserEthereumAddress(user);
-        if (!address) return;
-        const normalized = normalizeAddressForKey(address);
-        if (!isChainAddress(normalized)) return;
-        byAddress.set(normalized, {
-          address: normalized,
-          label: resolveServicesUserDisplayLabel(user, normalized),
-          avatarUrl: resolveServicesUserAvatarUrl(user),
+        const addresses = getServicesUserChainSourceAddresses(user);
+        addresses.forEach((address) => {
+          const normalized = normalizeAddressForKey(address);
+          if (!isChainAddress(normalized)) return;
+          byAddress.set(normalized, {
+            address: normalized,
+            label: resolveServicesUserDisplayLabel(user, normalized),
+            avatarUrl: resolveServicesUserAvatarUrl(user),
+          });
         });
       });
     } catch (error) {

@@ -1,7 +1,10 @@
 import type { ServicesUserRecord } from "$lib/auth/api";
-import { resolveProfileAvatarUrl } from "$lib/user/profileModel";
+import { resolveProfileAvatarUrl, shouldIgnoreProfileAvatarUrl } from "$lib/user/profileModel";
 
 const ETH_ADDRESS_RE = /^0x[0-9a-f]{40}$/;
+const PROTOTYPE_TEST_EMAIL = "user-lyra@mock.decentralised.art";
+const PROTOTYPE_TEST_DISPLAY_NAME = "prototype_test_account";
+const PROTOTYPE_TEST_ACCOUNT_CHAIN_SOURCE_ADDRESS = "0xb584a15f38c2014cff54fdb1b417428b51999276";
 
 export const normalizeAuthorAddress = (value: string): string => {
   const trimmed = value.trim().toLowerCase();
@@ -17,6 +20,28 @@ export const shortAuthorAddress = (address: string): string => {
   return `${normalized.slice(0, 8)}...${normalized.slice(-4)}`;
 };
 
+const asRecord = (value: unknown): Record<string, unknown> =>
+  value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+
+const asStringArray = (value: unknown): string[] =>
+  Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+
+const uniqueStrings = (values: string[]): string[] =>
+  Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
+
+const isPrototypeServicesUser = (user: ServicesUserRecord): boolean => {
+  const email = typeof user.email === "string" ? user.email.trim().toLowerCase() : "";
+  const displayName =
+    typeof user.display_name === "string"
+      ? user.display_name.trim()
+      : typeof user.displayName === "string"
+        ? user.displayName.trim()
+        : "";
+  return email === PROTOTYPE_TEST_EMAIL || displayName === PROTOTYPE_TEST_DISPLAY_NAME;
+};
+
 export const getServicesUserEthereumAddress = (user: ServicesUserRecord): string => {
   const direct =
     typeof user.ethereum_address === "string"
@@ -24,7 +49,45 @@ export const getServicesUserEthereumAddress = (user: ServicesUserRecord): string
       : typeof user.ethereumAddress === "string"
         ? user.ethereumAddress
         : "";
-  return normalizeAuthorAddress(direct);
+  const directAddress = normalizeAuthorAddress(direct);
+  if (directAddress) return directAddress;
+
+  const profileJson = asRecord(user.profile_json ?? user.profileJson);
+  const profilePublic = asRecord(profileJson.public ?? profileJson.profile ?? profileJson);
+  const profileAddress =
+    typeof profilePublic.ethereum_address === "string"
+      ? profilePublic.ethereum_address
+      : typeof profilePublic.ethereumAddress === "string"
+        ? profilePublic.ethereumAddress
+        : typeof profilePublic.address === "string"
+          ? profilePublic.address
+          : "";
+
+  return normalizeAuthorAddress(profileAddress);
+};
+
+export const getServicesUserChainSourceAddresses = (user: ServicesUserRecord): string[] => {
+  const profileJson = asRecord(user.profile_json ?? user.profileJson);
+  const profilePublic = asRecord(profileJson.public ?? profileJson.profile ?? profileJson);
+  const sourceAliases = asRecord(
+    profilePublic.source_aliases ?? profilePublic.sourceAliases ?? profilePublic.chain_sources,
+  );
+
+  return uniqueStrings(
+    [
+      getServicesUserEthereumAddress(user),
+      ...asStringArray(profilePublic.chain_source_addresses).map(normalizeAuthorAddress),
+      ...asStringArray(profilePublic.chainSourceAddresses).map(normalizeAuthorAddress),
+      ...asStringArray(profilePublic.source_addresses).map(normalizeAuthorAddress),
+      ...asStringArray(profilePublic.sourceAddresses).map(normalizeAuthorAddress),
+      ...asStringArray(profilePublic.author_source_addresses).map(normalizeAuthorAddress),
+      ...asStringArray(profilePublic.authorSourceAddresses).map(normalizeAuthorAddress),
+      ...asStringArray(sourceAliases.chain_source_addresses).map(normalizeAuthorAddress),
+      ...asStringArray(sourceAliases.chainSourceAddresses).map(normalizeAuthorAddress),
+      ...asStringArray(sourceAliases.addresses).map(normalizeAuthorAddress),
+      ...(isPrototypeServicesUser(user) ? [PROTOTYPE_TEST_ACCOUNT_CHAIN_SOURCE_ADDRESS] : []),
+    ].filter(Boolean),
+  );
 };
 
 export const resolveServicesUserDisplayLabel = (
@@ -48,14 +111,22 @@ export const resolveServicesUserDisplayLabel = (
   return shortAuthorAddress(fallbackAddress);
 };
 
-const asRecord = (value: unknown): Record<string, unknown> =>
-  value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
-
 export const resolveServicesUserAvatarUrl = (user: ServicesUserRecord): string => {
   const profileJson = asRecord(user.profile_json ?? user.profileJson);
   const profilePublic = asRecord(profileJson.public ?? profileJson.profile ?? profileJson);
+  const displayName =
+    typeof user.display_name === "string"
+      ? user.display_name
+      : typeof user.displayName === "string"
+        ? user.displayName
+        : "";
+  const email = typeof user.email === "string" ? user.email : "";
+  const nickname =
+    typeof profilePublic.nickname === "string"
+      ? profilePublic.nickname
+      : typeof profilePublic.name === "string"
+        ? profilePublic.name
+        : "";
 
   const candidates = [
     profilePublic.avatar_url,
@@ -68,6 +139,16 @@ export const resolveServicesUserAvatarUrl = (user: ServicesUserRecord): string =
   for (const candidate of candidates) {
     if (typeof candidate !== "string") continue;
     const resolved = resolveProfileAvatarUrl(candidate);
+    if (
+      shouldIgnoreProfileAvatarUrl({
+        email,
+        displayName,
+        nickname,
+        avatarUrl: resolved,
+      })
+    ) {
+      continue;
+    }
     if (resolved) return resolved;
   }
 
@@ -80,11 +161,13 @@ export const buildAuthorLabelMapFromServicesUsers = (
   const labelMap: Record<string, string> = {};
 
   users.forEach((user) => {
-    const address = getServicesUserEthereumAddress(user);
-    if (!address) return;
-    const label = resolveServicesUserDisplayLabel(user, address);
+    const addresses = getServicesUserChainSourceAddresses(user);
+    if (addresses.length === 0) return;
+    const label = resolveServicesUserDisplayLabel(user, addresses[0]);
     if (!label) return;
-    labelMap[address] = label;
+    addresses.forEach((address) => {
+      labelMap[address] = label;
+    });
   });
 
   return labelMap;
@@ -96,11 +179,13 @@ export const buildAuthorAvatarMapFromServicesUsers = (
   const avatarMap: Record<string, string> = {};
 
   users.forEach((user) => {
-    const address = getServicesUserEthereumAddress(user);
-    if (!address) return;
+    const addresses = getServicesUserChainSourceAddresses(user);
+    if (addresses.length === 0) return;
     const avatarUrl = resolveServicesUserAvatarUrl(user);
     if (!avatarUrl) return;
-    avatarMap[address] = avatarUrl;
+    addresses.forEach((address) => {
+      avatarMap[address] = avatarUrl;
+    });
   });
 
   return avatarMap;

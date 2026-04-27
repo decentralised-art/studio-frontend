@@ -7,7 +7,7 @@
 
   import ConnectorPostFeed from "$lib/components/feed/ConnectorPostFeed.svelte";
   import { listNetworkFeedEventsByAuthor, type NetworkFeedEvent } from "$lib/feed/particlePostData";
-  import { mapSnapshotParticlesToConnectorEvents } from "$lib/feed/networkEventMappers";
+  import { mapSnapshotToNetworkFeedEvents } from "$lib/feed/networkEventMappers";
   import { fetchChainOwnedStudioSnapshot } from "$lib/studio/chainStudioAdapter";
   import SectionShell from "$lib/components/ui/SectionShell.svelte";
   import Button from "$lib/components/ui/Button.svelte";
@@ -25,6 +25,7 @@
   import {
     buildAuthorAvatarMapFromServicesUsers,
     buildAuthorLabelMapFromServicesUsers,
+    getServicesUserChainSourceAddresses,
   } from "$lib/social/authorLabels";
   import type { ProfileViewUser } from "$lib/user/profileModel";
   import { normalizeProfileUser } from "$lib/user/profileModel";
@@ -65,6 +66,21 @@
   const resolvedUserFollowKey = $derived.by(() =>
     user ? normalizeAddressForKey(user.address) || user.id : "",
   );
+
+  const resolveServicesUserPayloadByAddress = async (address: string): Promise<unknown | null> => {
+    const normalizedAddress = normalizeAddressForKey(address);
+    if (!normalizedAddress) return null;
+    try {
+      const servicesUsers = await listServicesUsers();
+      const matchingUser = servicesUsers.find((entry) =>
+        getServicesUserChainSourceAddresses(entry).includes(normalizedAddress),
+      );
+      return matchingUser ? { user: matchingUser } : null;
+    } catch (error) {
+      console.warn("[User page] Failed to resolve address against services users.", error);
+      return null;
+    }
+  };
 
   const refreshFollowState = async (targetUserAddressOrId: string) => {
     const profileState = await getCurrentUserProfileState({ preferCached: true });
@@ -108,7 +124,7 @@
         ? getCurrentUserProfileState({ preferCached: true }).catch(() => null)
         : Promise.resolve(null);
       const userPayload = await (isAddressRoute
-        ? Promise.resolve({
+        ? ((await resolveServicesUserPayloadByAddress(normalizedRequestedAddress)) ?? {
             user: {
               id: normalizedRequestedAddress,
               display_name: shortAddress(normalizedRequestedAddress),
@@ -121,7 +137,10 @@
 
       user = normalizeProfileUser(userPayload);
       const activeUserId = user.id;
-      const feedAuthorKey = normalizeAddressForKey(user.address) || user.id;
+      const feedAuthorKey =
+        (isAddressRoute ? normalizedRequestedAddress : "") ||
+        normalizeAddressForKey(user.address) ||
+        user.id;
       userFeedEvents = listNetworkFeedEventsByAuthor(feedAuthorKey);
       viewerUserId = hasAuthSession() ? "viewer" : null;
       viewerFollowingIds = [];
@@ -131,15 +150,12 @@
         void fetchChainOwnedStudioSnapshot(feedAuthorKey, {
           authorId: feedAuthorKey,
           limit: 200,
-          includeRuntimeCode: false,
+          includeRuntimeCode: true,
         })
           .then((snapshot) => {
             if (!isUserLoadRequestActive(requestVersion)) return;
             if (user?.id !== activeUserId) return;
-            const targetedEvents = mapSnapshotParticlesToConnectorEvents(
-              feedAuthorKey,
-              snapshot.particles,
-            );
+            const targetedEvents = mapSnapshotToNetworkFeedEvents(feedAuthorKey, snapshot);
             if (targetedEvents.length > 0) {
               userFeedEvents = targetedEvents;
             }

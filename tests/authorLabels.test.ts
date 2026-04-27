@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildAuthorAvatarMapFromServicesUsers,
+  buildAuthorLabelMapFromServicesUsers,
+  getServicesUserChainSourceAddresses,
   resolveServicesUserAvatarUrl,
 } from "../src/lib/social/authorLabels";
 
@@ -39,5 +41,44 @@ describe("authorLabels", () => {
     ).toEqual({
       [address]: asset("/avatars/lyra.svg"),
     });
+  });
+
+  it("maps labels across service profile chain source aliases", () => {
+    const alias = "0xfa71ff2394596f824d69961293d095a50d322e4e";
+    const directAddress = "0x17a67177af1a698205f30affce83cafb0c0e0bc4";
+    const user = {
+      id: "prototype",
+      email: "user-lyra@mock.decentralised.art",
+      display_name: "prototype_test_account",
+      ethereum_address: directAddress.toUpperCase(),
+      profile_json: {
+        public: {
+          chain_source_addresses: [alias.toUpperCase()],
+        },
+      },
+    };
+
+    expect(getServicesUserChainSourceAddresses(user)).toEqual([directAddress, alias, address]);
+    expect(buildAuthorLabelMapFromServicesUsers([user])).toEqual({
+      [directAddress]: "prototype_test_account",
+      [address]: "prototype_test_account",
+      [alias]: "prototype_test_account",
+    });
+  });
+
+  it("ignores the legacy Lyra avatar for the prototype account", () => {
+    expect(
+      resolveServicesUserAvatarUrl({
+        id: "prototype",
+        email: "user-lyra@mock.decentralised.art",
+        display_name: "prototype_test_account",
+        ethereum_address: address,
+        profile_json: {
+          public: {
+            avatar_url: "/app/avatars/lyra.svg",
+          },
+        },
+      }),
+    ).toBe("");
   });
 });

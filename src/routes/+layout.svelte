@@ -11,13 +11,17 @@
   let { children, data } = $props();
   let authRevision = $state(0);
   let currentPath = $state("");
+  let hasMounted = $state(false);
   const devBypass = dev && import.meta.env.VITE_DEV_BYPASS_AUTH === "true";
   const hasCurrentAuthSession = $derived.by(() => {
     const revision = authRevision;
     return revision >= 0 && hasAuthSession();
   });
   const isAuthenticated = $derived.by(() => {
-    return devBypass || Boolean(data.isAuthenticated) || hasCurrentAuthSession;
+    if (devBypass) return true;
+    return hasMounted
+      ? hasCurrentAuthSession
+      : Boolean(data.isAuthenticated) || hasCurrentAuthSession;
   });
   const canRenderRoute = $derived(isAuthenticated || devBypass || isPublicRouteId(page.route.id));
   const guardRoute = (routeId: string | null) => {
@@ -29,6 +33,7 @@
 
   onMount(() => {
     const syncAuth = () => {
+      hasMounted = true;
       authRevision += 1;
       currentPath = window.location.pathname;
       guardRoute(page.route.id);
@@ -36,8 +41,10 @@
 
     syncAuth();
     window.addEventListener("auth:change", syncAuth);
+    window.addEventListener("storage", syncAuth);
     return () => {
       window.removeEventListener("auth:change", syncAuth);
+      window.removeEventListener("storage", syncAuth);
     };
   });
 

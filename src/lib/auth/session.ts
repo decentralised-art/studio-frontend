@@ -43,4 +43,8 @@ export const clearChainToken = (): void => {
   notifyAuthChange();
 };
 
-export const hasAuthSession = (): boolean => Boolean(getToken() || getChainToken());
+export const hasServicesSession = (): boolean => Boolean(getToken());
+
+export const hasChainSession = (): boolean => Boolean(getChainToken());
+
+export const hasAuthSession = hasServicesSession;

@@ -6,7 +6,7 @@
 
   import ConnectorPostFeed from "$lib/components/feed/ConnectorPostFeed.svelte";
   import { listNetworkFeedEventsByAuthor, type NetworkFeedEvent } from "$lib/feed/particlePostData";
-  import { mapSnapshotParticlesToConnectorEvents } from "$lib/feed/networkEventMappers";
+  import { mapSnapshotToNetworkFeedEvents } from "$lib/feed/networkEventMappers";
   import { fetchChainOwnedStudioSnapshot } from "$lib/studio/chainStudioAdapter";
   import Button from "$lib/components/ui/Button.svelte";
   import SectionShell from "$lib/components/ui/SectionShell.svelte";
@@ -141,9 +141,9 @@
           const snapshot = await fetchChainOwnedStudioSnapshot(sourceAddress, {
             authorId: sourceAddress,
             limit: 200,
-            includeRuntimeCode: false,
+            includeRuntimeCode: true,
           });
-          return mapSnapshotParticlesToConnectorEvents(sourceAddress, snapshot.particles);
+          return mapSnapshotToNetworkFeedEvents(sourceAddress, snapshot);
         }),
       );
       if (!isAccountLoadRequestActive(requestVersion)) return;
@@ -174,9 +174,8 @@
     saveSuccess = "";
 
     if (!getToken()) {
-      error =
-        "Services profile is temporarily unavailable in chain-only prototype mode. Studio and Network remain available.";
-      isLoading = false;
+      isRedirecting = true;
+      await goto(resolve("/login"));
       return;
     }
 

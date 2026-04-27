@@ -35,6 +35,21 @@ describe("profileModel", () => {
     expect(user.avatarUrl).toBe(asset("/avatars/lyra.svg"));
   });
 
+  it("ignores the legacy Lyra avatar on the prototype services account", () => {
+    const user = normalizeProfileUser({
+      id: "prototype",
+      email: "user-lyra@mock.decentralised.art",
+      display_name: "prototype_test_account",
+      profile_json: {
+        public: {
+          avatar_url: "/avatars/lyra.svg",
+        },
+      },
+    });
+
+    expect(user.avatarUrl).toBe("");
+  });
+
   it("does not assign the mock Lyra avatar to profiles without avatars", () => {
     const user = normalizeProfileUser({
       id: "user-1",

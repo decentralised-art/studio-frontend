@@ -35,6 +35,14 @@
     return mockUsers.some((entry) => entry.id === userId) ? userId : null;
   };
 
+  const warmMockChainSession = async (userId: string) => {
+    try {
+      await loginWithMockChainAccount(userId);
+    } catch (error) {
+      console.warn("[Login] Mock chain auth warm-up failed; services login remains active.", error);
+    }
+  };
+
   const handleSubmit = async (event: SubmitEvent) => {
     event.preventDefault();
     loginError = "";
@@ -50,7 +58,7 @@
       await login(email, form.password);
       const mockUserId = resolveMockUserIdFromEmail(email);
       if (mockUserId) {
-        await loginWithMockChainAccount(mockUserId);
+        await warmMockChainSession(mockUserId);
       }
       await goto(resolve("/account"));
     } catch (err) {
@@ -75,19 +83,9 @@
     form.password = credentials.password;
 
     try {
-      let servicesReady = true;
-      try {
-        await loginOrRegisterUser(credentials.email, user.nickname, credentials.password);
-      } catch (error) {
-        servicesReady = false;
-        console.warn(
-          "[Login] Services auth unavailable, continuing with chain-only prototype session.",
-          error,
-        );
-      }
-      await loginWithMockChainAccount(user.id);
-      const finalDestination = servicesReady ? destination : "/studio";
-      await goto(resolve(finalDestination));
+      await loginOrRegisterUser(credentials.email, user.nickname, credentials.password);
+      await warmMockChainSession(user.id);
+      await goto(resolve(destination));
     } catch (err) {
       loginError = err instanceof Error ? err.message : "Mock login failed.";
     } finally {

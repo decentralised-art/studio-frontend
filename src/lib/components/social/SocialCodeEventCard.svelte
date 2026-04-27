@@ -3,6 +3,7 @@
   import { resolve } from "$app/paths";
   import { displayUsersById } from "$lib/data/users";
   import type { RuntimeCodePostEvent } from "$lib/feed/particlePostData";
+  import { getUserAvatarInitials } from "$lib/user/avatarInitials";
 
   const {
     event,
@@ -26,6 +27,7 @@
     if (normalized.length < 14) return normalized;
     return `${normalized.slice(0, 8)}...${normalized.slice(-4)}`;
   };
+  const isAddressLabel = (value: string) => /^0x[0-9a-f]{6,}/i.test(value.trim());
 
   const author = $derived.by(() => displayUsersById[event.authorId] ?? null);
   const mappedAuthorLabel = $derived.by(() => {
@@ -48,6 +50,9 @@
     return "";
   });
   const authorAvatarUrl = $derived.by(() => mappedAuthorAvatarUrl || author?.avatarUrl || "");
+  const authorAvatarInitials = $derived.by(() =>
+    isAddressLabel(authorLabel) ? "?" : getUserAvatarInitials(authorLabel),
+  );
   const elementKindLabel = $derived.by(() =>
     event.type === "transformation" ? "transformation" : "condition",
   );
@@ -60,7 +65,9 @@
         {#if authorAvatarUrl}
           <img class="author-avatar" src={authorAvatarUrl} alt={`${authorLabel} avatar`} />
         {:else}
-          <div class="author-avatar author-avatar--fallback" aria-hidden="true">?</div>
+          <div class="author-avatar author-avatar--fallback" aria-hidden="true">
+            {authorAvatarInitials}
+          </div>
         {/if}
         <div class="author-meta">
           <div class="author-row">
