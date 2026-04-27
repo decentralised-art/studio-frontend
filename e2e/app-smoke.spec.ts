@@ -13,6 +13,32 @@ const stubRemoteApis = async (page: Page) => {
     const url = route.request().url();
 
     if (url.includes("/services/auth/me")) {
+      const isServicesAuthenticated = route
+        .request()
+        .headers()
+        .authorization?.startsWith("Bearer playwright-e2e-services-token");
+      if (isServicesAuthenticated) {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            user: {
+              id: "user-lyra",
+              email: "user-lyra@mock.decentralised.art",
+              display_name: "prototype_test_account",
+              ethereum_address: "0xb584a15f38c2014cff54fdb1b417428b51999276",
+              profile_json: {
+                public: {
+                  nickname: "prototype_test_account",
+                  ethereum_address: "0xb584a15f38c2014cff54fdb1b417428b51999276",
+                },
+              },
+            },
+          }),
+        });
+        return;
+      }
+
       await route.fulfill({
         status: 401,
         contentType: "application/json",
@@ -31,6 +57,7 @@ const stubRemoteApis = async (page: Page) => {
 
 const authenticatePrototypeSession = async (page: Page) => {
   await page.addInitScript(() => {
+    window.localStorage.setItem("hypermusic_token", "playwright-e2e-services-token");
     window.localStorage.setItem("hypermusic_chain_token", "playwright-e2e-chain-token");
   });
 };
