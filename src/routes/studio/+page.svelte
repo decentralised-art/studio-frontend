@@ -39,6 +39,7 @@
   import {
     buildExecuteRequestBody,
     buildExecuteRiPlan,
+    buildExecuteRiPlanFromPositioning,
     formatExecuteRiSummary,
     type ExecuteNodeOverrides,
   } from "$lib/studio/executeRequestPlanner";
@@ -166,6 +167,7 @@
   } from "$lib/studio/studioToolbox";
   import {
     addToolboxLibraryItem,
+    createEmptyToolboxLibrary,
     normalizeConnectorToolboxId,
     normalizeToolboxIdByKind,
     normalizeToolboxListByKind,
@@ -179,6 +181,7 @@
     type ChainStudioSyncResult,
   } from "$lib/studio/chainStudioAdapter";
   import {
+    getCachedCurrentUserToolboxLibrary,
     getCurrentUserProfileState,
     getCurrentUserToolboxLibrary,
     getMe,
@@ -187,7 +190,7 @@
     resolveCurrentUserChainSourceAddresses,
     saveCurrentUserToolboxLibrary,
   } from "$lib/auth/api";
-  import { clearChainToken, getChainToken } from "$lib/auth/session";
+  import { clearChainToken, getChainToken, getChainTokenUserId, getToken } from "$lib/auth/session";
   import {
     ChainApiRequestError,
     type ChainExecutePayload,
@@ -432,8 +435,11 @@
   let chainSyncBusy = $state(false);
   let chainSyncStatus = $state<string | null>(null);
   let chainSyncError = $state<string | null>(null);
+  let pendingBackgroundChainSync = false;
+  let backgroundChainSyncTimer: ReturnType<typeof setTimeout> | null = null;
   let lastStudioSyncedSourcesCount = $state(0);
   let toolboxLoadBusy = $state(true);
+  let toolboxLoadError = $state<string | null>(null);
   let chainDeployBusy = $state(false);
   let chainDeployStatus = $state<string | null>(null);
   let chainDeployError = $state<string | null>(null);
@@ -2147,10 +2153,19 @@
       persistStudioTabsSession();
     };
 
+    const handleAuthChange = () => {
+      const nextServicesToken = getToken() ?? "";
+      if (nextServicesToken === lastToolboxServicesToken) return;
+      lastToolboxServicesToken = nextServicesToken;
+      void loadToolboxLibraryFromProfile();
+    };
+
     window.addEventListener("keydown", handleKey);
     window.addEventListener("resize", handleWindowResize);
     window.addEventListener("studio-ri-update", handleStudioRiUpdate as EventListener);
     window.addEventListener("beforeunload", handleBeforeUnload);
+    window.addEventListener("auth:change", handleAuthChange);
+    window.addEventListener("storage", handleAuthChange);
     const resizeObserver = new ResizeObserver(() => {
       scheduleLayout();
     });
@@ -2174,12 +2189,9 @@
     void loadNetworkSelectionFromQuery();
     void loadToolboxLibraryFromProfile();
     void loadStudioAuthorUsers();
-    void ensureChainAuthForStudio().catch(() => {
-      // Non-blocking warmup: run/deploy paths handle auth errors explicitly.
-    });
     if (!chainAutoSyncStarted) {
       chainAutoSyncStarted = true;
-      void syncChainOwnedRegistry();
+      scheduleBackgroundChainSync();
     }
 
     return () => {
@@ -2187,25 +2199,22 @@
       window.removeEventListener("resize", handleWindowResize);
       window.removeEventListener("studio-ri-update", handleStudioRiUpdate as EventListener);
       window.removeEventListener("beforeunload", handleBeforeUnload);
+      window.removeEventListener("auth:change", handleAuthChange);
+      window.removeEventListener("storage", handleAuthChange);
       resizeObserver.disconnect();
       mutationObserver.disconnect();
       if (persistStudioTabsSessionTimer) {
         clearTimeout(persistStudioTabsSessionTimer);
         persistStudioTabsSessionTimer = null;
       }
+      clearBackgroundChainSyncTimer();
       persistStudioTabsSession();
     };
   });
 
-  const initialParticleToolbox = (mockUsersById[mockCurrentUserId]?.toolbox ?? []).map(
-    normalizeConnectorToolboxId,
-  );
-
-  let toolboxLibrary = $state<ToolboxLibrary>({
-    connector: initialParticleToolbox,
-    transformation: [],
-    condition: [],
-  });
+  let toolboxLibrary = $state<ToolboxLibrary>(createEmptyToolboxLibrary());
+  let toolboxLoadRequestId = 0;
+  let lastToolboxServicesToken = getToken() ?? "";
 
   const persistToolboxLibrary = async (nextToolboxLibrary: ToolboxLibrary) => {
     try {
@@ -2234,20 +2243,47 @@
   };
 
   const loadToolboxLibraryFromProfile = async () => {
-    toolboxLoadBusy = true;
-    try {
-      const saved = await getCurrentUserToolboxLibrary();
+    const requestId = (toolboxLoadRequestId += 1);
+    toolboxLoadError = null;
+    if (!getToken()) {
+      toolboxLibrary = createEmptyToolboxLibrary();
+      toolboxLoadBusy = false;
+      return;
+    }
+
+    const applyProfileToolbox = (saved: ToolboxLibrary) => {
       const nextToolboxLibrary = {
         connector: normalizeToolboxListByKind("connector", saved.connector),
         transformation: normalizeToolboxListByKind("transformation", saved.transformation),
         condition: normalizeToolboxListByKind("condition", saved.condition),
       };
       toolboxLibrary = nextToolboxLibrary;
+      return nextToolboxLibrary;
+    };
+
+    const cachedToolbox = getCachedCurrentUserToolboxLibrary();
+    let appliedCachedToolbox = false;
+    if (cachedToolbox) {
+      const nextToolboxLibrary = applyProfileToolbox(cachedToolbox);
+      appliedCachedToolbox = true;
+      void hydrateToolboxLibraryIntoNetwork(nextToolboxLibrary);
+    }
+
+    toolboxLoadBusy = true;
+    try {
+      const saved = await getCurrentUserToolboxLibrary();
+      if (requestId !== toolboxLoadRequestId) return;
+      const nextToolboxLibrary = applyProfileToolbox(saved);
       await hydrateToolboxLibraryIntoNetwork(nextToolboxLibrary);
     } catch (error) {
       console.warn("[Studio] Failed to load toolbox library from profile.", error);
+      if (!appliedCachedToolbox && requestId === toolboxLoadRequestId) {
+        toolboxLoadError = "Unable to load toolbox from your services profile.";
+      }
     } finally {
-      toolboxLoadBusy = false;
+      if (requestId === toolboxLoadRequestId) {
+        toolboxLoadBusy = false;
+      }
     }
   };
 
@@ -3305,6 +3341,7 @@
     Array<{ address: string; authorId: string; label: string }>
   > => {
     const profileState = await getCurrentUserProfileState({
+      preferCached: true,
       bootstrapPrototypeIfEmpty: true,
     });
     const resolvedCurrentSources = resolveCurrentUserChainSourceAddresses(profileState.me);
@@ -3368,16 +3405,30 @@
     return mockCurrentUserId;
   };
 
-  let chainTokenUserId = "";
+  let chainTokenUserId = getChainTokenUserId() ?? "";
+  let chainAuthPromise: Promise<void> | null = null;
   const ensureChainAuthForStudio = async (forceRefresh = false) => {
+    if (chainAuthPromise && !forceRefresh) return chainAuthPromise;
+
     const userId = await resolveCurrentMockChainUserId();
     if (forceRefresh) {
       clearChainToken();
       chainTokenUserId = "";
     }
-    if (getChainToken() && chainTokenUserId === userId) return;
-    await loginWithMockChainAccount(userId);
-    chainTokenUserId = userId;
+    const storedUserId = getChainTokenUserId() ?? chainTokenUserId;
+    if (getChainToken() && storedUserId === userId) {
+      chainTokenUserId = userId;
+      return;
+    }
+
+    chainAuthPromise = loginWithMockChainAccount(userId)
+      .then(() => {
+        chainTokenUserId = userId;
+      })
+      .finally(() => {
+        chainAuthPromise = null;
+      });
+    return chainAuthPromise;
   };
 
   async function withChainAuthRetry<T>(operation: () => Promise<T>): Promise<T> {
@@ -3523,7 +3574,11 @@
     return registry;
   };
 
-  const syncChainOwnedRegistry = async () => {
+  const syncChainOwnedRegistry = async (options: { background?: boolean } = {}) => {
+    if (options.background && chainRunBusy) {
+      pendingBackgroundChainSync = true;
+      return;
+    }
     chainSyncError = null;
     chainSyncStatus = "Fetching chain registry from chain accounts...";
     chainSyncBusy = true;
@@ -3582,6 +3637,20 @@
     } finally {
       chainSyncBusy = false;
     }
+  };
+
+  const clearBackgroundChainSyncTimer = () => {
+    if (!backgroundChainSyncTimer) return;
+    clearTimeout(backgroundChainSyncTimer);
+    backgroundChainSyncTimer = null;
+  };
+
+  const scheduleBackgroundChainSync = (delayMs = 1800) => {
+    if (backgroundChainSyncTimer || chainSyncBusy) return;
+    backgroundChainSyncTimer = setTimeout(() => {
+      backgroundChainSyncTimer = null;
+      void syncChainOwnedRegistry({ background: true });
+    }, delayMs);
   };
 
   const collectDraftTransformationSources = (graphNodes: StudioNode[]) => {
@@ -3997,6 +4066,10 @@
     summary: string;
   };
 
+  type PreparedExecuteRequest = ExecuteRequestPreview & {
+    positionedNodes: StudioNode[];
+  };
+
   const resolveActiveExecuteConnectorName = (graphNodes: StudioNode[] = nodes): string => {
     if (!activeTab) return "";
     if (isConnectorTreeTab(activeTabId)) {
@@ -4034,40 +4107,38 @@
     return rootNode ? resolveNodeName(rootNode).trim() : "";
   };
 
-  const buildExecuteRequestPreview = (
+  const buildEmptyExecuteRequestBody = (particlesCount: number): ChainExecutePayload => ({
+    connector_name: "",
+    particles_count: String(particlesCount),
+    dynamic_ri: {},
+  });
+
+  const prepareExecuteRequest = (
     graphNodes: StudioNode[] = nodes,
     graphEdges: Edge[] = edges,
-  ): ExecuteRequestPreview => {
+  ): PreparedExecuteRequest => {
     const particlesCount = Math.max(1, Math.trunc(runSamplesCount));
-    const emptyRequestBody: ChainExecutePayload = {
-      connector_name: "",
-      particles_count: String(particlesCount),
-      dynamic_ri: {},
-    };
-    const projection = computeConnectorRiProjectionForGraph(graphNodes, graphEdges);
-    const positionedNodes = applyProjectedRiPositionsToGraphNodes(
-      graphNodes,
-      projection.positionByNodeId,
-    );
-    const connectorName = resolveActiveExecuteConnectorName(positionedNodes);
+    const emptyRequestBody = buildEmptyExecuteRequestBody(particlesCount);
+    const connectorName = resolveActiveExecuteConnectorName(graphNodes);
     if (!connectorName) {
       return {
         connectorName: "",
         requestBody: emptyRequestBody,
         error: "No connector selected to run.",
-        warnings: [...projection.warnings],
+        warnings: [],
         summary: "Execute preview unavailable.",
+        positionedNodes: graphNodes,
       };
     }
 
     try {
       const runtime = buildStudioRuntime(
-        { nodes: positionedNodes, edges: graphEdges },
+        { nodes: graphNodes, edges: graphEdges },
         {
           rootLabel: activeTab?.label ?? "Connector",
           rootParticleId: activeTab?.particleId ?? connectorName,
         },
-        buildRuntimeOverrides({}, positionedNodes),
+        buildRuntimeOverrides({}, graphNodes),
       );
 
       if (!runtime.registry.connectors[connectorName]) {
@@ -4075,15 +4146,41 @@
           connectorName,
           requestBody: emptyRequestBody,
           error: `Connector '${connectorName}' is not present in runtime registry.`,
-          warnings: [...projection.warnings, ...runtime.warnings],
+          warnings: [...runtime.warnings],
           summary: "Execute preview unavailable.",
+          positionedNodes: graphNodes,
         };
       }
 
+      const projectionPlan = buildExecuteRiPlan(runtime.registry.connectors, connectorName, {});
+      const connectorNodes = graphNodes.filter((node) => isConnectorKind(node.data.kind));
+      const projection = connectorNodes.length
+        ? projectRiPositionsToConnectorNodes({
+            rootConnectorName: connectorName,
+            planNodes: projectionPlan.positioning.nodes,
+            graphNodes: connectorNodes.map((node) => ({
+              id: node.id,
+              connectorName: resolveNodeName(node),
+              tabRoot: Boolean(node.data.tabRoot),
+            })),
+            graphEdges: graphEdges.map((edge) => ({
+              source: edge.source ?? "",
+              target: edge.target ?? "",
+              sourceHandle: edge.sourceHandle ?? "",
+              targetHandle: edge.targetHandle ?? "",
+              relation: parseConnectorEdgeRelation(edge),
+              bindingSlot: parseConnectorEdgeBindingSlot(edge),
+            })),
+          })
+        : { positionByNodeId: {}, warnings: [] };
+      const positionedNodes = applyProjectedRiPositionsToGraphNodes(
+        graphNodes,
+        projection.positionByNodeId,
+      );
       const dynamicOverrides = collectExecuteNodeOverrides(positionedNodes);
-      const riPlan = buildExecuteRiPlan(
+      const riPlan = buildExecuteRiPlanFromPositioning(
         runtime.registry.connectors,
-        connectorName,
+        projectionPlan.positioning,
         dynamicOverrides,
       );
       const requestBody = buildExecuteRequestBody({
@@ -4108,6 +4205,7 @@
           ...blockedWarnings,
         ],
         summary: formatExecuteRiSummary(riPlan),
+        positionedNodes,
       };
     } catch (error) {
       return {
@@ -4117,10 +4215,25 @@
           error instanceof Error
             ? `Failed to build execute preview: ${error.message}`
             : "Failed to build execute preview.",
-        warnings: [...projection.warnings],
+        warnings: [],
         summary: "Execute preview unavailable.",
+        positionedNodes: graphNodes,
       };
     }
+  };
+
+  const buildExecuteRequestPreview = (
+    graphNodes: StudioNode[] = nodes,
+    graphEdges: Edge[] = edges,
+  ): ExecuteRequestPreview => {
+    const prepared = prepareExecuteRequest(graphNodes, graphEdges);
+    return {
+      connectorName: prepared.connectorName,
+      requestBody: prepared.requestBody,
+      error: prepared.error,
+      warnings: prepared.warnings,
+      summary: prepared.summary,
+    };
   };
 
   const executeRequestPreview = $derived.by(() => buildExecuteRequestPreview());
@@ -4307,70 +4420,141 @@
     }
   };
 
+  type StudioRunTimings = {
+    save: number;
+    prepare: number;
+    auth: number;
+    execute: number;
+    normalize: number;
+    jsonStringify: number;
+    store: number;
+    plugins: number;
+  };
+
+  const emptyStudioRunTimings = (): StudioRunTimings => ({
+    save: 0,
+    prepare: 0,
+    auth: 0,
+    execute: 0,
+    normalize: 0,
+    jsonStringify: 0,
+    store: 0,
+    plugins: 0,
+  });
+
+  const formatTimingMs = (value: number) => `${Math.round(value)}ms`;
+
+  const logStudioRunTiming = (
+    status: "completed" | "failed" | "blocked",
+    timings: StudioRunTimings,
+    totalMs: number,
+  ) => {
+    console.info(
+      `[Studio run timing] ${status} · save ${formatTimingMs(timings.save)} · prepare ${formatTimingMs(
+        timings.prepare,
+      )} · auth ${formatTimingMs(timings.auth)} · execute ${formatTimingMs(
+        timings.execute,
+      )} · normalize ${formatTimingMs(timings.normalize)} · jsonStringify ${formatTimingMs(
+        timings.jsonStringify,
+      )} · store ${formatTimingMs(timings.store)} · plugins ${formatTimingMs(
+        timings.plugins,
+      )} · total ${formatTimingMs(totalMs)}`,
+    );
+  };
+
+  function measureStudioRunStep<T>(
+    timings: StudioRunTimings,
+    key: keyof StudioRunTimings,
+    fn: () => T,
+  ): T {
+    const startedAt = performance.now();
+    try {
+      return fn();
+    } finally {
+      timings[key] += performance.now() - startedAt;
+    }
+  }
+
+  async function measureAsyncStudioRunStep<T>(
+    timings: StudioRunTimings,
+    key: keyof StudioRunTimings,
+    fn: () => Promise<T>,
+  ): Promise<T> {
+    const startedAt = performance.now();
+    try {
+      return await fn();
+    } finally {
+      timings[key] += performance.now() - startedAt;
+    }
+  }
+
   const executeActiveGraph = async () => {
     if (!activeTab || chainRunBusy || chainDeployBusy) return;
-    saveActiveGraph();
-    const positionedNodes = applyComputedRiPositionsToGraphNodes(nodes, edges);
-    nodes = positionedNodes;
+    const runTabId = activeTabId;
+    const runStartedAt = performance.now();
+    const timings = emptyStudioRunTimings();
     chainRunBusy = true;
     chainDeployError = null;
-    chainDeployStatus = "Running on chain...";
-    const runStartedAt = performance.now();
+    chainDeployStatus = "Preparing run...";
     let output: PtOutputFeature[] = [];
     let warnings: string[] = [];
-    const requestPreview = buildExecuteRequestPreview(positionedNodes, edges);
-    const requestPreparedAt = performance.now();
-    const connectorName = requestPreview.connectorName;
-    warnings = [...requestPreview.warnings];
-
-    if (!connectorName) {
-      const message = requestPreview.error ?? "No connector selected to run.";
-      chainRunMessageByTab = {
-        ...chainRunMessageByTab,
-        [activeTabId]: JSON.stringify({ message }, null, 2),
-      };
-      chainRunTimestampByTab = { ...chainRunTimestampByTab, [activeTabId]: Date.now() };
-      chainDeployStatus = null;
-      chainRunBusy = false;
-      return;
-    }
-    if (requestPreview.error) {
-      chainRunMessageByTab = {
-        ...chainRunMessageByTab,
-        [activeTabId]: JSON.stringify({ message: requestPreview.error }, null, 2),
-      };
-      chainRunTimestampByTab = { ...chainRunTimestampByTab, [activeTabId]: Date.now() };
-      chainDeployStatus = null;
-      chainRunBusy = false;
-      return;
-    }
+    let runStatus: "completed" | "failed" | "blocked" = "completed";
 
     try {
-      await ensureChainAuthForStudio();
-      const executeRequestStartedAt = performance.now();
-      const result = await withChainAuthRetry(() =>
-        postChainExecuteDetailed(requestPreview.requestBody),
+      measureStudioRunStep(timings, "save", () => saveActiveGraph());
+      const requestPreview = measureStudioRunStep(timings, "prepare", () =>
+        prepareExecuteRequest(nodes, edges),
       );
-      output = result.body.map((stream) => ({
-        feature_path: stream.path,
-        data: [...stream.data],
-      }));
+      nodes = requestPreview.positionedNodes;
+      const connectorName = requestPreview.connectorName;
+      warnings = [...requestPreview.warnings];
 
-      const responseJson = JSON.stringify(result.body, null, 2);
+      if (!connectorName) {
+        runStatus = "blocked";
+        const message = requestPreview.error ?? "No connector selected to run.";
+        chainRunMessageByTab = {
+          ...chainRunMessageByTab,
+          [runTabId]: JSON.stringify({ message }, null, 2),
+        };
+        chainRunTimestampByTab = { ...chainRunTimestampByTab, [runTabId]: Date.now() };
+        chainDeployStatus = null;
+        return;
+      }
+      if (requestPreview.error) {
+        runStatus = "blocked";
+        chainRunMessageByTab = {
+          ...chainRunMessageByTab,
+          [runTabId]: JSON.stringify({ message: requestPreview.error }, null, 2),
+        };
+        chainRunTimestampByTab = { ...chainRunTimestampByTab, [runTabId]: Date.now() };
+        chainDeployStatus = null;
+        return;
+      }
+
+      chainDeployStatus = "Authenticating with chain...";
+      await measureAsyncStudioRunStep(timings, "auth", () => ensureChainAuthForStudio());
+      chainDeployStatus = "Running on chain...";
+      const result = await measureAsyncStudioRunStep(timings, "execute", () =>
+        withChainAuthRetry(() => postChainExecuteDetailed(requestPreview.requestBody)),
+      );
+      output = measureStudioRunStep(timings, "normalize", () =>
+        result.body.map((stream) => ({
+          feature_path: stream.path,
+          data: [...stream.data],
+        })),
+      );
+
+      const responseJson = measureStudioRunStep(timings, "jsonStringify", () =>
+        JSON.stringify(result.body, null, 2),
+      );
       chainRunMessageByTab = {
         ...chainRunMessageByTab,
-        [activeTabId]: responseJson || "[]",
+        [runTabId]: responseJson,
       };
-      chainRunTimestampByTab = { ...chainRunTimestampByTab, [activeTabId]: Date.now() };
+      chainRunTimestampByTab = { ...chainRunTimestampByTab, [runTabId]: Date.now() };
       chainDeployStatus = "Run completed.";
-      console.info(
-        `[Studio run timing] prepare ${Math.round(
-          requestPreparedAt - runStartedAt,
-        )}ms · execute ${Math.round(performance.now() - executeRequestStartedAt)}ms · total ${Math.round(
-          performance.now() - runStartedAt,
-        )}ms`,
-      );
     } catch (error) {
+      runStatus = "failed";
       const err = extractExecuteErrorDetail(error);
       let responseOnly = "";
       if (error instanceof ChainApiRequestError) {
@@ -4384,24 +4568,26 @@
       const fallbackErrorJson = JSON.stringify({ message: err.headline }, null, 2);
       chainRunMessageByTab = {
         ...chainRunMessageByTab,
-        [activeTabId]: responseOnly || fallbackErrorJson,
+        [runTabId]: responseOnly || fallbackErrorJson,
       };
-      chainRunTimestampByTab = { ...chainRunTimestampByTab, [activeTabId]: Date.now() };
+      chainRunTimestampByTab = { ...chainRunTimestampByTab, [runTabId]: Date.now() };
       warnings = [...warnings, err.headline];
       chainDeployStatus = null;
       chainDeployError = err.headline;
       output = [];
-      console.info(
-        `[Studio run timing] prepare ${Math.round(
-          requestPreparedAt - runStartedAt,
-        )}ms · total ${Math.round(performance.now() - runStartedAt)}ms (failed)`,
-      );
     } finally {
-      runOutputByTab = { ...runOutputByTab, [activeTabId]: output };
-      runWarningsByTab = { ...runWarningsByTab, [activeTabId]: warnings };
-      runTimestampByTab = { ...runTimestampByTab, [activeTabId]: Date.now() };
-      refreshPluginOutputs(output);
+      measureStudioRunStep(timings, "store", () => {
+        runOutputByTab = { ...runOutputByTab, [runTabId]: output };
+        runWarningsByTab = { ...runWarningsByTab, [runTabId]: warnings };
+        runTimestampByTab = { ...runTimestampByTab, [runTabId]: Date.now() };
+      });
+      measureStudioRunStep(timings, "plugins", () => refreshPluginOutputs(output));
+      logStudioRunTiming(runStatus, timings, performance.now() - runStartedAt);
       chainRunBusy = false;
+      if (pendingBackgroundChainSync) {
+        pendingBackgroundChainSync = false;
+        scheduleBackgroundChainSync(250);
+      }
     }
   };
 
@@ -7205,8 +7391,8 @@
               chainSyncStatus ??
               "Sync owned chain connectors, transformations, conditions and connector records"}
             className="icon-btn"
-            disabled={chainSyncBusy || chainDeployBusy}
-            onclick={syncChainOwnedRegistry}
+            disabled={chainSyncBusy || chainDeployBusy || chainRunBusy}
+            onclick={() => void syncChainOwnedRegistry()}
           >
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="M20 12a8 8 0 1 1-2.34-5.66"></path>
@@ -7288,6 +7474,18 @@
                 <strong>{chainSyncError}</strong>
               </div>
             {/if}
+          </div>
+        {/if}
+        {#if explorerSource === "toolbox" && toolboxLoadError}
+          <div
+            class="chain-status-strip chain-status-strip--sidebar"
+            role="status"
+            aria-live="polite"
+          >
+            <div class="chain-status-chip is-error">
+              <span>Toolbox error</span>
+              <strong>{toolboxLoadError}</strong>
+            </div>
           </div>
         {/if}
         {#if explorerSource !== "plugins"}

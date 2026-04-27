@@ -211,4 +211,69 @@ describe("auth profile source bootstrap", () => {
       "0x7e5f4552091a69125d5dfcb7b8c2659029395bdf",
     );
   });
+
+  it("loads the full connector toolbox from the current services profile", async () => {
+    window.localStorage.setItem("hypermusic_token", "services-token");
+    const connectorToolbox = [
+      "pitch",
+      "time",
+      "test_random_transformation1234",
+      "test_random_add_connector_20260420_01",
+      "velocity",
+      "duration",
+      "test_midi_chromatic_in_time_stable_duration_and_velocity12345",
+      "test_various_midi_values12345",
+      "test_midi_polyphony089768",
+      "test_connector_polyphony_every_second12345678456",
+      "test_break_add2_56079",
+      "A2_breath_return_layer_realized",
+      "A2_breath_return_overlay",
+      "A2_breath_return_overlay_realized",
+    ];
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse({
+        id: "43e7e391-55fb-4956-950f-85f99fe7900f",
+        email: "user-lyra@mock.decentralised.art",
+        display_name: "prototype_test_account",
+        ethereum_address: "0xb584a15f38c2014cff54fdb1b417428b51999276",
+        profile_json: {
+          public: {
+            nickname: "prototype_test_account",
+            toolbox: [...connectorToolbox],
+            toolbox_library: {
+              connector: [...connectorToolbox],
+              transformation: ["subtract", "add"],
+              condition: [],
+            },
+          },
+        },
+      }),
+    );
+
+    const { getCurrentUserToolboxLibrary } = await import("../src/lib/auth/api");
+    const toolbox = await getCurrentUserToolboxLibrary();
+
+    expect(toolbox.connector).toEqual(connectorToolbox);
+    expect(toolbox.transformation).toEqual(["subtract", "add"]);
+  });
+
+  it("does not fall back to bundled mock toolbox entries without a services session", async () => {
+    const { getCurrentUserToolboxLibrary } = await import("../src/lib/auth/api");
+
+    await expect(getCurrentUserToolboxLibrary()).resolves.toEqual({
+      connector: [],
+      transformation: [],
+      condition: [],
+    });
+  });
+
+  it("clears stale services tokens when auth/me returns not found", async () => {
+    window.localStorage.setItem("hypermusic_token", "stale-services-token");
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 404 }));
+
+    const { getCurrentUserToolboxLibrary } = await import("../src/lib/auth/api");
+
+    await expect(getCurrentUserToolboxLibrary()).rejects.toThrow("Failed to load account.");
+    expect(window.localStorage.getItem("hypermusic_token")).toBeNull();
+  });
 });

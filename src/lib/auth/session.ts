@@ -2,6 +2,7 @@ import { browser } from "$app/environment";
 
 const TOKEN_KEY = "hypermusic_token";
 const CHAIN_TOKEN_KEY = "hypermusic_chain_token";
+const CHAIN_TOKEN_USER_ID_KEY = "hypermusic_chain_token_user_id";
 const AUTH_EVENT = "auth:change";
 
 const notifyAuthChange = () => {
@@ -31,15 +32,26 @@ export const getChainToken = (): string | null => {
   return localStorage.getItem(CHAIN_TOKEN_KEY);
 };
 
-export const setChainToken = (token: string): void => {
+export const getChainTokenUserId = (): string | null => {
+  if (!browser) return null;
+  return localStorage.getItem(CHAIN_TOKEN_USER_ID_KEY);
+};
+
+export const setChainToken = (token: string, userId?: string): void => {
   if (!browser) return;
   localStorage.setItem(CHAIN_TOKEN_KEY, token);
+  if (userId) {
+    localStorage.setItem(CHAIN_TOKEN_USER_ID_KEY, userId);
+  } else {
+    localStorage.removeItem(CHAIN_TOKEN_USER_ID_KEY);
+  }
   notifyAuthChange();
 };
 
 export const clearChainToken = (): void => {
   if (!browser) return;
   localStorage.removeItem(CHAIN_TOKEN_KEY);
+  localStorage.removeItem(CHAIN_TOKEN_USER_ID_KEY);
   notifyAuthChange();
 };
 

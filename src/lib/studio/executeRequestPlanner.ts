@@ -152,8 +152,18 @@ export const buildExecuteRiPlan = (
   connectors: Record<string, StudioConnectorDef>,
   rootConnectorName: string,
   overridesByPosition: ExecuteNodeOverrides = {},
+): ExecuteRiPlan =>
+  buildExecuteRiPlanFromPositioning(
+    connectors,
+    computeRiPositioning(connectors, rootConnectorName),
+    overridesByPosition,
+  );
+
+export const buildExecuteRiPlanFromPositioning = (
+  connectors: Record<string, StudioConnectorDef>,
+  positioning: RiPositioningResult,
+  overridesByPosition: ExecuteNodeOverrides = {},
 ): ExecuteRiPlan => {
-  const positioning = computeRiPositioning(connectors, rootConnectorName);
   const warnings: string[] = [];
 
   const { staticByPosition, warnings: staticWarnings } = resolveStaticRiPositions(

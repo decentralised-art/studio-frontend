@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
   clearChainToken,
   clearToken,
+  getChainTokenUserId,
   hasAuthSession,
   hasChainSession,
   hasServicesSession,
@@ -16,9 +17,10 @@ describe("auth session boundaries", () => {
   });
 
   it("requires a services token for app authentication", () => {
-    setChainToken("chain-token");
+    setChainToken("chain-token", "user-lyra");
 
     expect(hasChainSession()).toBe(true);
+    expect(getChainTokenUserId()).toBe("user-lyra");
     expect(hasServicesSession()).toBe(false);
     expect(hasAuthSession()).toBe(false);
   });
@@ -30,8 +32,9 @@ describe("auth session boundaries", () => {
     expect(hasAuthSession()).toBe(true);
     expect(hasChainSession()).toBe(false);
 
-    setChainToken("chain-token");
+    setChainToken("chain-token", "user-lyra");
     expect(hasChainSession()).toBe(true);
+    expect(getChainTokenUserId()).toBe("user-lyra");
     expect(hasAuthSession()).toBe(true);
 
     clearToken();
@@ -41,5 +44,16 @@ describe("auth session boundaries", () => {
 
     clearChainToken();
     expect(hasChainSession()).toBe(false);
+    expect(getChainTokenUserId()).toBeNull();
+  });
+
+  it("clears stale chain token ownership when no user id is supplied", () => {
+    setChainToken("chain-token", "user-lyra");
+    expect(getChainTokenUserId()).toBe("user-lyra");
+
+    setChainToken("chain-token-without-owner");
+
+    expect(hasChainSession()).toBe(true);
+    expect(getChainTokenUserId()).toBeNull();
   });
 });

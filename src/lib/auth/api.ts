@@ -63,7 +63,9 @@ const mockCredentialsForUser = (userId: string) => ({
 
 const redirectToLogin = () => {
   if (!browser) return;
-  goto(resolve("/login"));
+  void goto(resolve("/login")).catch(() => {
+    // Route guards also enforce login; ignore navigation failures outside a mounted app.
+  });
 };
 
 const parseTokenFromPayload = (payload: unknown): string => {
@@ -481,7 +483,7 @@ export const loginWithMockChainAccount = async (
     throw new Error(result.error ?? "Mock chain login failed.");
   }
 
-  setChainToken(result.token);
+  setChainToken(result.token, user.id);
   return result.token;
 };
 
@@ -495,6 +497,9 @@ export const chainAuthFetch = async (path: string, init: RequestInit = {}) => {
     headers,
   });
 };
+
+const isInvalidServicesSessionResponse = (path: string, status: number): boolean =>
+  status === 401 || status === 403 || (status === 404 && path === "/auth/me");
 
 export const authFetch = async (path: string, init: RequestInit = {}) => {
   const headers = new Headers(init.headers);
@@ -512,7 +517,8 @@ export const authFetch = async (path: string, init: RequestInit = {}) => {
     headers,
   });
 
-  if (!response.ok && (response.status === 401 || response.status === 403)) {
+  if (!response.ok && isInvalidServicesSessionResponse(path, response.status)) {
+    clearCachedMePayload();
     clearToken();
     redirectToLogin();
   }
@@ -1059,16 +1065,6 @@ const defaultSocialPreferences = (): SocialPreferencesProfile => ({
   followedFormatHashes: [],
 });
 
-const defaultToolboxLibraryForPrototype = (): ToolboxLibraryProfile => {
-  const fallbackUser = mockUsersById[mockCurrentUserId];
-  if (!fallbackUser) return defaultToolboxLibrary();
-  return {
-    connector: normalizeToolboxListByKind("connector", fallbackUser.toolbox),
-    transformation: [],
-    condition: [],
-  };
-};
-
 const parseToolboxLibraryFromProfileJson = (profileJsonRaw: unknown): ToolboxLibraryProfile => {
   const profileJson = asRecord(profileJsonRaw);
   const profilePublic = asRecord(profileJson.public ?? profileJson.profile ?? profileJson);
@@ -1228,7 +1224,7 @@ const resolvePrototypeFallbackProfileState = (): CurrentUserProfileState | null 
     me: null,
     userId: null,
     social: defaultSocialPreferencesForPrototype(mockUserId),
-    toolbox: defaultToolboxLibraryForPrototype(),
+    toolbox: defaultToolboxLibrary(),
   };
 };
 
@@ -1284,7 +1280,7 @@ export const getCurrentUserProfileState = async (options?: {
         me: null,
         userId: null,
         social: defaultSocialPreferences(),
-        toolbox: defaultToolboxLibraryForPrototype(),
+        toolbox: defaultToolboxLibrary(),
       }
     );
   }
@@ -1313,6 +1309,12 @@ export const getCurrentUserProfileState = async (options?: {
 
 export const getCurrentUserToolboxLibrary = async (): Promise<ToolboxLibraryProfile> => {
   return (await getCurrentUserProfileState()).toolbox;
+};
+
+export const getCachedCurrentUserToolboxLibrary = (): ToolboxLibraryProfile | null => {
+  const cachedPayload = readCachedMePayload();
+  if (!cachedPayload) return null;
+  return resolveProfileStateFromMePayload(cachedPayload).toolbox;
 };
 
 export const saveCurrentUserToolboxLibrary = async (

@@ -8,6 +8,23 @@ const collectPageErrors = (page: Page) => {
   return () => expect(errors).toEqual([]);
 };
 
+const prototypeConnectorToolbox = [
+  "pitch",
+  "time",
+  "test_random_transformation1234",
+  "test_random_add_connector_20260420_01",
+  "velocity",
+  "duration",
+  "test_midi_chromatic_in_time_stable_duration_and_velocity12345",
+  "test_various_midi_values12345",
+  "test_midi_polyphony089768",
+  "test_connector_polyphony_every_second12345678456",
+  "test_break_add2_56079",
+  "A2_breath_return_layer_realized",
+  "A2_breath_return_overlay",
+  "A2_breath_return_overlay_realized",
+];
+
 const stubRemoteApis = async (page: Page) => {
   await page.route("https://api.decentralised.art/**", async (route) => {
     const url = route.request().url();
@@ -31,6 +48,18 @@ const stubRemoteApis = async (page: Page) => {
                 public: {
                   nickname: "prototype_test_account",
                   ethereum_address: "0xb584a15f38c2014cff54fdb1b417428b51999276",
+                  toolbox: prototypeConnectorToolbox,
+                  toolbox_library: {
+                    connector: prototypeConnectorToolbox,
+                    transformation: [
+                      "subtract",
+                      "add",
+                      "test_add_new1234567",
+                      "test_random_20260419204115",
+                      "test_random_add_20260420_01",
+                    ],
+                    condition: [],
+                  },
                 },
               },
             },
@@ -59,6 +88,7 @@ const authenticatePrototypeSession = async (page: Page) => {
   await page.addInitScript(() => {
     window.localStorage.setItem("hypermusic_token", "playwright-e2e-services-token");
     window.localStorage.setItem("hypermusic_chain_token", "playwright-e2e-chain-token");
+    window.localStorage.setItem("hypermusic_chain_token_user_id", "user-lyra");
   });
 };
 
@@ -139,6 +169,22 @@ test("renders the Studio workspace shell", async ({ page }) => {
   await expect(page.getByRole("button", { name: "New Connector", exact: true })).toBeVisible();
   await expect(page.getByRole("application", { name: "Flow canvas" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Toggle assistant panel" }).first()).toBeVisible();
+  assertNoPageErrors();
+});
+
+test("renders the full saved connector toolbox in Studio", async ({ page }) => {
+  const assertNoPageErrors = collectPageErrors(page);
+  await stubRemoteApis(page);
+  await authenticatePrototypeSession(page);
+
+  await page.goto("/studio");
+  await page.getByRole("button", { name: "Toolbox" }).click();
+
+  await expect(page.getByText("test_midi_polyphony089768")).toBeVisible();
+  await expect(page.getByText("A2_breath_return_overlay_realized")).toBeVisible();
+  await expect(page.getByText("test_random_add_connector_20260420_01")).toBeVisible();
+  await expect(page.getByText("score-weave")).toHaveCount(0);
+  await expect(page.getByText("aurora-still")).toHaveCount(0);
   assertNoPageErrors();
 });
 
