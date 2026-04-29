@@ -278,7 +278,7 @@
   }
 
   .connector-head-main {
-    @apply min-w-0;
+    @apply min-w-0 flex-1;
   }
 
   .connector-kicker {
@@ -287,6 +287,7 @@
 
   .connector-title {
     @apply mt-1 text-2xl md:text-[1.8rem] font-semibold text-white leading-tight;
+    overflow-wrap: anywhere;
   }
 
   .connector-meta {
@@ -302,7 +303,7 @@
   }
 
   .connector-head-actions {
-    @apply flex flex-wrap gap-2 shrink-0;
+    @apply flex max-w-full shrink-0 flex-wrap gap-2 md:justify-end;
   }
 
   .connector-flow-shell {

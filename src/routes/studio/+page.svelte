@@ -7390,61 +7390,62 @@
   <div class="top-stack">
     <div
       class="tab-bar"
-      role="tablist"
-      aria-label="Connector tabs"
-      tabindex="0"
+      role="group"
+      aria-label="Connector tab strip"
       ondragover={handleTabDragOver}
       ondrop={handleTabDrop}
     >
-      {#each tabs as tab (tab.id)}
-        <div class={`tab ${tab.id === activeTabId ? "is-active" : ""}`}>
-          {#if tabRenameId === tab.id}
-            <input
-              class="tab-rename"
-              value={tabRenameValue}
-              oninput={(event) => {
-                const target = event.target as HTMLInputElement | null;
-                tabRenameValue = target?.value ?? "";
-              }}
-              onblur={() => commitTabRename(tab)}
-              onkeydown={(event) => {
-                if (event.key === "Enter") {
-                  event.preventDefault();
-                  commitTabRename(tab);
-                }
-                if (event.key === "Escape") {
-                  event.preventDefault();
-                  cancelTabRename();
-                }
-              }}
-            />
-          {:else}
+      <div class="tab-scroll" role="tablist" aria-label="Connector tabs" tabindex="0">
+        {#each tabs as tab (tab.id)}
+          <div class={`tab ${tab.id === activeTabId ? "is-active" : ""}`}>
+            {#if tabRenameId === tab.id}
+              <input
+                class="tab-rename"
+                value={tabRenameValue}
+                oninput={(event) => {
+                  const target = event.target as HTMLInputElement | null;
+                  tabRenameValue = target?.value ?? "";
+                }}
+                onblur={() => commitTabRename(tab)}
+                onkeydown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    commitTabRename(tab);
+                  }
+                  if (event.key === "Escape") {
+                    event.preventDefault();
+                    cancelTabRename();
+                  }
+                }}
+              />
+            {:else}
+              <button
+                type="button"
+                role="tab"
+                class="tab-button"
+                aria-selected={tab.id === activeTabId}
+                onclick={() => switchTab(tab.id)}
+                ondblclick={() => startTabRename(tab)}
+              >
+                <span class="tab-label">{tab.label}</span>
+                <span class={`tab-status ${tab.particleId ? "is-network" : "is-draft"}`}>
+                  {tab.particleId ? "Network (view-only)" : "in-progress"}
+                </span>
+              </button>
+            {/if}
             <button
               type="button"
-              role="tab"
-              class="tab-button"
-              aria-selected={tab.id === activeTabId}
-              onclick={() => switchTab(tab.id)}
-              ondblclick={() => startTabRename(tab)}
+              class="tab-close"
+              aria-label={`Close ${tab.label} tab`}
+              onclick={() => closeTab(tab.id)}
             >
-              <span class="tab-label">{tab.label}</span>
-              <span class={`tab-status ${tab.particleId ? "is-network" : "is-draft"}`}>
-                {tab.particleId ? "Network (view-only)" : "in-progress"}
-              </span>
+              <svg class="tab-close-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M6 6l12 12M18 6l-12 12"></path>
+              </svg>
             </button>
-          {/if}
-          <button
-            type="button"
-            class="tab-close"
-            aria-label={`Close ${tab.label} tab`}
-            onclick={() => closeTab(tab.id)}
-          >
-            <svg class="tab-close-icon" viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M6 6l12 12M18 6l-12 12"></path>
-            </svg>
-          </button>
-        </div>
-      {/each}
+          </div>
+        {/each}
+      </div>
       <button
         type="button"
         class="tab tab-add"
@@ -9426,7 +9427,17 @@
   }
 
   .tab-bar {
-    @apply flex items-center gap-2 px-3 py-2;
+    @apply flex min-w-0 items-center gap-2 px-3 py-2;
+  }
+
+  .tab-scroll {
+    @apply flex min-w-0 flex-1 items-center gap-2 overflow-x-auto;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+
+  .tab-scroll::-webkit-scrollbar {
+    display: none;
   }
 
   .top-action-group {
@@ -9453,7 +9464,7 @@
   .tab {
     @apply rounded-md border border-white/10 bg-white/5 px-3 py-1 text-[0.6rem]
       tracking-[0.08em] text-white/60 hover:border-white/30 hover:text-white;
-    @apply inline-flex items-center gap-2;
+    @apply inline-flex shrink-0 items-center gap-2;
   }
 
   .tab.is-active {
@@ -9487,7 +9498,7 @@
   }
 
   .tab-add {
-    @apply ml-auto w-8 justify-center px-0 text-white/70;
+    @apply w-8 justify-center px-0 text-white/70;
   }
 
   .tab-close {
