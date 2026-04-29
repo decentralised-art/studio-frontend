@@ -8,9 +8,27 @@ vi.mock("../src/lib/studio/assistant/modelClient", () => ({
   callAssistantStructuredModel: callAssistantStructuredModelMock,
 }));
 
-import { requestSolidityEditorAssistant } from "../src/lib/studio/assistant/solidityEditorAssistant";
+import {
+  buildSolidityEditorSystemPrompt,
+  requestSolidityEditorAssistant,
+} from "../src/lib/studio/assistant/solidityEditorAssistant";
 
 describe("studio solidity editor assistant", () => {
+  it("teaches transformation snippets the MIDI stream contract", () => {
+    const prompt = buildSolidityEditorSystemPrompt("transformation");
+
+    expect(prompt).toContain("pitch and velocity streams should use MIDI 0..127 values");
+    expect(prompt).toContain("time and duration streams should use beat values");
+    expect(prompt).toContain("duration must be greater than 0");
+  });
+
+  it("teaches condition snippets the current connector model", () => {
+    const prompt = buildSolidityEditorSystemPrompt("condition");
+
+    expect(prompt).toContain("conditions wrap connectors");
+    expect(prompt).toContain("whether a connector outputs values");
+  });
+
   it("parses assistant response and strips fenced code", async () => {
     callAssistantStructuredModelMock.mockResolvedValueOnce(
       JSON.stringify({

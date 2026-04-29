@@ -28,8 +28,10 @@ describe("studio plugin midi export", () => {
       duration: 1,
       velocity: 50,
       channel: 1,
+      groupPath: "/test_midi_connector078963:0",
     });
     expect(clip.lengthBeats).toBe(3);
+    expect(clip.diagnostics[0]?.noteCount).toBe(3);
   });
 
   it("drops out-of-range pitch notes instead of clamping", () => {
@@ -47,6 +49,24 @@ describe("studio plugin midi export", () => {
     });
     expect(clip.notes).toHaveLength(1);
     expect(clip.skippedNotes).toBe(1);
+    expect(clip.skipped[0]?.reason).toBe("invalid-pitch");
+  });
+
+  it("drops out-of-range velocity notes instead of clamping", () => {
+    const clip = pluginRuntimeToMidiClip({
+      ...runtimeData,
+      midiGroups: [
+        {
+          ...runtimeData.midiGroups[0],
+          pitch: { feature_path: "/x/pitch:0", data: [60, 62] },
+          time: { feature_path: "/x/time:0", data: [0, 1] },
+          duration: { feature_path: "/x/duration:0", data: [1, 1] },
+          velocity: { feature_path: "/x/velocity:0", data: [90, 160] },
+        },
+      ],
+    });
+    expect(clip.notes).toHaveLength(1);
+    expect(clip.skipped[0]?.reason).toBe("invalid-velocity");
   });
 
   it("encodes valid midi bytes with MThd header", () => {
@@ -56,6 +76,10 @@ describe("studio plugin midi export", () => {
     expect(bytes[1]).toBe(0x54); // T
     expect(bytes[2]).toBe(0x68); // h
     expect(bytes[3]).toBe(0x64); // d
+    expect(bytes[8]).toBe(0x00); // format 0, high byte
+    expect(bytes[9]).toBe(0x00); // format 0, low byte
+    expect(bytes[12]).toBe(0x01); // ppq high byte for 480
+    expect(bytes[13]).toBe(0xe0); // ppq low byte for 480
     expect(bytes.length).toBeGreaterThan(24);
   });
 });

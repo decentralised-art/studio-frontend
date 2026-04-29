@@ -3,6 +3,7 @@
   import { browser } from "$app/environment";
 
   import Button from "$lib/components/ui/Button.svelte";
+  import { midiChannelColor } from "$lib/midi/midiClip";
   import type { MidiParticle } from "$lib/particles/ptMidiAdapter";
 
   const { midi }: { midi: MidiParticle | null } = $props();
@@ -58,12 +59,6 @@
       max = Math.min(127, max + 6);
     }
     return { min, max };
-  };
-
-  const colorForChannel = (channel: number, velocity: number) => {
-    const hue = (channel * 42) % 360;
-    const lightness = 42 + Math.round((velocity / 127) * 18);
-    return `hsla(${hue}, 70%, ${lightness}%, 0.85)`;
   };
 
   const clampZoom = (value: number) => Math.min(maxZoom, Math.max(minZoom, value));
@@ -142,7 +137,7 @@
       const pitchIndex = max - note.pitch;
       const y = paddingY + pitchIndex * noteHeight + 1;
       const h = noteHeight - 2;
-      ctx.fillStyle = colorForChannel(note.channel, note.velocity);
+      ctx.fillStyle = midiChannelColor(note.channel, note.velocity, 0.85);
       ctx.fillRect(x, y, w, h);
     });
   };

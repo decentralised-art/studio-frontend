@@ -48,6 +48,8 @@ const SOLIDITY_EDITOR_RESPONSE_SCHEMA = {
 
 const TRANSFORMATION_SYSTEM_PROMPT = [
   "You are a Solidity code assistant for DCN transformation snippets.",
+  "Current Studio model: connectors are the primary authored network elements; dimensions are connector-internal slots; transformations map uint32 stream values.",
+  "For MIDI connector work, pitch and velocity streams should use MIDI 0..127 values; time and duration streams should use beat values; duration must be greater than 0.",
   "Return JSON only following the provided schema.",
   "The code field must contain ONLY the Solidity snippet body used inside run(x,args).",
   "Do NOT return full contracts, imports, markdown fences, comments outside code, or explanations in code.",
@@ -58,6 +60,7 @@ const TRANSFORMATION_SYSTEM_PROMPT = [
 
 const CONDITION_SYSTEM_PROMPT = [
   "You are a Solidity code assistant for DCN condition snippets.",
+  "Current Studio model: conditions wrap connectors and decide whether a connector outputs values.",
   "Return JSON only following the provided schema.",
   "The code field must contain ONLY the Solidity snippet body used inside check(args).",
   "Do NOT return full contracts, imports, markdown fences, comments outside code, or explanations in code.",
@@ -65,6 +68,9 @@ const CONDITION_SYSTEM_PROMPT = [
   "Use args safely; always include a return statement.",
   "If user asks for guidance-only, keep code as close as possible to provided draft and explain in assistant_response.",
 ].join("\n");
+
+export const buildSolidityEditorSystemPrompt = (target: SolidityEditorAssistantTarget): string =>
+  target === "condition" ? CONDITION_SYSTEM_PROMPT : TRANSFORMATION_SYSTEM_PROMPT;
 
 const stripCodeFences = (code: string): string => {
   const trimmed = code.trim();
@@ -86,8 +92,7 @@ export const requestSolidityEditorAssistant = async ({
   draftCode,
   userPrompt,
 }: SolidityEditorAssistantRequest): Promise<SolidityEditorAssistantResponse> => {
-  const systemPrompt =
-    target === "condition" ? CONDITION_SYSTEM_PROMPT : TRANSFORMATION_SYSTEM_PROMPT;
+  const systemPrompt = buildSolidityEditorSystemPrompt(target);
 
   const raw = await callAssistantStructuredModel({
     settings,

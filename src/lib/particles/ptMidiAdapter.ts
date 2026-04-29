@@ -1,15 +1,11 @@
+import type { MidiNote } from "$lib/midi/midiClip";
+
 export type PtOutputFeature = {
   feature_path: string;
   data: number[];
 };
 
-export type MidiNote = {
-  time: number;
-  duration: number;
-  pitch: number;
-  velocity: number;
-  channel: number;
-};
+export type { MidiNote };
 
 export type MidiParticle = {
   tempo: number;
@@ -90,7 +86,7 @@ export const ptOutputToMidi = (
   const groups = [...buckets.entries()].sort(([a], [b]) => a.localeCompare(b));
   const notes: MidiNote[] = [];
 
-  groups.forEach(([_, bucket], index) => {
+  groups.forEach(([group, bucket], index) => {
     const channel = (index % 16) + 1;
     const maxLength = Math.max(
       bucket.pitch?.length ?? 0,
@@ -112,6 +108,7 @@ export const ptOutputToMidi = (
         pitch: midiPitch,
         velocity: clampMidi(velocity),
         channel,
+        groupPath: group,
       });
     }
   });

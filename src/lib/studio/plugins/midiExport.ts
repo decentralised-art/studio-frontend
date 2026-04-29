@@ -1,29 +1,16 @@
 import { browser } from "$app/environment";
 
+import {
+  buildMidiClipFromStreamGroups,
+  type MidiClip,
+  type MidiNote,
+  type MidiScalarStream,
+  type MidiStreamGroup,
+} from "$lib/midi/midiClip";
 import type { StudioPluginRuntimeData } from "$lib/studio/plugins/runtime";
 
-export type StudioMidiNote = {
-  time: number;
-  duration: number;
-  pitch: number;
-  velocity: number;
-  channel: number;
-};
-
-export type StudioMidiClip = {
-  tempo: number;
-  ppq: number;
-  notes: StudioMidiNote[];
-  lengthBeats: number;
-  skippedNotes: number;
-};
-
-const PPQ = 480;
-
-const isFiniteNumber = (value: unknown): value is number =>
-  typeof value === "number" && Number.isFinite(value);
-
-const clampVelocity = (value: number) => Math.max(0, Math.min(127, Math.round(value)));
+export type StudioMidiNote = MidiNote;
+export type StudioMidiClip = MidiClip;
 
 const sanitizeFileName = (value: string) => {
   const trimmed = value.trim();
@@ -31,64 +18,27 @@ const sanitizeFileName = (value: string) => {
   return trimmed.replace(/[^a-z0-9._-]+/gi, "_").replace(/^_+|_+$/g, "");
 };
 
+const toMidiStream = (
+  stream: { feature_path: string; data: number[] } | undefined,
+): MidiScalarStream | undefined =>
+  stream ? { path: stream.feature_path, data: stream.data } : undefined;
+
+const toMidiStreamGroup = (
+  group: StudioPluginRuntimeData["midiGroups"][number],
+): MidiStreamGroup => ({
+  groupPath: group.groupPath,
+  pitch: toMidiStream(group.pitch),
+  time: toMidiStream(group.time),
+  duration: toMidiStream(group.duration),
+  velocity: toMidiStream(group.velocity),
+});
+
 export const pluginRuntimeToMidiClip = (
   runtimeData: StudioPluginRuntimeData,
   options?: { tempo?: number },
 ): StudioMidiClip => {
-  const tempo = Number.isFinite(options?.tempo) ? Math.max(10, Number(options?.tempo)) : 120;
-  const notes: StudioMidiNote[] = [];
-  let skippedNotes = 0;
-
-  runtimeData.midiGroups.forEach((group, groupIndex) => {
-    if (!group.pitch || !group.time || !group.duration || !group.velocity) return;
-    const maxLength = Math.max(
-      group.pitch.data.length,
-      group.time.data.length,
-      group.duration.data.length,
-      group.velocity.data.length,
-    );
-    const channel = (groupIndex % 16) + 1;
-
-    for (let i = 0; i < maxLength; i += 1) {
-      const pitchValue = group.pitch.data[i];
-      const timeValue = group.time.data[i];
-      const durationValue = group.duration.data[i];
-      const velocityValue = group.velocity.data[i];
-
-      if (
-        !isFiniteNumber(pitchValue) ||
-        !isFiniteNumber(timeValue) ||
-        !isFiniteNumber(durationValue) ||
-        !isFiniteNumber(velocityValue)
-      ) {
-        skippedNotes += 1;
-        continue;
-      }
-
-      if (durationValue <= 0 || timeValue < 0) {
-        skippedNotes += 1;
-        continue;
-      }
-
-      const pitch = Math.round(pitchValue);
-      if (pitch < 0 || pitch > 127) {
-        skippedNotes += 1;
-        continue;
-      }
-
-      notes.push({
-        time: timeValue,
-        duration: durationValue,
-        pitch,
-        velocity: clampVelocity(velocityValue),
-        channel,
-      });
-    }
-  });
-
-  notes.sort((a, b) => (a.time === b.time ? a.pitch - b.pitch : a.time - b.time));
-  const lengthBeats = notes.reduce((max, note) => Math.max(max, note.time + note.duration), 0);
-  return { tempo, ppq: PPQ, notes, lengthBeats, skippedNotes };
+  const groups = runtimeData.midiGroups.map(toMidiStreamGroup);
+  return buildMidiClipFromStreamGroups(groups, options);
 };
 
 const write16be = (value: number): number[] => [(value >> 8) & 0xff, value & 0xff];

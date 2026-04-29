@@ -1,12 +1,25 @@
 import { describe, expect, it } from "vitest";
 import {
   buildAssistantRepairPrompt,
+  buildAssistantSystemPrompt,
   splitAssistantToolCallsByConfirmation,
   summarizeAssistantToolCalls,
 } from "../src/lib/studio/assistant/orchestrator";
 import { parseAssistantToolCall } from "../src/lib/studio/assistant/types";
 
 describe("studio assistant orchestrator helpers", () => {
+  it("teaches the assistant the current connector and MIDI plugin contracts", () => {
+    const prompt = buildAssistantSystemPrompt();
+
+    expect(prompt).toContain("connectors are the primary authored network elements");
+    expect(prompt).toContain("pitch is an absolute MIDI note number 0..127");
+    expect(prompt).toContain("velocity is MIDI velocity 0..127");
+    expect(prompt).toContain("time is note start position in beats");
+    expect(prompt).toContain("duration is note length in beats");
+    expect(prompt).toContain("duration=0 is invalid");
+    expect(prompt).toContain("not separate packages");
+  });
+
   it("splits low/high risk calls for confirmation gate", () => {
     const calls = [
       parseAssistantToolCall(

@@ -3,6 +3,7 @@
   import { browser } from "$app/environment";
 
   import Button from "$lib/components/ui/Button.svelte";
+  import { midiChannelColor } from "$lib/midi/midiClip";
   import type { MidiNote, MidiParticle } from "$lib/particles/ptMidiAdapter";
 
   const { midi }: { midi: MidiParticle | null } = $props();
@@ -70,12 +71,6 @@
     treble: notes.filter((note) => note.pitch >= splitPitch),
     bass: notes.filter((note) => note.pitch < splitPitch),
   });
-
-  const colorForChannel = (channel: number, velocity: number) => {
-    const hue = (channel * 48) % 360;
-    const lightness = 46 + Math.round((velocity / 127) * 18);
-    return `hsla(${hue}, 70%, ${lightness}%, 0.9)`;
-  };
 
   const clampZoom = (value: number) => Math.min(maxZoom, Math.max(minZoom, value));
 
@@ -255,7 +250,7 @@
         const x = noteStartX + note.time * pixelsPerBeat;
         const diatonic = getDiatonic(note.pitch);
         const y = staffBottom - (diatonic - staffBase) * stepHeightPx;
-        const fill = colorForChannel(note.channel, note.velocity);
+        const fill = midiChannelColor(note.channel, note.velocity, 0.9);
 
         ctx.strokeStyle = "rgba(255,255,255,0.6)";
         drawLedgerLines(
