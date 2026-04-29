@@ -27,6 +27,7 @@
     connectorTreeCollapsible?: boolean;
     connectorTreeCollapsed?: boolean;
     definitionRole?: "root" | "member" | null;
+    contextHighlightRole?: "selected" | "member" | null;
     tabRoot?: boolean;
     hideOutlets?: boolean;
     staticRi?: Record<string, { startPoint: number; transformationShift: number }>;
@@ -56,6 +57,10 @@
   const readOnly = $derived(Boolean(data.fromNetwork));
   const definitionRole = $derived(data.definitionRole ?? null);
   const definitionClass = $derived(definitionRole ? `is-definition-${definitionRole}` : "");
+  const contextHighlightRole = $derived(data.contextHighlightRole ?? null);
+  const contextHighlightClass = $derived(
+    contextHighlightRole ? `is-context-${contextHighlightRole}` : "",
+  );
   const tabRoot = $derived(Boolean(data.tabRoot));
   const isRootConnector = $derived(tabRoot || definitionRole === "root");
   const showTopInlet = $derived(!tabRoot);
@@ -117,7 +122,9 @@
   });
 </script>
 
-<div class="connector-node {selectedClass} {definitionClass} {staticRiClass}">
+<div
+  class="connector-node {selectedClass} {definitionClass} {contextHighlightClass} {staticRiClass}"
+>
   {#if showTopInlet}
     <Handle type="target" position={Position.Top} id="in" />
   {/if}
@@ -302,9 +309,28 @@
     @apply border-sky-300/18 bg-sky-500/[0.04];
   }
 
+  .connector-node.is-context-selected:not(.is-selected) {
+    @apply border-emerald-400/45 bg-emerald-500/[0.05] text-emerald-100;
+    box-shadow:
+      0 0 0 1px rgba(52, 211, 153, 0.2),
+      0 12px 24px rgba(0, 0, 0, 0.4);
+  }
+
+  .connector-node.is-context-member:not(.is-selected) {
+    @apply border-emerald-300/32 bg-emerald-500/[0.04] text-emerald-50/90;
+    box-shadow:
+      0 0 0 1px rgba(52, 211, 153, 0.12),
+      0 10px 20px rgba(0, 0, 0, 0.38);
+  }
+
+  .connector-node.is-context-member .connector-row,
+  .connector-node.is-context-member .connector-condition-slot {
+    @apply border-emerald-300/18 bg-emerald-500/[0.035];
+  }
+
   .connector-node.has-static-ri:not(.is-selected):not(.is-definition-root):not(
       .is-definition-member
-    ) {
+    ):not(.is-context-selected):not(.is-context-member) {
     @apply border-violet-300/45 bg-violet-500/[0.06];
   }
 

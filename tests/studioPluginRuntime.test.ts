@@ -5,6 +5,10 @@ import {
   buildStudioPluginRuntimeData,
   collectConnectorScopedStreams,
   groupMidiStreams,
+  pathContainsAnyConnectorName,
+  pathContainsConnectorName,
+  pathStartsWithAnyConnectorPrefix,
+  pathStartsWithConnectorPrefix,
 } from "../src/lib/studio/plugins/runtime";
 
 const sampleStreams: PtOutputFeature[] = [
@@ -65,5 +69,34 @@ describe("studio plugin runtime helpers", () => {
     expect(payload.connectorTargets).toEqual(["test_midi_polyphony089768"]);
     expect(payload.streams).toHaveLength(4);
     expect(payload.midiGroups.length).toBeGreaterThan(0);
+  });
+
+  it("matches connector names inside stream path segments", () => {
+    expect(
+      pathContainsConnectorName(
+        "/test_midi_polyphony089768:0/test_various_midi_values12345:2/durationv2:0",
+        "test_various_midi_values12345",
+      ),
+    ).toBe(true);
+    expect(
+      pathContainsAnyConnectorName(
+        "/test_midi_polyphony089768:0/test_various_midi_values12345:2/durationv2:0",
+        ["missing", "test_midi_polyphony089768"],
+      ),
+    ).toBe(true);
+    expect(pathContainsConnectorName("/root:0/child:0/pitch:0", "other_child")).toBe(false);
+  });
+
+  it("matches connector path prefixes without confusing duplicate connector names", () => {
+    expect(pathStartsWithConnectorPrefix("/root:0/same:1/pitch:0", "/root:0/same:1")).toBe(true);
+    expect(pathStartsWithConnectorPrefix("/root:0/same:0/pitch:0", "/root:0/same:1")).toBe(false);
+    expect(pathStartsWithConnectorPrefix("/root:1/same:0/pitch:0", "/root:1/same:*")).toBe(true);
+    expect(pathStartsWithConnectorPrefix("/root:0/same:3/pitch:0", "/root:1/same:*")).toBe(false);
+    expect(
+      pathStartsWithAnyConnectorPrefix("/root:2/same:3/pitch:0", [
+        "/root:0/same:*",
+        "/root:2/same:*",
+      ]),
+    ).toBe(true);
   });
 });

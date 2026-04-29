@@ -14,13 +14,19 @@
     SALAMANDER_GRAND_PIANO_SAMPLE_BASE_URL,
     SALAMANDER_GRAND_PIANO_SAMPLE_URLS,
   } from "$lib/studio/plugins/salamanderGrandPiano";
-  import type { StudioPluginRuntimeData } from "$lib/studio/plugins/runtime";
+  import {
+    pathContainsAnyConnectorName,
+    pathStartsWithAnyConnectorPrefix,
+    type StudioPluginRuntimeData,
+  } from "$lib/studio/plugins/runtime";
 
   type PluginNodeData = {
     label: string;
     sourceId?: string;
     pluginData?: StudioPluginRuntimeData;
     pluginTargets?: string[];
+    selectedConnectorContextNames?: string[];
+    selectedConnectorContextPathPrefixes?: string[];
   };
 
   type PluginNode = Node<PluginNodeData, "plugin">;
@@ -41,6 +47,13 @@
   const pluginId = $derived(data.sourceId ?? runtimeData?.pluginId ?? "");
   const tempo = $derived(midiClip?.tempo ?? 120);
   const channelCount = $derived(midiClip?.channels ?? 1);
+  const selectedConnectorContextNames = $derived(data.selectedConnectorContextNames ?? []);
+  const selectedConnectorContextPathPrefixes = $derived(
+    data.selectedConnectorContextPathPrefixes ?? [],
+  );
+  const hasLineageSelection = $derived(
+    selectedConnectorContextPathPrefixes.length > 0 || selectedConnectorContextNames.length > 0,
+  );
 
   const basePixelsPerBeat = 42;
   const baseNoteRowHeight = 8;
@@ -305,6 +318,13 @@
   const renderNotes = $derived.by(() => {
     if (!midiClip) return [];
     return midiClip.notes.map((note, index) => {
+      const isLineageHighlighted =
+        hasLineageSelection &&
+        (note.sourcePaths ?? []).some((path) =>
+          selectedConnectorContextPathPrefixes.length > 0
+            ? pathStartsWithAnyConnectorPrefix(path, selectedConnectorContextPathPrefixes)
+            : pathContainsAnyConnectorName(path, selectedConnectorContextNames),
+        );
       const top = (pitchRange.max - note.pitch) * noteRowHeight + rollTopGutter + rollPadding + 1;
       const left = note.time * pixelsPerBeat + rollLeftGutter + rollPadding;
       const width = Math.max(1.5, note.duration * pixelsPerBeat);
@@ -315,7 +335,9 @@
         width,
         height: noteRectHeight,
         color: midiChannelColor(note.channel, note.velocity),
-        title: `${midiNoteName(note.pitch)} · beat ${note.time} · duration ${note.duration} · velocity ${note.velocity} · ${note.groupPath}`,
+        highlighted: isLineageHighlighted,
+        dimmed: hasLineageSelection && !isLineageHighlighted,
+        title: `${midiNoteName(note.pitch)} · beat ${note.time} · duration ${note.duration} · velocity ${note.velocity} · ${note.groupPath}${isLineageHighlighted ? " · selected connector lineage" : ""}`,
       };
     });
   });
@@ -490,7 +512,7 @@
         {/each}
         {#each renderNotes as note (note.id)}
           <div
-            class="roll-note"
+            class={`roll-note ${note.highlighted ? "is-lineage-highlighted" : ""} ${note.dimmed ? "is-lineage-dimmed" : ""}`}
             style={`left:${note.left}px; top:${note.top}px; width:${note.width}px; height:${note.height}px; background:${note.color};`}
             title={note.title}
           ></div>
@@ -676,6 +698,18 @@
 
   .roll-note {
     @apply absolute h-[7px] rounded-[2px] shadow-sm;
+  }
+
+  .roll-note.is-lineage-highlighted {
+    @apply z-[6] outline outline-2 outline-amber-200/95;
+    box-shadow:
+      0 0 0 1px rgba(251, 191, 36, 0.68),
+      0 0 14px rgba(251, 191, 36, 0.58);
+  }
+
+  .roll-note.is-lineage-dimmed {
+    opacity: 0.24;
+    filter: saturate(0.55);
   }
 
   :global(.plugin-resize-handle) {

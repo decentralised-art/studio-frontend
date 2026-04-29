@@ -96,6 +96,12 @@
     toInt,
   } from "$lib/studio/connectorGraph";
   import {
+    computeConnectorContextPathPrefixes,
+    computeSelectedConnectorContextHighlightRoles,
+    isConnectorContextEdge,
+    type ConnectorContextHighlightRole,
+  } from "$lib/studio/connectorContextHighlight";
+  import {
     buildConnectorTreeGraph as buildConnectorTreeGraphFromRegistry,
     computeConnectorOpenSlotsInRegistry,
   } from "$lib/studio/connectorTreeGraph";
@@ -376,11 +382,14 @@
     connectorTreeCollapsible?: boolean;
     connectorTreeCollapsed?: boolean;
     definitionRole?: "root" | "member" | null;
+    contextHighlightRole?: ConnectorContextHighlightRole | null;
     tabRoot?: boolean;
     hideOutlets?: boolean;
     pluginOutput?: PtOutputFeature[];
     pluginData?: StudioPluginRuntimeData;
     pluginTargets?: string[];
+    selectedConnectorContextNames?: string[];
+    selectedConnectorContextPathPrefixes?: string[];
     riStart?: number;
     riShift?: number;
     riLocked?: boolean;
@@ -3129,6 +3138,93 @@
         },
       };
     });
+    if (changed) {
+      nodes = nextNodes;
+    }
+  });
+
+  const selectedConnectorContextFingerprint = $derived.by(() =>
+    [
+      selectedNodeId ?? "",
+      nodes.map((node) => `${node.id}:${node.data.kind ?? ""}`).join("|"),
+      edges
+        .filter(isConnectorContextEdge)
+        .map((edge) => `${edge.source}>${edge.target}:${parseConnectorEdgeRelation(edge)}`)
+        .join("|"),
+    ].join("::"),
+  );
+
+  $effect(() => {
+    touchDeps(selectedConnectorContextFingerprint);
+
+    const roles = computeSelectedConnectorContextHighlightRoles(nodes, edges, selectedNodeId);
+    const contextNodeIds = new SvelteSet(roles.keys());
+    const contextRootConnector =
+      nodes.find(
+        (node) => isConnectorKind(node.data.kind) && node.data.definitionRole === "root",
+      ) ??
+      nodes.find((node) => isConnectorKind(node.data.kind) && Boolean(node.data.tabRoot)) ??
+      null;
+    const contextConnectorNames = Array.from(
+      new SvelteSet(
+        Array.from(roles.keys())
+          .map((nodeId) => nodes.find((item) => item.id === nodeId))
+          .filter(
+            (node): node is StudioNode => node !== undefined && isConnectorKind(node.data.kind),
+          )
+          .map((node) => resolveNodeName(node))
+          .filter(Boolean),
+      ),
+    );
+    const contextConnectorPathPrefixes = computeConnectorContextPathPrefixes(
+      nodes,
+      edges,
+      contextRootConnector?.id ?? null,
+      contextNodeIds,
+      resolveNodeName,
+    );
+    let changed = false;
+    const nextNodes = nodes.map((node) => {
+      const nextRole = roles.get(node.id) ?? null;
+      const currentRole = node.data.contextHighlightRole ?? null;
+      const nextContextNames = node.data.kind === "plugin" ? contextConnectorNames : undefined;
+      const nextContextPathPrefixes =
+        node.data.kind === "plugin" ? contextConnectorPathPrefixes : undefined;
+      const currentContextNames =
+        node.data.kind === "plugin" ? (node.data.selectedConnectorContextNames ?? []) : undefined;
+      const currentContextPathPrefixes =
+        node.data.kind === "plugin"
+          ? (node.data.selectedConnectorContextPathPrefixes ?? [])
+          : undefined;
+      const contextNamesChanged =
+        node.data.kind === "plugin" &&
+        (currentContextNames?.length !== nextContextNames?.length ||
+          (currentContextNames ?? []).some((name, index) => name !== nextContextNames?.[index]));
+      const contextPathPrefixesChanged =
+        node.data.kind === "plugin" &&
+        (currentContextPathPrefixes?.length !== nextContextPathPrefixes?.length ||
+          (currentContextPathPrefixes ?? []).some(
+            (prefix, index) => prefix !== nextContextPathPrefixes?.[index],
+          ));
+      if (currentRole === nextRole && !contextNamesChanged && !contextPathPrefixesChanged) {
+        return node;
+      }
+      changed = true;
+      return {
+        ...node,
+        data: {
+          ...node.data,
+          contextHighlightRole: nextRole,
+          ...(node.data.kind === "plugin"
+            ? {
+                selectedConnectorContextNames: nextContextNames,
+                selectedConnectorContextPathPrefixes: nextContextPathPrefixes,
+              }
+            : {}),
+        },
+      };
+    });
+
     if (changed) {
       nodes = nextNodes;
     }

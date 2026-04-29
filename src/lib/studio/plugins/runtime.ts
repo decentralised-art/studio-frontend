@@ -17,7 +17,7 @@ export type StudioPluginRuntimeData = {
   midiGroups: StudioPluginMidiStreamGroup[];
 };
 
-const normalizeSegmentName = (segment: string): string =>
+export const normalizePluginPathSegmentName = (segment: string): string =>
   segment.split(":")[0]?.trim().toLowerCase() ?? "";
 
 const parsePathSegments = (path: string): string[] =>
@@ -27,10 +27,12 @@ const parsePathSegments = (path: string): string[] =>
     .map((segment) => segment.trim())
     .filter(Boolean);
 
+const normalizePluginPathSegment = (segment: string): string => segment.trim().toLowerCase();
+
 const parseScalarKey = (path: string): MidiScalarKey | null => {
   const segments = parsePathSegments(path);
   const leaf = segments[segments.length - 1];
-  const name = normalizeSegmentName(leaf ?? "");
+  const name = normalizePluginPathSegmentName(leaf ?? "");
   if (name === "pitch") return "pitch";
   if (name === "time") return "time";
   if (name === "duration" || name === "durationv2") return "duration";
@@ -47,8 +49,47 @@ const parseGroupPath = (path: string): string => {
 const pathContainsTargetConnector = (path: string, targets: Set<string>): boolean => {
   if (!targets.size) return false;
   const segments = parsePathSegments(path);
-  return segments.some((segment) => targets.has(normalizeSegmentName(segment)));
+  return segments.some((segment) => targets.has(normalizePluginPathSegmentName(segment)));
 };
+
+export const pathContainsConnectorName = (path: string, connectorName: string): boolean => {
+  const normalized = connectorName.trim().toLowerCase();
+  if (!normalized) return false;
+  return parsePathSegments(path).some(
+    (segment) => normalizePluginPathSegmentName(segment) === normalized,
+  );
+};
+
+export const pathContainsAnyConnectorName = (
+  path: string,
+  connectorNames: readonly string[],
+): boolean => {
+  const normalizedNames = new Set(
+    connectorNames.map((name) => name.trim().toLowerCase()).filter(Boolean),
+  );
+  if (!normalizedNames.size) return false;
+  return parsePathSegments(path).some((segment) =>
+    normalizedNames.has(normalizePluginPathSegmentName(segment)),
+  );
+};
+
+export const pathStartsWithConnectorPrefix = (path: string, prefix: string): boolean => {
+  const sourceSegments = parsePathSegments(path).map(normalizePluginPathSegment);
+  const prefixSegments = parsePathSegments(prefix).map(normalizePluginPathSegment);
+  if (!prefixSegments.length || prefixSegments.length > sourceSegments.length) return false;
+  return prefixSegments.every((segment, index) => {
+    const sourceSegment = sourceSegments[index];
+    if (segment.endsWith(":*")) {
+      return sourceSegment?.split(":")[0] === segment.slice(0, -2);
+    }
+    return sourceSegment === segment;
+  });
+};
+
+export const pathStartsWithAnyConnectorPrefix = (
+  path: string,
+  prefixes: readonly string[],
+): boolean => prefixes.some((prefix) => pathStartsWithConnectorPrefix(path, prefix));
 
 export const collectConnectorScopedStreams = (
   streams: PtOutputFeature[],

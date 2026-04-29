@@ -137,7 +137,12 @@ const runtimeData: StudioPluginRuntimeData = {
   ],
 };
 
-const renderPluginNode = async (selected = true, pluginData = runtimeData) => {
+const renderPluginNode = async (
+  selected = true,
+  pluginData = runtimeData,
+  selectedConnectorContextNames: string[] = [],
+  selectedConnectorContextPathPrefixes: string[] = [],
+) => {
   const StudioPluginNode = await loadComponent();
 
   return render(StudioPluginNode, {
@@ -164,6 +169,8 @@ const renderPluginNode = async (selected = true, pluginData = runtimeData) => {
         sourceId: "midi-clip-export-v1",
         pluginData,
         pluginTargets: ["midi_root"],
+        selectedConnectorContextNames,
+        selectedConnectorContextPathPrefixes,
       },
     },
   });
@@ -221,6 +228,41 @@ describe("StudioPluginNode", () => {
       "title",
       "C4 · beat 0 · duration 1 · velocity 80 · /midi_root:0",
     );
+  });
+
+  it("highlights only notes contributed by the selected connector lineage", async () => {
+    const lineageRuntimeData: StudioPluginRuntimeData = {
+      ...runtimeData,
+      midiGroups: [
+        {
+          groupPath: "/midi_root:0",
+          pitch: { feature_path: "/midi_root:0/same_child:0/pitch:0", data: [60] },
+          time: { feature_path: "/midi_root:0/same_child:1/time:0", data: [0] },
+          duration: { feature_path: "/midi_root:0/same_child:2/duration:0", data: [1] },
+          velocity: { feature_path: "/midi_root:0/same_child:3/velocity:0", data: [90] },
+        },
+        {
+          groupPath: "/midi_root:1",
+          pitch: { feature_path: "/midi_root:1/same_child:0/pitch:0", data: [67] },
+          time: { feature_path: "/midi_root:1/same_child:1/time:0", data: [1] },
+          duration: { feature_path: "/midi_root:1/same_child:2/duration:0", data: [1] },
+          velocity: { feature_path: "/midi_root:1/same_child:3/velocity:0", data: [90] },
+        },
+      ],
+    };
+    const { container } = await renderPluginNode(
+      true,
+      lineageRuntimeData,
+      ["same_child"],
+      ["/midi_root:1/same_child:*"],
+    );
+
+    const notes = container.querySelectorAll(".roll-note");
+    expect(notes).toHaveLength(2);
+    expect(notes[0]).toHaveClass("is-lineage-dimmed");
+    expect(notes[0]).not.toHaveClass("is-lineage-highlighted");
+    expect(notes[1]).toHaveClass("is-lineage-highlighted");
+    expect(notes[1]).not.toHaveClass("is-lineage-dimmed");
   });
 
   it("preserves absolute beat offsets in the piano-roll preview layout", async () => {

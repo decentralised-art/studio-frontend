@@ -23,6 +23,7 @@ export type MidiNote = {
   velocity: number;
   channel: number;
   groupPath: string;
+  sourcePaths?: string[];
 };
 
 export type MidiSkippedNoteReason =
@@ -182,6 +183,12 @@ export const buildMidiClipFromStreamGroups = (
         velocity,
         channel,
         groupPath: group.groupPath,
+        sourcePaths: [
+          group.pitch?.path,
+          group.time?.path,
+          group.duration?.path,
+          group.velocity?.path,
+        ].filter((path): path is string => Boolean(path)),
       });
       diagnostic.noteCount += 1;
     }

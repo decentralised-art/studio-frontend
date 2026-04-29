@@ -29,6 +29,12 @@ describe("studio plugin midi export", () => {
       velocity: 50,
       channel: 1,
       groupPath: "/test_midi_connector078963:0",
+      sourcePaths: [
+        "/test_midi_connector078963:0/pitch:0",
+        "/test_midi_connector078963:0/time:0",
+        "/test_midi_connector078963:0/duration:0",
+        "/test_midi_connector078963:0/velocity:0",
+      ],
     });
     expect(clip.lengthBeats).toBe(3);
     expect(clip.diagnostics[0]?.noteCount).toBe(3);
