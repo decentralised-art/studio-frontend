@@ -2,6 +2,14 @@ import { asset } from "$app/paths";
 
 export const SALAMANDER_GRAND_PIANO_SAMPLE_BASE_URL = `${asset("/samples/piano")}/`;
 
+export const SALAMANDER_GRAND_PIANO_SOURCE_URL =
+  "https://github.com/sfzinstruments/SalamanderGrandPiano";
+
+export const SALAMANDER_GRAND_PIANO_LICENSE =
+  "Creative Commons Attribution 3.0 Unported (CC BY 3.0)";
+
+export const SALAMANDER_GRAND_PIANO_LICENSE_URL = "https://creativecommons.org/licenses/by/3.0/";
+
 export const SALAMANDER_GRAND_PIANO_SAMPLE_URLS: Record<string, string> = {
   C1: "C1.mp3",
   A1: "A1.mp3",
@@ -32,5 +40,4 @@ export const SALAMANDER_GRAND_PIANO_SAMPLE_URLS: Record<string, string> = {
   C8: "C8.mp3",
 };
 
-export const SALAMANDER_GRAND_PIANO_ATTRIBUTION =
-  "Salamander Grand Piano by Alexander Holm, CC BY 3.0.";
+export const SALAMANDER_GRAND_PIANO_ATTRIBUTION = `Salamander Grand Piano by Alexander Holm, ${SALAMANDER_GRAND_PIANO_LICENSE}.`;

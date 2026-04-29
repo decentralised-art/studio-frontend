@@ -6,8 +6,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { StudioPluginRuntimeData } from "../src/lib/studio/plugins/runtime";
 import {
+  SALAMANDER_GRAND_PIANO_ATTRIBUTION,
+  SALAMANDER_GRAND_PIANO_LICENSE,
+  SALAMANDER_GRAND_PIANO_LICENSE_URL,
   SALAMANDER_GRAND_PIANO_SAMPLE_BASE_URL,
   SALAMANDER_GRAND_PIANO_SAMPLE_URLS,
+  SALAMANDER_GRAND_PIANO_SOURCE_URL,
 } from "../src/lib/studio/plugins/salamanderGrandPiano";
 
 const toneMock = vi.hoisted(() => {
@@ -317,6 +321,16 @@ describe("StudioPluginNode", () => {
 
   it("maps the Salamander Grand Piano samples to local audio assets", () => {
     expect(SALAMANDER_GRAND_PIANO_SAMPLE_BASE_URL).toBe("/samples/piano/");
+    expect(SALAMANDER_GRAND_PIANO_ATTRIBUTION).toBe(
+      "Salamander Grand Piano by Alexander Holm, Creative Commons Attribution 3.0 Unported (CC BY 3.0).",
+    );
+    expect(SALAMANDER_GRAND_PIANO_LICENSE).toBe(
+      "Creative Commons Attribution 3.0 Unported (CC BY 3.0)",
+    );
+    expect(SALAMANDER_GRAND_PIANO_LICENSE_URL).toBe("https://creativecommons.org/licenses/by/3.0/");
+    expect(SALAMANDER_GRAND_PIANO_SOURCE_URL).toBe(
+      "https://github.com/sfzinstruments/SalamanderGrandPiano",
+    );
     expect(SALAMANDER_GRAND_PIANO_SAMPLE_URLS).toMatchObject({
       C1: "C1.mp3",
       C4: "C4.mp3",
@@ -328,6 +342,12 @@ describe("StudioPluginNode", () => {
     for (const samplePath of Object.values(SALAMANDER_GRAND_PIANO_SAMPLE_URLS)) {
       expect(existsSync(resolve("static/samples/piano", samplePath))).toBe(true);
     }
+
+    const notice = readFileSync(resolve("static/samples/piano/README.md"), "utf8");
+    expect(notice).toContain("Salamander Grand Piano by Alexander Holm");
+    expect(notice).toContain(SALAMANDER_GRAND_PIANO_LICENSE);
+    expect(notice).toContain(SALAMANDER_GRAND_PIANO_LICENSE_URL);
+    expect(notice).toContain(SALAMANDER_GRAND_PIANO_SOURCE_URL);
   });
 
   it("keeps resize edge hit areas wider than the visible one-pixel line", () => {

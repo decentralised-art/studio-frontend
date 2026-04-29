@@ -32,4 +32,4 @@ Current defaults:
 
 Future plugin UI may expose tempo, quantization, and track/channel controls, but these should remain explicit user settings rather than hidden fallbacks.
 
-Sample attribution: Salamander Grand Piano by Alexander Holm, licensed under CC BY 3.0.
+Sample attribution: the bundled piano samples are a browser-playback subset derived from Salamander Grand Piano by Alexander Holm, licensed under Creative Commons Attribution 3.0 Unported (CC BY 3.0). Source: https://github.com/sfzinstruments/SalamanderGrandPiano. License text: https://creativecommons.org/licenses/by/3.0/. Keep the notice in `static/samples/piano/README.md` with the sample files.
