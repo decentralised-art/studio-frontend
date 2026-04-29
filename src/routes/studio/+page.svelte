@@ -5581,16 +5581,24 @@
   const buildConnectorTreeGraph = (
     rootConnectorName: string,
     origin: { x: number; y: number },
-    options: { hideReadOnlyLeafOutlets?: boolean; markRootAsTabRoot?: boolean } = {},
+    options: {
+      hideReadOnlyLeafOutlets?: boolean;
+      markRootAsTabRoot?: boolean;
+      idFactoryScope?: string;
+    } = {},
   ): ConnectorTreeModel => {
     let idIndex = 0;
-    const idPrefix = slugify(rootConnectorName) || "connector";
+    const baseIdPrefix = slugify(rootConnectorName) || "connector";
+    const idPrefix = options.idFactoryScope
+      ? `${baseIdPrefix}-${options.idFactoryScope}`
+      : baseIdPrefix;
     return buildConnectorTreeGraphFromRegistry({
       connectorRegistry: deployedRegistry.connectors,
       rootConnectorName,
       origin,
       options: {
-        ...options,
+        hideReadOnlyLeafOutlets: options.hideReadOnlyLeafOutlets,
+        markRootAsTabRoot: options.markRootAsTabRoot,
         idFactory: () => `${idPrefix}-${idIndex++}`,
         labelForConnector: getConnectorLibraryLabel,
       },
@@ -6541,6 +6549,7 @@
       const graph = buildConnectorTreeGraph(registryName, nodePosition, {
         hideReadOnlyLeafOutlets: false,
         markRootAsTabRoot: false,
+        idFactoryScope: `flow-${crypto.randomUUID()}`,
       });
       if (graph.nodes.length) {
         nodes = [...nodes, ...graph.nodes];
