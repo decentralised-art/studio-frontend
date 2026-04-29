@@ -42,33 +42,14 @@ export const toolboxLibraryItemId = (kind: NetworkLibraryKind, id: string): stri
   return `condition-${id}`;
 };
 
-export const buildToolboxFallbackLibraryItem = ({
-  kind,
-  id,
-  authorId,
-}: {
-  kind: NetworkLibraryKind;
-  id: string;
-  authorId: string;
-}): LibraryItem => ({
-  id: toolboxLibraryItemId(kind, id),
-  name: id,
-  kind,
-  authorId,
-  summary: "Saved in toolbox.",
-  ...(kind === "feature" ? { dimensions: 1 } : {}),
-});
-
 export const listToolboxLibraryItemsForKind = ({
   kind,
   source,
   toolboxLibrary,
-  fallbackAuthorId,
 }: {
   kind: NetworkLibraryKind;
   source: readonly LibraryItem[];
   toolboxLibrary: ToolboxLibrary;
-  fallbackAuthorId: string;
 }): LibraryItem[] => {
   const toolboxKind = toolboxKindForLibraryKind(kind);
   const sourceByToolboxId = new Map<string, LibraryItem>();
@@ -78,9 +59,7 @@ export const listToolboxLibraryItemsForKind = ({
     sourceByToolboxId.set(entry.id, item);
   });
 
-  return toolboxLibrary[toolboxKind].map(
-    (id) =>
-      sourceByToolboxId.get(id) ??
-      buildToolboxFallbackLibraryItem({ kind, id, authorId: fallbackAuthorId }),
-  );
+  return toolboxLibrary[toolboxKind]
+    .map((id) => sourceByToolboxId.get(id) ?? null)
+    .filter((item): item is LibraryItem => Boolean(item));
 };

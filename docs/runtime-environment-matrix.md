@@ -61,6 +61,10 @@ Implication:
 
 - Runtime is strict network-only by default.
 - No mock fallback endpoints should be used for core network/studio flows.
+- Services auth is the app-entry gate. Chain auth is requested only when a chain action needs it.
+- Login and registration use services accounts only; there is no prototype-preview account shortcut.
+- Chain actions authenticate through MetaMask message signing and may patch the services profile's
+  `ethereum_address`.
 
 ## Explicit Override Examples
 

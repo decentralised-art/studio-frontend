@@ -59,13 +59,13 @@ describe("Studio chain sync helpers", () => {
     expect(
       buildStudioChainSyncSummary({
         sourceCount: 2,
-        connectorRecordCount: 3,
+        connectorEntryCount: 3,
         connectorCount: 4,
         transformationCount: 5,
         conditionCount: 6,
       }),
     ).toBe(
-      "Synced 2 sources · 3 connector records · 4 connectors · 5 transformations · 6 conditions.",
+      "Synced 2 sources · 3 connector entries · 4 connectors · 5 transformations · 6 conditions.",
     );
   });
 

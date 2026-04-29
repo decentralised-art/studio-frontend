@@ -129,11 +129,14 @@
     buildStudioChainSyncSources,
     buildStudioChainSyncSummary as formatStudioChainSyncSummary,
     isInvalidChainTokenError,
-    mergeChainSyncSnapshotIntoStudioState,
     mergeFetchedChainParticleIntoStudioState,
     mergeToolboxRuntimePayloadsIntoStudioState,
     type DeployedStudioState,
   } from "$lib/studio/studioChainSync";
+  import {
+    loadStudioNetworkLibraryFromEventFeed,
+    type StudioEventFeedLibraryDiscovery,
+  } from "$lib/studio/studioEventFeedLibrary";
   import {
     createEmptyDeployedLibrary,
     createEmptyDeployedRegistry,
@@ -169,24 +172,20 @@
     addToolboxLibraryItem,
     createEmptyToolboxLibrary,
     normalizeConnectorToolboxId,
-    normalizeToolboxIdByKind,
     normalizeToolboxListByKind,
     toggleToolboxLibraryItem,
     type ToolboxLibrary,
   } from "$lib/toolbox/toolboxLibrary";
   import { buildStudioRuntime } from "$lib/studio/studioRuntime";
-  import {
-    fetchChainOwnedStudioSnapshot,
-    fetchChainParticleForStudio,
-    type ChainStudioSyncResult,
-  } from "$lib/studio/chainStudioAdapter";
+  import { fetchChainParticleForStudio } from "$lib/studio/chainStudioAdapter";
   import {
     getCachedCurrentUserToolboxLibrary,
     getCurrentUserProfileState,
     getCurrentUserToolboxLibrary,
     getMe,
     listServicesUsers,
-    loginWithMockChainAccount,
+    chainTokenIdentityForWalletAddress,
+    loginWithBrowserWalletChainAccount,
     resolveCurrentUserChainSourceAddresses,
     saveCurrentUserToolboxLibrary,
   } from "$lib/auth/api";
@@ -201,7 +200,7 @@
   } from "$lib/chain/registryApi";
   import { createEphemeralDeployName, isReservedCoreCollectionName } from "$lib/chain/deployNaming";
   import { type LibraryItem } from "$lib/data/studioLibrary";
-  import { displayUsersById, mockCurrentUserId, mockUsersById, type User } from "$lib/data/users";
+  import { displayUsersById, type User } from "$lib/data/users";
   import {
     buildStudioUsersById,
     mapServicesUserToStudioAuthor,
@@ -435,8 +434,8 @@
   let chainSyncBusy = $state(false);
   let chainSyncStatus = $state<string | null>(null);
   let chainSyncError = $state<string | null>(null);
-  let pendingBackgroundChainSync = false;
-  let backgroundChainSyncTimer: ReturnType<typeof setTimeout> | null = null;
+  let studioNetworkLibraryLoaded = false;
+  let studioNetworkLibraryLoadPromise: Promise<void> | null = null;
   let lastStudioSyncedSourcesCount = $state(0);
   let toolboxLoadBusy = $state(true);
   let toolboxLoadError = $state<string | null>(null);
@@ -530,6 +529,16 @@
   let deployedLibrary = $state<DeployedLibrary>(createEmptyDeployedLibrary());
 
   let deployedParticles = $state<ExploreParticle[]>([]);
+
+  const createEmptyNetworkFeedLibraryIds = (): Record<NetworkLibraryKind, string[]> => ({
+    feature: [],
+    transformation: [],
+    condition: [],
+  });
+
+  let networkFeedLibraryIds = $state<Record<NetworkLibraryKind, string[]>>(
+    createEmptyNetworkFeedLibraryIds(),
+  );
 
   type StudioTab = {
     id: string;
@@ -939,12 +948,7 @@
     }
 
     if (rawKind === "creator") {
-      const candidate =
-        networkParticles.find((particle) => particle.authorId === rawId) ??
-        networkParticles.find(
-          (particle) =>
-            normalizeKey(mockUsersById[particle.authorId]?.nickname ?? "") === normalizeKey(rawId),
-        );
+      const candidate = networkParticles.find((particle) => particle.authorId === rawId);
       if (candidate) openParticleTab(candidate.id);
       clearNetworkIntentQuery();
       return;
@@ -967,6 +971,7 @@
       return;
     }
 
+    await ensureStudioNetworkLibraryLoaded();
     const item = resolveNetworkLibraryItem(kind, rawId);
     if (!item) {
       clearNetworkIntentQuery();
@@ -976,7 +981,7 @@
     if (activeTabReadOnly) {
       createEmptyTab();
     }
-    addLibraryNode(item, getCanvasCenter());
+    await addLibraryNode(item, getCanvasCenter());
     clearNetworkIntentQuery();
   };
 
@@ -1378,9 +1383,9 @@
     return null;
   };
 
-  const addConnectorNodeToFlowForAssistant = (
+  const addConnectorNodeToFlowForAssistant = async (
     connector: string,
-  ): { node: StudioNode; source: "network" | "draft" } => {
+  ): Promise<{ node: StudioNode; source: "network" | "draft" }> => {
     if (activeTabReadOnly) {
       throw new Error("Cannot add connectors in view-only tab.");
     }
@@ -1394,7 +1399,7 @@
       ) ?? null;
 
     if (networkItem) {
-      addLibraryNode(networkItem, getCanvasCenter());
+      await addLibraryNode(networkItem, getCanvasCenter());
     } else {
       addQuickNode("connector", connector, getCanvasCenter());
     }
@@ -1418,16 +1423,16 @@
     };
   };
 
-  const ensureConnectorNodeInFlowForAssistant = (
+  const ensureConnectorNodeInFlowForAssistant = async (
     connector: string,
     options: { createIfMissing?: boolean } = {},
-  ): { node: StudioNode; created: boolean; source?: "network" | "draft" } => {
+  ): Promise<{ node: StudioNode; created: boolean; source?: "network" | "draft" }> => {
     const existing = resolveConnectorNodeForAssistant(connector);
     if (existing) return { node: existing, created: false };
     if (!options.createIfMissing) {
       throw new Error(`Connector '${connector}' not found in current flow.`);
     }
-    const added = addConnectorNodeToFlowForAssistant(connector);
+    const added = await addConnectorNodeToFlowForAssistant(connector);
     return {
       node: added.node,
       created: true,
@@ -1514,8 +1519,8 @@
       message: "Flow inspected.",
       data: buildAssistantContextSnapshot(),
     }),
-    selectConnector: ({ connector }) => {
-      const resolved = ensureConnectorNodeInFlowForAssistant(connector, {
+    selectConnector: async ({ connector }) => {
+      const resolved = await ensureConnectorNodeInFlowForAssistant(connector, {
         createIfMissing: !activeTabReadOnly,
       });
       selectedNodeId = resolved.node.id;
@@ -1593,8 +1598,8 @@
         },
       };
     },
-    addConnectorToFlow: ({ connector }) => {
-      const { node, source } = addConnectorNodeToFlowForAssistant(connector);
+    addConnectorToFlow: async ({ connector }) => {
+      const { node, source } = await addConnectorNodeToFlowForAssistant(connector);
       selectedNodeId = node.id;
       return {
         message:
@@ -1603,14 +1608,18 @@
             : `Added draft connector '${connector}' to flow.`,
       };
     },
-    connectConnectors: ({ from_connector, to_connector, dimension, relation }) => {
+    connectConnectors: async ({ from_connector, to_connector, dimension, relation }) => {
       if (activeTabReadOnly) throw new Error("Cannot edit links in view-only tab.");
-      let source = ensureConnectorNodeInFlowForAssistant(from_connector, {
-        createIfMissing: true,
-      }).node;
-      let target = ensureConnectorNodeInFlowForAssistant(to_connector, {
-        createIfMissing: true,
-      }).node;
+      let source = (
+        await ensureConnectorNodeInFlowForAssistant(from_connector, {
+          createIfMissing: true,
+        })
+      ).node;
+      let target = (
+        await ensureConnectorNodeInFlowForAssistant(to_connector, {
+          createIfMissing: true,
+        })
+      ).node;
       let autoCorrectedDirection = false;
       const sourceDimensionCountBeforeSwap = source.data.dimensions ?? 1;
       const targetDimensionCountBeforeSwap = target.data.dimensions ?? 1;
@@ -1718,8 +1727,8 @@
         message: `Removed ${edgesToRemove.length} connector link(s).`,
       };
     },
-    setConnectorRiMode: ({ connector, mode }) => {
-      const resolved = ensureConnectorNodeInFlowForAssistant(connector, {
+    setConnectorRiMode: async ({ connector, mode }) => {
+      const resolved = await ensureConnectorNodeInFlowForAssistant(connector, {
         createIfMissing: !activeTabReadOnly,
       });
       applyConnectorRiPatch(resolved.node.id, { riLocked: mode === "static" });
@@ -1727,8 +1736,8 @@
         message: `Set RI mode for '${resolveNodeName(resolved.node)}' to ${mode}.`,
       };
     },
-    setConnectorRiValues: ({ connector, start_point, transformation_shift }) => {
-      const resolved = ensureConnectorNodeInFlowForAssistant(connector, {
+    setConnectorRiValues: async ({ connector, start_point, transformation_shift }) => {
+      const resolved = await ensureConnectorNodeInFlowForAssistant(connector, {
         createIfMissing: !activeTabReadOnly,
       });
       applyConnectorRiPatch(resolved.node.id, {
@@ -2157,7 +2166,12 @@
       const nextServicesToken = getToken() ?? "";
       if (nextServicesToken === lastToolboxServicesToken) return;
       lastToolboxServicesToken = nextServicesToken;
+      studioNetworkLibraryLoaded = false;
+      networkFeedLibraryIds = createEmptyNetworkFeedLibraryIds();
       void loadToolboxLibraryFromProfile();
+      if (nextServicesToken && explorerSource === "network") {
+        void ensureStudioNetworkLibraryLoaded();
+      }
     };
 
     window.addEventListener("keydown", handleKey);
@@ -2186,13 +2200,14 @@
 
     restoreStudioTabsSession();
     tabsSessionRestoreReady = true;
-    void loadNetworkSelectionFromQuery();
-    void loadToolboxLibraryFromProfile();
     void loadStudioAuthorUsers();
-    if (!chainAutoSyncStarted) {
-      chainAutoSyncStarted = true;
-      scheduleBackgroundChainSync();
-    }
+    void loadToolboxLibraryFromProfile();
+    void (async () => {
+      await loadNetworkSelectionFromQuery();
+      if (explorerSource === "network") {
+        await ensureStudioNetworkLibraryLoaded();
+      }
+    })();
 
     return () => {
       window.removeEventListener("keydown", handleKey);
@@ -2207,7 +2222,6 @@
         clearTimeout(persistStudioTabsSessionTimer);
         persistStudioTabsSessionTimer = null;
       }
-      clearBackgroundChainSyncTimer();
       persistStudioTabsSession();
     };
   });
@@ -2264,17 +2278,15 @@
     const cachedToolbox = getCachedCurrentUserToolboxLibrary();
     let appliedCachedToolbox = false;
     if (cachedToolbox) {
-      const nextToolboxLibrary = applyProfileToolbox(cachedToolbox);
+      applyProfileToolbox(cachedToolbox);
       appliedCachedToolbox = true;
-      void hydrateToolboxLibraryIntoNetwork(nextToolboxLibrary);
     }
 
     toolboxLoadBusy = true;
     try {
       const saved = await getCurrentUserToolboxLibrary();
       if (requestId !== toolboxLoadRequestId) return;
-      const nextToolboxLibrary = applyProfileToolbox(saved);
-      await hydrateToolboxLibraryIntoNetwork(nextToolboxLibrary);
+      applyProfileToolbox(saved);
     } catch (error) {
       console.warn("[Studio] Failed to load toolbox library from profile.", error);
       if (!appliedCachedToolbox && requestId === toolboxLoadRequestId) {
@@ -2292,6 +2304,10 @@
   );
 
   type NetworkLibrary = Record<NetworkLibraryKind, LibraryItem[]>;
+  let currentStudioAuthorId = $state("current-user");
+  function getCurrentStudioAuthorId() {
+    return currentStudioAuthorId || "current-user";
+  }
 
   const networkLibrary = $derived.by(
     (): NetworkLibrary => ({
@@ -2302,7 +2318,7 @@
           id: `draft-transform-${item.id}`,
           name: item.name,
           kind: "transformation" as const,
-          authorId: mockCurrentUserId,
+          authorId: getCurrentStudioAuthorId(),
           summary: "Unpublished in current tab (publish to chain before reuse).",
         })),
       ],
@@ -3316,16 +3332,60 @@
     deployedParticles = state.particles;
   };
 
-  const mergeChainSyncSnapshot = (snapshot: ChainStudioSyncResult) => {
-    applyDeployedStudioState(
-      mergeChainSyncSnapshotIntoStudioState(getDeployedStudioState(), snapshot),
-    );
+  const replaceOrAppendLibraryItems = (
+    current: LibraryItem[],
+    incoming: LibraryItem[],
+  ): LibraryItem[] => {
+    const incomingById = new Map(incoming.map((item) => [item.id, item]));
+    const merged = current.map((item) => incomingById.get(item.id) ?? item);
+    const existingIds = new SvelteSet(merged.map((item) => item.id));
+    incoming.forEach((item) => {
+      if (!existingIds.has(item.id)) {
+        merged.push(item);
+        existingIds.add(item.id);
+      }
+    });
+    return merged;
+  };
+
+  const collectNetworkFeedLibraryIds = (
+    library: DeployedLibrary,
+  ): Record<NetworkLibraryKind, string[]> => ({
+    feature: library.features.map((item) => item.id),
+    transformation: library.transformations.map((item) => item.id),
+    condition: library.conditions.map((item) => item.id),
+  });
+
+  const markNetworkLibraryItemVisible = (kind: NetworkLibraryKind, id: string) => {
+    const normalizedId = id.trim();
+    if (!normalizedId) return;
+    const current = networkFeedLibraryIds[kind] ?? [];
+    if (current.includes(normalizedId)) return;
+    networkFeedLibraryIds = {
+      ...networkFeedLibraryIds,
+      [kind]: [...current, normalizedId],
+    };
+  };
+
+  const applyStudioNetworkFeedLibraryDiscovery = (discovery: StudioEventFeedLibraryDiscovery) => {
+    networkFeedLibraryIds = collectNetworkFeedLibraryIds(discovery.library);
+    deployedLibrary = {
+      features: replaceOrAppendLibraryItems(deployedLibrary.features, discovery.library.features),
+      transformations: replaceOrAppendLibraryItems(
+        deployedLibrary.transformations,
+        discovery.library.transformations,
+      ),
+      conditions: replaceOrAppendLibraryItems(
+        deployedLibrary.conditions,
+        discovery.library.conditions,
+      ),
+    };
   };
 
   const buildStudioChainSyncSummary = (): string => {
     return formatStudioChainSyncSummary({
       sourceCount: lastStudioSyncedSourcesCount,
-      connectorRecordCount: deployedParticles.length,
+      connectorEntryCount: deployedParticles.length,
       connectorCount: deployedLibrary.features.length,
       transformationCount: deployedLibrary.transformations.length,
       conditionCount: deployedLibrary.conditions.length,
@@ -3337,12 +3397,17 @@
     chainSyncStatus = buildStudioChainSyncSummary();
   };
 
+  const buildStudioEventFeedSyncSummary = (
+    discovery: StudioEventFeedLibraryDiscovery,
+    sourceCount: number,
+  ): string =>
+    `Loaded ${discovery.discoveredItemCount} network library entries from chain feed across ${sourceCount} source(s): ${discovery.library.features.length} connectors, ${discovery.library.transformations.length} transformations, ${discovery.library.conditions.length} conditions.`;
+
   const resolveStudioChainSyncSources = async (): Promise<
     Array<{ address: string; authorId: string; label: string }>
   > => {
     const profileState = await getCurrentUserProfileState({
       preferCached: true,
-      bootstrapPrototypeIfEmpty: true,
     });
     const resolvedCurrentSources = resolveCurrentUserChainSourceAddresses(profileState.me);
     const sources = buildStudioChainSyncSources({
@@ -3358,51 +3423,50 @@
     return sources;
   };
 
-  const resolveCurrentMockChainUserId = async () => {
-    try {
-      const mePayload = (await getMe()) as Record<string, unknown>;
-      const user =
-        mePayload &&
-        typeof mePayload === "object" &&
-        mePayload.user &&
-        typeof mePayload.user === "object"
-          ? (mePayload.user as Record<string, unknown>)
-          : mePayload;
+  type StudioChainAuthContext = {
+    servicesUserId: string;
+    email: string;
+    displayName: string;
+    ethereumAddress: string;
+    authorId: string;
+  };
 
-      const email = typeof user?.email === "string" ? user.email.trim().toLowerCase() : "";
-      if (email.endsWith("@mock.decentralised.art")) {
-        const id = email.replace(/@mock\.decentralised\.art$/i, "");
-        if (mockUsersById[id as keyof typeof mockUsersById])
-          return id as keyof typeof mockUsersById;
-      }
+  const resolveCurrentStudioChainAuthContext = async (): Promise<StudioChainAuthContext> => {
+    const mePayload = (await getMe()) as Record<string, unknown>;
+    const user =
+      mePayload &&
+      typeof mePayload === "object" &&
+      mePayload.user &&
+      typeof mePayload.user === "object"
+        ? (mePayload.user as Record<string, unknown>)
+        : mePayload;
 
-      const displayName =
-        typeof user?.display_name === "string"
-          ? user.display_name.trim()
-          : typeof user?.displayName === "string"
-            ? user.displayName.trim()
-            : "";
-      if (displayName) {
-        const byName = Object.values(mockUsersById).find((entry) => entry.nickname === displayName);
-        if (byName) return byName.id;
-      }
-
-      const address =
-        typeof user?.ethereum_address === "string"
-          ? user.ethereum_address.trim().toLowerCase()
-          : typeof user?.ethereumAddress === "string"
-            ? user.ethereumAddress.trim().toLowerCase()
-            : "";
-      if (address) {
-        const byAddress = Object.values(mockUsersById).find(
-          (entry) => entry.address.toLowerCase() === address,
-        );
-        if (byAddress) return byAddress.id;
-      }
-    } catch {
-      // Services auth may be unavailable; use fallback.
+    const servicesUserId = typeof user?.id === "string" ? user.id.trim() : "";
+    if (!servicesUserId) {
+      throw new Error("Services account did not include a user id.");
     }
-    return mockCurrentUserId;
+
+    const email = typeof user?.email === "string" ? user.email.trim().toLowerCase() : "";
+    const displayName =
+      typeof user?.display_name === "string"
+        ? user.display_name.trim()
+        : typeof user?.displayName === "string"
+          ? user.displayName.trim()
+          : "";
+    const ethereumAddress =
+      typeof user?.ethereum_address === "string"
+        ? user.ethereum_address.trim().toLowerCase()
+        : typeof user?.ethereumAddress === "string"
+          ? user.ethereumAddress.trim().toLowerCase()
+          : "";
+
+    return {
+      servicesUserId,
+      email,
+      displayName,
+      ethereumAddress,
+      authorId: ethereumAddress || servicesUserId,
+    };
   };
 
   let chainTokenUserId = getChainTokenUserId() ?? "";
@@ -3410,20 +3474,25 @@
   const ensureChainAuthForStudio = async (forceRefresh = false) => {
     if (chainAuthPromise && !forceRefresh) return chainAuthPromise;
 
-    const userId = await resolveCurrentMockChainUserId();
+    const authContext = await resolveCurrentStudioChainAuthContext();
+    currentStudioAuthorId = authContext.authorId || getCurrentStudioAuthorId();
     if (forceRefresh) {
       clearChainToken();
       chainTokenUserId = "";
     }
+
+    const walletIdentity = chainTokenIdentityForWalletAddress(authContext.ethereumAddress);
     const storedUserId = getChainTokenUserId() ?? chainTokenUserId;
-    if (getChainToken() && storedUserId === userId) {
-      chainTokenUserId = userId;
+    if (getChainToken() && walletIdentity && storedUserId === walletIdentity) {
+      chainTokenUserId = walletIdentity;
+      if (authContext.ethereumAddress) currentStudioAuthorId = authContext.ethereumAddress;
       return;
     }
 
-    chainAuthPromise = loginWithMockChainAccount(userId)
-      .then(() => {
-        chainTokenUserId = userId;
+    chainAuthPromise = loginWithBrowserWalletChainAccount({ patchServicesProfile: true })
+      .then((result) => {
+        chainTokenUserId = chainTokenIdentityForWalletAddress(result.address);
+        currentStudioAuthorId = result.address.trim().toLowerCase() || getCurrentStudioAuthorId();
       })
       .finally(() => {
         chainAuthPromise = null;
@@ -3446,34 +3515,138 @@
     const merged = mergeFetchedChainParticleIntoStudioState(
       getDeployedStudioState(),
       fetched,
-      mockCurrentUserId,
+      getCurrentStudioAuthorId(),
     );
     if (!merged.merged) return false;
     applyDeployedStudioState(merged.state);
     return true;
   };
 
+  const collectConnectorReferenceNames = (connector: StudioConnectorDef): string[] => {
+    const names = new SvelteSet<string>();
+    connector.dimensions.forEach((dimension) => {
+      const composite = dimension.composite?.trim();
+      if (composite) names.add(composite);
+      Object.values(dimension.bindings ?? {}).forEach((target) => {
+        const name = target.trim();
+        if (name) names.add(name);
+      });
+    });
+    return Array.from(names);
+  };
+
+  const syncConnectorTreeFromChain = async (
+    connectorName: string,
+  ): Promise<{ loaded: string[]; missing: string[] }> => {
+    const root = connectorName.trim();
+    if (!root) return { loaded: [], missing: [] };
+
+    const queued = [root];
+    const visited = new SvelteSet<string>();
+    const loaded: string[] = [];
+    const missing: string[] = [];
+    const maxFetches = 64;
+
+    while (queued.length > 0 && visited.size < maxFetches) {
+      const name = queued.shift()?.trim() ?? "";
+      if (!name || visited.has(name)) continue;
+      visited.add(name);
+
+      let connector = deployedRegistry.connectors[name];
+      if (!connector) {
+        const merged = await syncSingleChainParticle(name);
+        if (!merged) {
+          missing.push(name);
+          continue;
+        }
+        loaded.push(name);
+        connector = deployedRegistry.connectors[name];
+      }
+
+      if (!connector) {
+        missing.push(name);
+        continue;
+      }
+
+      collectConnectorReferenceNames(connector).forEach((childName) => {
+        if (!visited.has(childName)) queued.push(childName);
+      });
+    }
+
+    if (queued.length > 0) {
+      missing.push(...queued.filter((name) => name.trim().length > 0));
+    }
+
+    return {
+      loaded,
+      missing: Array.from(new SvelteSet(missing)),
+    };
+  };
+
+  const hydrateDeployedConnectorFromChain = async (connectorName: string) => {
+    const name = connectorName.trim();
+    if (!name) return;
+    try {
+      const result = await withChainAuthRetry(() => syncConnectorTreeFromChain(name));
+      if (!result.missing.includes(name)) {
+        markNetworkLibraryItemVisible("feature", `feature-${name}`);
+      }
+    } catch (error) {
+      if (import.meta.env.DEV) {
+        console.warn("[Studio] Failed to hydrate deployed connector from chain.", error);
+      }
+    }
+  };
+
+  const hydrateDeployedRuntimeFromChain = async (
+    kind: "transformation" | "condition",
+    name: string,
+  ) => {
+    const trimmedName = name.trim();
+    if (!trimmedName) return;
+    try {
+      const payload =
+        kind === "transformation"
+          ? await getChainTransformation(trimmedName)
+          : await getChainCondition(trimmedName);
+      applyDeployedStudioState(
+        mergeToolboxRuntimePayloadsIntoStudioState(
+          getDeployedStudioState(),
+          kind,
+          [[trimmedName, payload]],
+          getCurrentStudioAuthorId(),
+        ),
+      );
+      markNetworkLibraryItemVisible(
+        kind,
+        kind === "transformation" ? `transform-${trimmedName}` : `condition-${trimmedName}`,
+      );
+    } catch (error) {
+      if (import.meta.env.DEV) {
+        console.warn("[Studio] Failed to hydrate deployed runtime item from chain.", error);
+      }
+    }
+  };
+
   const hydrateToolboxConnectorsIntoLibrary = async (connectorIds: string[]) => {
     const normalizedConnectorIds = Array.from(
-      new Set(connectorIds.map((value) => normalizeConnectorToolboxId(value)).filter(Boolean)),
+      new SvelteSet(
+        connectorIds.map((value) => normalizeConnectorToolboxId(value)).filter(Boolean),
+      ),
     );
     if (normalizedConnectorIds.length === 0) return;
 
-    const missing = normalizedConnectorIds.filter(
-      (connectorId) => !deployedRegistry.connectors[connectorId],
-    );
-    if (missing.length === 0) return;
-
     const settled = await Promise.allSettled(
-      missing.map(
-        async (connectorId) => [connectorId, await syncSingleChainParticle(connectorId)] as const,
+      normalizedConnectorIds.map(
+        async (connectorId) =>
+          [connectorId, await syncConnectorTreeFromChain(connectorId)] as const,
       ),
     );
 
-    const mergedCount = settled.filter(
-      (result): result is PromiseFulfilledResult<readonly [string, boolean]> =>
-        result.status === "fulfilled" && result.value[1],
-    ).length;
+    const mergedCount = settled.reduce((count, result) => {
+      if (result.status !== "fulfilled") return count;
+      return count + result.value[1].loaded.length;
+    }, 0);
     if (!chainSyncBusy && mergedCount > 0) {
       refreshStudioChainSyncSummary();
     }
@@ -3481,77 +3654,16 @@
     if (import.meta.env.DEV) {
       const failed = settled.filter(
         (result) =>
-          result.status === "rejected" || (result.status === "fulfilled" && !result.value[1]),
+          result.status === "rejected" ||
+          (result.status === "fulfilled" && result.value[1].missing.length > 0),
       ).length;
       if (failed > 0) {
         console.warn("[Studio] Some toolbox connectors could not be hydrated from chain.", {
           failed,
-          requested: missing.length,
+          requested: normalizedConnectorIds.length,
         });
       }
     }
-  };
-
-  const hydrateToolboxRuntimeItemsIntoLibrary = async (
-    kind: "transformation" | "condition",
-    ids: string[],
-  ) => {
-    const normalizedIds = normalizeToolboxListByKind(kind, ids);
-    if (normalizedIds.length === 0) return;
-
-    const existingIds = new Set(
-      (kind === "transformation"
-        ? deployedLibrary.transformations
-        : deployedLibrary.conditions
-      ).map((item) => normalizeToolboxIdByKind(kind, item.id)),
-    );
-    const missing = normalizedIds.filter((id) => !existingIds.has(id));
-    if (missing.length === 0) return;
-
-    const settled = await Promise.allSettled(
-      missing.map(async (name) => {
-        const payload =
-          kind === "transformation"
-            ? await getChainTransformation(name)
-            : await getChainCondition(name);
-        return [name, payload] as const;
-      }),
-    );
-
-    const fetched = settled
-      .filter(
-        (
-          result,
-        ): result is PromiseFulfilledResult<
-          readonly [
-            string,
-            (
-              | Awaited<ReturnType<typeof getChainTransformation>>
-              | Awaited<ReturnType<typeof getChainCondition>>
-            ),
-          ]
-        > => result.status === "fulfilled",
-      )
-      .map((result) => result.value);
-
-    if (fetched.length === 0) return;
-
-    applyDeployedStudioState(
-      mergeToolboxRuntimePayloadsIntoStudioState(
-        getDeployedStudioState(),
-        kind,
-        fetched,
-        mockCurrentUserId,
-      ),
-    );
-  };
-
-  const hydrateToolboxLibraryIntoNetwork = async (library: ToolboxLibrary) => {
-    await Promise.all([
-      hydrateToolboxConnectorsIntoLibrary(library.connector),
-      hydrateToolboxRuntimeItemsIntoLibrary("transformation", library.transformation),
-      hydrateToolboxRuntimeItemsIntoLibrary("condition", library.condition),
-    ]);
   };
 
   const collectLocalConditionRuntime = (
@@ -3574,83 +3686,61 @@
     return registry;
   };
 
-  const syncChainOwnedRegistry = async (options: { background?: boolean } = {}) => {
-    if (options.background && chainRunBusy) {
-      pendingBackgroundChainSync = true;
+  const syncStudioNetworkLibrary = async (options: { force?: boolean } = {}) => {
+    if (studioNetworkLibraryLoaded && !options.force) return;
+    if (studioNetworkLibraryLoadPromise && !options.force) {
+      await studioNetworkLibraryLoadPromise;
       return;
     }
-    chainSyncError = null;
-    chainSyncStatus = "Fetching chain registry from chain accounts...";
-    chainSyncBusy = true;
-    try {
+
+    const loadPromise = (async () => {
+      chainSyncError = null;
+      chainSyncStatus = "Loading Studio network library from chain feed...";
+      chainSyncBusy = true;
       const sources = await resolveStudioChainSyncSources();
       if (sources.length === 0) {
+        networkFeedLibraryIds = createEmptyNetworkFeedLibraryIds();
+        studioNetworkLibraryLoaded = false;
         chainSyncStatus = null;
         chainSyncError =
           "Unable to resolve Studio network sources from your profile. Check connection and retry.";
         return;
       }
-      let syncedSources = 0;
-      const failedSources: string[] = [];
-      for (const source of sources) {
-        const address = source.address;
-        if (!address) {
-          failedSources.push("Source address is empty.");
-          continue;
-        }
-        chainSyncStatus = `Fetching chain registry for ${source.label}...`;
-        try {
-          const snapshot = await withChainAuthRetry(() =>
-            fetchChainOwnedStudioSnapshot(address, {
-              authorId: source.authorId,
-            }),
-          );
-          mergeChainSyncSnapshot(snapshot);
-          syncedSources += 1;
-        } catch (error) {
-          failedSources.push(
-            error instanceof Error ? error.message : "Unknown source sync failure.",
-          );
-          continue;
-        }
-      }
 
-      if (syncedSources === 0) {
-        lastStudioSyncedSourcesCount = 0;
-        chainSyncStatus = null;
-        chainSyncError = failedSources[0] ?? "Failed to sync any Studio sources from chain.";
-        return;
-      }
-
+      chainSyncStatus = `Loading chain feed for ${sources.length} source(s)...`;
+      const discovery = await loadStudioNetworkLibraryFromEventFeed({
+        sourceAddresses: sources.map((source) => source.address),
+        pageLimit: 256,
+        maxPages: 8,
+        targetItems: 240,
+        includeUnfinalized: true,
+      });
+      applyStudioNetworkFeedLibraryDiscovery(discovery);
       refreshConnectorTreeTabs();
-      lastStudioSyncedSourcesCount = syncedSources;
-      chainSyncStatus = buildStudioChainSyncSummary();
-      if (failedSources.length > 0) {
-        chainSyncError = `Partial sync: ${failedSources.length} source(s) failed.`;
-      } else {
-        chainSyncError = null;
-      }
+      lastStudioSyncedSourcesCount = sources.length;
+      studioNetworkLibraryLoaded = true;
+      chainSyncStatus = buildStudioEventFeedSyncSummary(discovery, sources.length);
+      chainSyncError = null;
+    })();
+
+    studioNetworkLibraryLoadPromise = loadPromise;
+    try {
+      await loadPromise;
     } catch (error) {
+      studioNetworkLibraryLoaded = false;
       chainSyncError =
-        error instanceof Error ? error.message : "Failed to sync owned chain registry.";
+        error instanceof Error ? error.message : "Failed to load Studio network library.";
       chainSyncStatus = null;
     } finally {
+      if (studioNetworkLibraryLoadPromise === loadPromise) {
+        studioNetworkLibraryLoadPromise = null;
+      }
       chainSyncBusy = false;
     }
   };
 
-  const clearBackgroundChainSyncTimer = () => {
-    if (!backgroundChainSyncTimer) return;
-    clearTimeout(backgroundChainSyncTimer);
-    backgroundChainSyncTimer = null;
-  };
-
-  const scheduleBackgroundChainSync = (delayMs = 1800) => {
-    if (backgroundChainSyncTimer || chainSyncBusy) return;
-    backgroundChainSyncTimer = setTimeout(() => {
-      backgroundChainSyncTimer = null;
-      void syncChainOwnedRegistry({ background: true });
-    }, delayMs);
+  const ensureStudioNetworkLibraryLoaded = async () => {
+    await syncStudioNetworkLibrary();
   };
 
   const collectDraftTransformationSources = (graphNodes: StudioNode[]) => {
@@ -4584,10 +4674,6 @@
       measureStudioRunStep(timings, "plugins", () => refreshPluginOutputs(output));
       logStudioRunTiming(runStatus, timings, performance.now() - runStartedAt);
       chainRunBusy = false;
-      if (pendingBackgroundChainSync) {
-        pendingBackgroundChainSync = false;
-        scheduleBackgroundChainSync(250);
-      }
     }
   };
 
@@ -4818,7 +4904,7 @@
             id: `transform-${slugify(name)}`,
             name,
             kind: "transformation",
-            authorId: mockCurrentUserId,
+            authorId: getCurrentStudioAuthorId(),
             summary: "Deployed from Studio.",
           };
           return upsertLibraryItem(items, item);
@@ -4855,7 +4941,7 @@
             id: `condition-${name}`,
             name: node.data.label,
             kind: "condition",
-            authorId: mockCurrentUserId,
+            authorId: getCurrentStudioAuthorId(),
             summary: "Deployed from Studio.",
           });
         }, deployedLibrary.conditions),
@@ -4897,7 +4983,7 @@
             id: `feature-${connectorName}`,
             name: node.data.label,
             kind: "feature",
-            authorId: mockCurrentUserId,
+            authorId: getCurrentStudioAuthorId(),
             summary: "Deployed from Studio.",
             dimensions:
               node.data.dimensions ?? legacyFeatureDef?.dimensions.length ?? def.dimensions.length,
@@ -4945,7 +5031,7 @@
                   id: rootName,
                   name: activeTab.label,
                   summary: "Deployed from Studio.",
-                  authorId: mockCurrentUserId,
+                  authorId: getCurrentStudioAuthorId(),
                   viewId: mockParticleViews[0]?.id ?? "midi",
                   createdAt,
                   createdLabel: "just now",
@@ -4968,6 +5054,7 @@
     deployTimestampByTab = { ...deployTimestampByTab, [activeTabId]: Date.now() };
     if (publishedRootConnectorName) {
       chainDeployStatus = `Deployed connector '${publishedRootConnectorName}' to chain.`;
+      void hydrateDeployedConnectorFromChain(publishedRootConnectorName);
     } else if (runtime) {
       chainDeployStatus = "Deploy completed without publishing a connector.";
     } else {
@@ -4982,6 +5069,12 @@
         ? `Deployed ${deployedParts.join(" and ")} to chain.`
         : "Deploy completed.";
     }
+    Object.keys(compiled).forEach((name) => {
+      void hydrateDeployedRuntimeFromChain("transformation", name);
+    });
+    localConditionNodes.forEach((node) => {
+      void hydrateDeployedRuntimeFromChain("condition", resolveNodeName(node));
+    });
   };
 
   const closeTransformationEditor = () => {
@@ -5104,11 +5197,12 @@
           id: `condition-${slugify(trimmedName)}`,
           name: trimmedName,
           kind: "condition",
-          authorId: mockCurrentUserId,
+          authorId: getCurrentStudioAuthorId(),
           summary: "Deployed from Studio.",
         }),
       };
       addItemToToolboxLibrary("condition", trimmedName);
+      void hydrateDeployedRuntimeFromChain("condition", trimmedName);
 
       if (!nodeId && targetConnectorId) {
         attachConditionToConnector(targetConnectorId, {
@@ -5199,7 +5293,7 @@
           id: `transform-${slugify(trimmedName)}`,
           name: trimmedName,
           kind: "transformation",
-          authorId: mockCurrentUserId,
+          authorId: getCurrentStudioAuthorId(),
           summary: "Deployed from Studio.",
         }),
       };
@@ -5217,6 +5311,7 @@
       standaloneDraftTransformations = standaloneDraftTransformations.filter(
         (item) => normalizeKey(item.name) !== normalizeKey(trimmedName),
       );
+      void hydrateDeployedRuntimeFromChain("transformation", trimmedName);
       chainDeployStatus = `Deployed transformation ${trimmedName}.`;
       closeTransformationEditor();
     } catch (error) {
@@ -5531,8 +5626,8 @@
     try {
       chainSyncError = null;
       chainSyncStatus = `Fetching ${connectorName} from chain...`;
-      const merged = await withChainAuthRetry(() => syncSingleChainParticle(connectorName));
-      if (!merged) {
+      const result = await withChainAuthRetry(() => syncConnectorTreeFromChain(connectorName));
+      if (result.missing.includes(connectorName)) {
         chainSyncStatus = null;
         chainSyncError = `Connector ${connectorName} was not found in chain registry.`;
         return false;
@@ -5543,9 +5638,16 @@
       if (activeTabId === tabId) loadTabGraph(tabId);
       const hasRenderableTree =
         graph.nodes.length > 0 && !graph.nodes.some((node) => Boolean(node.data.placeholder));
-      chainSyncStatus = hasRenderableTree
-        ? `Loaded ${connectorName} from chain.`
-        : `Fetched ${connectorName}, but no tree could be rendered yet.`;
+      if (hasRenderableTree) {
+        chainSyncStatus =
+          result.loaded.length > 1
+            ? `Loaded ${connectorName} and ${result.loaded.length - 1} composite connector(s).`
+            : `Loaded ${connectorName} from chain.`;
+      } else {
+        const missing = result.missing.length ? ` Missing: ${result.missing.join(", ")}.` : "";
+        chainSyncStatus = null;
+        chainSyncError = `Fetched ${connectorName}, but no complete tree could be rendered yet.${missing}`;
+      }
       return hasRenderableTree;
     } catch (error) {
       chainSyncStatus = null;
@@ -6180,8 +6282,12 @@
         kind,
         source,
         toolboxLibrary,
-        fallbackAuthorId: mockCurrentUserId,
       });
+    }
+
+    if (explorerSource === "network") {
+      const networkIds = new SvelteSet(networkFeedLibraryIds[kind] ?? []);
+      return source.filter((item) => networkIds.has(item.id));
     }
 
     return source;
@@ -6197,7 +6303,6 @@
           kind,
           source,
           toolboxLibrary,
-          fallbackAuthorId: mockCurrentUserId,
         }).map((item) => item.id),
       );
     }
@@ -6378,7 +6483,41 @@
     return true;
   };
 
-  const addLibraryNode = (item: LibraryItem, position: { x: number; y: number } | null = null) => {
+  const ensureLibraryConnectorDetailLoaded = async (connectorName: string): Promise<boolean> => {
+    const name = connectorName.trim();
+    if (!name) return false;
+
+    const existingGraph = buildConnectorTreeGraph(name, { x: 0, y: 0 });
+    const existingGraphComplete =
+      existingGraph.nodes.length > 0 &&
+      !existingGraph.nodes.some((node) => Boolean(node.data.placeholder));
+    if (existingGraphComplete) return true;
+
+    chainSyncError = null;
+    chainSyncStatus = `Fetching ${name} from chain...`;
+    const result = await withChainAuthRetry(() => syncConnectorTreeFromChain(name));
+    const nextGraph = buildConnectorTreeGraph(name, { x: 0, y: 0 });
+    const loaded =
+      nextGraph.nodes.length > 0 && !nextGraph.nodes.some((node) => Boolean(node.data.placeholder));
+
+    if (loaded) {
+      chainSyncStatus =
+        result.loaded.length > 1
+          ? `Loaded ${name} and ${result.loaded.length - 1} composite connector(s).`
+          : `Loaded ${name} from chain.`;
+      return true;
+    }
+
+    const missing = result.missing.length ? ` Missing: ${result.missing.join(", ")}.` : "";
+    chainSyncStatus = null;
+    chainSyncError = `Connector ${name} was discovered in the feed but could not be loaded from chain.${missing}`;
+    return false;
+  };
+
+  const addHydratedLibraryNode = (
+    item: LibraryItem,
+    position: { x: number; y: number } | null = null,
+  ) => {
     if (activeTabReadOnly) return;
     if (item.kind === "transformation") {
       addTransformationToSelectedDimension(getLibraryTransformationName(item), "network");
@@ -6409,47 +6548,39 @@
         scheduleLayout();
         return;
       }
+
+      chainSyncError = `Connector ${registryName} is not loaded from chain yet.`;
+      return;
     }
     const node: StudioNode = {
       id: `${item.kind}-${item.id}-${crypto.randomUUID()}`,
       position: nodePosition,
-      type:
-        item.kind === "feature" ? "connector" : item.kind === "condition" ? "condition" : undefined,
+      type: item.kind === "condition" ? "condition" : undefined,
       data: {
         label: item.name,
-        kind: item.kind === "feature" ? "connector" : item.kind,
+        kind: item.kind,
         sourceId: item.id,
         viewId: item.viewId,
         networkId: registryName,
         fromNetwork: true,
-        dimensions: item.dimensions ?? (item.kind === "feature" ? 1 : undefined),
-        connectorRows:
-          item.kind === "feature"
-            ? createPlaceholderConnectorRows(item.dimensions ?? 1)
-            : undefined,
-        ...(item.kind === "feature"
-          ? (() => {
-              const staticRi = cloneStaticRiMap(
-                deployedRegistry.connectors[registryName]?.staticRi,
-              );
-              const selfStatic = resolveConnectorSelfStaticRi(staticRi);
-              return {
-                riStart: selfStatic?.startPoint ?? 0,
-                riShift: selfStatic?.transformationShift ?? 0,
-                riLocked: Boolean(selfStatic),
-                staticRi,
-              };
-            })()
-          : {}),
       },
     };
     nodes = [...nodes, node];
     if (item.kind === "condition") {
       conditionCodeById.set(node.id, defaultConditionDraftCode);
     }
+  };
+
+  const addLibraryNode = async (
+    item: LibraryItem,
+    position: { x: number; y: number } | null = null,
+  ) => {
+    if (activeTabReadOnly) return;
     if (item.kind === "feature") {
-      applyDimensionChange(node.id, node.data.dimensions ?? 1);
+      const loaded = await ensureLibraryConnectorDetailLoaded(getLibraryRegistryName(item));
+      if (!loaded) return;
     }
+    addHydratedLibraryNode(item, position);
   };
 
   const getCanvasCenter = () => {
@@ -6634,7 +6765,7 @@
         const position = screenToFlowPosition
           ? screenToFlowPosition({ x: event.clientX, y: event.clientY })
           : { x: event.clientX, y: event.clientY };
-        addLibraryNode(item, position);
+        void addLibraryNode(item, position);
         return;
       } catch (error) {
         console.warn("Failed to parse dropped library payload", error);
@@ -7173,7 +7304,6 @@
   );
 
   let apiEditorApplying = false;
-  let chainAutoSyncStarted = false;
 
   const applyApiPreviewJsonToStudio = (rawJson: string) => {
     if (!activeTab) throw new Error("No active tab.");
@@ -7386,13 +7516,13 @@
         <div class="top-deploy-group">
           <Button
             variant="ghost"
-            ariaLabel="Sync my chain registry"
+            ariaLabel="Refresh network library"
             title={chainSyncError ??
               chainSyncStatus ??
-              "Sync owned chain connectors, transformations, conditions and connector records"}
+              "Refresh network connectors, transformations and conditions from chain feed"}
             className="icon-btn"
             disabled={chainSyncBusy || chainDeployBusy || chainRunBusy}
-            onclick={() => void syncChainOwnedRegistry()}
+            onclick={() => void syncStudioNetworkLibrary({ force: true })}
           >
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="M20 12a8 8 0 1 1-2.34-5.66"></path>
@@ -7437,7 +7567,10 @@
           <button
             type="button"
             class={`source-tab ${explorerSource === "network" ? "is-active" : ""}`}
-            onclick={() => (explorerSource = "network")}
+            onclick={() => {
+              explorerSource = "network";
+              void ensureStudioNetworkLibraryLoaded();
+            }}
           >
             Network
           </button>
@@ -7554,7 +7687,7 @@
               loading={(explorerSource === "network" && chainSyncBusy) ||
                 (explorerSource === "toolbox" && toolboxLoadBusy)}
               usersById={studioUsersById}
-              onAdd={(item) => addLibraryNode(item, null)}
+              onAdd={(item) => void addLibraryNode(item, null)}
               onToolbox={toggleLibraryToolbox}
               onOpen={(item) => void openConnectorTab(getLibraryRegistryName(item))}
               onDragStart={handleLibraryDragStart}
@@ -7582,7 +7715,7 @@
               loading={(explorerSource === "network" && chainSyncBusy) ||
                 (explorerSource === "toolbox" && toolboxLoadBusy)}
               usersById={studioUsersById}
-              onAdd={(item) => addLibraryNode(item, null)}
+              onAdd={(item) => void addLibraryNode(item, null)}
               onToolbox={toggleLibraryToolbox}
               onDragStart={handleLibraryDragStart}
               draggable
@@ -7609,7 +7742,7 @@
               loading={(explorerSource === "network" && chainSyncBusy) ||
                 (explorerSource === "toolbox" && toolboxLoadBusy)}
               usersById={studioUsersById}
-              onAdd={(item) => addLibraryNode(item, null)}
+              onAdd={(item) => void addLibraryNode(item, null)}
               onToolbox={toggleLibraryToolbox}
               onDragStart={handleLibraryDragStart}
               draggable

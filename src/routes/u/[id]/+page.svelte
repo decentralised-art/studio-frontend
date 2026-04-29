@@ -6,9 +6,12 @@
   import { page } from "$app/stores";
 
   import ConnectorPostFeed from "$lib/components/feed/ConnectorPostFeed.svelte";
-  import { listNetworkFeedEventsByAuthor, type NetworkFeedEvent } from "$lib/feed/particlePostData";
-  import { mapSnapshotToNetworkFeedEvents } from "$lib/feed/networkEventMappers";
-  import { fetchChainOwnedStudioSnapshot } from "$lib/studio/chainStudioAdapter";
+  import {
+    listProfileActivityEvents,
+    normalizeProfileActivitySourceAddresses,
+    syncProfileActivityFromEventFeed,
+  } from "$lib/feed/profileActivity";
+  import type { NetworkFeedEvent } from "$lib/feed/particlePostData";
   import SectionShell from "$lib/components/ui/SectionShell.svelte";
   import Button from "$lib/components/ui/Button.svelte";
   import UserProfilePage from "$lib/components/user/UserProfilePage.svelte";
@@ -19,6 +22,7 @@
     getUserSocialConnections,
     getUserById,
     listServicesUsers,
+    type ServicesUserRecord,
     unfollowUserInProfile,
   } from "$lib/auth/api";
   import { getToken, hasAuthSession } from "$lib/auth/session";
@@ -41,11 +45,16 @@
   let followPending = $state(false);
   let activeSocialList = $state<"followers" | "following" | null>(null);
   let socialListsUnavailable = $state(false);
+  let socialCountersVisible = $state(false);
   let localToolboxConnectors = $state<string[]>([]);
   let userFeedEvents = $state<NetworkFeedEvent[]>([]);
+  let userFeedSourceAddresses = $state<string[]>([]);
+  let userFeedLoading = $state(false);
+  let userFeedError = $state("");
   let servicesUserLabels = $state<Record<string, string>>({});
   let servicesUserAvatars = $state<Record<string, string>>({});
   let userLoadRequestVersion = 0;
+  let userFeedRequestVersion = 0;
 
   const normalizeAddressForKey = (value: string): string => {
     const trimmed = value.trim().toLowerCase();
@@ -56,16 +65,23 @@
   const isChainAddress = (value: string): boolean =>
     /^0x[0-9a-f]{40}$/i.test(normalizeAddressForKey(value));
 
-  const shortAddress = (value: string): string => {
-    const normalized = normalizeAddressForKey(value);
-    if (!normalized) return "";
-    if (normalized.length < 14) return normalized;
-    return `${normalized.slice(0, 8)}...${normalized.slice(-4)}`;
-  };
-
   const resolvedUserFollowKey = $derived.by(() =>
     user ? normalizeAddressForKey(user.address) || user.id : "",
   );
+
+  const uniqueStrings = (values: string[]) =>
+    Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
+
+  const asRecord = (value: unknown): Record<string, unknown> =>
+    value && typeof value === "object" && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : {};
+
+  const extractServicesUserRecord = (payload: unknown): ServicesUserRecord => {
+    const root = asRecord(payload);
+    const nested = asRecord(root.user);
+    return (Object.keys(nested).length > 0 ? nested : root) as ServicesUserRecord;
+  };
 
   const resolveServicesUserPayloadByAddress = async (address: string): Promise<unknown | null> => {
     const normalizedAddress = normalizeAddressForKey(address);
@@ -89,6 +105,8 @@
     displayedFollowingIds = [...targetSocial.followingIds];
     displayedFollowerIds = [...targetSocial.followerIds];
     socialListsUnavailable = targetSocial.status !== "ok";
+    socialCountersVisible = targetSocial.status === "ok";
+    if (targetSocial.status !== "ok") activeSocialList = null;
   };
 
   const beginUserLoadRequest = (): number => {
@@ -98,6 +116,76 @@
 
   const isUserLoadRequestActive = (requestVersion: number): boolean =>
     requestVersion === userLoadRequestVersion;
+
+  const beginUserFeedRequest = (): number => {
+    userFeedRequestVersion += 1;
+    return userFeedRequestVersion;
+  };
+
+  const isUserFeedRequestActive = (requestVersion: number): boolean =>
+    requestVersion === userFeedRequestVersion;
+
+  const resolveUserFeedSourceAddresses = (
+    resolvedUser: ProfileViewUser,
+    userPayload: unknown,
+    routeAddress: string,
+  ): string[] =>
+    normalizeProfileActivitySourceAddresses(
+      uniqueStrings([
+        ...getServicesUserChainSourceAddresses(extractServicesUserRecord(userPayload)),
+        normalizeAddressForKey(resolvedUser.address),
+        routeAddress,
+      ]),
+    );
+
+  const refreshUserFeedFromEventFeed = async (
+    activeUserId: string,
+    sourceAddresses: string[],
+    loadRequestVersion: number,
+  ) => {
+    if (!isUserLoadRequestActive(loadRequestVersion)) return;
+    const feedRequestVersion = beginUserFeedRequest();
+    const normalizedSources = normalizeProfileActivitySourceAddresses(sourceAddresses);
+    userFeedSourceAddresses = normalizedSources;
+    userFeedEvents = listProfileActivityEvents(normalizedSources);
+    userFeedError = "";
+    if (normalizedSources.length === 0) {
+      userFeedLoading = false;
+      return;
+    }
+    userFeedLoading = userFeedEvents.length === 0;
+
+    try {
+      const events = await syncProfileActivityFromEventFeed({
+        sourceAddresses: normalizedSources,
+      });
+      if (
+        !isUserLoadRequestActive(loadRequestVersion) ||
+        !isUserFeedRequestActive(feedRequestVersion)
+      ) {
+        return;
+      }
+      if (user?.id !== activeUserId) return;
+      userFeedEvents = events;
+    } catch (feedError) {
+      if (
+        !isUserLoadRequestActive(loadRequestVersion) ||
+        !isUserFeedRequestActive(feedRequestVersion)
+      ) {
+        return;
+      }
+      console.warn("[User page] Event feed activity refresh failed.", feedError);
+      userFeedError =
+        feedError instanceof Error ? feedError.message : "Unable to load profile activity.";
+    } finally {
+      if (
+        isUserLoadRequestActive(loadRequestVersion) &&
+        isUserFeedRequestActive(feedRequestVersion)
+      ) {
+        userFeedLoading = false;
+      }
+    }
+  };
 
   const loadUser = async (routeUserId: string) => {
     const requestVersion = beginUserLoadRequest();
@@ -111,10 +199,12 @@
     isLoading = true;
     error = "";
     actionError = "";
+    userFeedError = "";
     activeSocialList = null;
     displayedFollowingIds = [];
     displayedFollowerIds = [];
     socialListsUnavailable = false;
+    socialCountersVisible = false;
 
     try {
       const servicesTokenPresent = Boolean(getToken());
@@ -127,7 +217,7 @@
         ? ((await resolveServicesUserPayloadByAddress(normalizedRequestedAddress)) ?? {
             user: {
               id: normalizedRequestedAddress,
-              display_name: shortAddress(normalizedRequestedAddress),
+              display_name: normalizedRequestedAddress,
               ethereum_address: normalizedRequestedAddress,
               bio: "",
             },
@@ -137,34 +227,16 @@
 
       user = normalizeProfileUser(userPayload);
       const activeUserId = user.id;
-      const feedAuthorKey =
-        (isAddressRoute ? normalizedRequestedAddress : "") ||
-        normalizeAddressForKey(user.address) ||
-        user.id;
-      userFeedEvents = listNetworkFeedEventsByAuthor(feedAuthorKey);
+      const routeAddress =
+        (isAddressRoute ? normalizedRequestedAddress : "") || normalizeAddressForKey(user.address);
+      const feedSourceAddresses = resolveUserFeedSourceAddresses(user, userPayload, routeAddress);
+      userFeedSourceAddresses = feedSourceAddresses;
+      userFeedEvents = listProfileActivityEvents(feedSourceAddresses);
       viewerUserId = hasAuthSession() ? "viewer" : null;
       viewerFollowingIds = [];
       localToolboxConnectors = [];
 
-      if (isChainAddress(feedAuthorKey)) {
-        void fetchChainOwnedStudioSnapshot(feedAuthorKey, {
-          authorId: feedAuthorKey,
-          limit: 200,
-          includeRuntimeCode: true,
-        })
-          .then((snapshot) => {
-            if (!isUserLoadRequestActive(requestVersion)) return;
-            if (user?.id !== activeUserId) return;
-            const targetedEvents = mapSnapshotToNetworkFeedEvents(feedAuthorKey, snapshot);
-            if (targetedEvents.length > 0) {
-              userFeedEvents = targetedEvents;
-            }
-          })
-          .catch((targetedError) => {
-            if (!isUserLoadRequestActive(requestVersion)) return;
-            console.warn("[User page] Targeted chain account fetch failed.", targetedError);
-          });
-      }
+      void refreshUserFeedFromEventFeed(activeUserId, feedSourceAddresses, requestVersion);
 
       isLoading = false;
 
@@ -187,6 +259,8 @@
           displayedFollowingIds = [...targetSocial.followingIds];
           displayedFollowerIds = [...targetSocial.followerIds];
           socialListsUnavailable = targetSocial.status !== "ok";
+          socialCountersVisible = targetSocial.status === "ok";
+          if (targetSocial.status !== "ok") activeSocialList = null;
         })
         .catch((socialError) => {
           if (!isUserLoadRequestActive(requestVersion)) return;
@@ -194,6 +268,8 @@
           displayedFollowingIds = [];
           displayedFollowerIds = [];
           socialListsUnavailable = true;
+          socialCountersVisible = false;
+          activeSocialList = null;
         });
     } catch (err) {
       if (!isUserLoadRequestActive(requestVersion)) return;
@@ -283,16 +359,25 @@
     if (normalizedAddress) {
       labels[normalizedAddress] = nickname;
     }
+    userFeedSourceAddresses.forEach((address) => {
+      const normalizedSource = normalizeAddressForKey(address);
+      if (normalizedSource) labels[normalizedSource] = nickname;
+    });
     return labels;
   });
   const userFeedAuthorAvatars = $derived.by(() => {
     const avatars: Record<string, string> = { ...servicesUserAvatars };
     if (!user?.avatarUrl) return avatars;
-    avatars[user.id] = user.avatarUrl;
+    const avatarUrl = user.avatarUrl;
+    avatars[user.id] = avatarUrl;
     const normalizedAddress = normalizeAddressForKey(user.address);
     if (normalizedAddress) {
-      avatars[normalizedAddress] = user.avatarUrl;
+      avatars[normalizedAddress] = avatarUrl;
     }
+    userFeedSourceAddresses.forEach((address) => {
+      const normalizedSource = normalizeAddressForKey(address);
+      if (normalizedSource) avatars[normalizedSource] = avatarUrl;
+    });
     return avatars;
   });
   const openConnectorInStudio = (connectorId: string) => {
@@ -329,6 +414,7 @@
       });
     return () => {
       userLoadRequestVersion += 1;
+      userFeedRequestVersion += 1;
     };
   });
 </script>
@@ -399,9 +485,9 @@
             resolvedUserFollowKey && viewerFollowingIds.includes(resolvedUserFollowKey),
           )}
           {followPending}
-          followersCount={socialListsUnavailable ? undefined : displayedFollowerIds.length}
-          followingCount={socialListsUnavailable ? undefined : displayedFollowingIds.length}
-          socialCountersDisabled={socialListsUnavailable}
+          followersCount={socialCountersVisible ? displayedFollowerIds.length : undefined}
+          followingCount={socialCountersVisible ? displayedFollowingIds.length : undefined}
+          socialCountersDisabled={!socialCountersVisible}
           onOpenFollowers={openFollowersList}
           onOpenFollowing={openFollowingList}
           onToggleFollow={handleToggleFollow}
@@ -417,13 +503,14 @@
 
       <div class="profile-post-feed profile-card-shell">
         <ConnectorPostFeed
+          loading={userFeedLoading}
           events={userFeedEvents}
           onConnectorOpen={openConnectorInStudio}
           onAddToToolbox={addConnectorToToolbox}
           {toolboxConnectorIds}
           authorLabelById={userFeedAuthorLabels}
           authorAvatarUrlById={userFeedAuthorAvatars}
-          emptyMessage="No activity by this user yet."
+          emptyMessage={userFeedError || "No activity by this user yet."}
         />
       </div>
 

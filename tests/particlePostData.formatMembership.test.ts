@@ -86,7 +86,7 @@ describe("particlePostData format hash membership", () => {
 
   it("returns only particles whose formatHash matches requested hash", async () => {
     const mod = await import("../src/lib/feed/particlePostData");
-    await mod.syncParticlePostDataFromChain({ force: true });
+    await mod.syncParticlePostDataFromOwnedAccountSnapshotsForDebug();
 
     const records = mod.listParticleRecordsByFormatHash(hashOne.toUpperCase());
 
@@ -96,7 +96,7 @@ describe("particlePostData format hash membership", () => {
 
   it("returns empty array for invalid hash", async () => {
     const mod = await import("../src/lib/feed/particlePostData");
-    await mod.syncParticlePostDataFromChain({ force: true });
+    await mod.syncParticlePostDataFromOwnedAccountSnapshotsForDebug();
 
     expect(mod.listParticleRecordsByFormatHash("not-a-hash")).toEqual([]);
   });

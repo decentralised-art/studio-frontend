@@ -78,4 +78,44 @@ describe("networkEventMappers", () => {
       ]),
     );
   });
+
+  it("does not invent runtime-code feed events when snapshot details are missing", () => {
+    const snapshot: ChainStudioSyncResult = {
+      registry: {
+        connectors: {},
+        features: {},
+        particles: {},
+        transformations: {},
+        conditions: {},
+      },
+      library: {
+        features: [],
+        transformations: [
+          {
+            id: "transform-missing",
+            name: "missing",
+            kind: "transformation",
+            authorId: "source",
+            summary: "",
+            runtimeSnippet: "",
+          },
+        ],
+        conditions: [
+          {
+            id: "condition-missing",
+            name: "missing",
+            kind: "condition",
+            authorId: "source",
+            summary: "",
+            runtimeSnippet: "",
+          },
+        ],
+      },
+      particles: [],
+    };
+
+    expect(
+      mapSnapshotToNetworkFeedEvents("0xb584a15f38c2014cff54fdb1b417428b51999276", snapshot),
+    ).toEqual([]);
+  });
 });

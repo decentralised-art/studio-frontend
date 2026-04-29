@@ -1,5 +1,28 @@
+import {
+  createChainFeedStream,
+  getChainFeedPage,
+  type ChainFeedItem,
+  type ChainFeedStreamDelta,
+  type ChainFeedStreamMeta,
+  type ChainFeedStreamSubscription,
+} from "$lib/chain/eventFeedApi";
 import { normalizeFormatHash } from "$lib/chain/registryApi";
 import type { ExploreParticle } from "$lib/data/exploreParticles";
+import {
+  applyChainFeedPage,
+  applyChainFeedStreamDelta,
+  createChainEventFeedCache,
+  getChainEventFeedSnapshot,
+  type ChainEventFeedPaginationState,
+  type ChainEventFeedRecord,
+  type ChainEventFeedStreamState,
+} from "$lib/feed/chainEventFeed";
+import {
+  hydrateChainEventDetail,
+  hydrateChainFeedItemDetail,
+  type ChainEventHydrationTarget,
+  type HydratedChainEventDetail,
+} from "$lib/feed/chainEventHydration";
 import type { FormatFeedEvent } from "$lib/formats/localFormats";
 import type { MockFeatureDef, MockParticleDef } from "$lib/particles/mockPtNetwork";
 import {
@@ -59,6 +82,7 @@ type ParticleDependencyRegistrySnapshot = {
 
 type ParticlePostCache = {
   loaded: boolean;
+  feedRecordsById: Map<string, ChainEventFeedRecord>;
   events: ParticlePostEvent[];
   particlesById: Map<string, ParticleRecord>;
   registry: ParticleDependencyRegistrySnapshot;
@@ -67,29 +91,50 @@ type ParticlePostCache = {
     transformations: Array<{ id: string; label: string; summary: string; authorId: string }>;
     conditions: Array<{ id: string; label: string; summary: string; authorId: string }>;
   };
+  pagination: ChainEventFeedPaginationState;
+  stream: ChainEventFeedStreamState;
 };
 
 const emptyCache = (): ParticlePostCache => ({
   loaded: false,
+  feedRecordsById: new Map(),
   events: [],
   particlesById: new Map(),
   registry: { connectors: {}, particles: {}, features: {} },
   searchable: { connectors: [], transformations: [], conditions: [] },
+  pagination: {
+    limit: null,
+    hasMore: false,
+    nextBefore: null,
+  },
+  stream: {
+    lastSeq: null,
+    requestedSinceSeq: null,
+    minAvailableSeq: null,
+    replayFloorSeq: null,
+    staleSinceSeq: false,
+  },
 });
 
 let cache: ParticlePostCache = emptyCache();
 let loadPromise: Promise<ParticlePostCache> | null = null;
+let loadPromiseKey = "";
 let cachedMaxOwnedPerSource: number | null = null;
 let cachedMaxSources: number | null = null;
 let cachedIncludesRuntimeCode = false;
 let cachedIncludesDependencyExpansion = false;
 let cachedSourceAddresses: string[] | null = null;
+let cachedFollowedFormatHashes: string[] = [];
+let cachedFeedPageLimit: number | null = null;
 const terminalSetCache = new Map<string, string[]>();
 const SOURCE_SNAPSHOT_CONCURRENCY = 4;
 const SOURCE_SNAPSHOT_TIMEOUT_MS = 6000;
 const EXPLICIT_SOURCE_SNAPSHOT_TIMEOUT_MS = 15000;
 const DEPENDENCY_FETCH_CONCURRENCY = 8;
 const DEPENDENCY_FETCH_TIMEOUT_MS = 8000;
+const EVENT_FEED_PAGE_LIMIT = 128;
+const EVENT_FEED_HYDRATION_CONCURRENCY = 8;
+const EVENT_FEED_HYDRATION_TIMEOUT_MS = 8000;
 const CHAIN_ADDRESS_RE = /^0x[0-9a-f]{40}$/;
 
 const normalizeSourceAddress = (value: string): string => {
@@ -206,6 +251,15 @@ const normalizeOptionalFormatHash = (value: unknown): string | undefined => {
   }
 };
 
+const normalizeFormatHashForScope = (value: unknown): string => {
+  if (typeof value !== "string") return "";
+  try {
+    return normalizeFormatHash(value);
+  } catch {
+    return "";
+  }
+};
+
 type RuntimeCodeRecord = {
   type: "transformation" | "condition";
   id: string;
@@ -236,7 +290,28 @@ const rebuildRuntimeCodeEvents = (records: RuntimeCodeRecord[]): Array<RuntimeCo
     runtimeSnippet: record.runtimeSnippet,
   }));
 
-const mergeSnapshots = async (options?: {
+const connectorToFeature = (connector: StudioConnectorDef): MockFeatureDef => ({
+  name: connector.name,
+  dimensions: connector.dimensions.map((dimension, index) => ({
+    label: `dim-${index + 1}`,
+    transformations: dimension.transformations.map((tx) => ({
+      name: tx.name as never,
+      args: [...tx.args],
+    })),
+  })),
+});
+
+const connectorToParticle = (connector: StudioConnectorDef): MockParticleDef => ({
+  name: connector.name,
+  featureName: connector.name,
+  composites: connector.dimensions.map((dimension) => dimension.composite ?? null),
+  conditionName: connector.conditionName,
+  conditionArgs: connector.conditionName ? [...(connector.conditionArgs ?? [])] : undefined,
+});
+
+const runtimeEventKey = (type: "transformation" | "condition", id: string) => `${type}:${id}`;
+
+const loadOwnedAccountSnapshotParticlePostCache = async (options?: {
   forceSources?: boolean;
   maxOwnedPerSource?: number;
   maxSources?: number;
@@ -454,6 +529,7 @@ const mergeSnapshots = async (options?: {
 
   return {
     loaded: true,
+    feedRecordsById: new Map(),
     events,
     particlesById: nextParticlesById,
     registry: nextRegistry,
@@ -462,6 +538,394 @@ const mergeSnapshots = async (options?: {
       transformations: Array.from(searchByKind.transformations.values()),
       conditions: Array.from(searchByKind.conditions.values()),
     },
+    pagination: {
+      limit: null,
+      hasMore: false,
+      nextBefore: null,
+    },
+    stream: {
+      lastSeq: null,
+      requestedSinceSeq: null,
+      minAvailableSeq: null,
+      replayFloorSeq: null,
+      staleSinceSeq: false,
+    },
+  };
+};
+
+const normalizeFeedPageLimit = (value: unknown): number => {
+  if (typeof value !== "number" || !Number.isFinite(value)) return EVENT_FEED_PAGE_LIMIT;
+  return Math.max(1, Math.min(256, Math.trunc(value)));
+};
+
+const isFeedItemRuntimeCode = (eventType: string): boolean => {
+  const normalized = eventType.trim().toLowerCase();
+  return normalized === "transformation_added" || normalized === "condition_added";
+};
+
+const isConnectorFeedEvent = (eventType: string, payloadType?: string): boolean => {
+  const normalizedPayloadType = payloadType?.trim().toLowerCase() ?? "";
+  if (normalizedPayloadType === "connector") return true;
+  return eventType.trim().toLowerCase() === "connector_added";
+};
+
+type EventFeedScope = {
+  sourceAddresses: string[];
+  followedFormatHashes: string[];
+  includeRuntimeCode: boolean;
+  restrictToPreferences: boolean;
+};
+
+const createEventFeedScope = (options?: {
+  sourceAddresses?: string[];
+  followedFormatHashes?: string[];
+  includeRuntimeCode?: boolean;
+}): EventFeedScope => {
+  const sourceAddresses = Array.from(
+    new Set((options?.sourceAddresses ?? []).map(normalizeSourceAddress).filter(Boolean)),
+  ).sort((a, b) => a.localeCompare(b));
+  const followedFormatHashes = Array.from(
+    new Set((options?.followedFormatHashes ?? []).map(normalizeFormatHashForScope).filter(Boolean)),
+  ).sort((a, b) => a.localeCompare(b));
+  return {
+    sourceAddresses,
+    followedFormatHashes,
+    includeRuntimeCode: options?.includeRuntimeCode !== false,
+    restrictToPreferences: sourceAddresses.length > 0 || followedFormatHashes.length > 0,
+  };
+};
+
+const feedOwnerMatchesScope = (owner: string, scope: EventFeedScope): boolean => {
+  if (!scope.restrictToPreferences) return true;
+  if (scope.sourceAddresses.length === 0) return false;
+  return scope.sourceAddresses.includes(normalizeSourceAddress(owner));
+};
+
+const feedItemMatchesPreHydrationScope = (item: ChainFeedItem, scope: EventFeedScope): boolean => {
+  const ownerMatches = feedOwnerMatchesScope(item.payload.owner, scope);
+  if (ownerMatches) return scope.includeRuntimeCode || !isFeedItemRuntimeCode(item.eventType);
+  return (
+    scope.followedFormatHashes.length > 0 && isConnectorFeedEvent(item.eventType, item.payload.type)
+  );
+};
+
+const feedDeltaMatchesPreHydrationScope = (
+  delta: ChainFeedStreamDelta,
+  scope: EventFeedScope,
+): boolean => {
+  const ownerMatches = feedOwnerMatchesScope(delta.payload.owner, scope);
+  if (ownerMatches) return scope.includeRuntimeCode || !isFeedItemRuntimeCode(delta.eventType);
+  return (
+    scope.followedFormatHashes.length > 0 &&
+    isConnectorFeedEvent(delta.eventType, delta.payload.type)
+  );
+};
+
+const hydratedDetailMatchesScope = (
+  event: ParticlePostEvent | null,
+  detail: HydratedChainEventDetail | null,
+  scope: EventFeedScope,
+): boolean => {
+  if (!event) return false;
+  if (feedOwnerMatchesScope(event.authorId, scope)) return true;
+  if (
+    event.type === "connector" &&
+    detail?.type === "connector" &&
+    detail.formatHash &&
+    scope.followedFormatHashes.includes(normalizeFormatHashForScope(detail.formatHash))
+  ) {
+    return true;
+  }
+  return !scope.restrictToPreferences;
+};
+
+type SearchMaps = {
+  connectors: Map<string, { id: string; label: string; summary: string; authorId: string }>;
+  transformations: Map<string, { id: string; label: string; summary: string; authorId: string }>;
+  conditions: Map<string, { id: string; label: string; summary: string; authorId: string }>;
+};
+
+const createSearchMaps = (
+  searchable: ParticlePostCache["searchable"] = {
+    connectors: [],
+    transformations: [],
+    conditions: [],
+  },
+): SearchMaps => ({
+  connectors: new Map(searchable.connectors.map((item) => [`connector:${item.id}`, item])),
+  transformations: new Map(
+    searchable.transformations.map((item) => [runtimeEventKey("transformation", item.id), item]),
+  ),
+  conditions: new Map(
+    searchable.conditions.map((item) => [runtimeEventKey("condition", item.id), item]),
+  ),
+});
+
+const sortSearchEntities = (
+  items: Array<{ id: string; label: string; summary: string; authorId: string }>,
+) =>
+  [...items].sort((a, b) => {
+    const byLabel = a.label.localeCompare(b.label);
+    if (byLabel !== 0) return byLabel;
+    return a.id.localeCompare(b.id);
+  });
+
+const searchableFromMaps = (maps: SearchMaps): ParticlePostCache["searchable"] => ({
+  connectors: sortSearchEntities(Array.from(maps.connectors.values())),
+  transformations: sortSearchEntities(Array.from(maps.transformations.values())),
+  conditions: sortSearchEntities(Array.from(maps.conditions.values())),
+});
+
+const removeEventFromWorkingStructures = (
+  event: ParticlePostEvent,
+  particlesById: Map<string, ParticleRecord>,
+  registry: ParticleDependencyRegistrySnapshot,
+  searchByKind: SearchMaps,
+) => {
+  if (event.type === "connector") {
+    particlesById.delete(event.particleId);
+    delete registry.connectors[event.particleId];
+    delete registry.features[event.particleId];
+    delete registry.particles[event.particleId];
+    searchByKind.connectors.delete(`connector:${event.particleId}`);
+    return;
+  }
+  searchByKind[`${event.type}s`].delete(runtimeEventKey(event.type, event.elementId));
+};
+
+const mergeParticlePostCaches = (
+  base: ParticlePostCache,
+  incoming: ParticlePostCache,
+): ParticlePostCache => {
+  const feedRecordsById = new Map(base.feedRecordsById);
+  const particlesById = new Map(base.particlesById);
+  const registry: ParticleDependencyRegistrySnapshot = {
+    connectors: { ...base.registry.connectors },
+    particles: { ...base.registry.particles },
+    features: { ...base.registry.features },
+  };
+  const searchByKind = createSearchMaps(base.searchable);
+
+  for (const [feedId, record] of incoming.feedRecordsById) {
+    const previous = feedRecordsById.get(feedId);
+    if (previous?.event) {
+      removeEventFromWorkingStructures(previous.event, particlesById, registry, searchByKind);
+    }
+    feedRecordsById.set(feedId, record);
+  }
+
+  incoming.particlesById.forEach((record, id) => {
+    particlesById.set(id, record);
+  });
+  Object.assign(registry.connectors, incoming.registry.connectors);
+  Object.assign(registry.particles, incoming.registry.particles);
+  Object.assign(registry.features, incoming.registry.features);
+
+  const incomingSearch = createSearchMaps(incoming.searchable);
+  incomingSearch.connectors.forEach((item, key) => searchByKind.connectors.set(key, item));
+  incomingSearch.transformations.forEach((item, key) =>
+    searchByKind.transformations.set(key, item),
+  );
+  incomingSearch.conditions.forEach((item, key) => searchByKind.conditions.set(key, item));
+
+  return {
+    loaded: true,
+    feedRecordsById,
+    events: Array.from(feedRecordsById.values())
+      .map((record) => record.event)
+      .filter((event): event is ParticlePostEvent => Boolean(event))
+      .sort(compareNewestFirst),
+    particlesById,
+    registry,
+    searchable: searchableFromMaps(searchByKind),
+    pagination: incoming.pagination,
+    stream: base.stream,
+  };
+};
+
+const hydrateVisibleFeedDetails = async (
+  items: Awaited<ReturnType<typeof getChainFeedPage>>["items"],
+): Promise<Map<string, HydratedChainEventDetail>> => {
+  const visibleItems = items.filter((item) => item.visible && item.status !== "removed");
+  const settled = await runSettledWithConcurrency(
+    visibleItems,
+    EVENT_FEED_HYDRATION_CONCURRENCY,
+    (item) =>
+      withTimeout(
+        hydrateChainFeedItemDetail(item),
+        EVENT_FEED_HYDRATION_TIMEOUT_MS,
+        `feed detail ${item.feedId}`,
+      ).then((detail) => ({ feedId: item.feedId, detail })),
+  );
+
+  const detailsByFeedId = new Map<string, HydratedChainEventDetail>();
+  for (const result of settled) {
+    if (result.status === "rejected") {
+      const reason = result.reason;
+      throw new Error(
+        reason instanceof Error
+          ? `Unable to hydrate chain feed detail: ${reason.message}`
+          : "Unable to hydrate chain feed detail.",
+      );
+    }
+    if (result.value.detail) {
+      detailsByFeedId.set(result.value.feedId, result.value.detail);
+    }
+  }
+  return detailsByFeedId;
+};
+
+const mergeHydratedConnectorDetail = (
+  detail: Extract<HydratedChainEventDetail, { type: "connector" }>,
+  event: ConnectorPostEvent,
+  nextParticlesById: Map<string, ParticleRecord>,
+  nextRegistry: ParticleDependencyRegistrySnapshot,
+  searchByKind: {
+    connectors: Map<string, { id: string; label: string; summary: string; authorId: string }>;
+  },
+): ConnectorPostEvent => {
+  const feature = connectorToFeature(detail.connector);
+  const particle = connectorToParticle(detail.connector);
+  nextRegistry.connectors[detail.connector.name] = detail.connector;
+  nextRegistry.features[feature.name] = feature;
+  nextRegistry.particles[particle.name] = particle;
+
+  const record: ParticleRecord = {
+    ...detail.particleRecord,
+    createdAt: event.createdAt,
+    createdLabel: event.createdLabel,
+  };
+  nextParticlesById.set(record.id, record);
+  searchByKind.connectors.set(`connector:${record.id}`, {
+    id: record.id,
+    label: record.name,
+    summary: record.summary,
+    authorId: record.authorId,
+  });
+
+  return {
+    ...event,
+    authorId: detail.owner,
+    particleId: detail.name,
+    particleLabel: detail.name,
+    ...(detail.formatHash ? { formatHash: detail.formatHash } : {}),
+    usedParticleIds: [...detail.dependencies],
+    usedParticleLabels: [...detail.dependencies],
+  };
+};
+
+const mergeHydratedRuntimeCodeDetail = (
+  detail: Extract<HydratedChainEventDetail, { type: "transformation" | "condition" }>,
+  event: RuntimeCodePostEvent,
+  searchByKind: {
+    transformations: Map<string, { id: string; label: string; summary: string; authorId: string }>;
+    conditions: Map<string, { id: string; label: string; summary: string; authorId: string }>;
+  },
+): RuntimeCodePostEvent => {
+  const nextEvent: RuntimeCodePostEvent = {
+    ...event,
+    authorId: detail.owner,
+    elementId: detail.name,
+    elementLabel: detail.name,
+    runtimeSnippet: detail.runtimeSnippet,
+  };
+  searchByKind[`${detail.type}s`].set(runtimeEventKey(detail.type, detail.name), {
+    id: detail.name,
+    label: detail.name,
+    summary: detail.runtimeSnippet,
+    authorId: detail.owner,
+  });
+  return nextEvent;
+};
+
+const loadEventFeedParticlePostCache = async (options?: {
+  sourceAddresses?: string[];
+  followedFormatHashes?: string[];
+  includeRuntimeCode?: boolean;
+  feedPageLimit?: number;
+  before?: string | null;
+}): Promise<ParticlePostCache> => {
+  const scope = createEventFeedScope(options);
+  const page = await getChainFeedPage({
+    limit: normalizeFeedPageLimit(options?.feedPageLimit),
+    before: options?.before ?? null,
+    includeUnfinalized: true,
+  });
+  const filteredItems = page.items.filter((item) => feedItemMatchesPreHydrationScope(item, scope));
+  const eventFeedCache = createChainEventFeedCache();
+  applyChainFeedPage(eventFeedCache, { ...page, items: filteredItems });
+  const projected = getChainEventFeedSnapshot(eventFeedCache);
+  const detailsByFeedId = await hydrateVisibleFeedDetails(filteredItems);
+
+  const nextParticlesById = new Map<string, ParticleRecord>();
+  const nextRegistry: ParticleDependencyRegistrySnapshot = {
+    connectors: {},
+    particles: {},
+    features: {},
+  };
+  const searchByKind = {
+    connectors: new Map<string, { id: string; label: string; summary: string; authorId: string }>(),
+    transformations: new Map<
+      string,
+      { id: string; label: string; summary: string; authorId: string }
+    >(),
+    conditions: new Map<string, { id: string; label: string; summary: string; authorId: string }>(),
+  };
+  const eventsById = new Map<string, ParticlePostEvent>();
+  const feedRecordsById = new Map<string, ChainEventFeedRecord>();
+
+  for (const record of projected.records) {
+    let event = record.event;
+    const detail = detailsByFeedId.get(record.feedId) ?? null;
+    if (!hydratedDetailMatchesScope(event, detail, scope)) {
+      feedRecordsById.set(record.feedId, {
+        ...record,
+        event: null,
+        visible: false,
+      });
+      continue;
+    }
+
+    if (event?.type === "connector" && detail?.type === "connector") {
+      event = mergeHydratedConnectorDetail(
+        detail,
+        event,
+        nextParticlesById,
+        nextRegistry,
+        searchByKind,
+      );
+    } else if (
+      event &&
+      (event.type === "transformation" || event.type === "condition") &&
+      detail &&
+      (detail.type === "transformation" || detail.type === "condition")
+    ) {
+      event = mergeHydratedRuntimeCodeDetail(detail, event, searchByKind);
+    }
+
+    if (event) eventsById.set(event.id, event);
+    feedRecordsById.set(record.feedId, {
+      ...record,
+      event,
+      visible: Boolean(event),
+    });
+  }
+
+  const events = Array.from(eventsById.values()).sort(compareNewestFirst);
+
+  return {
+    loaded: true,
+    feedRecordsById,
+    events,
+    particlesById: nextParticlesById,
+    registry: nextRegistry,
+    searchable: {
+      connectors: Array.from(searchByKind.connectors.values()),
+      transformations: Array.from(searchByKind.transformations.values()),
+      conditions: Array.from(searchByKind.conditions.values()),
+    },
+    pagination: projected.pagination,
+    stream: projected.stream,
   };
 };
 
@@ -473,11 +937,13 @@ export const syncParticlePostDataFromChain = async (options?: {
   includeRuntimeCode?: boolean;
   includeDependencyExpansion?: boolean;
   sourceAddresses?: string[];
+  followedFormatHashes?: string[];
+  feedPageLimit?: number;
 }) => {
-  const requestedIncludesRuntimeCode = options?.includeRuntimeCode !== false;
-  const requestedSourceAddresses = Array.from(
-    new Set((options?.sourceAddresses ?? []).map(normalizeSourceAddress).filter(Boolean)),
-  ).sort((a, b) => a.localeCompare(b));
+  const requestedScope = createEventFeedScope(options);
+  const requestedIncludesRuntimeCode = requestedScope.includeRuntimeCode;
+  const requestedSourceAddresses = requestedScope.sourceAddresses;
+  const requestedFollowedFormatHashes = requestedScope.followedFormatHashes;
   const hasExplicitSourceAddresses = requestedSourceAddresses.length > 0;
   const requestedIncludesDependencyExpansion = hasExplicitSourceAddresses
     ? options?.includeDependencyExpansion === true
@@ -490,6 +956,16 @@ export const syncParticlePostDataFromChain = async (options?: {
     typeof options?.maxSources === "number" && Number.isFinite(options.maxSources)
       ? Math.max(1, Math.trunc(options.maxSources))
       : null;
+  const requestedFeedPageLimit = normalizeFeedPageLimit(options?.feedPageLimit);
+  const requestKey = JSON.stringify({
+    sourceAddresses: requestedSourceAddresses,
+    followedFormatHashes: requestedFollowedFormatHashes,
+    includeRuntimeCode: requestedIncludesRuntimeCode,
+    includeDependencyExpansion: requestedIncludesDependencyExpansion,
+    maxOwnedPerSource: requestedMaxOwnedPerSource,
+    maxSources: requestedMaxSources,
+    feedPageLimit: requestedFeedPageLimit,
+  });
 
   const cacheSatisfiesRequest = (() => {
     if (!cache.loaded) return false;
@@ -504,8 +980,17 @@ export const syncParticlePostDataFromChain = async (options?: {
     } else if (cachedSourceAddresses !== null) {
       return false;
     }
+    if (cachedFollowedFormatHashes.length !== requestedFollowedFormatHashes.length) return false;
+    if (
+      !cachedFollowedFormatHashes.every(
+        (value, index) => value === requestedFollowedFormatHashes[index],
+      )
+    ) {
+      return false;
+    }
     if (requestedIncludesRuntimeCode && !cachedIncludesRuntimeCode) return false;
     if (requestedIncludesDependencyExpansion && !cachedIncludesDependencyExpansion) return false;
+    if (cachedFeedPageLimit !== null && cachedFeedPageLimit < requestedFeedPageLimit) return false;
     if (requestedMaxSources === null) {
       if (cachedMaxSources !== null) return false;
     } else if (cachedMaxSources !== null && cachedMaxSources < requestedMaxSources) {
@@ -520,34 +1005,288 @@ export const syncParticlePostDataFromChain = async (options?: {
 
   if (cacheSatisfiesRequest && !options?.force) return cache;
 
-  if (!loadPromise || options?.force) {
-    loadPromise = mergeSnapshots({
-      forceSources: Boolean(options?.forceSources),
+  if (!loadPromise || options?.force || loadPromiseKey !== requestKey) {
+    loadPromiseKey = requestKey;
+    loadPromise = loadEventFeedParticlePostCache({
       includeRuntimeCode: requestedIncludesRuntimeCode,
-      includeDependencyExpansion: requestedIncludesDependencyExpansion,
       ...(hasExplicitSourceAddresses ? { sourceAddresses: requestedSourceAddresses } : {}),
-      ...(requestedMaxSources !== null ? { maxSources: requestedMaxSources } : {}),
-      ...(requestedMaxOwnedPerSource !== null
-        ? { maxOwnedPerSource: requestedMaxOwnedPerSource }
+      ...(requestedFollowedFormatHashes.length > 0
+        ? { followedFormatHashes: requestedFollowedFormatHashes }
         : {}),
+      feedPageLimit: requestedFeedPageLimit,
     })
       .then((next) => {
         cache = next;
         cachedSourceAddresses = hasExplicitSourceAddresses ? [...requestedSourceAddresses] : null;
+        cachedFollowedFormatHashes = [...requestedFollowedFormatHashes];
         cachedMaxOwnedPerSource = requestedMaxOwnedPerSource;
         cachedMaxSources = requestedMaxSources;
         cachedIncludesRuntimeCode = requestedIncludesRuntimeCode;
         cachedIncludesDependencyExpansion = requestedIncludesDependencyExpansion;
+        cachedFeedPageLimit = requestedFeedPageLimit;
         terminalSetCache.clear();
+        loadPromise = null;
+        loadPromiseKey = "";
         return cache;
       })
       .catch((error) => {
         loadPromise = null;
+        loadPromiseKey = "";
         throw error;
       });
   }
   const next = await loadPromise;
   return next;
+};
+
+export const loadMoreParticlePostDataFromChain = async (options?: {
+  includeRuntimeCode?: boolean;
+  sourceAddresses?: string[];
+  followedFormatHashes?: string[];
+  feedPageLimit?: number;
+}) => {
+  const requestedScope = createEventFeedScope(options);
+  const requestedFeedPageLimit = normalizeFeedPageLimit(options?.feedPageLimit);
+  if (!cache.loaded) {
+    return syncParticlePostDataFromChain({
+      force: true,
+      includeRuntimeCode: requestedScope.includeRuntimeCode,
+      ...(requestedScope.sourceAddresses.length > 0
+        ? { sourceAddresses: requestedScope.sourceAddresses }
+        : {}),
+      ...(requestedScope.followedFormatHashes.length > 0
+        ? { followedFormatHashes: requestedScope.followedFormatHashes }
+        : {}),
+      feedPageLimit: requestedFeedPageLimit,
+    });
+  }
+  if (!cache.pagination.hasMore || !cache.pagination.nextBefore) return cache;
+
+  const nextPage = await loadEventFeedParticlePostCache({
+    includeRuntimeCode: requestedScope.includeRuntimeCode,
+    ...(requestedScope.sourceAddresses.length > 0
+      ? { sourceAddresses: requestedScope.sourceAddresses }
+      : {}),
+    ...(requestedScope.followedFormatHashes.length > 0
+      ? { followedFormatHashes: requestedScope.followedFormatHashes }
+      : {}),
+    feedPageLimit: requestedFeedPageLimit,
+    before: cache.pagination.nextBefore,
+  });
+  cache = mergeParticlePostCaches(cache, nextPage);
+  cachedSourceAddresses =
+    requestedScope.sourceAddresses.length > 0 ? [...requestedScope.sourceAddresses] : null;
+  cachedFollowedFormatHashes = [...requestedScope.followedFormatHashes];
+  cachedIncludesRuntimeCode = requestedScope.includeRuntimeCode;
+  cachedFeedPageLimit = requestedFeedPageLimit;
+  terminalSetCache.clear();
+  return cache;
+};
+
+const hydrationTargetFromDelta = (
+  delta: ChainFeedStreamDelta,
+): ChainEventHydrationTarget | null => {
+  if (delta.status === "removed") return null;
+  const type = delta.payload.type.trim().toLowerCase();
+  if (type === "connector" || type === "transformation" || type === "condition") {
+    return {
+      type,
+      name: delta.payload.name,
+      owner: delta.payload.owner,
+    };
+  }
+  if (delta.eventType === "connector_added") {
+    return { type: "connector", name: delta.payload.name, owner: delta.payload.owner };
+  }
+  if (delta.eventType === "transformation_added") {
+    return { type: "transformation", name: delta.payload.name, owner: delta.payload.owner };
+  }
+  if (delta.eventType === "condition_added") {
+    return { type: "condition", name: delta.payload.name, owner: delta.payload.owner };
+  }
+  return null;
+};
+
+const applyStreamMetaToCache = (meta: ChainFeedStreamMeta) => {
+  cache = {
+    ...cache,
+    stream: {
+      lastSeq: meta.lastSeq,
+      requestedSinceSeq: meta.requestedSinceSeq,
+      minAvailableSeq: meta.minAvailableSeq,
+      replayFloorSeq: meta.replayFloorSeq,
+      staleSinceSeq: meta.staleSinceSeq,
+    },
+  };
+};
+
+const applyStreamDeltaToCache = async (
+  delta: ChainFeedStreamDelta,
+  scope: EventFeedScope,
+): Promise<boolean> => {
+  if (!feedDeltaMatchesPreHydrationScope(delta, scope)) return false;
+
+  const eventFeedCache = createChainEventFeedCache();
+  applyChainFeedStreamDelta(eventFeedCache, delta);
+  const projected = getChainEventFeedSnapshot(eventFeedCache);
+  const record = projected.records.find((entry) => entry.feedId === delta.feedId) ?? null;
+  if (!record) return false;
+
+  let detail: HydratedChainEventDetail | null = null;
+  const target = hydrationTargetFromDelta(delta);
+  if (target) {
+    detail = await withTimeout(
+      hydrateChainEventDetail(target),
+      EVENT_FEED_HYDRATION_TIMEOUT_MS,
+      `feed delta detail ${delta.feedId}`,
+    );
+  }
+
+  let event = record.event;
+  const nextParticlesById = new Map<string, ParticleRecord>();
+  const nextRegistry: ParticleDependencyRegistrySnapshot = {
+    connectors: {},
+    particles: {},
+    features: {},
+  };
+  const searchByKind = createSearchMaps();
+
+  if (!hydratedDetailMatchesScope(event, detail, scope)) {
+    event = null;
+  } else if (event?.type === "connector" && detail?.type === "connector") {
+    event = mergeHydratedConnectorDetail(
+      detail,
+      event,
+      nextParticlesById,
+      nextRegistry,
+      searchByKind,
+    );
+  } else if (
+    event &&
+    (event.type === "transformation" || event.type === "condition") &&
+    detail &&
+    (detail.type === "transformation" || detail.type === "condition")
+  ) {
+    event = mergeHydratedRuntimeCodeDetail(detail, event, searchByKind);
+  }
+
+  const incoming: ParticlePostCache = {
+    loaded: true,
+    feedRecordsById: new Map([
+      [
+        record.feedId,
+        {
+          ...record,
+          event,
+          visible: Boolean(event),
+        },
+      ],
+    ]),
+    events: event ? [event] : [],
+    particlesById: nextParticlesById,
+    registry: nextRegistry,
+    searchable: searchableFromMaps(searchByKind),
+    pagination: cache.pagination,
+    stream: projected.stream,
+  };
+  cache = {
+    ...mergeParticlePostCaches(cache, incoming),
+    stream: {
+      ...cache.stream,
+      lastSeq:
+        cache.stream.lastSeq === null
+          ? delta.streamSeq
+          : Math.max(cache.stream.lastSeq, delta.streamSeq),
+    },
+  };
+  terminalSetCache.clear();
+  return true;
+};
+
+export const createParticlePostDataStream = (options?: {
+  includeRuntimeCode?: boolean;
+  sourceAddresses?: string[];
+  followedFormatHashes?: string[];
+  feedPageLimit?: number;
+  onUpdate?: () => void;
+  onMeta?: (state: ChainEventFeedStreamState) => void;
+  onStale?: () => void;
+  onError?: (error: Error) => void;
+}): ChainFeedStreamSubscription => {
+  const scope = createEventFeedScope(options);
+  return createChainFeedStream({
+    sinceSeq: cache.stream.lastSeq ?? 0,
+    limit: normalizeFeedPageLimit(options?.feedPageLimit),
+    onDelta: (delta) => {
+      void applyStreamDeltaToCache(delta, scope)
+        .then((changed) => {
+          if (changed) options?.onUpdate?.();
+        })
+        .catch((error) => {
+          options?.onError?.(
+            error instanceof Error ? error : new Error("Unable to apply chain feed delta."),
+          );
+        });
+    },
+    onMeta: (meta) => {
+      applyStreamMetaToCache(meta);
+      options?.onMeta?.({ ...cache.stream });
+      if (meta.staleSinceSeq) options?.onStale?.();
+    },
+    onError: (error) => options?.onError?.(error),
+  });
+};
+
+export const getParticlePostFeedState = () => ({
+  pagination: { ...cache.pagination },
+  stream: { ...cache.stream },
+  hasMoreHistory: Boolean(cache.pagination.hasMore && cache.pagination.nextBefore),
+});
+
+export const loadMoreConnectorPostDataFromChain = loadMoreParticlePostDataFromChain;
+export const createConnectorPostDataStream = createParticlePostDataStream;
+export const getConnectorPostFeedState = getParticlePostFeedState;
+
+export const syncParticlePostDataFromOwnedAccountSnapshotsForDebug = async (options?: {
+  forceSources?: boolean;
+  maxOwnedPerSource?: number;
+  maxSources?: number;
+  includeRuntimeCode?: boolean;
+  includeDependencyExpansion?: boolean;
+  sourceAddresses?: string[];
+}) => {
+  const requestedSourceAddresses = Array.from(
+    new Set((options?.sourceAddresses ?? []).map(normalizeSourceAddress).filter(Boolean)),
+  ).sort((a, b) => a.localeCompare(b));
+  const next = await loadOwnedAccountSnapshotParticlePostCache({
+    forceSources: Boolean(options?.forceSources),
+    includeRuntimeCode: options?.includeRuntimeCode !== false,
+    includeDependencyExpansion: options?.includeDependencyExpansion !== false,
+    ...(requestedSourceAddresses.length > 0 ? { sourceAddresses: requestedSourceAddresses } : {}),
+    ...(typeof options?.maxSources === "number" && Number.isFinite(options.maxSources)
+      ? { maxSources: Math.max(1, Math.trunc(options.maxSources)) }
+      : {}),
+    ...(typeof options?.maxOwnedPerSource === "number" && Number.isFinite(options.maxOwnedPerSource)
+      ? { maxOwnedPerSource: Math.max(1, Math.trunc(options.maxOwnedPerSource)) }
+      : {}),
+  });
+  cache = next;
+  cachedSourceAddresses =
+    requestedSourceAddresses.length > 0 ? [...requestedSourceAddresses] : null;
+  cachedFollowedFormatHashes = [];
+  cachedMaxOwnedPerSource =
+    typeof options?.maxOwnedPerSource === "number" && Number.isFinite(options.maxOwnedPerSource)
+      ? Math.max(1, Math.trunc(options.maxOwnedPerSource))
+      : null;
+  cachedMaxSources =
+    typeof options?.maxSources === "number" && Number.isFinite(options.maxSources)
+      ? Math.max(1, Math.trunc(options.maxSources))
+      : null;
+  cachedIncludesRuntimeCode = options?.includeRuntimeCode !== false;
+  cachedIncludesDependencyExpansion = options?.includeDependencyExpansion !== false;
+  cachedFeedPageLimit = null;
+  terminalSetCache.clear();
+  return cache;
 };
 
 export const listParticlePosts = (): ParticlePostEvent[] =>
@@ -656,14 +1395,31 @@ export const doesParticlePostCacheMatchSources = (sourceAddresses: string[]): bo
   return cachedSourceAddresses.every((value, index) => value === normalizedSources[index]);
 };
 
+export const doesParticlePostCacheMatchFeedScope = (
+  sourceAddresses: string[],
+  followedFormatHashes: string[] = [],
+): boolean => {
+  if (!doesParticlePostCacheMatchSources(sourceAddresses)) return false;
+  const normalizedFormatHashes = Array.from(
+    new Set(followedFormatHashes.map(normalizeFormatHashForScope).filter(Boolean)),
+  ).sort((a, b) => a.localeCompare(b));
+  if (cachedFollowedFormatHashes.length !== normalizedFormatHashes.length) return false;
+  return cachedFollowedFormatHashes.every(
+    (value, index) => value === normalizedFormatHashes[index],
+  );
+};
+
 export const resetParticlePostDataCacheForDebug = () => {
   cache = emptyCache();
   loadPromise = null;
+  loadPromiseKey = "";
   cachedSourceAddresses = null;
   cachedMaxOwnedPerSource = null;
   cachedMaxSources = null;
   cachedIncludesRuntimeCode = false;
   cachedIncludesDependencyExpansion = false;
+  cachedFeedPageLimit = null;
+  cachedFollowedFormatHashes = [];
   terminalSetCache.clear();
 };
 

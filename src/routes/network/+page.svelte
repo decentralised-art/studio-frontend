@@ -14,7 +14,10 @@
     unfollowFormatInProfile,
   } from "$lib/auth/api";
   import {
-    doesParticlePostCacheMatchSources,
+    createConnectorPostDataStream,
+    doesParticlePostCacheMatchFeedScope,
+    getConnectorPostFeedState,
+    loadMoreConnectorPostDataFromChain,
     listParticlePosts as listConnectorPosts,
     listParticleSearchEntities as listConnectorSearchEntities,
     syncParticlePostDataFromChain as syncConnectorPostDataFromChain,
@@ -84,6 +87,9 @@
   let pageMounted = false;
   let feedSyncRequestVersion = 0;
   let runtimeHydrationRequestVersion = 0;
+  let feedHasMoreHistory = $state(false);
+  let feedStreamSubscription: { close: () => void } | null = null;
+  let feedStreamStaleReloadPending = false;
 
   const normalizeAddressForKey = (value: string): string => {
     const trimmed = value.trim().toLowerCase();
@@ -92,13 +98,6 @@
   };
   const isChainAddress = (value: string): boolean =>
     ETH_ADDRESS_RE.test(normalizeAddressForKey(value));
-
-  const shortAddress = (address: string): string => {
-    const normalized = normalizeAddressForKey(address);
-    if (!normalized) return "";
-    if (normalized.length < 14) return normalized;
-    return `${normalized.slice(0, 8)}...${normalized.slice(-4)}`;
-  };
 
   const normalizeFormatHashForKey = (value: string): string => {
     try {
@@ -173,6 +172,11 @@
         labelMap[normalized] = currentUserFallbackLabel;
       });
     }
+    localFollowing.forEach((address) => {
+      const normalized = normalizeAddressForKey(address);
+      if (!normalized || labelMap[normalized]) return;
+      labelMap[normalized] = normalized;
+    });
     return labelMap;
   });
   const feedAuthorAvatarUrls = $derived.by(() => {
@@ -224,7 +228,7 @@
     networkFeedEvents.slice(0, Math.max(0, visibleEventCount)),
   );
   const hasMoreVisibleEvents = $derived.by(() => networkFeedEvents.length > visibleEventCount);
-  const canLoadMoreEvents = $derived.by(() => hasMoreVisibleEvents);
+  const canLoadMoreEvents = $derived.by(() => hasMoreVisibleEvents || feedHasMoreHistory);
   const feedEmptyMessage = $derived.by(() => {
     const hasFollowTargets = localFollowing.length > 0 || localFollowedFormats.length > 0;
     const hasOwnEvents = feedEvents.some((event) =>
@@ -261,7 +265,6 @@
   const hydrateProfileStateForNetwork = async (options?: { preferCached?: boolean }) => {
     const profileState = await getCurrentUserProfileState({
       ...(options ? { preferCached: options.preferCached } : {}),
-      bootstrapPrototypeIfEmpty: true,
     });
     localToolboxConnectors = [...profileState.toolbox.connector];
     const resolvedSourceAddresses = await deriveCurrentSourceAddresses(profileState);
@@ -285,6 +288,7 @@
   const refreshFeedStateFromCache = () => {
     feedEvents = readConnectorFeedEventsFromCache();
     chainElements = listConnectorSearchEntities();
+    feedHasMoreHistory = getConnectorPostFeedState().hasMoreHistory;
     if (feedEvents.length > 0) {
       feedLoadError = "";
     }
@@ -303,15 +307,14 @@
       const knownLabel = discoveredUserLabelByAddress.get(normalized)?.trim() ?? "";
       byAddress.set(normalized, {
         address: normalized,
-        label: knownLabel || shortAddress(normalized) || normalized,
+        label: knownLabel || normalized,
         avatarUrl: "",
       });
     });
     if (currentUserAddressKey && !byAddress.has(currentUserAddressKey)) {
       byAddress.set(currentUserAddressKey, {
         address: currentUserAddressKey,
-        label:
-          currentUserLabel.trim() || shortAddress(currentUserAddressKey) || currentUserAddressKey,
+        label: currentUserLabel.trim() || currentUserAddressKey,
         avatarUrl: currentUserAvatarUrl,
       });
     }
@@ -331,7 +334,7 @@
       return [
         {
           address: normalizedAddressQuery,
-          label: knownLabel || shortAddress(normalizedAddressQuery) || normalizedAddressQuery,
+          label: knownLabel || normalizedAddressQuery,
           avatarUrl: "",
         },
         ...matched,
@@ -394,7 +397,7 @@
         summary: item.summary,
         creatorName:
           discoveredUserLabelByAddress.get(normalizeAddressForKey(item.authorId)) ??
-          shortAddress(item.authorId) ??
+          normalizeAddressForKey(item.authorId) ??
           "unknown contributor",
       }))
       .slice(0, 10);
@@ -414,8 +417,54 @@
     });
   };
 
-  const loadChainFeed = async (options?: { refreshProfile?: boolean }) => {
+  const getFeedSyncOptions = () => ({
+    sourceAddresses: getFeedSourceAddresses(),
+    followedFormatHashes: [...localFollowedFormats],
+    includeRuntimeCode: true,
+    includeDependencyExpansion: false,
+  });
+
+  const closeFeedStream = () => {
+    feedStreamSubscription?.close();
+    feedStreamSubscription = null;
+  };
+
+  const startFeedStream = (
+    syncOptions: ReturnType<typeof getFeedSyncOptions>,
+    requestVersion: number,
+  ) => {
+    closeFeedStream();
+    try {
+      feedStreamSubscription = createConnectorPostDataStream({
+        ...syncOptions,
+        onUpdate: () => {
+          if (!isFeedSyncRequestActive(requestVersion)) return;
+          refreshFeedStateFromCache();
+        },
+        onMeta: () => {
+          if (!isFeedSyncRequestActive(requestVersion)) return;
+          feedHasMoreHistory = getConnectorPostFeedState().hasMoreHistory;
+        },
+        onStale: () => {
+          if (!isFeedSyncRequestActive(requestVersion) || feedStreamStaleReloadPending) return;
+          feedStreamStaleReloadPending = true;
+          void loadChainFeed({ refreshProfile: false, force: true }).finally(() => {
+            feedStreamStaleReloadPending = false;
+          });
+        },
+        onError: (error) => {
+          if (!isFeedSyncRequestActive(requestVersion)) return;
+          console.warn("[Network feed] Chain feed stream failed.", error);
+        },
+      });
+    } catch (error) {
+      console.warn("[Network feed] Failed to start chain feed stream.", error);
+    }
+  };
+
+  const loadChainFeed = async (options?: { refreshProfile?: boolean; force?: boolean }) => {
     const requestVersion = beginFeedSyncRequest();
+    closeFeedStream();
     feedLoadError = "";
     if (options?.refreshProfile !== false) {
       try {
@@ -428,18 +477,27 @@
         );
       }
     }
-    const sourceAddresses = getFeedSourceAddresses();
+    const syncOptions = getFeedSyncOptions();
+    const sourceAddresses = syncOptions.sourceAddresses;
+    const followedFormatHashes = syncOptions.followedFormatHashes;
     if (import.meta.env.DEV) {
-      console.info("[Network feed] Sync sources", sourceAddresses);
+      console.info("[Network feed] Sync scope", {
+        sourceAddresses,
+        followedFormatHashes,
+      });
     }
     try {
-      if (sourceAddresses.length === 0) {
+      if (sourceAddresses.length === 0 && followedFormatHashes.length === 0) {
         feedEvents = [];
         chainElements = { connectors: [], transformations: [], conditions: [] };
+        feedHasMoreHistory = false;
         feedLoading = false;
         feedSyncSettled = true;
       } else {
-        const cacheMatchesCurrentSources = doesParticlePostCacheMatchSources(sourceAddresses);
+        const cacheMatchesCurrentSources = doesParticlePostCacheMatchFeedScope(
+          sourceAddresses,
+          followedFormatHashes,
+        );
         let hasCachedFeed = false;
 
         if (cacheMatchesCurrentSources) {
@@ -451,33 +509,17 @@
           // Avoid showing stale events from a previous source set while refreshing.
           feedEvents = [];
           chainElements = { connectors: [], transformations: [], conditions: [] };
+          feedHasMoreHistory = false;
           feedLoading = true;
           feedSyncSettled = false;
         }
 
-        const syncOptions = {
-          sourceAddresses,
-          includeRuntimeCode: true,
-          includeDependencyExpansion: false,
-        } as const;
-
-        await syncConnectorPostDataFromChain(syncOptions);
+        await syncConnectorPostDataFromChain({ ...syncOptions, force: options?.force ?? true });
         if (!isFeedSyncRequestActive(requestVersion)) return;
         refreshFeedStateFromCache();
         feedLoading = false;
         feedSyncSettled = true;
-
-        if (cacheMatchesCurrentSources && hasCachedFeed) {
-          void syncConnectorPostDataFromChain({ ...syncOptions, force: true })
-            .then(() => {
-              if (!isFeedSyncRequestActive(requestVersion)) return;
-              refreshFeedStateFromCache();
-            })
-            .catch((error) => {
-              if (!isFeedSyncRequestActive(requestVersion)) return;
-              console.warn("[Network feed] Background refresh failed.", error);
-            });
-        }
+        startFeedStream(syncOptions, requestVersion);
       }
       visibleEventCount = FEED_PAGE_SIZE;
     } catch (error) {
@@ -504,7 +546,26 @@
       return;
     }
 
-    return;
+    if (!feedHasMoreHistory) return;
+
+    const requestVersion = feedSyncRequestVersion;
+    feedLoadMoreBusy = true;
+    feedLoadError = "";
+    try {
+      await loadMoreConnectorPostDataFromChain(getFeedSyncOptions());
+      if (!isFeedSyncRequestActive(requestVersion)) return;
+      refreshFeedStateFromCache();
+      visibleEventCount += FEED_PAGE_SIZE;
+    } catch (error) {
+      if (!isFeedSyncRequestActive(requestVersion)) return;
+      console.error("[Network feed] Failed to load older chain feed events.", error);
+      feedLoadError =
+        error instanceof Error ? error.message : "Unable to load older network feed events.";
+    } finally {
+      if (isFeedSyncRequestActive(requestVersion)) {
+        feedLoadMoreBusy = false;
+      }
+    }
   };
 
   $effect(() => {
@@ -523,6 +584,7 @@
     void syncConnectorPostDataFromChain({
       force: true,
       sourceAddresses,
+      followedFormatHashes: [...localFollowedFormats],
       maxOwnedPerSource: RUNTIME_SEARCH_MAX_OWNED_PER_SOURCE,
       includeRuntimeCode: true,
       includeDependencyExpansion: false,
@@ -610,6 +672,8 @@
       } else {
         await followFormatInProfile(normalizedHash);
       }
+      runtimeSearchHydrated = false;
+      await loadChainFeed({ refreshProfile: false, force: true });
     } catch (error) {
       console.error("[Network feed] Failed to persist followed format state.", error);
       localFollowedFormats = previous;
@@ -689,7 +753,7 @@
             if (byAddress.has(normalized)) return;
             byAddress.set(normalized, {
               address: normalized,
-              label: shortAddress(normalized) || normalized,
+              label: normalized,
               avatarUrl: "",
             });
           });
@@ -768,7 +832,11 @@
       .then(async (resolvedSourceAddresses) => {
         if (!pageMounted) return;
         socialPreferencesHydrated = true;
-        if (resolvedSourceAddresses.length === 0 && localFollowing.length === 0) {
+        if (
+          resolvedSourceAddresses.length === 0 &&
+          localFollowing.length === 0 &&
+          localFollowedFormats.length === 0
+        ) {
           feedLoadError = PROFILE_SOURCES_UNAVAILABLE_MESSAGE;
           feedLoading = false;
           feedSyncSettled = true;
@@ -797,6 +865,7 @@
       // Invalidate all in-flight async responders so stale callbacks cannot mutate state.
       feedSyncRequestVersion += 1;
       runtimeHydrationRequestVersion += 1;
+      closeFeedStream();
     };
   });
 </script>

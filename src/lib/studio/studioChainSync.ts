@@ -36,18 +36,18 @@ export type StudioChainSyncSource = {
 
 export const buildStudioChainSyncSummary = ({
   sourceCount,
-  connectorRecordCount,
+  connectorEntryCount,
   connectorCount,
   transformationCount,
   conditionCount,
 }: {
   sourceCount: number;
-  connectorRecordCount: number;
+  connectorEntryCount: number;
   connectorCount: number;
   transformationCount: number;
   conditionCount: number;
 }): string =>
-  `Synced ${sourceCount} sources · ${connectorRecordCount} connector records · ${connectorCount} connectors · ${transformationCount} transformations · ${conditionCount} conditions.`;
+  `Synced ${sourceCount} sources · ${connectorEntryCount} connector entries · ${connectorCount} connectors · ${transformationCount} transformations · ${conditionCount} conditions.`;
 
 export const shortStudioChainSourceAddress = (value: string): string => {
   const normalized = normalizeFeedSourceAddress(value);

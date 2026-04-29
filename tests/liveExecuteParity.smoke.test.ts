@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 
-import { authenticateAllMockAccountsInChain } from "../src/lib/auth/api";
 import { buildChainApiUrl } from "../src/lib/url/url";
 
 type ExecutePayload = {
@@ -36,27 +35,15 @@ const runLiveExecute = async (token: string, payload: ExecutePayload) => {
 };
 
 const liveSmokeEnabled = process.env.DCN_LIVE_SMOKE === "1";
+const liveChainToken = process.env.DCN_LIVE_CHAIN_TOKEN ?? "";
 
 describe("live execute parity smoke (manual, opt-in)", () => {
   it.skipIf(!liveSmokeEnabled)(
-    "authenticates a mock chain user and executes canonical payloads",
+    "executes canonical payloads with an externally supplied chain token",
     async () => {
-      const authResults = await authenticateAllMockAccountsInChain({
-        patchServicesProfile: false,
-      });
-      const authenticated = authResults.find(
-        (entry) => entry.success && typeof entry.token === "string" && entry.token.length > 0,
-      );
-      if (!authenticated) {
-        const details = authResults
-          .map(
-            (entry) =>
-              `- ${entry.userId} (${entry.nickname}): success=${entry.success} error=${entry.error ?? "none"}`,
-          )
-          .join("\n");
-        throw new Error(`No mock chain account could be authenticated.\n${details}`);
+      if (!liveChainToken) {
+        throw new Error("Set DCN_LIVE_CHAIN_TOKEN when running DCN_LIVE_SMOKE=1.");
       }
-      const token = authenticated.token as string;
 
       const payloads: ExecutePayload[] = [
         {
@@ -75,7 +62,7 @@ describe("live execute parity smoke (manual, opt-in)", () => {
       ];
 
       for (const payload of payloads) {
-        const result = await runLiveExecute(token, payload);
+        const result = await runLiveExecute(liveChainToken, payload);
         expect(result.ok).toBe(true);
 
         const body = result.body;

@@ -537,6 +537,72 @@ Suggested commit slices:
 5. `Use DCN event feed for Studio network library`
 6. `Quarantine legacy account snapshot sync`
 
+## Step 11: Feature-Safe Rollout Guardrails
+
+The migration should stay sliceable even after the first broad implementation. Keep the following
+boundaries explicit so regressions remain easy to isolate.
+
+Rollout slices:
+
+1. Add the typed event feed client, projection cache, hydration helpers, and unit tests without route
+   usage.
+2. Wire `/network` to feed-backed history, pagination, and SSE while keeping services profile/follow
+   ownership as the filtering source of truth.
+3. Wire `/account` and `/u/[id]` to feed-backed profile activity by normalized chain owner address.
+4. Wire Studio Network library discovery to event feed metadata, with exact entity hydration only when
+   opening, adding, dragging, deep-linking, or after deploy success.
+5. Quarantine old owned-account snapshot scans behind debug or targeted detail helpers only.
+6. Update route tests, source-level rollout guard tests, and docs before preparing a commit.
+
+Current guardrails:
+
+- `tests/eventFeedApi.test.ts`, `tests/chainEventFeed.test.ts`, and
+  `tests/chainEventHydration.test.ts` protect the raw backend contract, projection behavior, detail
+  hydration, SSE metadata, removed events, and no-fake-detail rule.
+- `tests/particlePostData.eventFeed.test.ts` protects the public feed cache API while its internals use
+  `/feed`.
+- `tests/profileActivity.test.ts` protects account/profile activity loading by owner address.
+- `tests/studioEventFeedLibrary.test.ts` protects Studio Network library discovery without detail fan-out.
+- `tests/eventFeedRollout.test.ts` prevents broad route paths from being rewired back to owned-account
+  scans and keeps old snapshot sync debug-only.
+- `e2e/app-smoke.spec.ts` verifies `/network`, `/account`, `/u/[id]`, and Studio Network discovery against
+  mocked `/chain/feed` responses and asserts the broad feed paths do not need `/chain/account`.
+
+CI/local acceptance for every slice:
+
+- `npm run format:check`
+- `npm run lint`
+- `npm run check`
+- `npm run test`
+- relevant `npm run test:e2e` coverage, or targeted Playwright specs while developing
+- `npm run build` before commit/push
+
+Notes:
+
+- The debug workflow already runs format check, lint, Svelte check, unit tests, production build, and
+  Playwright. The Playwright report artifact upload is temporarily disabled only because of the current
+  GitHub Actions storage quota issue.
+- The release workflow still performs the production build and release-artifact smoke test.
+- Exact entity endpoints remain canonical detail fetches. They are not fallbacks.
+
+## Step 12: Backend Contract Gap Tracking
+
+Backend event-feed improvements are tracked separately in
+`docs/dcn-event-feed-backend-contract-gaps.md`.
+
+This keeps frontend work unblocked while giving the backend developer an actionable list:
+
+- Add `owner=<address>` filter support to `/feed`.
+- Include `format_hash` in connector feed payloads.
+- Include `args_count` and `entity_address` in runtime feed payloads.
+- Include `op` in SSE delta data.
+- Allow omitted `limit` on `/feed`.
+
+The frontend adapter boundary should stay centralized in `eventFeedApi.ts`, `chainEventFeed.ts`,
+`chainEventHydration.ts`, `particlePostData.ts`, `profileActivity.ts`, and
+`studioEventFeedLibrary.ts`, so each backend contract improvement remains a small adapter/test change rather
+than a route rewrite.
+
 ## Non-Negotiable Behavior Constraints
 
 - Do not add confusing mock or static fallbacks for real app behavior.

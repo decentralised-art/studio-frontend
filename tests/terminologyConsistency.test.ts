@@ -99,9 +99,9 @@ const requiredConnectorPhrases: Record<string, string[]> = {
     "No connectors reference",
   ],
   "src/routes/studio/+page.svelte": [
-    "connector records",
+    "network library entries",
     "attached connector.",
-    "and connector records",
+    "transformations and conditions",
     "<span>Connector</span>",
   ],
 };
