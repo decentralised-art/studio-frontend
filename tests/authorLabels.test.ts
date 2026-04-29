@@ -58,15 +58,14 @@ describe("authorLabels", () => {
       },
     };
 
-    expect(getServicesUserChainSourceAddresses(user)).toEqual([directAddress, alias, address]);
+    expect(getServicesUserChainSourceAddresses(user)).toEqual([directAddress, alias]);
     expect(buildAuthorLabelMapFromServicesUsers([user])).toEqual({
       [directAddress]: "prototype_test_account",
-      [address]: "prototype_test_account",
       [alias]: "prototype_test_account",
     });
   });
 
-  it("ignores the legacy Lyra avatar for the prototype account", () => {
+  it("uses explicitly stored service profile avatars", () => {
     expect(
       resolveServicesUserAvatarUrl({
         id: "prototype",
@@ -79,6 +78,6 @@ describe("authorLabels", () => {
           },
         },
       }),
-    ).toBe("");
+    ).toBe(asset("/avatars/lyra.svg"));
   });
 });

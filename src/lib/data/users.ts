@@ -241,31 +241,6 @@ export const displayUsersById = Object.fromEntries(
   [...mockUsers, ...extraChainSourceProfiles].map((user) => [user.id, user] as const),
 ) as Record<string, User>;
 
-export const mockCurrentUserId: User["id"] = "user-lyra";
-
-export const mockFollowingByUserId: Partial<Record<User["id"], User["id"][]>> = {
-  "user-lyra": [
-    "user-milo",
-    "user-rae",
-    "user-jun",
-    "user-iris",
-    "user-nia",
-    "agent-aurora",
-    "chain-source-da25",
-    "chain-source-fa71",
-    "chain-source-b530",
-    "chain-source-71a6",
-    "chain-source-81da",
-    "chain-source-7e5f",
-  ],
-  "user-milo": ["user-lyra", "user-jun"],
-  "user-rae": ["user-lyra", "user-nia"],
-  "user-jun": ["user-lyra", "user-iris", "agent-aurora"],
-  "user-iris": ["user-lyra", "user-jun"],
-  "user-nia": ["user-lyra", "agent-aurora"],
-  "agent-aurora": ["user-lyra", "user-jun", "user-iris"],
-};
-
 export const extraChainSyncSources: ChainSyncSource[] = [
   {
     id: "chain-source-da25",

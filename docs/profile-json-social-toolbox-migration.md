@@ -103,8 +103,9 @@ Notes:
 3. `toolbox_library.condition` strips a legacy `condition-` prefix on save.
 4. Toolbox no longer stores `particles`, `feature`, or `plugin` as canonical categories.
 5. Formats are followable, but are not toolbox items.
-6. `followed_user_ids`, `followedUserIds`, and `followedUserAddresses` are legacy read aliases only;
-   social saves remove them so old IDs cannot re-add unfollowed users.
+6. `followedUserAddresses` and `followedFormatHashes` are legacy read aliases only. Social saves
+   write canonical snake_case address/hash arrays and remove legacy camelCase aliases plus legacy
+   user-id aliases.
 
 ## Read fallback behavior
 
@@ -121,12 +122,10 @@ Frontend reads these aliases if present:
    - `public.social_preferences.followed_user_addresses` (canonical)
    - `public.followed_user_addresses` (canonical mirror)
    - `followedUserAddresses` camelCase aliases (legacy)
-   - `followed_user_ids` / `followedUserIds` aliases (legacy)
 
-Legacy user IDs are resolved to chain-source addresses when possible. Mock user IDs first use the
-stored mock-chain account for that user, then fall back to the static mock address. Extra prototype
-chain-source IDs are also resolved to their configured addresses. Values that are already Ethereum
-addresses are lowercased and kept.
+Legacy `followed_user_ids` / `followedUserIds` are no longer resolved by the frontend. A services
+profile follows only the Ethereum addresses explicitly stored in the canonical address arrays.
+Values that are already Ethereum addresses are lowercased and kept.
 
 3. Social format follows:
    - `public.social_preferences.followed_format_hashes` (canonical)
@@ -136,13 +135,11 @@ addresses are lowercased and kept.
 `followed_format_ids` is not a current read source. Historical values may be preserved as unrelated
 profile fields if already present, but the frontend follows formats by format hash.
 
-## Prototype bootstrap behavior
+## Bootstrap Behavior
 
-When loading social preferences with bootstrap enabled, if `followed_user_addresses` resolves to an
-empty list, the frontend can seed mock accounts with known prototype follow addresses and persist
-the canonical address fields. This keeps Explore/Studio network content useful before global
-search/discovery is implemented.
+The frontend no longer seeds mock/prototype follow addresses into an empty profile. Newly registered
+or empty services accounts start with an empty follow list until the user follows an address or
+format explicitly.
 
-Toolbox bootstrap is separate: unauthenticated prototype fallback state can expose the mock current
-user's default connector toolbox, but an authenticated empty profile is not automatically filled
-with toolbox items. Toolbox entries are added through explicit save/deploy/toggle actions.
+Toolbox entries are also services-profile state. An authenticated empty profile is not automatically
+filled with toolbox items; entries are added through explicit save/deploy/toggle actions.

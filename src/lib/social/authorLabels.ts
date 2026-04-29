@@ -1,10 +1,7 @@
 import type { ServicesUserRecord } from "$lib/auth/api";
-import { resolveProfileAvatarUrl, shouldIgnoreProfileAvatarUrl } from "$lib/user/profileModel";
+import { resolveProfileAvatarUrl } from "$lib/user/profileModel";
 
 const ETH_ADDRESS_RE = /^0x[0-9a-f]{40}$/;
-const PROTOTYPE_TEST_EMAIL = "user-lyra@mock.decentralised.art";
-const PROTOTYPE_TEST_DISPLAY_NAME = "prototype_test_account";
-const PROTOTYPE_TEST_ACCOUNT_CHAIN_SOURCE_ADDRESS = "0xb584a15f38c2014cff54fdb1b417428b51999276";
 
 export const normalizeAuthorAddress = (value: string): string => {
   const trimmed = value.trim().toLowerCase();
@@ -30,17 +27,6 @@ const asStringArray = (value: unknown): string[] =>
 
 const uniqueStrings = (values: string[]): string[] =>
   Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
-
-const isPrototypeServicesUser = (user: ServicesUserRecord): boolean => {
-  const email = typeof user.email === "string" ? user.email.trim().toLowerCase() : "";
-  const displayName =
-    typeof user.display_name === "string"
-      ? user.display_name.trim()
-      : typeof user.displayName === "string"
-        ? user.displayName.trim()
-        : "";
-  return email === PROTOTYPE_TEST_EMAIL || displayName === PROTOTYPE_TEST_DISPLAY_NAME;
-};
 
 export const getServicesUserEthereumAddress = (user: ServicesUserRecord): string => {
   const direct =
@@ -85,7 +71,6 @@ export const getServicesUserChainSourceAddresses = (user: ServicesUserRecord): s
       ...asStringArray(sourceAliases.chain_source_addresses).map(normalizeAuthorAddress),
       ...asStringArray(sourceAliases.chainSourceAddresses).map(normalizeAuthorAddress),
       ...asStringArray(sourceAliases.addresses).map(normalizeAuthorAddress),
-      ...(isPrototypeServicesUser(user) ? [PROTOTYPE_TEST_ACCOUNT_CHAIN_SOURCE_ADDRESS] : []),
     ].filter(Boolean),
   );
 };
@@ -114,20 +99,6 @@ export const resolveServicesUserDisplayLabel = (
 export const resolveServicesUserAvatarUrl = (user: ServicesUserRecord): string => {
   const profileJson = asRecord(user.profile_json ?? user.profileJson);
   const profilePublic = asRecord(profileJson.public ?? profileJson.profile ?? profileJson);
-  const displayName =
-    typeof user.display_name === "string"
-      ? user.display_name
-      : typeof user.displayName === "string"
-        ? user.displayName
-        : "";
-  const email = typeof user.email === "string" ? user.email : "";
-  const nickname =
-    typeof profilePublic.nickname === "string"
-      ? profilePublic.nickname
-      : typeof profilePublic.name === "string"
-        ? profilePublic.name
-        : "";
-
   const candidates = [
     profilePublic.avatar_url,
     profilePublic.avatarUrl,
@@ -139,16 +110,6 @@ export const resolveServicesUserAvatarUrl = (user: ServicesUserRecord): string =
   for (const candidate of candidates) {
     if (typeof candidate !== "string") continue;
     const resolved = resolveProfileAvatarUrl(candidate);
-    if (
-      shouldIgnoreProfileAvatarUrl({
-        email,
-        displayName,
-        nickname,
-        avatarUrl: resolved,
-      })
-    ) {
-      continue;
-    }
     if (resolved) return resolved;
   }
 

@@ -67,4 +67,28 @@ describe("profile avatar rendering", () => {
     expect(queryByText("PT")).not.toBeInTheDocument();
     expect(container.querySelector("img.avatar-img")).toBeInTheDocument();
   });
+
+  it("omits social counters when a profile has no services social graph", () => {
+    const { queryByRole } = render(UserProfileView, {
+      props: {
+        user: profileUser(),
+      },
+    });
+
+    expect(queryByRole("button", { name: /followers/i })).not.toBeInTheDocument();
+    expect(queryByRole("button", { name: /following/i })).not.toBeInTheDocument();
+  });
+
+  it("renders social counters when services social graph counts are available", () => {
+    const { getByRole } = render(UserProfileView, {
+      props: {
+        user: profileUser(),
+        followersCount: 2,
+        followingCount: 3,
+      },
+    });
+
+    expect(getByRole("button", { name: /followers\s*2/i })).toBeInTheDocument();
+    expect(getByRole("button", { name: /following\s*3/i })).toBeInTheDocument();
+  });
 });

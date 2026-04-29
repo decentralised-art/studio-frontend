@@ -7,40 +7,25 @@
   import Input from "$lib/components/ui/Input.svelte";
   import SectionShell from "$lib/components/ui/SectionShell.svelte";
 
-  import { login, loginOrRegisterUser, loginWithMockChainAccount } from "$lib/auth/api";
+  import { login, registerUser } from "$lib/auth/api";
   import { DEFAULT_AUTHENTICATED_ROUTE } from "$lib/auth/routeAccess";
   import { hasAuthSession } from "$lib/auth/session";
-  import { mockUsers } from "$lib/data/users";
+
+  type AuthMode = "login" | "register";
 
   let form = $state({
     email: "",
+    displayName: "",
     password: "",
   });
 
+  let authMode = $state<AuthMode>("login");
   let isSubmitting = $state(false);
   let loginError = $state("");
-  const isDev = import.meta.env.DEV;
 
-  const MOCK_PASSWORD = "mock-user-password";
-
-  const mockCredentialsForUser = (userId: string) => ({
-    email: `${userId}@mock.decentralised.art`,
-    password: MOCK_PASSWORD,
-  });
-
-  const resolveMockUserIdFromEmail = (emailRaw: string): string | null => {
-    const email = emailRaw.trim().toLowerCase();
-    if (!email.endsWith("@mock.decentralised.art")) return null;
-    const userId = email.replace(/@mock\.decentralised\.art$/i, "");
-    return mockUsers.some((entry) => entry.id === userId) ? userId : null;
-  };
-
-  const warmMockChainSession = async (userId: string) => {
-    try {
-      await loginWithMockChainAccount(userId);
-    } catch (error) {
-      console.warn("[Login] Mock chain auth warm-up failed; services login remains active.", error);
-    }
+  const toggleAuthMode = () => {
+    authMode = authMode === "login" ? "register" : "login";
+    loginError = "";
   };
 
   const handleSubmit = async (event: SubmitEvent) => {
@@ -52,49 +37,29 @@
       return;
     }
 
+    if (authMode === "register" && !form.displayName.trim()) {
+      loginError = "Display name is required.";
+      return;
+    }
+
     isSubmitting = true;
     try {
       const email = form.email.trim();
-      await login(email, form.password);
-      const mockUserId = resolveMockUserIdFromEmail(email);
-      if (mockUserId) {
-        await warmMockChainSession(mockUserId);
+      if (authMode === "register") {
+        await registerUser(email, form.displayName.trim(), form.password);
       }
+      await login(email, form.password);
       await goto(resolve("/account"));
     } catch (err) {
-      loginError = err instanceof Error ? err.message : "Login failed.";
+      loginError =
+        err instanceof Error
+          ? err.message
+          : authMode === "register"
+            ? "Registration failed."
+            : "Login failed.";
     } finally {
       isSubmitting = false;
     }
-  };
-
-  const loginWithMockUser = async (
-    userId: string,
-    destination: "/account" | "/studio" = "/account",
-  ) => {
-    const user = mockUsers.find((entry) => entry.id === userId);
-    if (!user) return;
-
-    loginError = "";
-    isSubmitting = true;
-
-    const credentials = mockCredentialsForUser(user.id);
-    form.email = credentials.email;
-    form.password = credentials.password;
-
-    try {
-      await loginOrRegisterUser(credentials.email, user.nickname, credentials.password);
-      await warmMockChainSession(user.id);
-      await goto(resolve(destination));
-    } catch (err) {
-      loginError = err instanceof Error ? err.message : "Mock login failed.";
-    } finally {
-      isSubmitting = false;
-    }
-  };
-
-  const handlePrototypePreview = async () => {
-    await loginWithMockUser("user-lyra", "/studio");
   };
 
   onMount(() => {
@@ -108,36 +73,25 @@
 <div class="auth-page">
   <SectionShell>
     <div class="header">
-      <h1 class="title">Log in</h1>
-      <p class="subtitle">Access your account and toolbox.</p>
+      <h1 class="title">{authMode === "register" ? "Create account" : "Log in"}</h1>
+      <p class="subtitle">
+        {authMode === "register"
+          ? "Register a services account for your DCN profile."
+          : "Access your account and toolbox."}
+      </p>
     </div>
 
-    <div class="prototype-preview">
-      <p class="prototype-preview-title">Prototype Preview</p>
-      <p class="prototype-preview-text">
-        DCN is currently in an experimental pre-MVP phase. It is suitable for exploration and demos,
-        but not yet for production-ready projects or persistence-critical workflows.
-      </p>
-      <div class="actions prototype-preview-actions">
-        <Button
-          variant="primary"
-          type="button"
-          onclick={handlePrototypePreview}
-          disabled={isSubmitting}
-        >
-          Preview Prototype
-        </Button>
-      </div>
-    </div>
-
-    {#if !isDev}
-      <p class="dev-notice">
-        Public release is not yet available. Use Preview to explore the prototype safely.
-      </p>
-    {/if}
+    <p class="mock-system-warning">
+      Mock system warning: this deployment may still expose experimental chain data and development
+      infrastructure. Accounts, follows, and toolbox entries are loaded only from your services
+      profile.
+    </p>
 
     <form class="form" onsubmit={handleSubmit}>
       <Input label="Email" type="email" bind:value={form.email} placeholder="you@hypermusic.ai" />
+      {#if authMode === "register"}
+        <Input label="Display name" bind:value={form.displayName} placeholder="Your public name" />
+      {/if}
       <Input label="Password" type="password" bind:value={form.password} placeholder="••••••••" />
 
       {#if loginError}
@@ -146,17 +100,19 @@
 
       <div class="actions">
         <Button variant="primary" type="submit" disabled={isSubmitting}>
-          {isSubmitting ? "Signing in..." : "Sign in"}
+          {isSubmitting
+            ? authMode === "register"
+              ? "Creating..."
+              : "Signing in..."
+            : authMode === "register"
+              ? "Create account"
+              : "Sign in"}
         </Button>
       </div>
 
-      {#if isDev}
-        <p class="mock-login-credentials">Prototype mock password: <code>{MOCK_PASSWORD}</code></p>
-      {/if}
-
-      <p class="registration-closed">
-        New account registration is temporarily disabled while the app is still in development.
-      </p>
+      <button class="mode-toggle" type="button" onclick={toggleAuthMode}>
+        {authMode === "register" ? "Already have an account? Sign in" : "Need an account? Register"}
+      </button>
     </form>
   </SectionShell>
 </div>
@@ -180,24 +136,9 @@
     @apply text-sm text-white/60;
   }
 
-  .dev-notice {
-    @apply mt-4 rounded-md border border-white/10 bg-white/5 px-3 py-2 text-sm text-white/70;
-  }
-
-  .prototype-preview {
+  .mock-system-warning {
     @apply mt-4 rounded-lg border border-cyan-300/25 bg-cyan-400/5 px-4 py-3 space-y-2;
-  }
-
-  .prototype-preview-title {
-    @apply text-sm font-semibold tracking-wide uppercase text-cyan-200;
-  }
-
-  .prototype-preview-text {
     @apply text-sm text-white/75;
-  }
-
-  .prototype-preview-actions {
-    @apply justify-start pt-1;
   }
 
   .form {
@@ -208,19 +149,12 @@
     @apply flex items-center justify-end;
   }
 
-  .mock-login-credentials {
-    @apply text-xs text-white/60;
-  }
-
-  .mock-login-credentials code {
-    @apply text-white/80 bg-white/5 px-1 py-0.5 rounded;
-  }
-
   .error {
     @apply text-sm text-red-400;
   }
 
-  .registration-closed {
-    @apply text-xs text-white/55 text-left;
+  .mode-toggle {
+    @apply text-xs text-white/65 underline decoration-transparent underline-offset-2 transition
+      hover:text-white hover:decoration-white/70;
   }
 </style>

@@ -62,7 +62,7 @@ describe("toolbox library helpers", () => {
     );
   });
 
-  it("lists saved toolbox items from source data with fallbacks for missing entries", () => {
+  it("lists only saved toolbox items that are present in source data", () => {
     const source: LibraryItem[] = [
       {
         id: "feature-pitch",
@@ -78,18 +78,7 @@ describe("toolbox library helpers", () => {
         kind: "feature",
         source,
         toolboxLibrary: { ...emptyToolbox(), connector: ["pitch", "remote-only"] },
-        fallbackAuthorId: "user-lyra",
       }),
-    ).toEqual([
-      source[0],
-      {
-        id: "feature-remote-only",
-        name: "remote-only",
-        kind: "feature",
-        authorId: "user-lyra",
-        summary: "Saved in toolbox.",
-        dimensions: 1,
-      },
-    ]);
+    ).toEqual([source[0]]);
   });
 });

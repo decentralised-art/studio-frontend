@@ -2,13 +2,6 @@ import { browser } from "$app/environment";
 import { goto } from "$app/navigation";
 import { resolve } from "$app/paths";
 import {
-  extraChainSourceProfiles,
-  mockCurrentUserId,
-  mockFollowingByUserId,
-  mockUsers,
-  mockUsersById,
-} from "$lib/data/users";
-import {
   createEmptyToolboxLibrary,
   normalizeConnectorToolboxId,
   normalizeToolboxIdByKind,
@@ -18,11 +11,7 @@ import {
   type ToolboxLibrary,
 } from "$lib/toolbox/toolboxLibrary";
 import { buildChainApiUrl, buildServicesApiUrl } from "$lib/url/url";
-import {
-  createChainAuthRequest,
-  getOrCreateMockEthereumAccount,
-  getStoredMockEthereumAccount,
-} from "./mockEthereum";
+import { buildNonceLoginMessage } from "./mockEthereum";
 import {
   clearChainToken,
   clearToken,
@@ -32,34 +21,33 @@ import {
   setToken,
 } from "./session";
 
-export type MockChainAuthResult = {
-  userId: string;
-  nickname: string;
+export type BrowserWalletChainAuthResult = {
   address: string;
-  publicKey: string;
-  privateKey: string;
-  nonce: string | null;
-  message: string | null;
-  signature: string | null;
-  token: string | null;
+  nonce: string;
+  message: string;
+  signature: string;
+  token: string;
   patchedUserId: string | null;
   ethereumAddressPatched: boolean;
-  success: boolean;
-  error: string | null;
 };
 
-const MOCK_USER_PASSWORD = "mock-user-password";
-const SERVICES_ME_CACHE_KEY = "dcn_services_me_cache_v1";
-const servicesPatchCacheByMockUserId = new Map<
-  string,
-  { ethereumAddress: string; patchedUserId: string | null }
->();
-let cachedMePayloadMemory: unknown | null = null;
+type BrowserEthereumProvider = {
+  request: <T = unknown>(args: { method: string; params?: unknown[] }) => Promise<T>;
+};
 
-const mockCredentialsForUser = (userId: string) => ({
-  email: `${userId}@mock.decentralised.art`,
-  password: MOCK_USER_PASSWORD,
-});
+type WindowWithEthereum = Window & {
+  ethereum?: BrowserEthereumProvider;
+};
+
+type ChainAuthPayload = {
+  address: string;
+  signature: string;
+  message: string;
+};
+
+const SERVICES_ME_CACHE_KEY = "dcn_services_me_cache_v1";
+const ETHEREUM_ADDRESS_RE = /^0x[0-9a-f]{40}$/i;
+let cachedMePayloadMemory: unknown | null = null;
 
 const redirectToLogin = () => {
   if (!browser) return;
@@ -104,17 +92,6 @@ const createStatusError = (message: string, status: number): HttpStatusError => 
   const error = new Error(message) as HttpStatusError;
   error.status = status;
   return error;
-};
-
-const isStatusError = (error: unknown, status: number): boolean => {
-  if (!error || typeof error !== "object") return false;
-  return (error as { status?: number }).status === status;
-};
-
-const shouldAttemptRegistrationAfterLoginError = (error: unknown): boolean => {
-  if (!error || typeof error !== "object") return false;
-  const status = (error as { status?: number }).status;
-  return status === 401 || status === 404;
 };
 
 const parseTokenFromResponse = (raw: string): string => {
@@ -187,30 +164,6 @@ const parseResponseBody = async (response: Response) => {
   return response.text();
 };
 
-const loginOrRegisterWithServices = async (
-  email: string,
-  displayName: string,
-  password: string,
-): Promise<string> => {
-  try {
-    return await login(email, password);
-  } catch (error) {
-    if (!shouldAttemptRegistrationAfterLoginError(error)) {
-      throw error;
-    }
-
-    try {
-      await registerUser(email, displayName, password);
-    } catch (registerError) {
-      if (!isStatusError(registerError, 409)) {
-        throw registerError;
-      }
-    }
-
-    return login(email, password);
-  }
-};
-
 const readCachedMePayload = (): unknown | null => {
   if (!browser) return cachedMePayloadMemory;
   if (cachedMePayloadMemory !== null) return cachedMePayloadMemory;
@@ -262,6 +215,20 @@ const extractErrorMessage = (payload: unknown): string => {
   return "Request failed.";
 };
 
+const normalizeEthereumAddress = (value: string): string => {
+  const trimmed = value.trim().toLowerCase();
+  if (!trimmed) return "";
+  const prefixed = trimmed.startsWith("0x") ? trimmed : `0x${trimmed}`;
+  return ETHEREUM_ADDRESS_RE.test(prefixed) ? prefixed : "";
+};
+
+const stripHexPrefix = (value: string): string => value.trim().replace(/^0x/i, "");
+
+export const chainTokenIdentityForWalletAddress = (address: string): string => {
+  const normalized = normalizeEthereumAddress(address);
+  return normalized ? `wallet:${normalized}` : "";
+};
+
 const requestChainNonce = async (address: string): Promise<string> => {
   const nonceUrl = buildChainApiUrl(`/nonce/${encodeURIComponent(address)}`);
   const response = await fetch(nonceUrl, { method: "GET" });
@@ -277,9 +244,7 @@ const requestChainNonce = async (address: string): Promise<string> => {
   return nonce;
 };
 
-const requestChainAuthToken = async (
-  authRequest: ReturnType<typeof createChainAuthRequest>,
-): Promise<string> => {
+const requestChainAuthToken = async (authRequest: ChainAuthPayload): Promise<string> => {
   const authUrl = buildChainApiUrl("/auth");
 
   const primaryResponse = await fetch(authUrl, {
@@ -317,72 +282,93 @@ const requestChainAuthToken = async (
   return token;
 };
 
-const authenticateMockUserInChain = async (
-  userId: string,
-  nickname: string,
-  options?: { patchServicesProfile?: boolean },
-): Promise<MockChainAuthResult> => {
-  const account = getOrCreateMockEthereumAccount(`mock-user:${userId}`);
-  const mockUser = mockUsers.find((entry) => entry.id === userId);
-
-  let nonce: string | null = null;
-  let message: string | null = null;
-  let signature: string | null = null;
-  let token: string | null = null;
-  let patchedUserId: string | null = null;
-
-  try {
-    nonce = await requestChainNonce(account.address);
-    const authRequest = createChainAuthRequest(account, nonce);
-    message = authRequest.message;
-    signature = authRequest.signature;
-    token = await requestChainAuthToken(authRequest);
-    if (mockUser) {
-      mockUser.address = account.address;
-    }
-
-    const shouldPatchServicesProfile = options?.patchServicesProfile !== false;
-    const servicesPatch = shouldPatchServicesProfile
-      ? await ensureMockUserServicesEthereumAddress(userId, nickname, account.address)
-      : {
-          patchedUserId: null,
-          ethereumAddressPatched: false,
-          error: null,
-        };
-    patchedUserId = servicesPatch.patchedUserId;
-
-    return {
-      userId,
-      nickname,
-      address: account.address,
-      publicKey: account.publicKey,
-      privateKey: account.privateKey,
-      nonce,
-      message,
-      signature,
-      token,
-      patchedUserId,
-      ethereumAddressPatched: servicesPatch.ethereumAddressPatched,
-      success: true,
-      error: servicesPatch.error,
-    };
-  } catch (err) {
-    return {
-      userId,
-      nickname,
-      address: account.address,
-      publicKey: account.publicKey,
-      privateKey: account.privateKey,
-      nonce,
-      message,
-      signature,
-      token,
-      patchedUserId,
-      ethereumAddressPatched: false,
-      success: false,
-      error: err instanceof Error ? err.message : "Chain auth failed.",
-    };
+const getBrowserEthereumProvider = (
+  provider?: BrowserEthereumProvider,
+): BrowserEthereumProvider => {
+  if (provider) return provider;
+  if (!browser) {
+    throw new Error("MetaMask is only available in the browser.");
   }
+  const detected = (window as WindowWithEthereum).ethereum;
+  if (!detected) {
+    throw new Error("MetaMask is not available in this browser.");
+  }
+  return detected;
+};
+
+const requestBrowserWalletAddress = async (provider?: BrowserEthereumProvider): Promise<string> => {
+  const activeProvider = getBrowserEthereumProvider(provider);
+  const accounts = await activeProvider.request<unknown>({
+    method: "eth_requestAccounts",
+  });
+  const address = Array.isArray(accounts) && typeof accounts[0] === "string" ? accounts[0] : "";
+  const normalized = normalizeEthereumAddress(address);
+  if (!normalized) {
+    throw new Error("No Ethereum account was selected in MetaMask.");
+  }
+  return normalized;
+};
+
+const signChainAuthMessage = async ({
+  provider,
+  address,
+  message,
+}: {
+  provider?: BrowserEthereumProvider;
+  address: string;
+  message: string;
+}): Promise<string> => {
+  const activeProvider = getBrowserEthereumProvider(provider);
+  const signature = await activeProvider.request<unknown>({
+    method: "personal_sign",
+    params: [message, address],
+  });
+  if (typeof signature !== "string" || !signature.trim()) {
+    throw new Error("MetaMask did not return a signature.");
+  }
+  return signature.trim();
+};
+
+export const authenticateBrowserWalletInChain = async (options?: {
+  provider?: BrowserEthereumProvider;
+  patchServicesProfile?: boolean;
+}): Promise<BrowserWalletChainAuthResult> => {
+  const address = await requestBrowserWalletAddress(options?.provider);
+  const nonce = await requestChainNonce(address);
+  const message = buildNonceLoginMessage(nonce);
+  const signature = await signChainAuthMessage({
+    provider: options?.provider,
+    address,
+    message,
+  });
+  const token = await requestChainAuthToken({
+    address,
+    signature: stripHexPrefix(signature),
+    message,
+  });
+
+  let patchedUserId: string | null = null;
+  let ethereumAddressPatched = false;
+  if (options?.patchServicesProfile !== false && getToken()) {
+    const me = await getMe();
+    const userId = extractUserIdFromUserPayload(me);
+    if (!userId) {
+      throw new Error("Services auth succeeded, but /auth/me did not return a user id.");
+    }
+    await updateUserById(userId, { ethereum_address: address });
+    patchedUserId = userId;
+    ethereumAddressPatched = true;
+  }
+
+  return {
+    address,
+    nonce,
+    message,
+    signature,
+    token,
+    patchedUserId,
+    ethereumAddressPatched,
+  };
 };
 
 const extractUserIdFromUserPayload = (payload: unknown): string | null => {
@@ -397,94 +383,17 @@ const extractUserIdFromUserPayload = (payload: unknown): string | null => {
   return null;
 };
 
-const ensureMockUserServicesEthereumAddress = async (
-  userId: string,
-  nickname: string,
-  ethereumAddress: string,
-): Promise<{
-  patchedUserId: string | null;
-  ethereumAddressPatched: boolean;
-  error: string | null;
-}> => {
-  const cached = servicesPatchCacheByMockUserId.get(userId);
-  if (cached && cached.ethereumAddress.toLowerCase() === ethereumAddress.trim().toLowerCase()) {
-    return {
-      patchedUserId: cached.patchedUserId,
-      ethereumAddressPatched: true,
-      error: null,
-    };
-  }
-
-  const previousToken = getToken();
-  const credentials = mockCredentialsForUser(userId);
-
-  try {
-    await loginOrRegisterWithServices(credentials.email, nickname, credentials.password);
-
-    const me = await getMe();
-    const realUserId = extractUserIdFromUserPayload(me);
-    if (!realUserId) {
-      throw new Error("Services auth succeeded, but /auth/me did not return a user id.");
-    }
-
-    await updateUserById(realUserId, { ethereum_address: ethereumAddress });
-    servicesPatchCacheByMockUserId.set(userId, {
-      ethereumAddress: ethereumAddress.trim(),
-      patchedUserId: realUserId,
-    });
-    return {
-      patchedUserId: realUserId,
-      ethereumAddressPatched: true,
-      error: null,
-    };
-  } catch (error) {
-    return {
-      patchedUserId: null,
-      ethereumAddressPatched: false,
-      error:
-        error instanceof Error
-          ? `Chain auth succeeded, but failed to patch services user: ${error.message}`
-          : "Chain auth succeeded, but failed to patch services user.",
-    };
-  } finally {
-    if (previousToken) setToken(previousToken);
-    else clearToken();
-  }
-};
-
-export const authenticateAllMockAccountsInChain = async (options?: {
+export const loginWithBrowserWalletChainAccount = async (options?: {
+  provider?: BrowserEthereumProvider;
   patchServicesProfile?: boolean;
-}): Promise<MockChainAuthResult[]> => {
-  const results: MockChainAuthResult[] = [];
-  for (const user of mockUsers) {
-    results.push(
-      await authenticateMockUserInChain(user.id, user.nickname, {
-        patchServicesProfile: options?.patchServicesProfile ?? false,
-      }),
-    );
-  }
-  return results;
-};
-
-export const loginWithMockChainAccount = async (
-  userId: string = mockCurrentUserId,
-): Promise<string> => {
-  const user = mockUsers.find((entry) => entry.id === userId);
-  if (!user) {
-    throw new Error(`Mock user not found: ${userId}`);
-  }
-
-  // Keep Services profile ethereum_address aligned with active chain signer so
-  // account identity, feed source derivation, and authored ownership stay consistent.
-  const result = await authenticateMockUserInChain(user.id, user.nickname, {
-    patchServicesProfile: true,
+}): Promise<BrowserWalletChainAuthResult> => {
+  const result = await authenticateBrowserWalletInChain({
+    provider: options?.provider,
+    patchServicesProfile: options?.patchServicesProfile,
   });
-  if (!result.success || !result.token) {
-    throw new Error(result.error ?? "Mock chain login failed.");
-  }
-
-  setChainToken(result.token, user.id);
-  return result.token;
+  const tokenIdentity = chainTokenIdentityForWalletAddress(result.address);
+  setChainToken(result.token, tokenIdentity);
+  return result;
 };
 
 export const chainAuthFetch = async (path: string, init: RequestInit = {}) => {
@@ -565,12 +474,6 @@ export const registerUser = async (email: string, displayName: string, password:
 
   return payload;
 };
-
-export const loginOrRegisterUser = async (
-  email: string,
-  displayName: string,
-  password: string,
-): Promise<string> => loginOrRegisterWithServices(email, displayName, password);
 
 export const logout = async (): Promise<void> => {
   const token = getToken();
@@ -751,14 +654,6 @@ export const getUserById = async (userId: string) => {
   const response = await fetch(buildServicesApiUrl(`/users/${encodeURIComponent(userId)}`));
   const payload = await parseResponseBody(response);
   if (!response.ok) {
-    // Transitional mixed mode: the network feed still uses mock user IDs (user-*, agent-*),
-    // while auth/account runs against the real backend. Keep mock profiles functional in prod.
-    const mockUser = [...mockUsers, ...extraChainSourceProfiles].find(
-      (entry) => entry.id === userId,
-    );
-    if (response.status === 404 && mockUser) {
-      return { user: mockUser };
-    }
     throw new Error(extractErrorMessage(payload));
   }
   return payload;
@@ -869,27 +764,6 @@ export const resolveCurrentUserChainSourceAddresses = (mePayload: unknown): stri
   resolveProfileChainSourceAddresses(envelope.profileJson).forEach((address) => {
     sourceSet.add(address);
   });
-  resolvePrototypeAccountChainSourceAddresses(envelope).forEach((address) => {
-    sourceSet.add(address);
-  });
-
-  if (browser) {
-    const email =
-      typeof envelope.rootUser.email === "string"
-        ? envelope.rootUser.email.trim().toLowerCase()
-        : "";
-    if (email.endsWith("@mock.decentralised.art")) {
-      const mockUserId = email.replace(/@mock\.decentralised\.art$/i, "");
-      if (mockUserId) {
-        const mockChainAddress = normalizeFollowAddress(
-          getStoredMockEthereumAccount(`mock-user:${mockUserId}`)?.address ?? "",
-        );
-        if (mockChainAddress) {
-          sourceSet.add(mockChainAddress);
-        }
-      }
-    }
-  }
 
   return Array.from(sourceSet);
 };
@@ -915,8 +789,6 @@ const uniqueStrings = (values: string[]) =>
 
 const ETH_ADDRESS_RE = /^0x[0-9a-f]{40}$/;
 const FORMAT_HASH_RE = /^0x[0-9a-f]{64}$/;
-// Public demo content authored by the prototype account before local mock signers were regenerated.
-const PROTOTYPE_TEST_ACCOUNT_CHAIN_SOURCE_ADDRESS = "0xb584a15f38c2014cff54fdb1b417428b51999276";
 
 const normalizeFollowAddress = (value: string): string => {
   const trimmed = value.trim().toLowerCase();
@@ -949,107 +821,7 @@ const resolveProfileChainSourceAddresses = (profileJsonRaw: unknown): string[] =
   );
 };
 
-const resolvePrototypeAccountChainSourceAddresses = (envelope: {
-  rootUser: Record<string, unknown>;
-}): string[] => {
-  const email =
-    typeof envelope.rootUser.email === "string" ? envelope.rootUser.email.trim().toLowerCase() : "";
-  const displayName =
-    typeof envelope.rootUser.display_name === "string"
-      ? envelope.rootUser.display_name.trim()
-      : typeof envelope.rootUser.displayName === "string"
-        ? envelope.rootUser.displayName.trim()
-        : "";
-
-  if (email !== "user-lyra@mock.decentralised.art" && displayName !== "prototype_test_account") {
-    return [];
-  }
-
-  return [PROTOTYPE_TEST_ACCOUNT_CHAIN_SOURCE_ADDRESS];
-};
-
-const resolveStoredMockUserAddress = (userId: string): string => {
-  if (!browser) return "";
-  return normalizeFollowAddress(getStoredMockEthereumAccount(`mock-user:${userId}`)?.address ?? "");
-};
-
-const resolveKnownPrototypeUserAddress = (userId: string): string => {
-  const target = userId.trim();
-  if (!target) return "";
-  const mockUser = mockUsers.find((entry) => entry.id === target);
-  if (mockUser) {
-    return resolveStoredMockUserAddress(target) || normalizeFollowAddress(mockUser.address);
-  }
-  const user = extraChainSourceProfiles.find((entry) => entry.id === target);
-  return normalizeFollowAddress(user?.address ?? "");
-};
-
-const normalizeFollowTarget = (value: string): string =>
-  normalizeFollowAddress(value) || resolveKnownPrototypeUserAddress(value);
-
-const resolveMockUserIdFromMePayload = (mePayload: unknown): string | null => {
-  const envelope = extractUserEnvelope(mePayload);
-  if (!envelope) return null;
-
-  const email =
-    typeof envelope.rootUser.email === "string" ? envelope.rootUser.email.trim().toLowerCase() : "";
-  if (email.endsWith("@mock.decentralised.art")) {
-    const fromEmail = email.replace(/@mock\.decentralised\.art$/i, "");
-    if (mockUsersById[fromEmail as keyof typeof mockUsersById]) return fromEmail;
-  }
-
-  const displayName =
-    typeof envelope.rootUser.display_name === "string"
-      ? envelope.rootUser.display_name.trim()
-      : typeof envelope.rootUser.displayName === "string"
-        ? envelope.rootUser.displayName.trim()
-        : "";
-  if (displayName) {
-    const byName = mockUsers.find((entry) => entry.nickname === displayName);
-    if (byName) return byName.id;
-  }
-
-  const address = normalizeFollowAddress(
-    typeof envelope.rootUser.ethereum_address === "string"
-      ? envelope.rootUser.ethereum_address
-      : typeof envelope.rootUser.ethereumAddress === "string"
-        ? envelope.rootUser.ethereumAddress
-        : "",
-  );
-  if (address) {
-    const byAddress = mockUsers.find((entry) => normalizeFollowAddress(entry.address) === address);
-    if (byAddress) return byAddress.id;
-  }
-
-  return null;
-};
-
-const resolveMockUserIdFromActiveChainSigner = (): string | null => {
-  if (!browser) return null;
-  const activeSignerAddress = resolveActiveChainSignerAddress();
-  if (!activeSignerAddress) return null;
-
-  for (const user of mockUsers) {
-    const storedAddress = normalizeFollowAddress(
-      getStoredMockEthereumAccount(`mock-user:${user.id}`)?.address ?? "",
-    );
-    if (storedAddress && storedAddress === activeSignerAddress) return user.id;
-  }
-
-  return null;
-};
-
-const defaultSocialPreferencesForPrototype = (userId: string): SocialPreferencesProfile => {
-  const followedIds = mockFollowingByUserId[userId as keyof typeof mockFollowingByUserId] ?? [];
-  const followedUserAddresses = uniqueStrings(
-    followedIds.map((id) => resolveKnownPrototypeUserAddress(id)).filter(Boolean),
-  );
-
-  return {
-    followedUserAddresses,
-    followedFormatHashes: [],
-  };
-};
+const normalizeFollowTarget = (value: string): string => normalizeFollowAddress(value);
 
 const normalizeFollowFormatHash = (value: string): string => {
   const trimmed = value.trim().toLowerCase();
@@ -1097,12 +869,8 @@ const parseSocialPreferencesFromProfileJson = (
       [
         ...asStringArray(social.followed_user_addresses),
         ...asStringArray(social.followedUserAddresses),
-        ...asStringArray(social.followed_user_ids),
-        ...asStringArray(social.followedUserIds),
         ...asStringArray(profilePublic.followed_user_addresses),
         ...asStringArray(profilePublic.followedUserAddresses),
-        ...asStringArray(profilePublic.followed_user_ids),
-        ...asStringArray(profilePublic.followedUserIds),
       ]
         .map(normalizeFollowTarget)
         .filter(Boolean),
@@ -1217,94 +985,26 @@ const resolveProfileStateFromMePayload = (mePayload: unknown): CurrentUserProfil
   };
 };
 
-const resolvePrototypeFallbackProfileState = (): CurrentUserProfileState | null => {
-  const mockUserId = resolveMockUserIdFromActiveChainSigner();
-  if (!mockUserId) return null;
-  return {
-    me: null,
-    userId: null,
-    social: defaultSocialPreferencesForPrototype(mockUserId),
-    toolbox: defaultToolboxLibrary(),
-  };
-};
-
-const bootstrapPrototypeProfileState = async (
-  profileState: CurrentUserProfileState,
-  options?: { persist?: boolean },
-): Promise<CurrentUserProfileState> => {
-  if (profileState.social.followedUserAddresses.length > 0) return profileState;
-
-  const mockUserId =
-    resolveMockUserIdFromMePayload(profileState.me) ?? resolveMockUserIdFromActiveChainSigner();
-  if (!mockUserId) return profileState;
-
-  const prototypeSocial = defaultSocialPreferencesForPrototype(mockUserId);
-  if (prototypeSocial.followedUserAddresses.length === 0) return profileState;
-
-  const nextSocial: SocialPreferencesProfile = {
-    followedUserAddresses: uniqueStrings([
-      ...profileState.social.followedUserAddresses,
-      ...prototypeSocial.followedUserAddresses,
-    ]),
-    followedFormatHashes: profileState.social.followedFormatHashes,
-  };
-  const nextState = {
-    ...profileState,
-    social: nextSocial,
-  };
-
-  const envelope = extractUserEnvelope(profileState.me);
-  if (options?.persist !== false && envelope) {
-    try {
-      await updateUserById(envelope.userId, {
-        profile_json: mergeSocialPreferencesIntoProfileJson(envelope.profileJson, nextSocial),
-      });
-    } catch (error) {
-      console.warn("[Auth] Failed to persist prototype social bootstrap.", error);
-    }
-  }
-
-  return nextState;
-};
-
 export const getCurrentUserProfileState = async (options?: {
   preferCached?: boolean;
-  bootstrapPrototypeIfEmpty?: boolean;
 }): Promise<CurrentUserProfileState> => {
   if (!getToken()) {
-    const prototypeFallback = options?.bootstrapPrototypeIfEmpty
-      ? resolvePrototypeFallbackProfileState()
-      : null;
-    return (
-      prototypeFallback ?? {
-        me: null,
-        userId: null,
-        social: defaultSocialPreferences(),
-        toolbox: defaultToolboxLibrary(),
-      }
-    );
+    return {
+      me: null,
+      userId: null,
+      social: defaultSocialPreferences(),
+      toolbox: defaultToolboxLibrary(),
+    };
   }
 
   if (options?.preferCached) {
     const cachedPayload = readCachedMePayload();
     if (cachedPayload) {
-      const cachedState = resolveProfileStateFromMePayload(cachedPayload);
-      return options.bootstrapPrototypeIfEmpty
-        ? bootstrapPrototypeProfileState(cachedState, { persist: false })
-        : cachedState;
+      return resolveProfileStateFromMePayload(cachedPayload);
     }
   }
 
-  try {
-    const state = resolveProfileStateFromMePayload(await getMe());
-    return options?.bootstrapPrototypeIfEmpty ? bootstrapPrototypeProfileState(state) : state;
-  } catch (error) {
-    const prototypeFallback = options?.bootstrapPrototypeIfEmpty
-      ? resolvePrototypeFallbackProfileState()
-      : null;
-    if (prototypeFallback) return prototypeFallback;
-    throw error;
-  }
+  return resolveProfileStateFromMePayload(await getMe());
 };
 
 export const getCurrentUserToolboxLibrary = async (): Promise<ToolboxLibraryProfile> => {
@@ -1362,13 +1062,10 @@ export const addConditionToCurrentUserToolbox = async (conditionId: string): Pro
 export const addParticleToCurrentUserToolbox = async (particleId: string): Promise<void> =>
   addConnectorToCurrentUserToolbox(particleId);
 
-export const getCurrentUserSocialPreferences = async (options?: {
-  bootstrapPrototypeIfEmpty?: boolean;
-}): Promise<SocialPreferencesProfile> => {
+export const getCurrentUserSocialPreferences = async (): Promise<SocialPreferencesProfile> => {
   return (
     await getCurrentUserProfileState({
       preferCached: true,
-      bootstrapPrototypeIfEmpty: options?.bootstrapPrototypeIfEmpty,
     })
   ).social;
 };

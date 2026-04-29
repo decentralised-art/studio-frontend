@@ -1,31 +1,27 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { extraChainSourceProfiles, mockUsers, mockUsersById } from "../src/lib/data/users";
-
 const jsonResponse = (payload: unknown, status = 200) =>
   new Response(JSON.stringify(payload), {
     status,
     headers: { "content-type": "application/json" },
   });
 
-describe("auth profile source bootstrap", () => {
+describe("auth profile state", () => {
   beforeEach(() => {
     vi.resetModules();
     vi.restoreAllMocks();
     window.localStorage.clear();
   });
 
-  it("resolves legacy followed user ids to chain source addresses", async () => {
+  it("ignores legacy followed user ids instead of resolving bundled mock accounts", async () => {
     window.localStorage.setItem("hypermusic_token", "services-token");
-    const { getOrCreateMockEthereumAccount } = await import("../src/lib/auth/mockEthereum");
-    const storedJunAccount = getOrCreateMockEthereumAccount("mock-user:user-jun");
 
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       jsonResponse({
         user: {
-          id: "real-lyra",
-          email: "user-lyra@mock.decentralised.art",
-          display_name: "Lyra N.",
+          id: "real-user",
+          email: "user@example.test",
+          display_name: "Real User",
           profile_json: {
             public: {
               social_preferences: {
@@ -40,13 +36,7 @@ describe("auth profile source bootstrap", () => {
     const { getCurrentUserProfileState } = await import("../src/lib/auth/api");
     const state = await getCurrentUserProfileState();
 
-    expect(state.social.followedUserAddresses).toContain(storedJunAccount.address.toLowerCase());
-    expect(state.social.followedUserAddresses).not.toContain(
-      mockUsersById["user-jun"].address.toLowerCase(),
-    );
-    expect(state.social.followedUserAddresses).toContain(
-      "0xfa71ff2394596f824d69961293d095a50d322e4e",
-    );
+    expect(state.social.followedUserAddresses).toEqual([]);
   });
 
   it("resolves current user chain source aliases from profile json", async () => {
@@ -70,45 +60,39 @@ describe("auth profile source bootstrap", () => {
     ]);
   });
 
-  it("keeps the canonical prototype account chain source as an authored alias", async () => {
+  it("does not add prototype chain source aliases by email or display name", async () => {
     const { resolveCurrentUserChainSourceAddresses } = await import("../src/lib/auth/api");
 
     expect(
       resolveCurrentUserChainSourceAddresses({
         user: {
-          id: "real-lyra",
+          id: "real-user",
           email: "user-lyra@mock.decentralised.art",
           display_name: "prototype_test_account",
           ethereum_address: "0x17a67177af1a698205f30affce83cafb0c0e0bc4",
           profile_json: { public: {} },
         },
       }),
-    ).toEqual(
-      expect.arrayContaining([
-        "0x17a67177af1a698205f30affce83cafb0c0e0bc4",
-        "0xb584a15f38c2014cff54fdb1b417428b51999276",
-      ]),
-    );
+    ).toEqual(["0x17a67177af1a698205f30affce83cafb0c0e0bc4"]);
   });
 
   it("canonicalizes saved follows so legacy user ids cannot rehydrate unfollows", async () => {
     window.localStorage.setItem("hypermusic_token", "services-token");
-    const junAddress = mockUsersById["user-jun"].address.toLowerCase();
-    const sourceAddress = "0xfa71ff2394596f824d69961293d095a50d322e4e";
+    const followedAddress = "0x17a67177af1a698205f30affce83cafb0c0e0bc4";
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
       const url = String(input);
       if (url.includes("/auth/me")) {
         return jsonResponse({
           user: {
-            id: "real-lyra",
-            email: "user-lyra@mock.decentralised.art",
-            display_name: "Lyra N.",
+            id: "real-user",
+            email: "user@example.test",
+            display_name: "Real User",
             profile_json: {
               public: {
-                followedUserAddresses: [junAddress],
+                followedUserAddresses: [followedAddress],
                 followed_user_ids: ["user-jun"],
                 social_preferences: {
-                  followedUserAddresses: [junAddress],
+                  followedUserAddresses: [followedAddress],
                   followedUserIds: ["chain-source-fa71"],
                 },
               },
@@ -116,17 +100,17 @@ describe("auth profile source bootstrap", () => {
           },
         });
       }
-      if (url.includes("/users/real-lyra") && init?.method === "PATCH") {
+      if (url.includes("/users/real-user") && init?.method === "PATCH") {
         return jsonResponse({ ok: true });
       }
       return jsonResponse({ message: "unexpected request" }, 500);
     });
 
     const { unfollowUserInProfile } = await import("../src/lib/auth/api");
-    await unfollowUserInProfile(junAddress);
+    await unfollowUserInProfile(followedAddress);
 
     const patchCall = fetchMock.mock.calls.find(
-      ([input, init]) => String(input).includes("/users/real-lyra") && init?.method === "PATCH",
+      ([input, init]) => String(input).includes("/users/real-user") && init?.method === "PATCH",
     );
     expect(patchCall).toBeTruthy();
     const body = JSON.parse(String(patchCall?.[1]?.body ?? "{}")) as {
@@ -146,70 +130,45 @@ describe("auth profile source bootstrap", () => {
       };
     };
     const profilePublic = body.profile_json?.public;
-    expect(profilePublic?.followed_user_addresses).toEqual([sourceAddress]);
+    expect(profilePublic?.followed_user_addresses).toEqual([]);
     expect(profilePublic).not.toHaveProperty("followed_user_ids");
     expect(profilePublic).not.toHaveProperty("followedUserAddresses");
     expect(profilePublic).not.toHaveProperty("followedUserIds");
-    expect(profilePublic?.social_preferences?.followed_user_addresses).toEqual([sourceAddress]);
+    expect(profilePublic?.social_preferences?.followed_user_addresses).toEqual([]);
     expect(profilePublic?.social_preferences).not.toHaveProperty("followed_user_ids");
     expect(profilePublic?.social_preferences).not.toHaveProperty("followedUserAddresses");
     expect(profilePublic?.social_preferences).not.toHaveProperty("followedUserIds");
   });
 
-  it("seeds empty mock profiles with prototype follow addresses", async () => {
+  it("does not seed empty profiles with mock follow addresses", async () => {
     window.localStorage.setItem("hypermusic_token", "services-token");
-    const { getOrCreateMockEthereumAccount } = await import("../src/lib/auth/mockEthereum");
-    const storedJunAccount = getOrCreateMockEthereumAccount("mock-user:user-jun");
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
       const url = String(input);
       if (url.includes("/auth/me")) {
         return jsonResponse({
           user: {
-            id: "real-lyra",
-            email: "user-lyra@mock.decentralised.art",
-            display_name: "Lyra N.",
+            id: "real-user",
+            email: "user@example.test",
+            display_name: "Real User",
             profile_json: { public: {} },
           },
         });
       }
-      if (url.includes("/users/real-lyra") && init?.method === "PATCH") {
+      if (url.includes("/users/real-user") && init?.method === "PATCH") {
         return jsonResponse({ ok: true });
       }
       return jsonResponse({ message: "unexpected request" }, 500);
     });
 
     const { getCurrentUserProfileState } = await import("../src/lib/auth/api");
-    const state = await getCurrentUserProfileState({ bootstrapPrototypeIfEmpty: true });
+    const state = await getCurrentUserProfileState();
 
-    expect(state.social.followedUserAddresses).toEqual(
-      expect.arrayContaining([
-        ...mockUsers
-          .filter((user) => user.id !== "user-lyra")
-          .map((user) =>
-            user.id === "user-jun"
-              ? storedJunAccount.address.toLowerCase()
-              : user.address.toLowerCase(),
-          ),
-        ...extraChainSourceProfiles.map((user) => user.address.toLowerCase()),
-      ]),
-    );
-    expect(state.social.followedUserAddresses).not.toContain(
-      mockUsersById["user-jun"].address.toLowerCase(),
-    );
-
-    const patchCall = fetchMock.mock.calls.find(
-      ([input, init]) => String(input).includes("/users/real-lyra") && init?.method === "PATCH",
-    );
-    expect(patchCall).toBeTruthy();
-    const body = JSON.parse(String(patchCall?.[1]?.body ?? "{}")) as {
-      profile_json?: { public?: { followed_user_addresses?: string[] } };
-    };
-    expect(body.profile_json?.public?.followed_user_addresses).toContain(
-      "0xfa71ff2394596f824d69961293d095a50d322e4e",
-    );
-    expect(body.profile_json?.public?.followed_user_addresses).toContain(
-      "0x7e5f4552091a69125d5dfcb7b8c2659029395bdf",
-    );
+    expect(state.social.followedUserAddresses).toEqual([]);
+    expect(
+      fetchMock.mock.calls.some(
+        ([input, init]) => String(input).includes("/users/real-user") && init?.method === "PATCH",
+      ),
+    ).toBe(false);
   });
 
   it("loads the full connector toolbox from the current services profile", async () => {
@@ -233,12 +192,12 @@ describe("auth profile source bootstrap", () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       jsonResponse({
         id: "43e7e391-55fb-4956-950f-85f99fe7900f",
-        email: "user-lyra@mock.decentralised.art",
-        display_name: "prototype_test_account",
+        email: "user@example.test",
+        display_name: "Current User",
         ethereum_address: "0xb584a15f38c2014cff54fdb1b417428b51999276",
         profile_json: {
           public: {
-            nickname: "prototype_test_account",
+            nickname: "Current User",
             toolbox: [...connectorToolbox],
             toolbox_library: {
               connector: [...connectorToolbox],

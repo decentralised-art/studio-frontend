@@ -58,10 +58,6 @@ const asRecord = (value: unknown): Record<string, unknown> =>
     ? (value as Record<string, unknown>)
     : {};
 
-const PROTOTYPE_TEST_EMAIL = "user-lyra@mock.decentralised.art";
-const PROTOTYPE_TEST_DISPLAY_NAME = "prototype_test_account";
-const LEGACY_PROTOTYPE_MOCK_AVATAR_PATH = "/avatars/lyra.svg";
-
 export const resolveProfileAvatarUrl = (value: string): string => {
   const trimmed = value.trim();
   if (!trimmed) return "";
@@ -70,33 +66,6 @@ export const resolveProfileAvatarUrl = (value: string): string => {
   if (rootedStaticAvatar) return asset(`/avatars/${rootedStaticAvatar[1]}`);
   if (trimmed.startsWith("avatars/")) return asset(`/${trimmed}`);
   return trimmed;
-};
-
-const isLegacyPrototypeMockAvatarUrl = (value: string): boolean => {
-  const normalized = value.trim().toLowerCase().split(/[?#]/)[0];
-  return normalized.endsWith(LEGACY_PROTOTYPE_MOCK_AVATAR_PATH);
-};
-
-export const shouldIgnoreProfileAvatarUrl = ({
-  email = "",
-  displayName = "",
-  nickname = "",
-  avatarUrl,
-}: {
-  email?: string;
-  displayName?: string;
-  nickname?: string;
-  avatarUrl: string;
-}): boolean => {
-  const normalizedEmail = email.trim().toLowerCase();
-  const normalizedDisplayName = displayName.trim();
-  const normalizedNickname = nickname.trim();
-  const isPrototypeAccount =
-    normalizedEmail === PROTOTYPE_TEST_EMAIL ||
-    normalizedDisplayName === PROTOTYPE_TEST_DISPLAY_NAME ||
-    normalizedNickname === PROTOTYPE_TEST_DISPLAY_NAME;
-
-  return isPrototypeAccount && isLegacyPrototypeMockAvatarUrl(avatarUrl);
 };
 
 const parseKind = (value: unknown): UserKind =>
@@ -138,18 +107,7 @@ export const normalizeProfileUser = (payload: unknown): ProfileViewUser => {
     resolveProfileAvatarUrl(coerceString(nested.avatarUrl)),
   );
   const email = coerceString(nested.email);
-  const displayName = pickFirst(
-    coerceString(nested.display_name),
-    coerceString(nested.displayName),
-  );
-  const avatarUrl = shouldIgnoreProfileAvatarUrl({
-    email,
-    displayName,
-    nickname,
-    avatarUrl: rawAvatarUrl,
-  })
-    ? ""
-    : rawAvatarUrl;
+  const avatarUrl = rawAvatarUrl;
 
   const bio = pickFirst(
     coerceString(profilePublic.bio),
