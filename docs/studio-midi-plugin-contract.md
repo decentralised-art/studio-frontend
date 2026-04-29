@@ -19,6 +19,11 @@ The plugin does not invent missing values. Missing streams, missing array entrie
 
 Playback uses Tone.js in the browser. MIDI export writes a Standard MIDI file using the validated clip model.
 
+Playback modes:
+
+- Analog synth: the default lightweight Tone.js `PolySynth` preview.
+- Grand piano: a Tone.js `Sampler` preview using local MP3 samples served from `static/samples/piano`. Samples are loaded lazily on first piano playback. The current sampler map uses representative notes from `C1` through `C8`; Tone.js interpolates missing pitches and MIDI note velocity controls playback gain.
+
 Current defaults:
 
 - Tempo: `120` BPM.
@@ -26,3 +31,5 @@ Current defaults:
 - Channel assignment: one channel per mapped stream group, wrapping after channel 16.
 
 Future plugin UI may expose tempo, quantization, and track/channel controls, but these should remain explicit user settings rather than hidden fallbacks.
+
+Sample attribution: Salamander Grand Piano by Alexander Holm, licensed under CC BY 3.0.

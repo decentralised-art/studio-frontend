@@ -1,10 +1,83 @@
 import "@testing-library/jest-dom/vitest";
-import { render, screen } from "@testing-library/svelte";
-import { readFileSync } from "node:fs";
+import { fireEvent, render, screen, waitFor } from "@testing-library/svelte";
+import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { StudioPluginRuntimeData } from "../src/lib/studio/plugins/runtime";
+import {
+  SALAMANDER_GRAND_PIANO_SAMPLE_BASE_URL,
+  SALAMANDER_GRAND_PIANO_SAMPLE_URLS,
+} from "../src/lib/studio/plugins/salamanderGrandPiano";
+
+const toneMock = vi.hoisted(() => {
+  const polySynthArgs: unknown[][] = [];
+  const samplerArgs: unknown[][] = [];
+
+  const transport = {
+    PPQ: 192,
+    bpm: { value: 120 },
+    loop: false,
+    state: "stopped",
+    ticks: 0,
+    cancel: vi.fn(),
+    getTicksAtTime: vi.fn(() => 0),
+    schedule: vi.fn(),
+    start: vi.fn(() => {
+      transport.state = "started";
+    }),
+    stop: vi.fn((time?: number) => {
+      if (typeof time === "number") {
+        transport.state = "stopped";
+        transport.ticks = 0;
+      }
+    }),
+  };
+
+  class MockInstrument {
+    dispose = vi.fn();
+    triggerAttackRelease = vi.fn();
+    toDestination() {
+      return this;
+    }
+  }
+
+  class MockPolySynth extends MockInstrument {
+    constructor(...args: unknown[]) {
+      super();
+      polySynthArgs.push(args);
+    }
+  }
+
+  class MockSampler extends MockInstrument {
+    constructor(...args: unknown[]) {
+      super();
+      samplerArgs.push(args);
+    }
+  }
+
+  return {
+    PolySynth: MockPolySynth,
+    Sampler: MockSampler,
+    Synth: class MockSynth {},
+    Transport: transport,
+    immediate: vi.fn(() => 0),
+    loaded: vi.fn(async () => undefined),
+    now: vi.fn(() => 0),
+    polySynthArgs,
+    samplerArgs,
+    start: vi.fn(async () => undefined),
+  };
+});
+
+vi.mock("tone", () => toneMock);
+
+vi.mock("$app/environment", () => ({
+  browser: true,
+  building: false,
+  dev: false,
+  version: "test",
+}));
 
 vi.mock("@xyflow/svelte", async () => {
   const [{ default: Handle }, { default: NodeResizer }] = await Promise.all([
@@ -19,6 +92,27 @@ vi.mock("@xyflow/svelte", async () => {
       Bottom: "bottom",
     },
   };
+});
+
+beforeEach(() => {
+  window.requestAnimationFrame = vi.fn(() => 1);
+  window.cancelAnimationFrame = vi.fn();
+  toneMock.Transport.PPQ = 192;
+  toneMock.Transport.bpm.value = 120;
+  toneMock.Transport.loop = false;
+  toneMock.Transport.state = "stopped";
+  toneMock.Transport.ticks = 0;
+  toneMock.Transport.cancel.mockClear();
+  toneMock.Transport.getTicksAtTime.mockClear();
+  toneMock.Transport.schedule.mockClear();
+  toneMock.Transport.start.mockClear();
+  toneMock.Transport.stop.mockClear();
+  toneMock.immediate.mockClear();
+  toneMock.loaded.mockClear();
+  toneMock.now.mockClear();
+  toneMock.polySynthArgs.length = 0;
+  toneMock.samplerArgs.length = 0;
+  toneMock.start.mockClear();
 });
 
 const loadComponent = async () =>
@@ -39,7 +133,7 @@ const runtimeData: StudioPluginRuntimeData = {
   ],
 };
 
-const renderPluginNode = async (selected = true) => {
+const renderPluginNode = async (selected = true, pluginData = runtimeData) => {
   const StudioPluginNode = await loadComponent();
 
   return render(StudioPluginNode, {
@@ -64,7 +158,7 @@ const renderPluginNode = async (selected = true) => {
       data: {
         label: "MIDI Clip Export",
         sourceId: "midi-clip-export-v1",
-        pluginData: runtimeData,
+        pluginData,
         pluginTargets: ["midi_root"],
       },
     },
@@ -113,6 +207,8 @@ describe("StudioPluginNode", () => {
     expect(screen.getByRole("button", { name: "Stop" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Download MIDI" })).toBeEnabled();
     expect(screen.getByRole("spinbutton", { name: "Tempo" })).toHaveValue(120);
+    expect(screen.getByRole("button", { name: "Synth" })).toHaveClass("is-active");
+    expect(screen.getByRole("button", { name: "Piano" })).not.toHaveClass("is-active");
     expect(screen.getByRole("region", { name: "MIDI piano roll preview" })).toBeInTheDocument();
 
     const notes = container.querySelectorAll(".roll-note");
@@ -121,6 +217,117 @@ describe("StudioPluginNode", () => {
       "title",
       "C4 · beat 0 · duration 1 · velocity 80 · /midi_root:0",
     );
+  });
+
+  it("preserves absolute beat offsets in the piano-roll preview layout", async () => {
+    const shiftedRuntimeData: StudioPluginRuntimeData = {
+      ...runtimeData,
+      midiGroups: [
+        {
+          ...runtimeData.midiGroups[0],
+          time: { feature_path: "/midi_root:0/time:0", data: [1, 2, 3] },
+        },
+      ],
+    };
+    const { container } = await renderPluginNode(true, shiftedRuntimeData);
+
+    const notes = container.querySelectorAll(".roll-note");
+    expect(notes[0]).toHaveAttribute("style", expect.stringContaining("left: 90px"));
+    expect(notes[0]).toHaveAttribute(
+      "title",
+      "C4 · beat 1 · duration 1 · velocity 80 · /midi_root:0",
+    );
+  });
+
+  it("allows switching playback preview from synth to grand piano samples", async () => {
+    await renderPluginNode(true);
+
+    await fireEvent.click(screen.getByRole("button", { name: "Piano" }));
+
+    expect(screen.getByRole("button", { name: "Synth" })).not.toHaveClass("is-active");
+    expect(screen.getByRole("button", { name: "Piano" })).toHaveClass("is-active");
+  });
+
+  it("creates analog synth playback with immediate zero-attack notes", async () => {
+    await renderPluginNode(true);
+
+    await fireEvent.click(screen.getByRole("button", { name: "Play" }));
+
+    await waitFor(() => expect(toneMock.Transport.start).toHaveBeenCalledTimes(1));
+    expect(toneMock.polySynthArgs).toHaveLength(1);
+    expect(toneMock.polySynthArgs[0][0]).toBe(toneMock.Synth);
+    expect(toneMock.polySynthArgs[0][1]).toMatchObject({
+      envelope: { attack: 0, decay: 0.1, sustain: 0.4, release: 0.4 },
+    });
+  });
+
+  it("creates piano sample playback with immediate zero-attack notes", async () => {
+    await renderPluginNode(true);
+
+    await fireEvent.click(screen.getByRole("button", { name: "Piano" }));
+    await fireEvent.click(screen.getByRole("button", { name: "Play" }));
+
+    await waitFor(() => expect(toneMock.Transport.start).toHaveBeenCalledTimes(1));
+    expect(toneMock.samplerArgs).toHaveLength(1);
+    expect(toneMock.samplerArgs[0][0]).toMatchObject({
+      urls: SALAMANDER_GRAND_PIANO_SAMPLE_URLS,
+      baseUrl: SALAMANDER_GRAND_PIANO_SAMPLE_BASE_URL,
+      attack: 0,
+      release: 1,
+    });
+    expect(toneMock.loaded).toHaveBeenCalledTimes(1);
+  });
+
+  it("can start playback after changing tempo", async () => {
+    await renderPluginNode(true);
+
+    await fireEvent.input(screen.getByRole("spinbutton", { name: "Tempo" }), {
+      target: { value: "90" },
+    });
+    await fireEvent.click(screen.getByRole("button", { name: "Play" }));
+
+    await waitFor(() => expect(toneMock.start).toHaveBeenCalledTimes(1));
+    expect(toneMock.Transport.bpm.value).toBe(90);
+    expect(toneMock.Transport.schedule).toHaveBeenCalledTimes(3);
+    await waitFor(() => expect(toneMock.Transport.start).toHaveBeenCalledWith(0.05, "0i"));
+    expect(screen.getByRole("button", { name: "Play" })).toBeDisabled();
+  });
+
+  it("can restart playback after changing tempo while playback is running", async () => {
+    await renderPluginNode(true);
+
+    await fireEvent.click(screen.getByRole("button", { name: "Play" }));
+    await waitFor(() => expect(toneMock.Transport.start).toHaveBeenCalledTimes(1));
+    expect(toneMock.Transport.state).toBe("started");
+
+    await fireEvent.input(screen.getByRole("spinbutton", { name: "Tempo" }), {
+      target: { value: "90" },
+    });
+
+    expect(toneMock.Transport.stop).toHaveBeenLastCalledWith(0);
+    expect(toneMock.Transport.state).toBe("stopped");
+    expect(screen.getByRole("button", { name: "Play" })).toBeEnabled();
+
+    await fireEvent.click(screen.getByRole("button", { name: "Play" }));
+
+    await waitFor(() => expect(toneMock.Transport.start).toHaveBeenCalledTimes(2));
+    expect(toneMock.Transport.bpm.value).toBe(90);
+    expect(toneMock.Transport.state).toBe("started");
+  });
+
+  it("maps the Salamander Grand Piano samples to local audio assets", () => {
+    expect(SALAMANDER_GRAND_PIANO_SAMPLE_BASE_URL).toBe("/samples/piano/");
+    expect(SALAMANDER_GRAND_PIANO_SAMPLE_URLS).toMatchObject({
+      C1: "C1.mp3",
+      C4: "C4.mp3",
+      "D#4": "Ds4.mp3",
+      "F#4": "Fs4.mp3",
+      C8: "C8.mp3",
+    });
+    expect(Object.keys(SALAMANDER_GRAND_PIANO_SAMPLE_URLS)).toHaveLength(27);
+    for (const samplePath of Object.values(SALAMANDER_GRAND_PIANO_SAMPLE_URLS)) {
+      expect(existsSync(resolve("static/samples/piano", samplePath))).toBe(true);
+    }
   });
 
   it("keeps resize edge hit areas wider than the visible one-pixel line", () => {
@@ -133,5 +340,39 @@ describe("StudioPluginNode", () => {
     expect(source).toContain("width: 12px;");
     expect(source).toContain(":global(.plugin-resize-line.svelte-flow__resize-control.line.top),");
     expect(source).toContain("height: 12px;");
+  });
+
+  it("keeps audio scheduling and the visual playhead on the same clock", () => {
+    const source = readFileSync(
+      resolve("src/lib/components/studio/StudioPluginNode.svelte"),
+      "utf8",
+    );
+
+    expect(source).toContain("showPlayhead");
+    expect(source).toContain("beatsToTransportTicks");
+    expect(source).toContain("transport.schedule(");
+    expect(source).toContain("beatsToTransportTicks(tone, note.time)");
+    expect(source).toContain('tone.Transport.start(tone.now() + 0.05, "0i")');
+    expect(source).toContain("tone.Transport.stop(resetTime)");
+    expect(source).toContain("envelope: { attack: 0, decay: 0.1, sustain: 0.4, release: 0.4 }");
+    expect(source).toContain("attack: 0");
+    expect(source).toContain("transport.getTicksAtTime(toneModule.immediate())");
+    expect(source).toContain("currentTicks / transport.PPQ");
+    expect(source).toContain("const currentRuntimeData = runtimeData");
+    expect(source).toContain("instrument.triggerAttackRelease(");
+    expect(source).not.toContain("getAudibleContextTime");
+    expect(source).not.toContain("rawContext.getOutputTimestamp");
+    expect(source).not.toContain("rawContext.outputLatency");
+    expect(source).not.toContain("attack: 0.01");
+    expect(source).not.toContain("toneModule.Transport.stop();");
+    expect(source).not.toContain("transport.stop();");
+    expect(source).not.toContain("transport.ticks = 0");
+    expect(source).not.toContain("playbackVisualLatencySeconds");
+    expect(source).not.toContain("playbackStartContextTime");
+    expect(source).not.toContain("playbackStartBeat");
+    expect(source).not.toContain("playbackStartTimeoutId");
+    expect(source).not.toContain("tone.Draw.schedule");
+    expect(source).not.toContain('toneModule.Transport.start("+0.05")');
+    expect(source).not.toContain("if (!midiClip) return;");
   });
 });

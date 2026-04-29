@@ -17,6 +17,7 @@ describe("studio assistant orchestrator helpers", () => {
     expect(prompt).toContain("time is note start position in beats");
     expect(prompt).toContain("duration is note length in beats");
     expect(prompt).toContain("duration=0 is invalid");
+    expect(prompt).toContain("Salamander Grand Piano sample preview");
     expect(prompt).toContain("not separate packages");
   });
 

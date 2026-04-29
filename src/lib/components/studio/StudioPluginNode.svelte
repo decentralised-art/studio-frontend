@@ -10,6 +10,10 @@
     type MidiSkippedNoteReason,
   } from "$lib/midi/midiClip";
   import { downloadMidiClip, pluginRuntimeToMidiClip } from "$lib/studio/plugins/midiExport";
+  import {
+    SALAMANDER_GRAND_PIANO_SAMPLE_BASE_URL,
+    SALAMANDER_GRAND_PIANO_SAMPLE_URLS,
+  } from "$lib/studio/plugins/salamanderGrandPiano";
   import type { StudioPluginRuntimeData } from "$lib/studio/plugins/runtime";
 
   type PluginNodeData = {
@@ -20,6 +24,8 @@
   };
 
   type PluginNode = Node<PluginNodeData, "plugin">;
+  type PlaybackInstrumentMode = "analog-synth" | "grand-piano";
+  type PlaybackInstrument = import("tone").PolySynth | import("tone").Sampler;
 
   const { data, selected }: NodeProps<PluginNode> = $props();
   const selectedClass = $derived(selected ? "is-selected" : "");
@@ -52,16 +58,21 @@
   let gridDivision = $state<1 | 2 | 4>(2);
   let isAudioReady = $state(false);
   let isPlaying = $state(false);
+  let showPlayhead = $state(false);
   let audioStatus = $state("Click Play to enable audio");
   let playheadBeat = $state(0);
+  let instrumentMode = $state<PlaybackInstrumentMode>("analog-synth");
+  let playbackRunId = 0;
   let toneModule: typeof import("tone") | null = null;
-  let synths: Array<import("tone").PolySynth | import("tone").Synth> = [];
+  let playbackInstrument: PlaybackInstrument | null = null;
   let rafId: number | null = null;
+  let lastRuntimeData: StudioPluginRuntimeData | null | undefined = undefined;
 
   const pixelsPerBeat = $derived(basePixelsPerBeat * zoom);
   const noteRowHeight = $derived(baseNoteRowHeight * zoom);
   const zoomPercent = $derived(Math.round(zoom * 100));
   const noteRectHeight = $derived(Math.max(3, noteRowHeight - 1.5));
+  const clipLengthBeats = $derived(Math.max(1, midiClip?.lengthBeats ?? 0));
   const playheadLeft = $derived(rollLeftGutter + rollPadding + playheadBeat * pixelsPerBeat);
 
   const clampZoom = (value: number) => Math.min(maxZoom, Math.max(minZoom, value));
@@ -75,24 +86,41 @@
     const input = event.currentTarget as HTMLInputElement | null;
     const value = Number(input?.value);
     if (!Number.isFinite(value)) return;
-    tempoSetting = Math.max(10, Math.min(300, Math.round(value)));
+    const nextTempo = Math.max(10, Math.min(300, Math.round(value)));
+    if (tempoSetting === nextTempo) return;
+    stopPlayback();
+    tempoSetting = nextTempo;
+  };
+  const setInstrumentMode = (nextMode: PlaybackInstrumentMode) => {
+    if (instrumentMode === nextMode) return;
+    instrumentMode = nextMode;
+    stopPlayback();
+    disposePlaybackInstrument();
   };
 
-  const disposeSynths = () => {
-    synths.forEach((synth) => synth.dispose());
-    synths = [];
+  const disposePlaybackInstrument = () => {
+    playbackInstrument?.dispose();
+    playbackInstrument = null;
+  };
+
+  const resetTransport = (tone: typeof import("tone")) => {
+    const resetTime = tone.immediate();
+    tone.Transport.stop(resetTime);
+    tone.Transport.cancel(0);
   };
 
   const stopPlayback = () => {
+    playbackRunId += 1;
     if (toneModule) {
-      toneModule.Transport.stop();
-      toneModule.Transport.cancel(0);
+      resetTransport(toneModule);
     }
+    disposePlaybackInstrument();
     if (rafId && browser) {
       window.cancelAnimationFrame(rafId);
       rafId = null;
     }
     isPlaying = false;
+    showPlayhead = false;
     playheadBeat = 0;
     audioStatus = isAudioReady ? "Audio ready" : "Click Play to enable audio";
   };
@@ -108,65 +136,104 @@
     return true;
   };
 
+  const createPlaybackInstrument = async (
+    tone: typeof import("tone"),
+    runId: number,
+  ): Promise<PlaybackInstrument | null> => {
+    disposePlaybackInstrument();
+
+    if (instrumentMode === "grand-piano") {
+      audioStatus = "Loading grand piano samples";
+      const sampler = new tone.Sampler({
+        urls: SALAMANDER_GRAND_PIANO_SAMPLE_URLS,
+        baseUrl: SALAMANDER_GRAND_PIANO_SAMPLE_BASE_URL,
+        attack: 0,
+        release: 1,
+      }).toDestination();
+      playbackInstrument = sampler;
+      await tone.loaded();
+      return runId === playbackRunId ? sampler : null;
+    }
+
+    const synth = new tone.PolySynth(tone.Synth, {
+      envelope: { attack: 0, decay: 0.1, sustain: 0.4, release: 0.4 },
+    }).toDestination();
+    playbackInstrument = synth;
+    return synth;
+  };
+
+  const beatsToTransportTicks = (tone: typeof import("tone"), beats: number) =>
+    `${Math.max(0, Math.round(beats * tone.Transport.PPQ))}i`;
+
   const updatePlayhead = () => {
     if (!browser || !toneModule || !midiClip) return;
-    const secondsPerBeat = 60 / midiClip.tempo;
-    playheadBeat = toneModule.Transport.seconds / secondsPerBeat;
+    const transport = toneModule.Transport;
+    const currentTicks = transport.getTicksAtTime(toneModule.immediate());
+    playheadBeat = Math.max(0, currentTicks / transport.PPQ);
+    if (transport.state === "started") {
+      audioStatus = "Playing";
+    }
+    if (playheadBeat >= midiClip.lengthBeats) {
+      stopPlayback();
+      return;
+    }
     rafId = window.requestAnimationFrame(updatePlayhead);
   };
 
-  const scheduleMidi = () => {
+  const scheduleMidi = async (runId: number): Promise<{ totalBeats: number } | null> => {
     const tone = toneModule;
     const clip = midiClip;
-    if (!tone || !clip || clip.notes.length === 0) return;
+    if (!tone || !clip || clip.notes.length === 0) return null;
 
-    tone.Transport.stop();
-    tone.Transport.cancel(0);
-    tone.Transport.loop = false;
-    disposeSynths();
-    tone.Transport.bpm.value = clip.tempo;
-
-    for (let index = 0; index < Math.max(1, clip.channels); index += 1) {
-      const synth = new tone.PolySynth(tone.Synth, {
-        envelope: { attack: 0.01, decay: 0.1, sustain: 0.4, release: 0.4 },
-      }).toDestination();
-      synths.push(synth);
-    }
+    const transport = tone.Transport;
+    resetTransport(tone);
+    transport.loop = false;
+    transport.bpm.value = clip.tempo;
+    const instrument = await createPlaybackInstrument(tone, runId);
+    if (!instrument || runId !== playbackRunId) return null;
 
     const secondsPerBeat = 60 / clip.tempo;
     clip.notes.forEach((note) => {
-      const channelIndex = Math.max(0, note.channel - 1);
-      const synth = synths[channelIndex % synths.length];
-      if (!synth) return;
-      const startSeconds = Math.max(0, note.time) * secondsPerBeat;
       const durationSeconds = Math.max(0.02, note.duration * secondsPerBeat);
+      const durationBeats = durationSeconds / secondsPerBeat;
       const velocity = Math.min(1, Math.max(0, note.velocity / 127));
-      const frequency = tone.Frequency(note.pitch, "midi").toFrequency();
+      const pitch = midiNoteName(note.pitch);
 
-      tone.Transport.schedule((transportTime) => {
-        synth.triggerAttackRelease(frequency, durationSeconds, transportTime, velocity);
-      }, startSeconds);
+      transport.schedule(
+        (time) => {
+          if (runId !== playbackRunId) return;
+          instrument.triggerAttackRelease(
+            pitch,
+            beatsToTransportTicks(tone, durationBeats),
+            time,
+            velocity,
+          );
+        },
+        beatsToTransportTicks(tone, note.time),
+      );
     });
 
-    const totalSeconds = Math.max(0, clip.lengthBeats) * secondsPerBeat;
-    if (totalSeconds > 0) {
-      tone.Transport.scheduleOnce(() => {
-        stopPlayback();
-      }, totalSeconds + 0.05);
-    }
+    return { totalBeats: Math.max(0, clip.lengthBeats) };
   };
 
   const play = async () => {
     if (!midiClip || midiClip.notes.length === 0) return;
+    const runId = playbackRunId + 1;
+    playbackRunId = runId;
     const ready = await ensureTone();
-    if (!ready || !toneModule) return;
-    scheduleMidi();
-    toneModule.Transport.seconds = 0;
-    toneModule.Transport.start("+0.05");
+    if (!ready || !toneModule || runId !== playbackRunId) return;
+    const tone = toneModule;
+    const scheduled = await scheduleMidi(runId);
+    if (!scheduled || runId !== playbackRunId) return;
+    playheadBeat = 0;
     isPlaying = true;
-    audioStatus = "Playing";
-    if (rafId) window.cancelAnimationFrame(rafId);
-    rafId = window.requestAnimationFrame(updatePlayhead);
+    showPlayhead = true;
+    audioStatus = "Starting";
+    if (browser) {
+      if (rafId) window.cancelAnimationFrame(rafId);
+      rafId = window.requestAnimationFrame(updatePlayhead);
+    }
+    tone.Transport.start(tone.now() + 0.05, "0i");
   };
 
   const pitchRange = $derived.by(() => {
@@ -181,15 +248,14 @@
     return { min, max };
   });
   const rollWidth = $derived.by(() => {
-    const beats = midiClip?.lengthBeats ?? 0;
-    return Math.max(360, rollLeftGutter + beats * pixelsPerBeat + rollPadding * 2);
+    return Math.max(360, rollLeftGutter + clipLengthBeats * pixelsPerBeat + rollPadding * 2);
   });
   const rollHeight = $derived.by(() => {
     const rows = pitchRange.max - pitchRange.min + 1;
     return Math.max(170, rollTopGutter + rows * noteRowHeight + rollPadding * 2);
   });
   const beatGrid = $derived.by(() => {
-    const beats = Math.max(1, Math.ceil(midiClip?.lengthBeats ?? 0));
+    const beats = Math.max(1, Math.ceil(clipLengthBeats));
     return Array.from({ length: beats + 1 }, (_, index) => index);
   });
   const pitchLanes = $derived.by(() => {
@@ -224,7 +290,7 @@
       })),
   );
   const subdivisionGrid = $derived.by(() => {
-    const maxBeat = Math.max(1, Math.ceil(midiClip?.lengthBeats ?? 0));
+    const maxBeat = Math.max(1, Math.ceil(clipLengthBeats));
     const totalDivisions = maxBeat * gridDivision;
     return Array.from({ length: totalDivisions + 1 }, (_, index) => {
       const beat = index / gridDivision;
@@ -288,13 +354,18 @@
   };
 
   $effect(() => {
-    if (!midiClip) return;
-    untrack(() => stopPlayback());
+    const currentRuntimeData = runtimeData;
+    if (currentRuntimeData === lastRuntimeData) return;
+    const hadPreviousRuntimeData = lastRuntimeData !== undefined;
+    lastRuntimeData = currentRuntimeData;
+    if (hadPreviousRuntimeData) {
+      untrack(() => stopPlayback());
+    }
   });
 
   onDestroy(() => {
     stopPlayback();
-    disposeSynths();
+    disposePlaybackInstrument();
   });
 </script>
 
@@ -366,6 +437,22 @@
             </button>
           {/each}
         </div>
+        <div class="sound-controls" aria-label="Playback sound">
+          <button
+            type="button"
+            class={`sound-btn ${instrumentMode === "analog-synth" ? "is-active" : ""}`}
+            onclick={() => setInstrumentMode("analog-synth")}
+          >
+            Synth
+          </button>
+          <button
+            type="button"
+            class={`sound-btn ${instrumentMode === "grand-piano" ? "is-active" : ""}`}
+            onclick={() => setInstrumentMode("grand-piano")}
+          >
+            Piano
+          </button>
+        </div>
         <Button variant="ghost" type="button" onclick={zoomOut}>-</Button>
         <button class="zoom-readout" type="button" onclick={resetZoom}>{zoomPercent}%</button>
         <Button variant="ghost" type="button" onclick={zoomIn}>+</Button>
@@ -392,7 +479,7 @@
         {#each barLabels as label (label.beat)}
           <div class="roll-bar-label" style={`left:${label.left + 3}px;`}>Bar {label.bar}</div>
         {/each}
-        {#if isPlaying}
+        {#if isPlaying && showPlayhead}
           <div class="roll-playhead" style={`left:${playheadLeft}px;`}></div>
         {/if}
         {#each subdivisionGrid as division (`${division.beat}`)}
@@ -475,6 +562,10 @@
     @apply mr-2 flex items-center gap-1 text-[0.5rem] uppercase tracking-[0.14em] text-white/45;
   }
 
+  .sound-controls {
+    @apply mr-2 flex items-center gap-1 text-[0.5rem] uppercase tracking-[0.14em] text-white/45;
+  }
+
   .tempo-control {
     @apply mr-2 flex items-center gap-1 text-[0.5rem] uppercase tracking-[0.14em] text-white/45;
   }
@@ -494,6 +585,19 @@
   .grid-btn.is-active {
     @apply border-emerald-300/60 text-emerald-100;
     background: rgba(16, 185, 129, 0.18);
+  }
+
+  .sound-btn {
+    @apply rounded-md border border-white/20 px-1.5 py-1 text-[0.5rem] tracking-[0.12em] text-white/65;
+  }
+
+  .sound-btn:hover {
+    @apply border-white/35 text-white/85;
+  }
+
+  .sound-btn.is-active {
+    @apply border-cyan-300/60 text-cyan-100;
+    background: rgba(34, 211, 238, 0.16);
   }
 
   .zoom-readout {

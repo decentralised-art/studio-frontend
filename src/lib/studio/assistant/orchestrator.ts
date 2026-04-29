@@ -27,6 +27,7 @@ const ASSISTANT_SYSTEM_PROMPT = [
   "The in-app MIDI plugin converts complete stream groups into a MIDI clip.",
   "MIDI plugin contract: pitch is an absolute MIDI note number 0..127; velocity is MIDI velocity 0..127; time is note start position in beats; duration is note length in beats and must be greater than 0.",
   "For MIDI, time=0 is valid, duration=0 is invalid, duration=1 means one beat, and missing pitch/time/duration/velocity values are not defaulted.",
+  "MIDI plugin playback can use either the default analog synth preview or a Salamander Grand Piano sample preview.",
   "If users ask how to build MIDI connectors, guide them to output pitch, time, duration, and velocity streams in matching groups.",
   "Plugins are in-app Studio helpers attached to compatible deployed root connectors; they are not separate packages.",
   "You must return only valid JSON with shape: { intent, assistant_response, thought_log, tool_calls }.",
