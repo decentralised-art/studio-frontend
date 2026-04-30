@@ -12,6 +12,7 @@
     onConnectorOpen,
     onParticleOpen,
     onAddToToolbox,
+    toolboxMode = "add",
     toolboxConnectorIds,
     toolboxParticleIds,
     authorLabelById,
@@ -26,6 +27,7 @@
     onConnectorOpen?: ((connectorId: string) => void) | undefined;
     onParticleOpen?: ((connectorId: string) => void) | undefined;
     onAddToToolbox?: ((connectorId: string) => void) | undefined;
+    toolboxMode?: "add" | "toggle";
     toolboxConnectorIds?: ReadonlySet<string>;
     toolboxParticleIds?: ReadonlySet<string>;
     authorLabelById?: Readonly<Record<string, string>>;
@@ -47,6 +49,7 @@
   {onLoadMore}
   onParticleOpen={resolvedOpenHandler}
   {onAddToToolbox}
+  {toolboxMode}
   toolboxParticleIds={resolvedToolboxIds}
   {authorLabelById}
   {authorAvatarUrlById}

@@ -1,6 +1,7 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
 const fixtureAddress = "0xb584a15f38c2014cff54fdb1b417428b51999276";
+const fixtureFollowerAddress = "0xfa71ff2394596f824d69961293d095a50d322e4e";
 
 type Rgba = {
   r: number;
@@ -10,6 +11,51 @@ type Rgba = {
 };
 
 const stubStudioApis = async (page: Page) => {
+  const themeUser = {
+    id: "theme-user",
+    email: "theme-user@example.test",
+    display_name: "Theme User",
+    ethereum_address: fixtureAddress,
+    profile_json: {
+      public: {
+        nickname: "Theme User",
+        ethereum_address: fixtureAddress,
+        toolbox: [],
+        toolbox_library: {
+          connector: [],
+          transformation: [],
+          condition: [],
+        },
+        social_preferences: {
+          followed_user_addresses: [fixtureFollowerAddress],
+          followed_format_hashes: [],
+        },
+      },
+    },
+  };
+  const followerUser = {
+    id: "theme-follower",
+    email: "theme-follower@example.test",
+    display_name: "Theme Follower",
+    ethereum_address: fixtureFollowerAddress,
+    profile_json: {
+      public: {
+        nickname: "Theme Follower",
+        ethereum_address: fixtureFollowerAddress,
+        toolbox: [],
+        toolbox_library: {
+          connector: [],
+          transformation: [],
+          condition: [],
+        },
+        social_preferences: {
+          followed_user_addresses: [fixtureAddress],
+          followed_format_hashes: [],
+        },
+      },
+    },
+  };
+
   await page.route("https://api.decentralised.art/**", async (route) => {
     const url = route.request().url();
 
@@ -18,25 +64,26 @@ const stubStudioApis = async (page: Page) => {
         status: 200,
         contentType: "application/json",
         body: JSON.stringify({
-          user: {
-            id: "theme-user",
-            email: "theme-user@example.test",
-            display_name: "Theme User",
-            ethereum_address: fixtureAddress,
-            profile_json: {
-              public: {
-                nickname: "Theme User",
-                ethereum_address: fixtureAddress,
-                toolbox: [],
-                toolbox_library: {
-                  connector: [],
-                  transformation: [],
-                  condition: [],
-                },
-              },
-            },
-          },
+          user: themeUser,
         }),
+      });
+      return;
+    }
+
+    if (url.includes("/services/users/theme-user")) {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ user: themeUser }),
+      });
+      return;
+    }
+
+    if (url.includes("/services/users")) {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify([themeUser, followerUser]),
       });
       return;
     }
@@ -313,5 +360,139 @@ test("light theme restyles Network feed links, icons, and mini flows", async ({ 
   expect(
     contrastRatio(parseRgba(linkColors.color), parseRgba(cardColors.backgroundColor)),
     JSON.stringify({ cardColors, linkColors }),
+  ).toBeGreaterThanOrEqual(4.5);
+});
+
+test("Network toolbox button toggles connector saved state", async ({ page }) => {
+  await stubStudioApis(page);
+  await authenticateFixtureSession(page);
+
+  await page.goto("/network");
+
+  const addButton = page.getByRole("button", { name: "Add connector to toolbox" }).first();
+  await expect(addButton).toBeVisible({ timeout: 15_000 });
+  await expect(addButton).toHaveAttribute("aria-pressed", "false");
+
+  await addButton.click();
+
+  const removeButton = page.getByRole("button", { name: "Remove connector from toolbox" }).first();
+  await expect(removeButton).toBeVisible();
+  await expect(removeButton).toHaveAttribute("aria-pressed", "true");
+
+  await removeButton.click();
+
+  const restoredAddButton = page.getByRole("button", { name: "Add connector to toolbox" }).first();
+  await expect(restoredAddButton).toBeVisible();
+  await expect(restoredAddButton).toHaveAttribute("aria-pressed", "false");
+});
+
+test("light theme keeps Account content shells from adding a background band", async ({ page }) => {
+  await stubStudioApis(page);
+  await authenticateFixtureSession(page);
+
+  await page.goto("/account");
+  await page.getByRole("button", { name: "Switch to light theme" }).click();
+
+  const profileCardShell = page.locator(".account-page .profile-card-shell").first();
+  const profilePageShell = page.locator(".account-page .profile-page-shell").first();
+  const profileSectionShell = page.locator(".account-page .profile-page-shell > .section-shell");
+  const feedCardShell = page.locator(".account-page .feed-card-shell").first();
+  const feedCard = page.locator(".account-page .feed-card-shell .card-soft").first();
+
+  await expect(profilePageShell).toBeVisible({ timeout: 15_000 });
+  await expect(profileSectionShell).toBeVisible();
+  await expect(feedCardShell).toBeVisible();
+  await expect(feedCard).toBeVisible();
+
+  const cardShellColors = await elementColors(profileCardShell);
+  const pageShellColors = await elementColors(profilePageShell);
+  const sectionShellColors = await elementColors(profileSectionShell);
+  const feedCardShellColors = await elementColors(feedCardShell);
+  const feedCardColors = await elementColors(feedCard);
+
+  expect(cardShellColors.backgroundColor).toBe("rgba(0, 0, 0, 0)");
+  expect(pageShellColors.backgroundColor).toBe("rgba(0, 0, 0, 0)");
+  expect(sectionShellColors.backgroundColor).toBe(feedCardColors.backgroundColor);
+  expect(feedCardShellColors.backgroundColor).toBe("rgba(0, 0, 0, 0)");
+});
+
+test("light theme keeps public profile social counters readable", async ({ page }) => {
+  await stubStudioApis(page);
+  await authenticateFixtureSession(page);
+
+  await page.goto("/u/theme-user");
+  await page.getByRole("button", { name: "Switch to light theme" }).click();
+
+  const counterPill = page.locator(".social-count-pill").first();
+  const counterValue = page.locator(".social-count-value").first();
+  const pageBody = page.locator("body");
+  const profilePageShell = page.locator(".public-profile-stack .profile-page-shell").first();
+  const profileSectionShell = page
+    .locator(".public-profile-stack .profile-page-shell > .section-shell")
+    .first();
+  const feedCardShell = page.locator(".public-profile-stack .feed-card-shell").first();
+  const feedCard = page.locator(".public-profile-stack .feed-card-shell .card-soft").first();
+
+  await expect(counterValue).toHaveText("1", { timeout: 15_000 });
+  await expect(profilePageShell).toBeVisible();
+  await expect(profileSectionShell).toBeVisible();
+  await expect(feedCardShell).toBeVisible();
+  await expect(feedCard).toBeVisible();
+
+  const pageColors = await elementColors(pageBody);
+  const pageShellColors = await elementColors(profilePageShell);
+  const sectionShellColors = await elementColors(profileSectionShell);
+  const feedCardShellColors = await elementColors(feedCardShell);
+  const feedCardColors = await elementColors(feedCard);
+  const pillColors = await elementColors(counterPill);
+  const valueColors = await elementColors(counterValue);
+  const effectivePillBackground = blendOver(
+    parseRgba(pillColors.backgroundColor),
+    parseRgba(pageColors.backgroundColor),
+  );
+
+  expect(pageShellColors.backgroundColor).toBe("rgba(0, 0, 0, 0)");
+  expect(sectionShellColors.backgroundColor).toBe(feedCardColors.backgroundColor);
+  expect(feedCardShellColors.backgroundColor).toBe("rgba(0, 0, 0, 0)");
+  expect(valueColors.color).not.toBe("rgb(255, 255, 255)");
+  expect(
+    contrastRatio(parseRgba(valueColors.color), effectivePillBackground),
+    JSON.stringify({ pageColors, pillColors, valueColors }),
+  ).toBeGreaterThanOrEqual(4.5);
+});
+
+test("light theme restyles connector page metadata and related feed shell", async ({ page }) => {
+  await stubStudioApis(page);
+  await authenticateFixtureSession(page);
+
+  await page.goto("/c/theme_connector");
+  await page.getByRole("button", { name: "Switch to light theme" }).click();
+
+  const overview = page.locator(".connector-overview").first();
+  const authorLink = page.locator(".connector-author-link").first();
+  const formatLink = page.locator(".connector-format-link").first();
+  const relatedFeedShell = page.locator(".connector-feed-shell").first();
+
+  await expect(overview).toBeVisible({ timeout: 15_000 });
+  await expect(authorLink).toBeVisible();
+  await expect(formatLink).toBeVisible();
+  await expect(relatedFeedShell).toBeVisible();
+
+  const overviewColors = await elementColors(overview);
+  const authorColors = await elementColors(authorLink);
+  const formatColors = await elementColors(formatLink);
+  const feedShellColors = await elementColors(relatedFeedShell);
+
+  expect(authorColors.color).not.toBe("rgb(255, 255, 255)");
+  expect(formatColors.color).not.toBe("rgb(255, 255, 255)");
+  expect(feedShellColors.backgroundColor).toBe("rgba(0, 0, 0, 0)");
+
+  expect(
+    contrastRatio(parseRgba(authorColors.color), parseRgba(overviewColors.backgroundColor)),
+    JSON.stringify({ overviewColors, authorColors }),
+  ).toBeGreaterThanOrEqual(4.5);
+  expect(
+    contrastRatio(parseRgba(formatColors.color), parseRgba(overviewColors.backgroundColor)),
+    JSON.stringify({ overviewColors, formatColors }),
   ).toBeGreaterThanOrEqual(4.5);
 });

@@ -204,7 +204,7 @@
             {#if connector.formatHash}
               <span aria-hidden="true">•</span>
               <a
-                class="connector-author-link"
+                class="connector-format-link"
                 href={resolve("/f/[slug]", { slug: connector.formatHash })}
               >
                 {connectorFormatName}
@@ -242,7 +242,7 @@
       </div>
     </section>
 
-    <div class="page-card-shell">
+    <div class="page-card-shell connector-feed-shell">
       <ConnectorPostFeed
         events={relatedConnectorEvents}
         onConnectorOpen={openConnectorInStudio}
@@ -270,7 +270,10 @@
   }
 
   .connector-overview {
-    @apply rounded-3xl border border-white/10 bg-black/35 backdrop-blur-sm p-4 md:p-5;
+    @apply rounded-3xl border p-4 backdrop-blur-sm md:p-5;
+    background: var(--surface-card);
+    border-color: var(--border-subtle);
+    color: var(--text-primary);
   }
 
   .connector-head {
@@ -282,24 +285,35 @@
   }
 
   .connector-kicker {
-    @apply text-[0.62rem] uppercase tracking-[0.18em] text-white/45;
+    @apply text-[0.62rem] uppercase tracking-[0.18em];
+    color: var(--text-faint);
   }
 
   .connector-title {
-    @apply mt-1 text-2xl md:text-[1.8rem] font-semibold text-white leading-tight;
+    @apply mt-1 text-2xl font-semibold leading-tight md:text-[1.8rem];
+    color: var(--text-primary);
     overflow-wrap: anywhere;
   }
 
   .connector-meta {
-    @apply mt-2 flex flex-wrap items-center gap-2 text-sm text-white/60;
+    @apply mt-2 flex flex-wrap items-center gap-2 text-sm;
+    color: var(--text-muted);
   }
 
-  .connector-author-link {
-    @apply text-white/85 hover:text-white transition no-underline;
+  .connector-author-link,
+  .connector-format-link {
+    @apply no-underline transition;
+    color: var(--color-accent-strong);
+  }
+
+  .connector-author-link:hover,
+  .connector-format-link:hover {
+    color: var(--color-accent);
   }
 
   .connector-summary {
-    @apply mt-3 text-sm leading-relaxed text-white/80;
+    @apply mt-3 text-sm leading-relaxed;
+    color: var(--text-secondary);
   }
 
   .connector-head-actions {
@@ -310,16 +324,24 @@
     @apply mt-4;
   }
 
+  .connector-feed-shell {
+    background: transparent !important;
+    border-color: transparent !important;
+    box-shadow: none !important;
+  }
+
   .status {
     @apply space-y-2;
   }
 
   .status-title {
-    @apply text-lg font-semibold text-white;
+    @apply text-lg font-semibold;
+    color: var(--text-primary);
   }
 
   .status-subtitle {
-    @apply text-sm text-white/60;
+    @apply text-sm;
+    color: var(--text-muted);
   }
 
   @media (max-width: 1200px) {

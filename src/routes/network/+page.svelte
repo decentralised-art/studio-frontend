@@ -4,12 +4,12 @@
   import { resolve } from "$app/paths";
   import ConnectorPostFeed from "$lib/components/feed/ConnectorPostFeed.svelte";
   import {
-    addConnectorToCurrentUserToolbox,
     followFormatInProfile,
     followUserInProfile,
     getCurrentUserProfileState,
     listServicesUsers,
     resolveCurrentUserChainSourceAddresses,
+    saveCurrentUserToolboxLibrary,
     unfollowUserInProfile,
     unfollowFormatInProfile,
   } from "$lib/auth/api";
@@ -41,6 +41,11 @@
   import Button from "$lib/components/ui/Button.svelte";
   import Input from "$lib/components/ui/Input.svelte";
   import { getChainFormatDisplayName } from "$lib/formats/chainFormats";
+  import {
+    createEmptyToolboxLibrary,
+    toggleToolboxLibraryItem,
+    type ToolboxLibrary,
+  } from "$lib/toolbox/toolboxLibrary";
   import { normalizeProfileUser } from "$lib/user/profileModel";
 
   const FEED_PAGE_SIZE = 10;
@@ -78,7 +83,7 @@
   let localFollowing = $state<string[]>([]);
   let localFollowedFormats = $state<string[]>([]);
   let userFollowPendingByAddress = $state<Record<string, boolean>>({});
-  let localToolboxConnectors = $state<string[]>([]);
+  let localToolboxLibrary = $state<ToolboxLibrary>(createEmptyToolboxLibrary());
   let currentUserAddress = $state("");
   let currentUserSourceAliases = $state<string[]>([]);
   let currentUserLabel = $state("");
@@ -125,7 +130,7 @@
 
   const followedAuthorIds = $derived.by(() => new SvelteSet(localFollowing));
   const followedFormatKeys = $derived.by(() => new SvelteSet(localFollowedFormats));
-  const toolboxConnectorIds = $derived.by(() => new SvelteSet(localToolboxConnectors));
+  const toolboxConnectorIds = $derived.by(() => new SvelteSet(localToolboxLibrary.connector));
   const currentUserAddressKey = $derived.by(() => normalizeAddressForKey(currentUserAddress));
   const currentUserSourceAddressSet = $derived.by(() => {
     const set = new SvelteSet<string>();
@@ -266,7 +271,11 @@
     const profileState = await getCurrentUserProfileState({
       ...(options ? { preferCached: options.preferCached } : {}),
     });
-    localToolboxConnectors = [...profileState.toolbox.connector];
+    localToolboxLibrary = {
+      connector: [...profileState.toolbox.connector],
+      transformation: [...profileState.toolbox.transformation],
+      condition: [...profileState.toolbox.condition],
+    };
     const resolvedSourceAddresses = await deriveCurrentSourceAddresses(profileState);
     const currentProfileUser = profileState.me ? normalizeProfileUser(profileState.me) : null;
     const currentProfileNickname = currentProfileUser?.nickname.trim() ?? "";
@@ -680,13 +689,19 @@
     }
   };
 
-  const addConnectorToToolbox = (connectorId: string) => {
-    if (toolboxConnectorIds.has(connectorId)) return;
-    const previous = [...localToolboxConnectors];
-    localToolboxConnectors = [...localToolboxConnectors, connectorId];
-    void addConnectorToCurrentUserToolbox(connectorId).catch((error) => {
+  const toggleConnectorToolbox = (connectorId: string) => {
+    const previous = localToolboxLibrary;
+    const { library: next, changed } = toggleToolboxLibraryItem(
+      localToolboxLibrary,
+      "connector",
+      connectorId,
+    );
+    if (!changed) return;
+
+    localToolboxLibrary = next;
+    void saveCurrentUserToolboxLibrary(next).catch((error) => {
       console.error("[Network feed] Failed to persist toolbox update.", error);
-      localToolboxConnectors = previous;
+      localToolboxLibrary = previous;
     });
   };
 
@@ -847,7 +862,7 @@
       .catch((error) => {
         if (!pageMounted) return;
         console.warn("[Network feed] Failed to load profile state.", error);
-        localToolboxConnectors = [];
+        localToolboxLibrary = createEmptyToolboxLibrary();
         currentUserAddress = "";
         currentUserSourceAliases = [];
         currentUserLabel = "";
@@ -1025,7 +1040,8 @@
     emptyMessage={feedEmptyMessage}
     onLoadMore={loadMoreFeedEvents}
     onConnectorOpen={openConnectorInStudio}
-    onAddToToolbox={addConnectorToToolbox}
+    onAddToToolbox={toggleConnectorToolbox}
+    toolboxMode="toggle"
     {toolboxConnectorIds}
     authorLabelById={feedAuthorLabels}
     authorAvatarUrlById={feedAuthorAvatarUrls}

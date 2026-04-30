@@ -227,7 +227,7 @@
       const normalizedRequestedAddress = normalizeAddressForKey(userId);
       const isAddressRoute = isChainAddress(normalizedRequestedAddress);
       const profileStatePromise = servicesTokenPresent
-        ? getCurrentUserProfileState({ preferCached: true }).catch(() => null)
+        ? getCurrentUserProfileState().catch(() => null)
         : Promise.resolve(null);
       const profileState = await profileStatePromise;
       const currentUserPayload =

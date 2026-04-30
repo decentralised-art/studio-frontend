@@ -512,6 +512,11 @@ export type ServicesUserRecord = {
   [key: string]: unknown;
 };
 
+const asRecord = (value: unknown): Record<string, unknown> =>
+  value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+
 const coerceServicesUserRecord = (value: unknown): ServicesUserRecord | null => {
   if (typeof value === "string") {
     const id = value.trim();
@@ -532,6 +537,50 @@ const coerceServicesUserRecord = (value: unknown): ServicesUserRecord | null => 
     ...base,
     id,
   };
+};
+
+const mergeUpdatedUserPayload = (
+  payload: unknown,
+  previousPayload: unknown | null,
+  userId: string,
+  patch: Record<string, unknown>,
+): unknown => {
+  const updatedUser = coerceServicesUserRecord(payload);
+  if (updatedUser?.id !== userId) return payload;
+
+  const previousUser = coerceServicesUserRecord(previousPayload);
+  const mergedUser: ServicesUserRecord = {
+    ...(previousUser?.id === userId ? previousUser : {}),
+    ...patch,
+    ...updatedUser,
+    id: userId,
+  };
+
+  const payloadRoot = asRecord(payload);
+  const payloadUser = asRecord(payloadRoot.user);
+  if (Object.keys(payloadUser).length > 0) {
+    return {
+      ...payloadRoot,
+      user: {
+        ...payloadUser,
+        ...mergedUser,
+      },
+    };
+  }
+
+  const previousRoot = asRecord(previousPayload);
+  const previousNestedUser = asRecord(previousRoot.user);
+  if (Object.keys(previousNestedUser).length > 0) {
+    return {
+      ...previousRoot,
+      user: {
+        ...previousNestedUser,
+        ...mergedUser,
+      },
+    };
+  }
+
+  return mergedUser;
 };
 
 const asUserRecordArray = (payload: unknown): ServicesUserRecord[] => {
@@ -663,6 +712,7 @@ export const updateUserById = async (
   userId: string,
   patch: Record<string, unknown>,
 ): Promise<unknown> => {
+  const previousCachedMePayload = readCachedMePayload();
   const response = await authFetch(`/users/${encodeURIComponent(userId)}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
@@ -674,12 +724,13 @@ export const updateUserById = async (
   }
   // Profile updates (social/toolbox/nickname) must update /auth/me cache,
   // otherwise cross-page state can remain stale until manual refresh.
+  const mergedPayload = mergeUpdatedUserPayload(payload, previousCachedMePayload, userId, patch);
   clearCachedMePayload();
-  const updatedUser = coerceServicesUserRecord(payload);
+  const updatedUser = coerceServicesUserRecord(mergedPayload);
   if (updatedUser?.id === userId) {
-    writeCachedMePayload(payload);
+    writeCachedMePayload(mergedPayload);
   }
-  return payload;
+  return mergedPayload;
 };
 
 export type ToolboxLibraryProfile = ToolboxLibrary;
@@ -779,11 +830,6 @@ export type UserSocialConnections = {
   followerIds: string[];
   status: UserSocialConnectionsStatus;
 };
-
-const asRecord = (value: unknown): Record<string, unknown> =>
-  value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
 
 const asStringArray = (value: unknown): string[] =>
   Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];

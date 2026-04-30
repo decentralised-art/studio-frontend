@@ -309,12 +309,26 @@
 :root[data-theme="light"]
   :where(
     .account-page .profile-card-shell,
+    .account-page .profile-page-shell,
     .account-page .profile-post-feed,
+    .account-page .feed-card-shell,
     .public-profile-stack .profile-card-shell,
-    .public-profile-stack .profile-post-feed
+    .public-profile-stack .profile-page-shell,
+    .public-profile-stack .profile-post-feed,
+    .public-profile-stack .feed-card-shell
   ) {
   background: transparent !important;
   border-color: transparent !important;
+  box-shadow: none !important;
+}
+
+:root[data-theme="light"] .account-page .profile-page-shell > .section-shell.section-primary,
+:root[data-theme="light"]
+  .public-profile-stack
+  .profile-page-shell
+  > .section-shell.section-primary {
+  background: var(--surface-card) !important;
+  border-color: var(--border-subtle) !important;
   box-shadow: none !important;
 }
 

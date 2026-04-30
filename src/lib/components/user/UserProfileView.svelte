@@ -136,7 +136,9 @@
   }
 
   .avatar {
-    @apply h-16 w-16 rounded-full border border-white/10 bg-white/10 overflow-hidden;
+    @apply h-16 w-16 overflow-hidden rounded-full border;
+    background: var(--surface-panel-soft);
+    border-color: var(--border-subtle);
   }
 
   .avatar-img {
@@ -152,11 +154,13 @@
   }
 
   .avatar-title {
-    @apply text-sm text-white/70;
+    @apply text-sm;
+    color: var(--text-secondary);
   }
 
   .avatar-subtitle {
-    @apply text-xs text-white/45;
+    @apply text-xs;
+    color: var(--text-faint);
   }
 
   .field {
@@ -164,12 +168,15 @@
   }
 
   .input-label {
-    @apply text-xs font-medium uppercase tracking-[0.18em] text-white/50;
+    @apply text-xs font-medium uppercase tracking-[0.18em];
+    color: var(--text-faint);
   }
 
   .input {
-    @apply w-full rounded-lg border border-white/15 bg-black/40
-      px-3 py-2 text-sm text-white disabled:opacity-100;
+    @apply w-full rounded-lg border px-3 py-2 text-sm disabled:opacity-100;
+    background: var(--surface-input);
+    border-color: var(--border-subtle);
+    color: var(--text-primary);
   }
 
   .bio-textarea {
@@ -181,12 +188,26 @@
   }
 
   .header-action--ghost {
-    @apply border-white/15 bg-white/5 text-white hover:border-white/25 hover:bg-white/10;
+    background: var(--studio-node-bg-soft);
+    border-color: var(--studio-node-border);
+    color: var(--text-secondary);
+  }
+
+  .header-action--ghost:hover:not(:disabled) {
+    background: var(--studio-node-bg-hover);
+    border-color: var(--studio-node-border-strong);
+    color: var(--text-primary);
   }
 
   .header-action--primary {
-    @apply border-[#8de58f]/40 bg-[#8de58f]/15 text-[#8de58f]
-      hover:border-[#8de58f]/60 hover:bg-[#8de58f]/20;
+    background: var(--color-accent-soft);
+    border-color: color-mix(in srgb, var(--color-accent) 42%, transparent);
+    color: var(--color-accent-strong);
+  }
+
+  .header-action--primary:hover:not(:disabled) {
+    border-color: color-mix(in srgb, var(--color-accent) 58%, transparent);
+    background: color-mix(in srgb, var(--color-accent-soft) 78%, var(--surface-card-hover));
   }
 
   .header-action:disabled {
@@ -198,11 +219,16 @@
   }
 
   .social-count-pill {
-    @apply rounded-lg border border-white/12 bg-white/5 px-3 py-2 text-left transition;
+    @apply rounded-lg border px-3 py-2 text-left transition;
+    background: var(--studio-node-bg-soft);
+    border-color: var(--studio-node-border);
+    color: var(--text-secondary);
   }
 
   .social-count-pill:hover:not(:disabled) {
-    @apply border-white/25 bg-white/10;
+    background: var(--studio-node-bg-hover);
+    border-color: var(--studio-node-border-strong);
+    color: var(--text-primary);
   }
 
   .social-count-pill:disabled {
@@ -210,10 +236,12 @@
   }
 
   .social-count-label {
-    @apply block text-[0.62rem] uppercase tracking-[0.16em] text-white/45;
+    @apply block text-[0.62rem] uppercase tracking-[0.16em];
+    color: var(--text-faint);
   }
 
   .social-count-value {
-    @apply mt-1 block text-sm font-medium text-white;
+    @apply mt-1 block text-sm font-medium;
+    color: var(--text-primary);
   }
 </style>

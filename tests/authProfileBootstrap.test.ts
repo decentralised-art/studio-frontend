@@ -216,6 +216,60 @@ describe("auth profile state", () => {
     expect(toolbox.transformation).toEqual(["subtract", "add"]);
   });
 
+  it("keeps cached profile JSON when profile updates return partial user payloads", async () => {
+    window.localStorage.setItem("hypermusic_token", "services-token");
+    const existingMePayload = {
+      user: {
+        id: "real-user",
+        email: "user@example.test",
+        display_name: "Adam",
+        profile_json: {
+          public: {
+            nickname: "Adam",
+            bio: "Prototype composer profile.",
+            toolbox_library: {
+              connector: ["pitch"],
+              transformation: [],
+              condition: [],
+            },
+          },
+        },
+      },
+    };
+    window.localStorage.setItem("dcn_services_me_cache_v1", JSON.stringify(existingMePayload));
+
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse({
+        user: {
+          id: "real-user",
+          display_name: "sunsetsobserver",
+        },
+      }),
+    );
+
+    const { getCachedMe, updateUserById } = await import("../src/lib/auth/api");
+    const { normalizeProfileUser } = await import("../src/lib/user/profileModel");
+    const nextProfileJson = {
+      public: {
+        nickname: "sunsetsobserver",
+        bio: "Prototype composer profile.",
+        toolbox_library: {
+          connector: ["pitch"],
+          transformation: [],
+          condition: [],
+        },
+      },
+    };
+
+    const payload = await updateUserById("real-user", {
+      display_name: "sunsetsobserver",
+      profile_json: nextProfileJson,
+    });
+
+    expect(normalizeProfileUser(payload).bio).toBe("Prototype composer profile.");
+    expect(normalizeProfileUser(getCachedMe()).bio).toBe("Prototype composer profile.");
+  });
+
   it("does not fall back to bundled mock toolbox entries without a services session", async () => {
     const { getCurrentUserToolboxLibrary } = await import("../src/lib/auth/api");
 

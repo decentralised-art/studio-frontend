@@ -14,13 +14,26 @@ describe("connector page layout", () => {
   it("keeps long connector titles from colliding with header actions", () => {
     const missing = connectorPageRoutes.flatMap((route) => {
       const source = readSource(route);
-      return [
-        ".connector-head-main {\n    @apply min-w-0 flex-1;",
-        ".connector-title {\n    @apply mt-1 text-2xl md:text-[1.8rem] font-semibold text-white leading-tight;\n    overflow-wrap: anywhere;",
-        ".connector-head-actions {\n    @apply flex max-w-full shrink-0 flex-wrap gap-2 md:justify-end;",
-      ]
-        .filter((phrase) => !source.includes(phrase))
-        .map((phrase) => `${route} -> '${phrase}'`);
+      const requiredChecks = [
+        {
+          label: ".connector-head-main keeps min-width constrained",
+          passes: source.includes(".connector-head-main {\n    @apply min-w-0 flex-1;"),
+        },
+        {
+          label: ".connector-title allows long names to wrap",
+          passes: /\.connector-title\s*{[^}]*overflow-wrap:\s*anywhere;[^}]*}/s.test(source),
+        },
+        {
+          label: ".connector-head-actions can wrap instead of overlapping",
+          passes: source.includes(
+            ".connector-head-actions {\n    @apply flex max-w-full shrink-0 flex-wrap gap-2 md:justify-end;",
+          ),
+        },
+      ];
+
+      return requiredChecks
+        .filter((check) => !check.passes)
+        .map((check) => `${route} -> ${check.label}`);
     });
 
     expect(missing).toEqual([]);

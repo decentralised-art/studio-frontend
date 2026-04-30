@@ -12,6 +12,7 @@
     onLoadMore,
     onParticleOpen,
     onAddToToolbox,
+    toolboxMode = "add",
     toolboxParticleIds = new Set<string>(),
     authorLabelById,
     authorAvatarUrlById,
@@ -24,6 +25,7 @@
     onLoadMore?: (() => void | Promise<void>) | undefined;
     onParticleOpen?: ((particleId: string) => void) | undefined;
     onAddToToolbox?: ((particleId: string) => void) | undefined;
+    toolboxMode?: "add" | "toggle";
     toolboxParticleIds?: ReadonlySet<string>;
     authorLabelById?: Readonly<Record<string, string>>;
     authorAvatarUrlById?: Readonly<Record<string, string>>;
@@ -83,6 +85,7 @@
             {event}
             {onParticleOpen}
             {onAddToToolbox}
+            {toolboxMode}
             {authorLabelById}
             {authorAvatarUrlById}
             inToolbox={toolboxParticleIds.has(event.particleId)}

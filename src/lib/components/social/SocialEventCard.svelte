@@ -10,6 +10,7 @@
     onConnectorOpen,
     onParticleOpen,
     onAddToToolbox,
+    toolboxMode = "add",
     authorLabelById,
     authorAvatarUrlById,
     inToolbox = false,
@@ -18,6 +19,7 @@
     onConnectorOpen?: ((connectorId: string) => void) | undefined;
     onParticleOpen?: ((particleId: string) => void) | undefined;
     onAddToToolbox?: ((particleId: string) => void) | undefined;
+    toolboxMode?: "add" | "toggle";
     authorLabelById?: Readonly<Record<string, string>>;
     authorAvatarUrlById?: Readonly<Record<string, string>>;
     inToolbox?: boolean;
@@ -69,10 +71,25 @@
       label: event.usedParticleLabels[index] ?? id,
     })),
   );
-  const handleAddToToolbox = (eventClick: MouseEvent) => {
+  const toolboxButtonDisabled = $derived(inToolbox && toolboxMode !== "toggle");
+  const toolboxButtonTitle = $derived(
+    inToolbox
+      ? toolboxMode === "toggle"
+        ? "Remove from toolbox"
+        : "Already in toolbox"
+      : "Add to toolbox",
+  );
+  const toolboxButtonLabel = $derived(
+    inToolbox
+      ? toolboxMode === "toggle"
+        ? "Remove connector from toolbox"
+        : "Connector already in toolbox"
+      : "Add connector to toolbox",
+  );
+  const handleToolboxClick = (eventClick: MouseEvent) => {
     eventClick.preventDefault();
     eventClick.stopPropagation();
-    if (inToolbox) return;
+    if (toolboxButtonDisabled) return;
     onAddToToolbox?.(event.particleId);
   };
 </script>
@@ -82,11 +99,11 @@
     <button
       type="button"
       class={`toolbox-add-button ${inToolbox ? "is-saved" : ""}`}
-      title={inToolbox ? "Already in toolbox" : "Add to toolbox"}
-      aria-label={inToolbox ? "Connector already in toolbox" : "Add connector to toolbox"}
+      title={toolboxButtonTitle}
+      aria-label={toolboxButtonLabel}
       aria-pressed={inToolbox}
-      onclick={handleAddToToolbox}
-      disabled={inToolbox}
+      onclick={handleToolboxClick}
+      disabled={toolboxButtonDisabled}
     >
       <svg viewBox="0 0 24 24" aria-hidden="true">
         <path
