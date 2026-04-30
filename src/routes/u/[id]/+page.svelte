@@ -138,6 +138,22 @@
       ]),
     );
 
+  const routeMatchesCurrentProfile = (
+    routeUserId: string,
+    normalizedRequestedAddress: string,
+    currentProfilePayload: unknown,
+  ): boolean => {
+    const currentProfileUser = normalizeProfileUser(currentProfilePayload);
+    if (routeUserId && currentProfileUser.id === routeUserId) return true;
+    if (!isChainAddress(normalizedRequestedAddress)) return false;
+
+    const currentProfileAddresses = uniqueStrings([
+      normalizeAddressForKey(currentProfileUser.address),
+      ...getServicesUserChainSourceAddresses(extractServicesUserRecord(currentProfilePayload)),
+    ]);
+    return currentProfileAddresses.includes(normalizedRequestedAddress);
+  };
+
   const refreshUserFeedFromEventFeed = async (
     activeUserId: string,
     sourceAddresses: string[],
@@ -213,16 +229,24 @@
       const profileStatePromise = servicesTokenPresent
         ? getCurrentUserProfileState({ preferCached: true }).catch(() => null)
         : Promise.resolve(null);
-      const userPayload = await (isAddressRoute
-        ? ((await resolveServicesUserPayloadByAddress(normalizedRequestedAddress)) ?? {
-            user: {
-              id: normalizedRequestedAddress,
-              display_name: normalizedRequestedAddress,
-              ethereum_address: normalizedRequestedAddress,
-              bio: "",
-            },
-          })
-        : getUserById(userId));
+      const profileState = await profileStatePromise;
+      const currentUserPayload =
+        profileState?.me &&
+        routeMatchesCurrentProfile(userId, normalizedRequestedAddress, profileState.me)
+          ? profileState.me
+          : null;
+      const userPayload =
+        currentUserPayload ??
+        (await (isAddressRoute
+          ? ((await resolveServicesUserPayloadByAddress(normalizedRequestedAddress)) ?? {
+              user: {
+                id: normalizedRequestedAddress,
+                display_name: normalizedRequestedAddress,
+                ethereum_address: normalizedRequestedAddress,
+                bio: "",
+              },
+            })
+          : getUserById(userId)));
       if (!isUserLoadRequestActive(requestVersion)) return;
 
       user = normalizeProfileUser(userPayload);
@@ -240,17 +264,14 @@
 
       isLoading = false;
 
-      void profileStatePromise.then((profileState) => {
-        if (!isUserLoadRequestActive(requestVersion)) return;
-        const viewerAddressFromProfile =
-          profileState?.me && typeof profileState.me === "object"
-            ? normalizeAddressForKey(normalizeProfileUser(profileState.me).address)
-            : "";
-        viewerUserId =
-          viewerAddressFromProfile || profileState?.userId || (hasAuthSession() ? "viewer" : null);
-        viewerFollowingIds = [...(profileState?.social.followedUserAddresses ?? [])];
-        localToolboxConnectors = [...(profileState?.toolbox.connector ?? [])];
-      });
+      const viewerAddressFromProfile =
+        profileState?.me && typeof profileState.me === "object"
+          ? normalizeAddressForKey(normalizeProfileUser(profileState.me).address)
+          : "";
+      viewerUserId =
+        profileState?.userId || viewerAddressFromProfile || (hasAuthSession() ? "viewer" : null);
+      viewerFollowingIds = [...(profileState?.social.followedUserAddresses ?? [])];
+      localToolboxConnectors = [...(profileState?.toolbox.connector ?? [])];
 
       const socialTarget = normalizeAddressForKey(user.address) || user.id;
       void getUserSocialConnections(socialTarget)

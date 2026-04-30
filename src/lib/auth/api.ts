@@ -672,9 +672,13 @@ export const updateUserById = async (
   if (!response.ok) {
     throw new Error(extractErrorMessage(payload));
   }
-  // Profile updates (social/toolbox/nickname) must invalidate /auth/me cache,
+  // Profile updates (social/toolbox/nickname) must update /auth/me cache,
   // otherwise cross-page state can remain stale until manual refresh.
   clearCachedMePayload();
+  const updatedUser = coerceServicesUserRecord(payload);
+  if (updatedUser?.id === userId) {
+    writeCachedMePayload(payload);
+  }
   return payload;
 };
 

@@ -38,12 +38,42 @@ type RemoteApiObserver = {
 
 const stubRemoteApis = async (
   page: Page,
-  options: { missingProfileConnectorDetail?: boolean } = {},
+  options: {
+    authDisplayName?: string;
+    missingProfileConnectorDetail?: boolean;
+    publicDisplayName?: string;
+  } = {},
 ) => {
   const observer: RemoteApiObserver = {
     chainAccountRequests: [],
     chainFeedRequests: [],
   };
+  const authDisplayName = options.authDisplayName ?? fixtureDisplayName;
+  const publicDisplayName = options.publicDisplayName ?? fixtureDisplayName;
+  const buildFixtureUser = (displayName: string) => ({
+    id: fixtureUserId,
+    email: fixtureEmail,
+    display_name: displayName,
+    ethereum_address: fixtureAddress,
+    profile_json: {
+      public: {
+        nickname: displayName,
+        ethereum_address: fixtureAddress,
+        toolbox: fixtureConnectorToolbox,
+        toolbox_library: {
+          connector: fixtureConnectorToolbox,
+          transformation: [
+            "subtract",
+            "add",
+            "test_add_new1234567",
+            "test_random_20260419204115",
+            "test_random_add_20260420_01",
+          ],
+          condition: [],
+        },
+      },
+    },
+  });
 
   await page.route("https://api.decentralised.art/**", async (route) => {
     const url = route.request().url();
@@ -58,30 +88,7 @@ const stubRemoteApis = async (
           status: 200,
           contentType: "application/json",
           body: JSON.stringify({
-            user: {
-              id: fixtureUserId,
-              email: fixtureEmail,
-              display_name: fixtureDisplayName,
-              ethereum_address: fixtureAddress,
-              profile_json: {
-                public: {
-                  nickname: fixtureDisplayName,
-                  ethereum_address: fixtureAddress,
-                  toolbox: fixtureConnectorToolbox,
-                  toolbox_library: {
-                    connector: fixtureConnectorToolbox,
-                    transformation: [
-                      "subtract",
-                      "add",
-                      "test_add_new1234567",
-                      "test_random_20260419204115",
-                      "test_random_add_20260420_01",
-                    ],
-                    condition: [],
-                  },
-                },
-              },
-            },
+            user: buildFixtureUser(authDisplayName),
           }),
         });
         return;
@@ -91,6 +98,24 @@ const stubRemoteApis = async (
         status: 401,
         contentType: "application/json",
         body: JSON.stringify({ message: "Unauthorized" }),
+      });
+      return;
+    }
+
+    if (url.includes(`/services/users/${fixtureUserId}`)) {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ user: buildFixtureUser(publicDisplayName) }),
+      });
+      return;
+    }
+
+    if (url.includes("/services/users")) {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify([buildFixtureUser(publicDisplayName)]),
       });
       return;
     }
@@ -613,6 +638,22 @@ test("renders public profile activity from the chain feed", async ({ page }) => 
 
   await expect(page.getByRole("link", { name: "profile_connector" })).toBeVisible();
   await expect(page.getByText("No activity by this user yet.")).toHaveCount(0);
+  assertNoPageErrors();
+});
+
+test("uses fresh current profile data for the logged-in user's public page", async ({ page }) => {
+  const assertNoPageErrors = collectPageErrors(page);
+  await stubRemoteApis(page, {
+    authDisplayName: "sunsetsobserver",
+    publicDisplayName: "Adam",
+  });
+  await authenticateFixtureSession(page);
+
+  await page.goto(`/u/${fixtureAddress}`);
+
+  await expect(page.locator(".profile-main input").first()).toHaveValue("sunsetsobserver");
+  await expect(page.getByRole("button", { name: "Edit profile" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Follow", exact: true })).toHaveCount(0);
   assertNoPageErrors();
 });
 
