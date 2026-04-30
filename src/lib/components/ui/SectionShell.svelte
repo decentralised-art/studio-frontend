@@ -61,11 +61,13 @@
   }
 
   .section-shell-title {
-    @apply text-base sm:text-lg font-semibold tracking-wide text-white;
+    @apply text-base sm:text-lg font-semibold tracking-wide;
+    color: var(--text-primary);
   }
 
   .section-shell-subtitle {
-    @apply text-xs sm:text-sm text-white/60 max-w-xl;
+    @apply text-xs sm:text-sm max-w-xl;
+    color: var(--text-muted);
   }
 
   /* little glowing dot for section headers */
@@ -74,9 +76,10 @@
   }
 
   .section-primary {
-    @apply border border-white/10
-      bg-linear-to-b from-white/5 to-black/60
-       p-6 sm:p-8;
+    @apply border p-6 sm:p-8;
+    background: linear-gradient(180deg, var(--surface-card), var(--surface-panel));
+    border-color: var(--border-subtle);
+    box-shadow: var(--shadow-soft);
   }
 
   .section-subtle {

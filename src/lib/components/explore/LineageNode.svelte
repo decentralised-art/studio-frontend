@@ -21,24 +21,34 @@
   @reference "$lib/styles/style.css";
 
   .lineage-node {
-    @apply flex flex-col gap-1 rounded-lg border border-white/20 bg-gray-800
-      px-3 py-2 text-sm text-white shadow-md
-      transition-colors duration-200 cursor-pointer hover:border-emerald-300/60;
+    @apply flex cursor-pointer flex-col gap-1 rounded-lg border px-3 py-2 text-sm shadow-md transition-colors duration-200;
+    background: var(--studio-node-bg);
+    border-color: var(--studio-node-border);
+    color: var(--text-primary);
+  }
+
+  .lineage-node:hover {
+    border-color: color-mix(in srgb, var(--color-accent) 58%, transparent);
   }
 
   .lineage-node.is-selected {
-    @apply border-emerald-400 shadow-[0_0_24px_rgba(16,185,129,0.25)];
+    border-color: var(--color-accent);
+    box-shadow: var(--shadow-glow);
   }
 
   :global(.lineage-handle) {
-    @apply h-2 w-2 rounded-full border border-white/40 bg-white/70;
+    @apply h-2 w-2 rounded-full border;
+    background: var(--surface-panel-strong);
+    border-color: var(--color-accent);
   }
 
   .node-type {
-    @apply text-[0.6rem] uppercase tracking-[0.28em] text-white/50;
+    @apply text-[0.6rem] uppercase tracking-[0.28em];
+    color: var(--text-muted);
   }
 
   .label {
-    @apply block max-w-[180px] truncate font-semibold text-white/90;
+    @apply block max-w-[180px] truncate font-semibold;
+    color: var(--text-primary);
   }
 </style>

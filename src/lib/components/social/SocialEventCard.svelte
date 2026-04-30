@@ -173,19 +173,24 @@
   }
 
   .social-event-card {
-    @apply relative text-white/90 flex flex-col gap-2.5;
+    @apply relative flex flex-col gap-2.5;
+    color: var(--text-primary);
   }
 
   .toolbox-add-button {
-    @apply absolute top-0.5 right-0.5 z-10 h-8 w-8 rounded-lg border border-white/12 bg-black/45
-      text-white/70 transition;
+    @apply absolute right-0.5 top-0.5 z-10 h-8 w-8 rounded-lg border transition;
     display: grid;
     place-items: center;
     backdrop-filter: blur(8px);
+    background: var(--surface-floating);
+    border-color: var(--border-subtle);
+    color: var(--text-muted);
   }
 
   .toolbox-add-button:hover:not(:disabled) {
-    @apply border-white/30 text-white bg-black/65;
+    background: var(--surface-floating-hover);
+    border-color: var(--border-strong);
+    color: var(--text-primary);
   }
 
   .toolbox-add-button:disabled {
@@ -224,11 +229,14 @@
   }
 
   .author-avatar {
-    @apply h-10 w-10 rounded-xl border border-white/10 bg-white/5 object-cover shrink-0;
+    @apply h-10 w-10 shrink-0 rounded-xl border object-cover;
+    background: var(--surface-panel-soft);
+    border-color: var(--border-subtle);
   }
 
   .author-avatar--fallback {
-    @apply flex items-center justify-center text-white/70 font-semibold;
+    @apply flex items-center justify-center font-semibold;
+    color: var(--text-muted);
   }
 
   .author-meta {
@@ -245,21 +253,28 @@
   }
 
   .author-name {
-    @apply text-sm md:text-[0.95rem] font-semibold tracking-[0.03em] text-white;
+    @apply text-sm font-semibold tracking-[0.03em] md:text-[0.95rem];
+    color: var(--text-primary);
   }
 
   .author-link {
-    @apply hover:text-white/85 transition;
+    @apply transition;
     text-decoration: none;
   }
 
+  .author-link:hover {
+    color: var(--color-accent-strong);
+  }
+
   .event-time {
-    @apply mt-0.5 text-[0.62rem] uppercase tracking-[0.16em] text-white/45;
+    @apply mt-0.5 text-[0.62rem] uppercase tracking-[0.16em];
+    color: var(--text-faint);
   }
 
   .author-event-text {
-    @apply text-sm text-white/75 leading-snug;
+    @apply text-sm leading-snug;
     align-self: baseline;
+    color: var(--text-muted);
   }
 
   .event-body {
@@ -271,16 +286,24 @@
   }
 
   .event-link-row {
-    @apply flex flex-wrap items-baseline gap-x-2 gap-y-1 text-white/70 leading-snug;
+    @apply flex flex-wrap items-baseline gap-x-2 gap-y-1 leading-snug;
+    color: var(--text-muted);
   }
 
   .event-link-label {
-    @apply uppercase tracking-[0.14em] text-[0.62rem] text-white/40;
+    @apply text-[0.62rem] uppercase tracking-[0.14em];
+    color: var(--text-faint);
   }
 
   .event-connector-link,
   .event-dependency-link {
-    @apply text-white/85 hover:text-white no-underline transition;
+    @apply no-underline transition;
+    color: var(--text-primary);
+  }
+
+  .event-connector-link:hover,
+  .event-dependency-link:hover {
+    color: var(--color-accent-strong);
   }
 
   .event-connector-link {
@@ -292,7 +315,7 @@
   }
 
   .event-link-separator {
-    @apply text-white/35;
+    color: var(--text-faint);
   }
 
   .event-graph {

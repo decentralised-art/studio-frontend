@@ -78,32 +78,47 @@
       rounded-md text-sm font-semibold tracking-wide
       transition-all duration-150
       focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2
-      focus-visible:ring-offset-black disabled:opacity-40
+      disabled:opacity-40
       disabled:cursor-not-allowed whitespace-nowrap;
+    --tw-ring-color: var(--focus-ring);
+    --tw-ring-offset-color: var(--surface-page);
   }
 
   .btn-selected {
-    @apply border border-emerald-500/60 bg-emerald-500/10 text-emerald-300;
+    border: 1px solid color-mix(in srgb, var(--color-accent) 58%, transparent);
+    background: var(--color-accent-soft);
+    color: var(--color-accent-strong);
   }
 
   .btn-primary {
     @apply px-4 py-2
-      bg-emerald-500 text-black
       shadow-md shadow-emerald-500/40
       hover:bg-emerald-400 hover:shadow-lg
       focus-visible:ring-emerald-400;
+    background: var(--color-accent);
+    color: var(--text-inverse);
   }
 
   .btn-ghost {
-    @apply px-3 py-2
-      bg-white/5 text-white
-      border border-white/10
-      hover:bg-white/10 hover:border-white/20;
+    @apply px-3 py-2 border;
+    background: var(--surface-panel-soft);
+    border-color: var(--border-subtle);
+    color: var(--text-primary);
+  }
+
+  .btn-ghost:hover {
+    background: var(--surface-card-hover);
+    border-color: var(--border-strong);
   }
 
   .btn-subtle {
-    @apply px-3 py-2
-      bg-white/0 text-white/70
-      hover:bg-white/5 hover:text-white;
+    @apply px-3 py-2;
+    background: transparent;
+    color: var(--text-muted);
+  }
+
+  .btn-subtle:hover {
+    background: var(--surface-panel-soft);
+    color: var(--text-primary);
   }
 </style>

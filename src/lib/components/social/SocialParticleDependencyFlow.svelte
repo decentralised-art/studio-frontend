@@ -442,7 +442,7 @@
       bind:edges={flowEdges}
       {nodeTypes}
       defaultEdgeOptions={{
-        style: "stroke: rgba(255,255,255,0.28); stroke-width: 1.4px;",
+        style: "stroke: var(--studio-flow-pattern); stroke-width: 1.4px;",
       }}
       nodesDraggable={false}
       nodesConnectable={false}
@@ -464,7 +464,7 @@
           void fitFlow();
         }}
       />
-      <Background bgColor="black" />
+      <Background bgColor="var(--studio-flow-bg)" patternColor="var(--studio-flow-pattern)" />
     </SvelteFlow>
   {/key}
 </div>
@@ -473,16 +473,26 @@
   @reference "$lib/styles/style.css";
 
   .social-dependency-flow {
-    @apply relative h-full w-full rounded-2xl border border-white/10 bg-black/40 overflow-hidden;
+    @apply relative h-full w-full overflow-hidden rounded-2xl border;
     height: var(--social-flow-height);
+    background: var(--studio-flow-bg);
+    border-color: var(--border-subtle);
   }
 
   .flow-expand-btn {
-    @apply absolute top-2 right-2 z-10 h-8 w-8 rounded-lg border border-white/15 bg-black/70
-      text-white/80 transition hover:border-white/35 hover:text-white hover:bg-black/85;
+    @apply absolute right-2 top-2 z-10 h-8 w-8 rounded-lg border transition;
     display: grid;
     place-items: center;
     backdrop-filter: blur(8px);
+    background: var(--surface-floating);
+    border-color: var(--border-subtle);
+    color: var(--text-muted);
+  }
+
+  .flow-expand-btn:hover {
+    background: var(--surface-floating-hover);
+    border-color: var(--border-strong);
+    color: var(--text-primary);
   }
 
   .flow-expand-btn svg {
@@ -497,6 +507,11 @@
 
   .social-dependency-flow :global(.svelte-flow) {
     @apply rounded-2xl;
+    --xy-background-color: var(--studio-flow-bg);
+    --xy-background-pattern-color: var(--studio-flow-pattern);
+    --xy-background-pattern-dots-color-default: var(--studio-flow-pattern);
+    --xy-background-pattern-lines-color-default: var(--studio-flow-pattern);
+    --xy-background-pattern-cross-color-default: var(--studio-flow-pattern);
   }
 
   .social-dependency-flow :global(.svelte-flow__attribution) {
@@ -512,16 +527,16 @@
   }
 
   .social-dependency-flow :global(.svelte-flow__background path) {
-    stroke: rgba(255, 255, 255, 0.04);
+    stroke: var(--studio-flow-pattern);
   }
 
   .social-dependency-flow :global(.svelte-flow__edge-path) {
-    stroke: rgba(255, 255, 255, 0.24);
+    stroke: var(--studio-flow-pattern);
     stroke-width: 1.25px;
   }
 
   .social-dependency-flow :global(.svelte-flow__edge-text) {
-    fill: rgba(255, 255, 255, 0.9) !important;
+    fill: var(--text-primary) !important;
   }
 
   .social-dependency-flow :global(.svelte-flow__edge-textbg) {
@@ -530,18 +545,18 @@
   }
 
   .social-dependency-flow :global(.svelte-flow__edge-label) {
-    color: rgba(255, 255, 255, 0.92) !important;
+    color: var(--text-primary) !important;
     background: transparent !important;
     border: none !important;
     box-shadow: none !important;
-    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.65);
+    text-shadow: none;
   }
 
   .social-dependency-flow :global(.svelte-flow__edge-label-renderer .svelte-flow__edge-label) {
-    color: rgba(255, 255, 255, 0.92) !important;
+    color: var(--text-primary) !important;
     background: transparent !important;
     border: none !important;
     box-shadow: none !important;
-    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.65);
+    text-shadow: none;
   }
 </style>

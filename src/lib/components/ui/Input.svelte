@@ -87,9 +87,7 @@
     {value}
     oninput={handleInput}
     onblur={handleBlur}
-    class={`input
-            ${error ? "border-red-500/80 focus:ring-red-500/70" : "border-white/15"}
-            `}
+    class={`input ${error ? "input-has-error" : ""}`}
   />
 
   {#if error}
@@ -103,19 +101,33 @@
   @reference "$lib/styles/style.css";
 
   .input {
-    @apply w-full rounded-lg border border-white/15 bg-black/40
-      px-3 py-2 text-sm text-white
-      placeholder:text-white/40
-      focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400
-      focus-visible:border-emerald-400/60;
+    @apply w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus-visible:ring-2;
+    background: var(--surface-input);
+    border-color: var(--border-subtle);
+    color: var(--text-primary);
+    --tw-ring-color: var(--focus-ring);
+  }
+
+  .input::placeholder {
+    color: var(--text-faint);
+  }
+
+  .input:focus-visible {
+    border-color: color-mix(in srgb, var(--color-accent) 60%, transparent);
+  }
+
+  .input-has-error {
+    @apply border-red-500/80 focus-visible:ring-red-500/70;
   }
 
   .input-label {
-    @apply text-xs font-medium uppercase tracking-[0.18em] text-white/50;
+    @apply text-xs font-medium uppercase tracking-[0.18em];
+    color: var(--text-muted);
   }
 
   .input-help {
-    @apply text-[0.7rem] text-white/40 mt-1;
+    @apply text-[0.7rem] mt-1;
+    color: var(--text-faint);
   }
 
   .input-error {

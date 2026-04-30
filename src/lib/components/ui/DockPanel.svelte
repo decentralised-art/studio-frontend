@@ -142,15 +142,20 @@
   @reference "$lib/styles/style.css";
 
   .dock {
-    @apply relative flex flex-col min-h-0 border border-white/10 bg-black/70;
+    @apply relative flex flex-col min-h-0 border;
+    background: var(--surface-panel);
+    border-color: var(--border-subtle);
+    color: var(--text-primary);
   }
 
   .dock-head {
-    @apply flex items-center justify-between gap-2 border-b border-white/10 px-3 py-2;
+    @apply flex items-center justify-between gap-2 border-b px-3 py-2;
+    border-bottom-color: var(--border-subtle);
   }
 
   .dock-title {
-    @apply text-[0.6rem] uppercase tracking-[0.28em] text-white/55;
+    @apply text-[0.6rem] uppercase tracking-[0.28em];
+    color: var(--text-muted);
   }
 
   .dock-inline {
@@ -158,11 +163,17 @@
   }
 
   .dock-btn {
-    @apply text-[0.55rem] uppercase tracking-[0.2em] text-white/50 hover:text-white/80;
+    @apply text-[0.55rem] uppercase tracking-[0.2em];
+    color: var(--text-faint);
+  }
+
+  .dock-btn:hover {
+    color: var(--text-primary);
   }
 
   .dock-body {
-    @apply flex-1 min-h-0 overflow-auto p-2 text-sm text-white/70;
+    @apply flex-1 min-h-0 overflow-auto p-2 text-sm;
+    color: var(--text-muted);
   }
 
   .dock-body-scale {
@@ -197,7 +208,7 @@
     content: "";
     @apply absolute top-0 bottom-0 left-1/2 -translate-x-1/2;
     width: 2px;
-    background: rgba(255, 255, 255, 0.12);
+    background: var(--border-strong);
     transition: background-color 140ms ease;
   }
 

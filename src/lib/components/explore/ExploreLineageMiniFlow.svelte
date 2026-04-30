@@ -126,7 +126,7 @@
     {nodeTypes}
     {edgeTypes}
     defaultEdgeOptions={{
-      style: "stroke: rgba(255,255,255,0.45); stroke-width: 1.6px;",
+      style: "stroke: var(--studio-flow-pattern); stroke-width: 1.6px;",
     }}
     fitView
     fitViewOptions={{ padding: 0.25 }}
@@ -142,7 +142,7 @@
     panOnScroll={false}
     panOnDrag
   >
-    <Background bgColor="black" />
+    <Background bgColor="var(--studio-flow-bg)" patternColor="var(--studio-flow-pattern)" />
   </SvelteFlow>
   {#if activeNode}
     <div
@@ -215,25 +215,34 @@
   @reference "$lib/styles/style.css";
 
   .mini-flow {
-    @apply relative h-[260px] w-full rounded-2xl border border-white/10 bg-black/40;
+    @apply relative h-[260px] w-full rounded-2xl border;
+    background: var(--studio-flow-bg);
+    border-color: var(--border-subtle);
   }
 
   .mini-flow :global(.svelte-flow) {
     @apply rounded-2xl;
+    --xy-background-color: var(--studio-flow-bg);
+    --xy-background-pattern-color: var(--studio-flow-pattern);
+    --xy-background-pattern-dots-color-default: var(--studio-flow-pattern);
+    --xy-background-pattern-lines-color-default: var(--studio-flow-pattern);
+    --xy-background-pattern-cross-color-default: var(--studio-flow-pattern);
   }
 
   .mini-flow :global(.svelte-flow__node-default) {
-    @apply rounded-xl border border-white/15 bg-white/10 px-3 py-2 text-[0.65rem]
-      font-semibold uppercase tracking-[0.2em] text-white/80;
+    @apply rounded-xl border px-3 py-2 text-[0.65rem] font-semibold uppercase tracking-[0.2em];
+    background: var(--studio-node-bg);
+    border-color: var(--studio-node-border);
+    color: var(--text-secondary);
   }
 
   .mini-flow :global(.svelte-flow__edge-path) {
-    stroke: rgba(255, 255, 255, 0.3);
+    stroke: var(--studio-flow-pattern);
     stroke-width: 1.5px;
   }
 
   .mini-flow :global(.svelte-flow__edge-text) {
-    fill: rgba(255, 255, 255, 0.9) !important;
+    fill: var(--text-primary) !important;
   }
 
   .mini-flow :global(.svelte-flow__edge-textbg) {
@@ -242,19 +251,19 @@
   }
 
   .mini-flow :global(.svelte-flow__edge-label) {
-    color: rgba(255, 255, 255, 0.92) !important;
+    color: var(--text-primary) !important;
     background: transparent !important;
     border: none !important;
     box-shadow: none !important;
-    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.65);
+    text-shadow: none;
   }
 
   .mini-flow :global(.svelte-flow__edge-label-renderer .svelte-flow__edge-label) {
-    color: rgba(255, 255, 255, 0.92) !important;
+    color: var(--text-primary) !important;
     background: transparent !important;
     border: none !important;
     box-shadow: none !important;
-    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.65);
+    text-shadow: none;
   }
 
   .mini-flow :global(.svelte-flow__edge) {
@@ -262,21 +271,28 @@
   }
 
   .node-popup {
-    @apply absolute top-3 right-3 z-10 w-[280px] max-h-[240px]
-      overflow-y-auto border border-white/15 bg-black/90
-      p-3 text-xs text-white/70 shadow-xl;
+    @apply absolute right-3 top-3 z-10 max-h-[240px] w-[280px] overflow-y-auto border p-3 text-xs shadow-xl;
+    background: var(--surface-floating-hover);
+    border-color: var(--border-subtle);
+    color: var(--text-muted);
   }
 
   .popup-head {
-    @apply flex items-start justify-between gap-2 border-b border-white/10 pb-2 mb-3;
+    @apply mb-3 flex items-start justify-between gap-2 border-b pb-2;
+    border-bottom-color: var(--border-subtle);
   }
 
   .popup-title {
-    @apply text-[0.7rem] font-semibold uppercase tracking-[0.22em] text-white/80;
+    @apply text-[0.7rem] font-semibold uppercase tracking-[0.22em];
+    color: var(--text-primary);
   }
 
   .popup-close {
-    @apply text-white/50 hover:text-white/80;
+    color: var(--text-muted);
+  }
+
+  .popup-close:hover {
+    color: var(--text-primary);
   }
 
   .popup-list {
@@ -284,7 +300,9 @@
   }
 
   .popup-row {
-    @apply space-y-2 rounded-lg border border-white/10 bg-black/40 p-2;
+    @apply space-y-2 rounded-lg border p-2;
+    background: var(--surface-panel-soft);
+    border-color: var(--border-subtle);
   }
 
   .popup-meta {
@@ -292,11 +310,13 @@
   }
 
   .popup-label {
-    @apply text-[0.6rem] uppercase tracking-[0.2em] text-white/60;
+    @apply text-[0.6rem] uppercase tracking-[0.2em];
+    color: var(--text-muted);
   }
 
   .popup-seed {
-    @apply text-[0.55rem] uppercase tracking-[0.2em] text-white/35;
+    @apply text-[0.55rem] uppercase tracking-[0.2em];
+    color: var(--text-faint);
   }
 
   .popup-inputs {

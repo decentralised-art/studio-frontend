@@ -104,7 +104,8 @@
   }
 
   .social-format-card {
-    @apply text-white/90 flex flex-col gap-2.5;
+    @apply flex flex-col gap-2.5;
+    color: var(--text-primary);
   }
 
   .event-header {
@@ -116,11 +117,14 @@
   }
 
   .author-avatar {
-    @apply h-10 w-10 rounded-xl border border-white/10 bg-white/5 object-cover shrink-0;
+    @apply h-10 w-10 shrink-0 rounded-xl border object-cover;
+    background: var(--surface-panel-soft);
+    border-color: var(--border-subtle);
   }
 
   .author-avatar--fallback {
-    @apply flex items-center justify-center text-white/70 font-semibold;
+    @apply flex items-center justify-center font-semibold;
+    color: var(--text-muted);
   }
 
   .author-meta {
@@ -137,36 +141,54 @@
   }
 
   .author-name {
-    @apply text-sm md:text-[0.95rem] font-semibold tracking-[0.03em] text-white;
+    @apply text-sm font-semibold tracking-[0.03em] md:text-[0.95rem];
+    color: var(--text-primary);
   }
 
   .author-link {
-    @apply hover:text-white/85 transition;
+    @apply transition;
     text-decoration: none;
   }
 
+  .author-link:hover {
+    color: var(--color-accent-strong);
+  }
+
   .event-time {
-    @apply mt-0.5 text-[0.62rem] uppercase tracking-[0.16em] text-white/45;
+    @apply mt-0.5 text-[0.62rem] uppercase tracking-[0.16em];
+    color: var(--text-faint);
   }
 
   .author-event-text {
-    @apply text-sm text-white/75 leading-snug;
+    @apply text-sm leading-snug;
     align-self: baseline;
+    color: var(--text-muted);
   }
 
   .format-link {
-    @apply text-white underline decoration-white/35 underline-offset-2 hover:decoration-white/75 transition;
+    @apply underline underline-offset-2 transition;
+    color: var(--text-primary);
+    text-decoration-color: var(--border-strong);
+  }
+
+  .format-link:hover {
+    color: var(--color-accent-strong);
+    text-decoration-color: color-mix(in srgb, var(--color-accent) 70%, transparent);
   }
 
   .format-scalars {
-    @apply rounded-2xl border border-white/10 bg-black/45 px-3 py-2.5;
+    @apply rounded-2xl border px-3 py-2.5;
+    background: var(--surface-panel-soft);
+    border-color: var(--border-subtle);
   }
 
   .format-scalars-label {
-    @apply m-0 text-[0.62rem] uppercase tracking-[0.14em] text-white/50;
+    @apply m-0 text-[0.62rem] uppercase tracking-[0.14em];
+    color: var(--text-muted);
   }
 
   .format-scalars-values {
-    @apply m-0 mt-1 text-sm text-white/85 break-words;
+    @apply m-0 mt-1 break-words text-sm;
+    color: var(--text-secondary);
   }
 </style>

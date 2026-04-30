@@ -45,7 +45,7 @@
   {markerStart}
   {markerEnd}
   {interactionWidth}
-  style="stroke: rgba(255,255,255,0.55); stroke-width: 1.8px;"
+  style="stroke: var(--studio-flow-pattern); stroke-width: 1.8px;"
 />
 
 <EdgeLabel
@@ -69,22 +69,26 @@
   @reference "$lib/styles/style.css";
 
   :global(.svelte-flow__edge-label.lineage-edge-label) {
-    @apply px-1 py-0.5 text-[0.65rem] text-white/85;
+    @apply px-1 py-0.5 text-[0.65rem];
+    color: var(--text-primary) !important;
     background: transparent !important;
     border: none !important;
     box-shadow: none !important;
-    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.65);
+    text-shadow: none;
   }
 
   .edge-title {
-    @apply text-[0.6rem] uppercase tracking-[0.24em] text-white/60;
+    @apply text-[0.6rem] uppercase tracking-[0.24em];
+    color: var(--text-muted);
   }
 
   .edge-list {
-    @apply mt-1 space-y-1 text-xs text-white/80;
+    @apply mt-1 space-y-1 text-xs;
+    color: var(--text-secondary);
   }
 
   .edge-empty {
-    @apply mt-1 text-[0.65rem] text-white/40;
+    @apply mt-1 text-[0.65rem];
+    color: var(--text-faint);
   }
 </style>

@@ -119,26 +119,36 @@
   }
 
   .feed-empty {
-    @apply rounded-3xl border border-white/10 bg-black/40 p-6 text-center text-white/70 mx-auto;
+    @apply mx-auto rounded-3xl border p-6 text-center;
     width: var(--social-feed-card-width, min(50vw, 56rem));
     max-width: 100%;
+    background: var(--surface-card);
+    border-color: var(--border-subtle);
+    color: var(--text-muted);
   }
 
   .feed-load-more {
-    @apply text-xs uppercase tracking-[0.18em] text-white/45 py-1;
+    @apply py-1 text-xs uppercase tracking-[0.18em];
+    color: var(--text-faint);
   }
 
   .feed-load-more-btn {
-    @apply rounded-xl border border-white/12 bg-white/5 px-4 py-2 text-xs uppercase tracking-[0.18em]
-      text-white/70 transition;
+    @apply rounded-xl border px-4 py-2 text-xs uppercase tracking-[0.18em] transition;
+    background: var(--surface-card);
+    border-color: var(--border-subtle);
+    color: var(--text-muted);
   }
 
   .feed-load-more-btn:hover {
-    @apply border-white/30 bg-white/10 text-white;
+    background: var(--surface-card-hover);
+    border-color: var(--border-strong);
+    color: var(--text-primary);
   }
 
   .feed-skeleton {
-    @apply rounded-3xl border border-white/10 bg-black/30 p-4 grid gap-3;
+    @apply grid gap-3 rounded-3xl border p-4;
+    background: var(--surface-card);
+    border-color: var(--border-subtle);
   }
 
   .feed-skeleton-head {
@@ -146,7 +156,9 @@
   }
 
   .feed-skeleton-avatar {
-    @apply h-10 w-10 rounded-xl border border-white/10 bg-white/5 shrink-0;
+    @apply h-10 w-10 shrink-0 rounded-xl border;
+    background: var(--surface-panel-soft);
+    border-color: var(--border-subtle);
   }
 
   .feed-skeleton-lines {
@@ -154,7 +166,8 @@
   }
 
   .feed-skeleton-line {
-    @apply h-3 rounded-full bg-white/10;
+    @apply h-3 rounded-full;
+    background: var(--surface-panel-soft);
   }
 
   .feed-skeleton-line.line-lg {
@@ -171,11 +184,15 @@
   }
 
   .feed-skeleton-icon {
-    @apply h-8 w-8 rounded-lg border border-white/10 bg-white/5 shrink-0;
+    @apply h-8 w-8 shrink-0 rounded-lg border;
+    background: var(--surface-panel-soft);
+    border-color: var(--border-subtle);
   }
 
   .feed-skeleton-graph {
-    @apply h-[18rem] rounded-2xl border border-white/5 bg-black/40;
+    @apply h-[18rem] rounded-2xl border;
+    background: var(--studio-flow-bg);
+    border-color: var(--border-subtle);
   }
 
   .shimmer {

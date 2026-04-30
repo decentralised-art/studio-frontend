@@ -38,14 +38,19 @@
   }
 
   .root-redirect-card {
-    @apply min-w-[18rem] rounded-2xl border border-white/10 bg-white/5 px-6 py-5 text-center;
+    @apply min-w-[18rem] rounded-2xl border px-6 py-5 text-center;
+    background: var(--surface-card);
+    border-color: var(--border-subtle);
+    box-shadow: var(--shadow-soft);
   }
 
   .root-redirect-label {
-    @apply text-xs uppercase tracking-[0.28em] text-white/40;
+    @apply text-xs uppercase tracking-[0.28em];
+    color: var(--text-faint);
   }
 
   .root-redirect-message {
-    @apply mt-3 text-sm text-white/80;
+    @apply mt-3 text-sm;
+    color: var(--text-secondary);
   }
 </style>

@@ -7,6 +7,7 @@
   import "$lib/styles/style.css";
   import { isPublicRouteId, LOGIN_ROUTE } from "$lib/auth/routeAccess";
   import { hasAuthSession } from "$lib/auth/session";
+  import ThemeToggle from "$lib/components/theme/ThemeToggle.svelte";
 
   let { children, data } = $props();
   let authRevision = $state(0);
@@ -54,26 +55,25 @@
   });
 </script>
 
-<div class="min-h-screen flex flex-col">
-  <header
-    class="sticky top-0 z-40 border-b backdrop-blur-[10px]"
-    style="background: rgba(4, 14, 19, 0.58); border-bottom-color: rgba(233, 244, 244, 0.1);"
-  >
+<ThemeToggle />
+
+<div class="app-shell min-h-screen flex flex-col">
+  <header class="app-header sticky top-0 z-40 border-b backdrop-blur-[10px]">
     <nav class="max-w-6xl mx-auto h-14 px-4 flex items-center justify-between gap-4">
       <a href="https://decentralised.art/" class="flex items-center gap-2">
         <!-- logo here -->
-        <span class="text-sm font-semibold tracking-[0.08em] uppercase">
+        <span class="app-logo-text text-sm font-semibold tracking-[0.08em] uppercase">
           Decentralised Creative Network
         </span>
       </a>
 
-      <div class="flex items-center gap-4 text-sm text-white/70">
+      <div class="app-nav-links flex items-center gap-4 text-sm">
         {#if isAuthenticated}
-          <a href={resolve("/")} class="hover:text-white">Network</a>
-          <a href={resolve("/studio")} class="hover:text-white">Studio</a>
-          <a href={resolve("/account")} class="hover:text-white">Account</a>
+          <a href={resolve("/")}>Network</a>
+          <a href={resolve("/studio")}>Studio</a>
+          <a href={resolve("/account")}>Account</a>
         {:else}
-          <a href={resolve("/login")} class="hover:text-white">Login</a>
+          <a href={resolve("/login")}>Login</a>
         {/if}
       </div>
     </nav>
@@ -88,18 +88,18 @@
   </main>
 
   {#if currentPath !== resolve("/studio") && currentPath !== resolve("/network")}
-    <footer class="border-t border-white/10 text-white/40">
+    <footer class="app-footer border-t">
       <div
         class="max-w-6xl mx-auto px-4 py-[1.9rem] grid gap-6 md:flex md:items-start md:justify-between"
       >
         <div class="flex flex-col gap-[0.45rem]">
           <p
-            class="m-0 text-white"
+            class="app-footer-title m-0"
             style="font-family: Syne, 'Space Grotesk', system-ui, sans-serif; font-size: 1.1rem; letter-spacing: 0.01em;"
           >
             Decentralised Creative Network
           </p>
-          <p class="m-0 text-[0.82rem] text-white/70">© 2026 decentralised.art</p>
+          <p class="app-footer-meta m-0 text-[0.82rem]">© 2026 decentralised.art</p>
         </div>
       </div>
     </footer>
@@ -110,6 +110,43 @@
   @reference "$lib/styles/style.css";
 
   .auth-redirect-page {
-    @apply flex-1 min-h-0 flex items-center justify-center px-4 py-10 text-sm text-white/70;
+    @apply flex-1 min-h-0 flex items-center justify-center px-4 py-10 text-sm;
+    color: var(--text-muted);
+  }
+
+  .app-shell {
+    background: var(--surface-page);
+    color: var(--text-primary);
+  }
+
+  .app-header {
+    background: var(--surface-header);
+    border-bottom-color: var(--border-subtle);
+  }
+
+  .app-logo-text,
+  .app-footer-title {
+    color: var(--text-primary);
+  }
+
+  .app-nav-links {
+    color: var(--text-muted);
+  }
+
+  .app-nav-links a {
+    transition: color 150ms ease;
+  }
+
+  .app-nav-links a:hover {
+    color: var(--text-primary);
+  }
+
+  .app-footer {
+    color: var(--text-faint);
+    border-top-color: var(--border-subtle);
+  }
+
+  .app-footer-meta {
+    color: var(--text-muted);
   }
 </style>

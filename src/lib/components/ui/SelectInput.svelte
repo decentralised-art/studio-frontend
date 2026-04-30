@@ -103,7 +103,8 @@
   }
 
   .input-label {
-    @apply text-xs font-medium uppercase tracking-[0.18em] text-white/50;
+    @apply text-xs font-medium uppercase tracking-[0.18em];
+    color: var(--text-muted);
   }
 
   /* ---------- select ---------- */
@@ -113,11 +114,13 @@
   }
 
   .select {
-    @apply w-full rounded-lg border border-white/15 bg-black
-      pl-3 pr-4 py-2 text-sm text-white
-      focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400
-      focus-visible:border-emerald-400/60
+    @apply w-full rounded-lg border pl-3 pr-4 py-2 text-sm
+      focus:outline-none focus-visible:ring-2
       disabled:opacity-50 disabled:cursor-not-allowed;
+    background: var(--surface-input);
+    border-color: var(--border-subtle);
+    color: var(--text-primary);
+    --tw-ring-color: var(--focus-ring);
 
     /* hide native arrow */
     appearance: none;
@@ -136,13 +139,15 @@
   .select-icon {
     @apply pointer-events-none absolute
       right-4 top-1/2 -translate-y-1/2
-      text-xs text-white/60;
+      text-xs;
+    color: var(--text-muted);
   }
 
   /* ---------- help / error ---------- */
 
   .input-help {
-    @apply text-[0.7rem] text-white/40 mt-1;
+    @apply text-[0.7rem] mt-1;
+    color: var(--text-faint);
   }
 
   .input-error {

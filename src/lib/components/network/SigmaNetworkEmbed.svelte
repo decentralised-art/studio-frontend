@@ -218,19 +218,24 @@
   @reference "$lib/styles/style.css";
 
   .sigma-embed-shell {
-    @apply relative rounded-2xl border border-white/10 bg-slate-950/90 p-2;
+    @apply relative rounded-2xl border p-2;
     min-height: var(--sigma-min-height);
+    background: var(--surface-card);
+    border-color: var(--border-subtle);
   }
 
   .sigma-embed-canvas {
-    @apply h-full min-h-[180px] rounded-xl border border-white/10 bg-slate-950;
+    @apply h-full min-h-[180px] rounded-xl border;
     min-height: calc(var(--sigma-min-height) - 16px);
+    background: var(--studio-flow-bg);
+    border-color: var(--border-subtle);
   }
 
   .sigma-embed-hint {
-    @apply pointer-events-none absolute left-1/2 bottom-3 -translate-x-1/2
-      rounded-full border border-white/10 bg-black/70 px-2.5 py-1
-      text-[0.58rem] uppercase tracking-[0.12em] text-white/60;
+    @apply pointer-events-none absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full border px-2.5 py-1 text-[0.58rem] uppercase tracking-[0.12em];
+    background: var(--surface-floating);
+    border-color: var(--border-subtle);
+    color: var(--text-muted);
   }
 
   .sigma-embed-error {
@@ -239,9 +244,10 @@
   }
 
   .sigma-embed-idle {
-    @apply pointer-events-none absolute inset-2 rounded-xl border border-white/5;
+    @apply pointer-events-none absolute inset-2 rounded-xl border;
+    border-color: var(--border-subtle);
     background:
-      radial-gradient(circle at 24% 26%, rgba(255, 255, 255, 0.04), transparent 38%),
-      radial-gradient(circle at 78% 70%, rgba(103, 214, 255, 0.06), transparent 42%);
+      radial-gradient(circle at 24% 26%, var(--surface-panel-soft), transparent 38%),
+      radial-gradient(circle at 78% 70%, var(--color-accent-soft), transparent 42%);
   }
 </style>

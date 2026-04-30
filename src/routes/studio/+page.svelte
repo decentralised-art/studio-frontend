@@ -7968,7 +7968,7 @@
         panOnDrag
         proOptions={{ hideAttribution: true }}
       >
-        <Background bgColor="black" />
+        <Background bgColor="var(--studio-flow-bg)" patternColor="var(--studio-flow-pattern)" />
         <FlowInstanceBridge
           onReady={({ screenToFlowPosition: toFlow, getZoom: zoomFn, fitView: fitViewFn }) => {
             screenToFlowPosition = toFlow;
@@ -9534,12 +9534,15 @@
 
   .top-stack {
     grid-area: top;
-    @apply flex flex-col border-b border-white/10 bg-black/80;
+    @apply flex flex-col border-b;
+    background: var(--surface-header);
+    border-bottom-color: var(--border-subtle);
   }
 
   .canvas {
     grid-area: canvas;
-    @apply relative min-h-0 bg-black flex flex-col;
+    @apply relative min-h-0 flex flex-col;
+    background: var(--studio-flow-bg);
   }
 
   .tab-bar {
@@ -9637,6 +9640,16 @@
 
   .studio :global(.svelte-flow) {
     @apply h-full w-full;
+    --xy-background-color: var(--studio-flow-bg);
+    --xy-background-pattern-dots-color-default: var(--studio-flow-pattern);
+    --xy-background-pattern-lines-color-default: var(--studio-flow-pattern);
+    --xy-background-pattern-cross-color-default: var(--studio-flow-pattern);
+    --xy-handle-background-color: var(--surface-panel-strong);
+    --xy-handle-border-color: var(--color-accent);
+    --xy-selection-background-color: var(--color-accent-soft);
+    --xy-edge-label-color: var(--text-primary);
+    --xy-edge-label-background-color: transparent;
+    background: var(--studio-flow-bg);
   }
 
   .studio > :global(.dock--left) {
@@ -9817,20 +9830,20 @@
   }
 
   .studio :global(.svelte-flow__node) {
-    @apply rounded-md border border-white/15 bg-black/80 text-white/80;
-    box-shadow: 0 12px 24px rgba(0, 0, 0, 0.45);
-    background-color: rgba(6, 8, 12, 0.85) !important;
-    color: rgba(255, 255, 255, 0.85) !important;
-    border-color: rgba(255, 255, 255, 0.15) !important;
+    @apply rounded-md border;
+    box-shadow: var(--studio-node-shadow);
+    background-color: var(--studio-node-bg) !important;
+    color: var(--text-secondary) !important;
+    border-color: var(--studio-node-border) !important;
   }
 
   .studio :global(.svelte-flow__node.selected) {
     @apply border-emerald-400/60 text-emerald-200;
     box-shadow:
       0 0 0 1px rgba(52, 211, 153, 0.3),
-      0 16px 28px rgba(0, 0, 0, 0.5);
+      var(--studio-node-shadow);
     border-color: rgba(52, 211, 153, 0.6) !important;
-    color: rgba(167, 243, 208, 0.95) !important;
+    color: var(--color-accent-strong) !important;
   }
 
   .studio :global(.svelte-flow__node .svelte-flow__node-content) {
@@ -9838,7 +9851,7 @@
   }
 
   .studio :global(.svelte-flow__edge-text) {
-    fill: rgba(255, 255, 255, 0.9) !important;
+    fill: var(--text-primary) !important;
   }
 
   .studio :global(.svelte-flow__edge-textbg) {
@@ -9847,11 +9860,11 @@
   }
 
   .studio :global(.svelte-flow__edge-label) {
-    color: rgba(255, 255, 255, 0.92) !important;
+    color: var(--text-primary) !important;
     background: transparent !important;
     border: none !important;
     box-shadow: none !important;
-    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.65);
+    text-shadow: none;
   }
 
   .studio :global(.dock--top .btn),
@@ -10638,31 +10651,39 @@
   }
 
   .chain-status-chip {
-    @apply inline-flex max-w-full items-start gap-2 rounded-md border border-white/10 bg-black/70 px-2 py-1
-      text-[0.62rem] text-white/80;
+    @apply inline-flex max-w-full items-start gap-2 rounded-md border px-2 py-1 text-[0.62rem];
+    background: var(--surface-card);
+    border-color: var(--border-subtle);
+    color: var(--text-secondary);
   }
 
   .chain-status-chip span {
-    @apply shrink-0 uppercase tracking-[0.18em] text-white/50;
+    @apply shrink-0 uppercase tracking-[0.18em];
+    color: var(--text-muted);
   }
 
   .chain-status-chip strong {
-    @apply font-medium text-white/80 break-words;
+    @apply break-words font-medium;
+    color: var(--text-secondary);
   }
 
   .chain-status-chip.is-error {
-    @apply border-rose-400/30 bg-rose-950/20 text-rose-100;
+    background: rgba(244, 63, 94, 0.1);
+    border-color: rgba(244, 63, 94, 0.32);
+    color: #be123c;
   }
 
   .chain-status-chip.is-error span {
-    @apply text-rose-200/70;
+    color: #be123c;
   }
 
   .chain-status-chip.is-success {
-    @apply border-emerald-400/30 bg-emerald-950/20 text-emerald-100;
+    background: var(--color-accent-soft);
+    border-color: color-mix(in srgb, var(--color-accent) 36%, transparent);
+    color: var(--color-accent-strong);
   }
 
   .chain-status-chip.is-success span {
-    @apply text-emerald-200/70;
+    color: var(--color-accent-strong);
   }
 </style>

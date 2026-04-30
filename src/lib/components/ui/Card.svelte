@@ -108,33 +108,44 @@
   @reference "$lib/styles/style.css";
 
   .card {
-    @apply w-full relative rounded-3xl border border-white/10
-
-      bg-white/5
-      shadow-[0_18px_60px_rgba(15,23,42,0.85)]
-      p-6;
+    @apply w-full relative rounded-3xl border p-6;
+    background: var(--surface-card);
+    border-color: var(--border-subtle);
+    box-shadow: var(--shadow-soft);
+    color: var(--text-primary);
   }
 
   .card-hoverable {
-    @apply transition
-    hover:border-emerald-400
-    hover:shadow-lg
-    focus-visible:ring-2
-    focus-visible:ring-emerald-400/60;
+    @apply transition focus-visible:ring-2;
+  }
+
+  .card-hoverable:hover {
+    border-color: var(--color-accent);
+    background: var(--surface-card-hover);
+  }
+
+  .card-hoverable:focus-visible {
+    --tw-ring-color: var(--focus-ring);
   }
 
   .card-selected {
-    @apply border  border-emerald-500/60 bg-emerald-500/10 text-emerald-300;
+    border-color: color-mix(in srgb, var(--color-accent) 58%, transparent);
+    background: var(--color-accent-soft);
+    color: var(--color-accent-strong);
   }
 
   .card-soft {
-    @apply rounded-2xl border border-white/10
-      bg-white/5 p-4;
+    @apply rounded-2xl border p-4;
+    background: var(--surface-card);
+    border-color: var(--border-subtle);
+    color: var(--text-primary);
   }
 
   .card-compact {
-    @apply w-full rounded-2xl border border-white/10
-      bg-white/5 p-2;
+    @apply w-full rounded-2xl border p-2;
+    background: var(--surface-card);
+    border-color: var(--border-subtle);
+    color: var(--text-primary);
   }
 
   .card-gradient-border {
@@ -148,7 +159,9 @@
   }
 
   .card-gradient-border > .card-inner {
-    @apply rounded-[1.4rem] bg-black/80 border border-white/10
-       p-6;
+    @apply rounded-[1.4rem] border p-6;
+    background: var(--surface-panel-strong);
+    border-color: var(--border-subtle);
+    color: var(--text-primary);
   }
 </style>

@@ -129,16 +129,20 @@
   }
 
   .title {
-    @apply text-xl font-semibold text-white;
+    @apply text-xl font-semibold;
+    color: var(--text-primary);
   }
 
   .subtitle {
-    @apply text-sm text-white/60;
+    @apply text-sm;
+    color: var(--text-muted);
   }
 
   .mock-system-warning {
-    @apply mt-4 rounded-lg border border-cyan-300/25 bg-cyan-400/5 px-4 py-3 space-y-2;
-    @apply text-sm text-white/75;
+    @apply mt-4 rounded-lg border px-4 py-3 space-y-2 text-sm;
+    background: color-mix(in srgb, #06b6d4 8%, transparent);
+    border-color: color-mix(in srgb, #0891b2 28%, transparent);
+    color: var(--text-secondary);
   }
 
   .form {
@@ -154,7 +158,12 @@
   }
 
   .mode-toggle {
-    @apply text-xs text-white/65 underline decoration-transparent underline-offset-2 transition
-      hover:text-white hover:decoration-white/70;
+    @apply text-xs underline decoration-transparent underline-offset-2 transition;
+    color: var(--text-muted);
+  }
+
+  .mode-toggle:hover {
+    color: var(--text-primary);
+    text-decoration-color: var(--border-strong);
   }
 </style>

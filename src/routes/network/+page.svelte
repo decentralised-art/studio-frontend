@@ -1052,8 +1052,10 @@
   }
 
   .follow-search-bar {
-    @apply rounded-3xl border border-white/10 bg-black/70 backdrop-blur-xl
-      px-3 py-3 md:px-4 md:py-3.5;
+    @apply rounded-3xl border px-3 py-3 backdrop-blur-xl md:px-4 md:py-3.5;
+    background: var(--surface-panel-strong);
+    border-color: var(--border-subtle);
+    box-shadow: var(--shadow-soft);
   }
 
   .follow-search-inner {
@@ -1073,11 +1075,14 @@
   }
 
   .result-group-label {
-    @apply text-[0.58rem] uppercase tracking-[0.2em] text-white/40 px-1;
+    @apply px-1 text-[0.58rem] uppercase tracking-[0.2em];
+    color: var(--text-faint);
   }
 
   .follow-candidate-item {
-    @apply flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/5 px-2.5 py-2;
+    @apply flex items-center justify-between gap-3 rounded-xl border px-2.5 py-2;
+    background: var(--surface-card);
+    border-color: var(--border-subtle);
   }
 
   .candidate-meta {
@@ -1085,11 +1090,14 @@
   }
 
   .candidate-avatar {
-    @apply h-8 w-8 rounded-lg border border-white/10 object-cover bg-white/5 shrink-0;
+    @apply h-8 w-8 shrink-0 rounded-lg border object-cover;
+    background: var(--surface-panel-soft);
+    border-color: var(--border-subtle);
   }
 
   .candidate-avatar--glyph {
-    @apply flex items-center justify-center text-xs font-semibold text-white/70;
+    @apply flex items-center justify-center text-xs font-semibold;
+    color: var(--text-muted);
   }
 
   .candidate-text {
@@ -1097,7 +1105,8 @@
   }
 
   .candidate-name {
-    @apply text-sm font-medium text-white leading-tight;
+    @apply text-sm font-medium leading-tight;
+    color: var(--text-primary);
   }
 
   .candidate-name-link {
@@ -1106,11 +1115,13 @@
   }
 
   .candidate-name-link:hover {
-    @apply decoration-white/70;
+    color: var(--color-accent-strong);
+    text-decoration-color: color-mix(in srgb, var(--color-accent) 70%, transparent);
   }
 
   .candidate-kind {
-    @apply text-[0.62rem] uppercase tracking-[0.14em] text-white/45;
+    @apply text-[0.62rem] uppercase tracking-[0.14em];
+    color: var(--text-faint);
   }
 
   .candidate-actions {
@@ -1118,7 +1129,10 @@
   }
 
   .search-empty {
-    @apply rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-white/60;
+    @apply rounded-xl border px-3 py-2 text-sm;
+    background: var(--surface-card);
+    border-color: var(--border-subtle);
+    color: var(--text-muted);
   }
 
   @media (max-width: 1200px) {

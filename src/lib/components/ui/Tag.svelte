@@ -29,17 +29,24 @@
 
   .tag {
     @apply inline-flex items-center gap-1 rounded-full
-      border border-white/10 bg-white/5
+      border
       px-2.5 py-1 text-[0.7rem] uppercase
-      tracking-[0.15em] text-white/60;
+      tracking-[0.15em];
+    background: var(--surface-panel-soft);
+    border-color: var(--border-subtle);
+    color: var(--text-muted);
   }
 
   .tag-accent {
-    @apply border-emerald-500/60 bg-emerald-500/10 text-emerald-300;
+    border-color: color-mix(in srgb, var(--color-accent) 58%, transparent);
+    background: var(--color-accent-soft);
+    color: var(--color-accent-strong);
   }
 
   .tag-outline {
-    @apply border-white/30 bg-transparent text-white/70;
+    background: transparent;
+    border-color: var(--border-strong);
+    color: var(--text-muted);
   }
 
   .tag-preserve-case {

@@ -101,7 +101,8 @@
   }
 
   .social-code-card {
-    @apply text-white/90 flex flex-col gap-2.5;
+    @apply flex flex-col gap-2.5;
+    color: var(--text-primary);
   }
 
   .event-header {
@@ -113,11 +114,14 @@
   }
 
   .author-avatar {
-    @apply h-10 w-10 rounded-xl border border-white/10 bg-white/5 object-cover shrink-0;
+    @apply h-10 w-10 shrink-0 rounded-xl border object-cover;
+    background: var(--surface-panel-soft);
+    border-color: var(--border-subtle);
   }
 
   .author-avatar--fallback {
-    @apply flex items-center justify-center text-white/70 font-semibold;
+    @apply flex items-center justify-center font-semibold;
+    color: var(--text-muted);
   }
 
   .author-meta {
@@ -134,25 +138,34 @@
   }
 
   .author-name {
-    @apply text-sm md:text-[0.95rem] font-semibold tracking-[0.03em] text-white;
+    @apply text-sm font-semibold tracking-[0.03em] md:text-[0.95rem];
+    color: var(--text-primary);
   }
 
   .author-link {
-    @apply hover:text-white/85 transition;
+    @apply transition;
     text-decoration: none;
   }
 
+  .author-link:hover {
+    color: var(--color-accent-strong);
+  }
+
   .event-time {
-    @apply mt-0.5 text-[0.62rem] uppercase tracking-[0.16em] text-white/45;
+    @apply mt-0.5 text-[0.62rem] uppercase tracking-[0.16em];
+    color: var(--text-faint);
   }
 
   .author-event-text {
-    @apply text-sm text-white/75 leading-snug;
+    @apply text-sm leading-snug;
     align-self: baseline;
+    color: var(--text-muted);
   }
 
   .code-shell {
-    @apply rounded-2xl border border-white/10 bg-black/45 px-3 py-2.5;
+    @apply rounded-2xl border px-3 py-2.5;
+    background: var(--surface-code);
+    border-color: var(--border-subtle);
   }
 
   .code-shell pre {
@@ -160,7 +173,8 @@
   }
 
   .code-shell code {
-    @apply text-xs md:text-[0.82rem] text-cyan-100;
+    @apply text-xs md:text-[0.82rem];
+    color: var(--color-accent-strong);
     font-family:
       ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New",
       monospace;
