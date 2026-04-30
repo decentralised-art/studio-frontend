@@ -104,6 +104,9 @@
   import {
     buildConnectorTreeGraph as buildConnectorTreeGraphFromRegistry,
     computeConnectorOpenSlotsInRegistry,
+    hasConnectorTreePlaceholderNodes,
+    isCompleteConnectorTreeModel,
+    shouldReplaceConnectorTreeModel,
   } from "$lib/studio/connectorTreeGraph";
   import { mergeConnectorTreeProjectionWithOverlay } from "$lib/studio/connectorTreeOverlay";
   import {
@@ -5705,8 +5708,11 @@
     const tab = tabs.find((candidate) => candidate.id === tabId);
     const rootConnectorName = tab?.particleId?.trim() ?? "";
     if (!rootConnectorName || !connectorTreeModelsByTab.has(tabId)) return;
+    const currentGraph = connectorTreeModelsByTab.get(tabId) ?? null;
     const graph = buildConnectorTreeGraph(rootConnectorName, { x: 360, y: 120 });
-    connectorTreeModelsByTab.set(tabId, graph);
+    if (shouldReplaceConnectorTreeModel(currentGraph, graph)) {
+      connectorTreeModelsByTab.set(tabId, graph);
+    }
     tabGraphs.set(tabId, tabGraphs.get(tabId) ?? { nodes: [], edges: [] });
     if (activeTabId === tabId) loadTabGraph(tabId);
   };
@@ -5720,11 +5726,14 @@
   };
 
   const ensureConnectorTreeTabGraph = async (tabId: string, connectorName: string) => {
+    const currentGraph = connectorTreeModelsByTab.get(tabId) ?? null;
     let graph = buildConnectorTreeGraph(connectorName, { x: 360, y: 120 });
-    connectorTreeModelsByTab.set(tabId, graph);
+    if (shouldReplaceConnectorTreeModel(currentGraph, graph)) {
+      connectorTreeModelsByTab.set(tabId, graph);
+    }
     tabGraphs.set(tabId, tabGraphs.get(tabId) ?? { nodes: [], edges: [] });
     if (activeTabId === tabId) loadTabGraph(tabId);
-    const hasPlaceholderNodes = graph.nodes.some((node) => Boolean(node.data.placeholder));
+    const hasPlaceholderNodes = hasConnectorTreePlaceholderNodes(graph);
     if (graph.nodes.length && !hasPlaceholderNodes) return true;
 
     try {
@@ -5737,11 +5746,13 @@
         return false;
       }
       graph = buildConnectorTreeGraph(connectorName, { x: 360, y: 120 });
-      connectorTreeModelsByTab.set(tabId, graph);
+      const graphBeforeFetchReload = connectorTreeModelsByTab.get(tabId) ?? null;
+      if (shouldReplaceConnectorTreeModel(graphBeforeFetchReload, graph)) {
+        connectorTreeModelsByTab.set(tabId, graph);
+      }
       tabGraphs.set(tabId, tabGraphs.get(tabId) ?? { nodes: [], edges: [] });
       if (activeTabId === tabId) loadTabGraph(tabId);
-      const hasRenderableTree =
-        graph.nodes.length > 0 && !graph.nodes.some((node) => Boolean(node.data.placeholder));
+      const hasRenderableTree = isCompleteConnectorTreeModel(graph);
       if (hasRenderableTree) {
         chainSyncStatus =
           result.loaded.length > 1

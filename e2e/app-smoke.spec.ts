@@ -36,7 +36,10 @@ type RemoteApiObserver = {
   chainFeedRequests: string[];
 };
 
-const stubRemoteApis = async (page: Page) => {
+const stubRemoteApis = async (
+  page: Page,
+  options: { missingProfileConnectorDetail?: boolean } = {},
+) => {
   const observer: RemoteApiObserver = {
     chainAccountRequests: [],
     chainFeedRequests: [],
@@ -252,6 +255,14 @@ const stubRemoteApis = async (page: Page) => {
     }
 
     if (url.includes("/chain/connector/profile_connector")) {
+      if (options.missingProfileConnectorDetail) {
+        await route.fulfill({
+          status: 404,
+          contentType: "application/json",
+          body: JSON.stringify({ message: "Not found" }),
+        });
+        return;
+      }
       await route.fulfill({
         status: 200,
         contentType: "application/json",
@@ -320,6 +331,82 @@ const authenticateFixtureSession = async (page: Page) => {
     window.localStorage.setItem(
       "hypermusic_chain_token_user_id",
       "wallet:0xb584a15f38c2014cff54fdb1b417428b51999276",
+    );
+  });
+};
+
+const seedRestoredConnectorPluginSession = async (page: Page) => {
+  await page.addInitScript(() => {
+    const rootNode = {
+      id: "connector-profile_connector-restored",
+      type: "connector",
+      draggable: true,
+      position: { x: 360, y: 120 },
+      data: {
+        label: "profile_connector",
+        kind: "connector",
+        dimensions: 1,
+        connectorRows: [{ dimension: 1, transformations: [] }],
+        conditionLabel: null,
+        sourceId: "feature-profile_connector",
+        networkId: "profile_connector",
+        fromNetwork: true,
+        tabRoot: true,
+        hideOutlets: false,
+        riPosition: 0,
+        riStart: 0,
+        riShift: 0,
+        riLocked: false,
+      },
+    };
+    const pluginNode = {
+      id: "plugin-midi-clip-export-v1-restored",
+      type: "plugin",
+      draggable: true,
+      position: { x: 360, y: 360 },
+      data: {
+        label: "MIDI Clip Export",
+        kind: "plugin",
+        sourceId: "midi-clip-export-v1",
+        fromNetwork: true,
+      },
+    };
+    const pluginEdge = {
+      id: "edge-plugin-midi-clip-export-v1-restored-profile_connector",
+      source: pluginNode.id,
+      sourceHandle: "out",
+      target: rootNode.id,
+      targetHandle: "plugin-in",
+      label: "plugin",
+      data: { relation: "plugin", pluginId: "midi-clip-export-v1" },
+    };
+
+    window.sessionStorage.setItem(
+      "dcn_studio_tabs_session_v1",
+      JSON.stringify({
+        version: 1,
+        tabs: [
+          {
+            id: "tab-profile-connector",
+            label: "profile_connector",
+            particleId: "profile_connector",
+          },
+        ],
+        activeTabId: "tab-profile-connector",
+        tabGraphs: {
+          "tab-profile-connector": {
+            nodes: [rootNode, pluginNode],
+            edges: [pluginEdge],
+          },
+        },
+        connectorTreeModels: {
+          "tab-profile-connector": {
+            rootConnectorName: "profile_connector",
+            nodes: [rootNode],
+            edges: [],
+          },
+        },
+      }),
     );
   });
 };
@@ -466,6 +553,36 @@ test("opens and adds a Studio Network connector discovered from the feed", async
   await expect(page.getByRole("tab", { name: /profile_connector/ })).toBeVisible();
   expect(remoteApis.chainFeedRequests.some((url) => url.includes("/chain/feed"))).toBe(true);
   expect(remoteApis.chainAccountRequests).toEqual([]);
+  assertNoPageErrors();
+});
+
+test("keeps restored Studio connector trees when plugin overlays are present", async ({ page }) => {
+  const assertNoPageErrors = collectPageErrors(page);
+  await stubRemoteApis(page, { missingProfileConnectorDetail: true });
+  await authenticateFixtureSession(page);
+  await seedRestoredConnectorPluginSession(page);
+
+  const restoredConnector = page
+    .locator(".connector-node")
+    .filter({ hasText: "profile_connector" });
+  const restoredPlugin = page.locator(".plugin-node").filter({ hasText: "MIDI Clip Export" });
+  const networkConnectorCard = page
+    .getByRole("listitem")
+    .filter({ hasText: "profile_connector" })
+    .first();
+
+  await page.goto("/studio");
+  await expect(networkConnectorCard).toBeVisible({ timeout: 15_000 });
+  await expect(restoredConnector).toBeVisible();
+  await expect(restoredPlugin).toBeVisible();
+
+  await page.goto("/network");
+  await expect(page.getByRole("region", { name: "Activity feed" })).toBeVisible();
+
+  await page.goto("/studio");
+  await expect(networkConnectorCard).toBeVisible({ timeout: 15_000 });
+  await expect(restoredConnector).toBeVisible();
+  await expect(restoredPlugin).toBeVisible();
   assertNoPageErrors();
 });
 

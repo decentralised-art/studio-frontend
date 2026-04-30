@@ -3,6 +3,9 @@ import { describe, expect, it } from "vitest";
 import {
   buildConnectorTreeGraph,
   computeConnectorOpenSlotsInRegistry,
+  hasConnectorTreePlaceholderNodes,
+  isCompleteConnectorTreeModel,
+  shouldReplaceConnectorTreeModel,
   type ConnectorTreeModel,
   type ConnectorTreeNode,
 } from "../src/lib/studio/connectorTreeGraph";
@@ -210,5 +213,26 @@ describe("connectorTreeGraph", () => {
     expect(() => computeConnectorOpenSlotsInRegistry(registry, "root")).toThrowError(
       /Connector cycle/,
     );
+  });
+
+  it("does not replace a complete restored tree with a placeholder rebuild", () => {
+    const complete = build(
+      {
+        root: connector("root", [{ composite: "child" }]),
+        child: connector("child", [{}]),
+      },
+      "root",
+    );
+    const placeholder = build(
+      {
+        root: connector("root", [{ composite: "child" }]),
+      },
+      "root",
+    );
+
+    expect(isCompleteConnectorTreeModel(complete)).toBe(true);
+    expect(hasConnectorTreePlaceholderNodes(placeholder)).toBe(true);
+    expect(shouldReplaceConnectorTreeModel(complete, placeholder)).toBe(false);
+    expect(shouldReplaceConnectorTreeModel(placeholder, complete)).toBe(true);
   });
 });

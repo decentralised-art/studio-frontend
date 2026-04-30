@@ -73,6 +73,26 @@ export type ConnectorTreeGraphOptions = {
   labelForConnector?: (connectorName: string) => string;
 };
 
+type ConnectorTreePlaceholderModel = {
+  nodes: Array<{ data: { placeholder?: boolean } }>;
+};
+
+export const hasConnectorTreePlaceholderNodes = (
+  model: ConnectorTreePlaceholderModel | null | undefined,
+) => Boolean(model?.nodes.some((node) => Boolean(node.data.placeholder)));
+
+export const isCompleteConnectorTreeModel = (
+  model: ConnectorTreePlaceholderModel | null | undefined,
+) => Boolean(model && model.nodes.length > 0 && !hasConnectorTreePlaceholderNodes(model));
+
+export const shouldReplaceConnectorTreeModel = (
+  current: ConnectorTreePlaceholderModel | null | undefined,
+  next: ConnectorTreePlaceholderModel | null | undefined,
+) => {
+  if (isCompleteConnectorTreeModel(next)) return true;
+  return !isCompleteConnectorTreeModel(current);
+};
+
 type IncomingBindingDescriptor = {
   targetName: string;
   kind: "static" | "forwarded";
