@@ -1,4 +1,5 @@
 import { normalizeFormatHash } from "$lib/chain/registryApi";
+import { MUSIC_SCORE_PLUGIN_ID, MUSIC_SCORE_PLUGIN_NAME } from "$lib/score/codebook";
 
 export type StudioPluginDescriptor = {
   id: string;
@@ -18,6 +19,13 @@ const BUILTIN_STUDIO_PLUGINS: StudioPluginDescriptor[] = [
     name: "MIDI Clip Export",
     summary:
       "Generates MIDI clips from pitch/time/duration/velocity connector streams and supports file export.",
+    supportedFormatHashes: [MIDI_QUAD_FORMAT_HASH],
+    status: "alpha",
+  },
+  {
+    id: MUSIC_SCORE_PLUGIN_ID,
+    name: MUSIC_SCORE_PLUGIN_NAME,
+    summary: "Renders connector-produced note streams or MusicXML trees as MusicXML 4.0 notation.",
     supportedFormatHashes: [MIDI_QUAD_FORMAT_HASH],
     status: "alpha",
   },

@@ -6,6 +6,7 @@
 
   import {
     Background,
+    SelectionMode,
     SvelteFlow,
     type Connection,
     type Edge,
@@ -224,8 +225,14 @@
   } from "$lib/studio/plugins/runtime";
   import {
     listCompatibleStudioPlugins,
+    listStudioPlugins,
     type StudioPluginDescriptor,
   } from "$lib/studio/plugins/registry";
+  import {
+    listStudioPluginTemplates,
+    listStudioPluginTemplatesForPlugin,
+    type StudioPluginTemplateDescriptor,
+  } from "$lib/studio/plugins/templates";
   import {
     bindStudioCanvasDragDrop,
     readStudioPluginDropData,
@@ -327,6 +334,15 @@
       can_deploy: boolean;
       high_risk_tools_require_confirmation: string[];
     };
+    plugin_templates: Array<{
+      id: string;
+      plugin_id: string;
+      name: string;
+      archetype_connectors: string[];
+      slot_connectors: string[];
+      purpose: string;
+      editable_draft: boolean;
+    }>;
     network_connector_catalog: string[];
   };
 
@@ -417,12 +433,15 @@
   let edges = $state.raw<Edge[]>([]);
   let selectedNodeId = $state<string | null>(null);
   let selectedEdgeId = $state<string | null>(null);
+  let selectedNodeIds = $state.raw<string[]>([]);
+  let selectedEdgeIds = $state.raw<string[]>([]);
   type ConnectorDropTarget =
     | { type: "dimension"; connectorId: string; dimensionIndex: number }
     | { type: "condition"; connectorId: string }
     | null;
   let connectorDropTarget = $state<ConnectorDropTarget>(null);
-  let explorerSource = $state<"network" | "toolbox" | "plugins">("network");
+  type ExplorerSource = "network" | "toolbox" | "plugins" | "templates";
+  let explorerSource = $state<ExplorerSource>("network");
   let libraryTab = $state<"connectors" | "transformations" | "conditions">("connectors");
   let tooltipX = $state(0);
   let tooltipY = $state(0);
@@ -523,6 +542,8 @@
   let libraryCreateActionError = $state<string | null>(null);
   let pluginAttachStatus = $state<string | null>(null);
   let pluginAttachError = $state<string | null>(null);
+  let templateAttachError = $state<string | null>(null);
+  let templatePluginId = $state("");
   let standaloneDraftTransformations = $state<StandaloneTransformationDraft[]>([]);
   const conditionCodeById = new SvelteMap<string, string>();
 
@@ -1519,6 +1540,15 @@
           "remove_transformation_from_dimension",
         ],
       },
+      plugin_templates: listStudioPluginTemplates().map((template) => ({
+        id: template.id,
+        plugin_id: template.pluginId,
+        name: template.name,
+        archetype_connectors: template.archetypeConnectors,
+        slot_connectors: template.slotConnectors,
+        purpose: template.summary,
+        editable_draft: true,
+      })),
       network_connector_catalog: networkLibrary.feature
         .map((item) => getLibraryRegistryName(item) || item.name)
         .filter((name, index, all) => name && all.indexOf(name) === index)
@@ -2125,8 +2155,13 @@
       if (transformationEditorOpen || conditionEditorOpen) return;
       if (isEditableTarget(event.target)) return;
       const key = event.key.toLowerCase();
+      const hasGraphSelection =
+        selectedNodeIds.length > 0 ||
+        selectedEdgeIds.length > 0 ||
+        selectedNodeId !== null ||
+        selectedEdgeId !== null;
 
-      if ((key === "backspace" || key === "delete") && (selectedNodeId || selectedEdgeId)) {
+      if ((key === "backspace" || key === "delete") && hasGraphSelection) {
         event.preventDefault();
         removeSelectedGraphEntity();
         return;
@@ -2615,13 +2650,50 @@
 
   let layoutFrame: number | null = null;
   let spacingFrame: number | null = null;
+  let manualGraphDragActive = false;
+  let manualGraphDragSettleTimer: ReturnType<typeof setTimeout> | null = null;
 
-  const scheduleLayout = () => {
+  const cancelLayoutFrames = () => {
+    if (layoutFrame !== null) {
+      cancelAnimationFrame(layoutFrame);
+      layoutFrame = null;
+    }
+    if (spacingFrame !== null) {
+      cancelAnimationFrame(spacingFrame);
+      spacingFrame = null;
+    }
+  };
+
+  const shouldDeferAutoLayout = () => manualGraphDragActive || manualGraphDragSettleTimer !== null;
+
+  const beginManualGraphDrag = () => {
+    manualGraphDragActive = true;
+    if (manualGraphDragSettleTimer !== null) {
+      clearTimeout(manualGraphDragSettleTimer);
+      manualGraphDragSettleTimer = null;
+    }
+    cancelLayoutFrames();
+  };
+
+  const endManualGraphDrag = () => {
+    manualGraphDragActive = false;
+    cancelLayoutFrames();
+    if (manualGraphDragSettleTimer !== null) {
+      clearTimeout(manualGraphDragSettleTimer);
+    }
+    manualGraphDragSettleTimer = setTimeout(() => {
+      manualGraphDragSettleTimer = null;
+    }, 250);
+  };
+
+  const scheduleLayout = ({ connectorTrees = false }: { connectorTrees?: boolean } = {}) => {
     if (!canvasEl) return;
+    if (shouldDeferAutoLayout()) return;
     if (layoutFrame !== null) cancelAnimationFrame(layoutFrame);
     layoutFrame = requestAnimationFrame(() => {
       layoutFrame = null;
-      layoutFeatureClusters();
+      if (shouldDeferAutoLayout()) return;
+      layoutFeatureClusters({ connectorTrees });
     });
   };
 
@@ -2709,9 +2781,11 @@
 
   const scheduleNodeSpacing = () => {
     if (!canvasEl) return;
+    if (shouldDeferAutoLayout()) return;
     if (spacingFrame !== null) cancelAnimationFrame(spacingFrame);
     spacingFrame = requestAnimationFrame(() => {
       spacingFrame = null;
+      if (shouldDeferAutoLayout()) return;
       const spacedNodes = ensureNodeSpacing(nodes);
       if (spacedNodes !== nodes) {
         nodes = spacedNodes;
@@ -2727,9 +2801,139 @@
     return target;
   };
 
-  const layoutFeatureClusters = () => {
-    if (!canvasEl) return;
+  const parseConnectorDimensionHandleForLayout = (handle?: string | null): number | null => {
+    if (!handle?.startsWith("dim-")) return null;
+    const value = Number(handle.replace("dim-", ""));
+    return Number.isInteger(value) && value >= 0 ? value : null;
+  };
+
+  const buildConnectorTreeLayoutUpdates = (): SvelteMap<string, { x: number; y: number }> => {
     const updates = new SvelteMap<string, { x: number; y: number }>();
+    const connectorNodes = nodes.filter((node) => isConnectorKind(node.data.kind) && !node.hidden);
+    if (!connectorNodes.length) return updates;
+
+    const connectorById = new SvelteMap<string, StudioNode>(
+      connectorNodes.map((node) => [node.id, node] as const),
+    );
+    const connectorEdges = edges.filter((edge) => {
+      const source = connectorById.get(edge.source);
+      const target = connectorById.get(edge.target);
+      if (!source || !target) return false;
+      if ((edge.targetHandle ?? "in") !== "in") return false;
+      return parseConnectorDimensionHandleForLayout(edge.sourceHandle) !== null;
+    });
+    if (!connectorEdges.length) return updates;
+
+    const childrenByConnector = new SvelteMap<string, Edge[]>();
+    const incomingConnectorIds = new SvelteSet<string>();
+    connectorEdges.forEach((edge) => {
+      incomingConnectorIds.add(edge.target);
+      const current = childrenByConnector.get(edge.source) ?? [];
+      current.push(edge);
+      childrenByConnector.set(edge.source, current);
+    });
+
+    childrenByConnector.forEach((items) => {
+      items.sort((a, b) => {
+        const dimA = parseConnectorDimensionHandleForLayout(a.sourceHandle) ?? 0;
+        const dimB = parseConnectorDimensionHandleForLayout(b.sourceHandle) ?? 0;
+        if (dimA !== dimB) return dimA - dimB;
+        const targetA = connectorById.get(a.target);
+        const targetB = connectorById.get(b.target);
+        return (targetA?.data.label ?? "").localeCompare(targetB?.data.label ?? "");
+      });
+    });
+
+    const nodeWidth = (node: StudioNode) => measureNodeSize(node.id, fallbackNodeSize(node)).width;
+    const horizontalGap = 96;
+    const verticalGap = 300;
+    const subtreeWidthMemo = new SvelteMap<string, number>();
+
+    const computeSubtreeWidth = (nodeId: string, stack = new SvelteSet<string>()): number => {
+      const node = connectorById.get(nodeId);
+      if (!node) return 0;
+      if (stack.has(nodeId)) return nodeWidth(node);
+      const memo = subtreeWidthMemo.get(nodeId);
+      if (memo !== undefined) return memo;
+
+      const nextStack = new SvelteSet(stack);
+      nextStack.add(nodeId);
+      const children = (childrenByConnector.get(nodeId) ?? []).filter((edge) =>
+        connectorById.has(edge.target),
+      );
+      const childWidths = children.map((edge) => computeSubtreeWidth(edge.target, nextStack));
+      const childrenWidth =
+        childWidths.reduce((sum, width) => sum + width, 0) +
+        horizontalGap * Math.max(0, childWidths.length - 1);
+      const width = Math.max(nodeWidth(node), childrenWidth);
+      subtreeWidthMemo.set(nodeId, width);
+      return width;
+    };
+
+    const placed = new SvelteSet<string>();
+    const placeSubtree = (
+      nodeId: string,
+      left: number,
+      top: number,
+      stack = new SvelteSet<string>(),
+    ) => {
+      const node = connectorById.get(nodeId);
+      if (!node || placed.has(nodeId) || stack.has(nodeId)) return;
+      const width = computeSubtreeWidth(nodeId);
+      const ownWidth = nodeWidth(node);
+      updates.set(nodeId, { x: left + width / 2 - ownWidth / 2, y: top });
+      placed.add(nodeId);
+
+      const nextStack = new SvelteSet(stack);
+      nextStack.add(nodeId);
+      const children = (childrenByConnector.get(nodeId) ?? []).filter((edge) =>
+        connectorById.has(edge.target),
+      );
+      const childWidths = children.map((edge) => computeSubtreeWidth(edge.target, nextStack));
+      const totalChildrenWidth =
+        childWidths.reduce((sum, childWidth) => sum + childWidth, 0) +
+        horizontalGap * Math.max(0, childWidths.length - 1);
+      let cursorX = left + Math.max(0, (width - totalChildrenWidth) / 2);
+
+      children.forEach((edge, index) => {
+        const childWidth = childWidths[index] ?? 0;
+        placeSubtree(edge.target, cursorX, top + verticalGap, nextStack);
+        cursorX += childWidth + horizontalGap;
+      });
+    };
+
+    const roots = connectorNodes
+      .filter((node) => !incomingConnectorIds.has(node.id))
+      .sort((a, b) => {
+        if (Boolean(a.data.tabRoot) !== Boolean(b.data.tabRoot)) {
+          return a.data.tabRoot ? -1 : 1;
+        }
+        return a.position.x - b.position.x || a.position.y - b.position.y;
+      });
+    const orderedRoots = [
+      ...roots,
+      ...connectorNodes.filter((node) => incomingConnectorIds.has(node.id)),
+    ].filter(
+      (node, index, all) => all.findIndex((candidate) => candidate.id === node.id) === index,
+    );
+
+    let cursorX = Math.min(...connectorNodes.map((node) => node.position.x));
+    const rootY = Math.min(...connectorNodes.map((node) => node.position.y));
+    orderedRoots.forEach((root) => {
+      if (placed.has(root.id)) return;
+      const width = computeSubtreeWidth(root.id);
+      placeSubtree(root.id, cursorX, rootY);
+      cursorX += width + horizontalGap * 1.5;
+    });
+
+    return updates;
+  };
+
+  const layoutFeatureClusters = ({ connectorTrees = false }: { connectorTrees?: boolean } = {}) => {
+    if (!canvasEl) return;
+    const updates = connectorTrees
+      ? buildConnectorTreeLayoutUpdates()
+      : new SvelteMap<string, { x: number; y: number }>();
     const gapX = 24;
     const gapY = 48;
     const defaultSize = { width: 160, height: 60 };
@@ -2744,6 +2948,7 @@
         if (!dimensions.length) return;
 
         const featureSize = measureNodeSize(feature.id, defaultSize);
+        const featurePosition = updates.get(feature.id) ?? feature.position;
         const dimensionSizes = dimensions.map((dimension) =>
           measureNodeSize(dimension.id, defaultDimensionSize),
         );
@@ -2752,10 +2957,10 @@
         const totalWidth =
           dimensionSizes.reduce((sum, size) => sum + size.width, 0) +
           gapX * Math.max(0, dimensions.length - 1);
-        const featureCenter = feature.position.x + featureSize.width / 2;
+        const featureCenter = featurePosition.x + featureSize.width / 2;
         let cursorX = featureCenter - totalWidth / 2;
 
-        const dimensionRowY = feature.position.y + featureSize.height + gapY;
+        const dimensionRowY = featurePosition.y + featureSize.height + gapY;
         const compositeRowY = dimensionRowY + maxDimensionHeight + gapY;
 
         dimensions.forEach((dimension, index) => {
@@ -3356,7 +3561,7 @@
   };
 
   const handleAutoLayout = () => {
-    scheduleLayout();
+    scheduleLayout({ connectorTrees: true });
   };
 
   const handleZoomToFit = () => {
@@ -4449,11 +4654,26 @@
       return "";
     }
   });
+  const allStudioPlugins = $derived.by<StudioPluginDescriptor[]>(() => listStudioPlugins());
   const compatibleStudioPlugins = $derived.by<StudioPluginDescriptor[]>(() => {
     const formatHash = activePluginSourceFormatHash;
     if (!formatHash) return [];
     return listCompatibleStudioPlugins(formatHash);
   });
+  const compatibleStudioPluginIds = $derived.by(
+    () => new SvelteSet(compatibleStudioPlugins.map((plugin) => plugin.id)),
+  );
+  const templatePluginOptions = $derived.by<StudioPluginDescriptor[]>(() => allStudioPlugins);
+  const selectedPluginNodeTemplateId = $derived.by(() => {
+    if (selectedNode?.data.kind !== "plugin") return "";
+    return selectedNode.data.sourceId?.trim() ?? "";
+  });
+  const activeTemplatePlugin = $derived.by<StudioPluginDescriptor | null>(
+    () => templatePluginOptions.find((plugin) => plugin.id === templatePluginId) ?? null,
+  );
+  const activePluginTemplates = $derived.by(() =>
+    listStudioPluginTemplatesForPlugin(activeTemplatePlugin?.id),
+  );
   const pluginSourceInfoMessage = $derived.by(() => {
     if (!activePluginSourceRootConnectorName) {
       return "No root connector selected in this tab.";
@@ -4464,14 +4684,35 @@
     if (!activePluginSourceFormatHash) {
       return "This connector has no normalized format hash, so plugin compatibility cannot be resolved.";
     }
-    if (!compatibleStudioPlugins.length) {
-      return `No installed plugins are compatible with format ${activePluginSourceFormatHash}.`;
-    }
     return "";
   });
   const pluginAttachEnabled = $derived.by(
     () => Boolean(activePluginSourceRootConnectorName) && Boolean(activePluginSourceRootConnector),
   );
+  const canAttachStudioPlugin = (plugin: StudioPluginDescriptor): boolean =>
+    pluginAttachEnabled && compatibleStudioPluginIds.has(plugin.id);
+  const getPluginAttachStatusLabel = (plugin: StudioPluginDescriptor): string => {
+    if (!pluginAttachEnabled) return "Needs root";
+    if (!activePluginSourceFormatHash) return "Format unavailable";
+    if (!compatibleStudioPluginIds.has(plugin.id)) return "Different format";
+    return "Compatible";
+  };
+
+  $effect(() => {
+    const options = templatePluginOptions;
+    const selectedPluginId = selectedPluginNodeTemplateId;
+    if (selectedPluginId && options.some((plugin) => plugin.id === selectedPluginId)) {
+      if (templatePluginId !== selectedPluginId) {
+        templatePluginId = selectedPluginId;
+        templateAttachError = null;
+      }
+      return;
+    }
+    if (!options.some((plugin) => plugin.id === templatePluginId)) {
+      templatePluginId = options[0]?.id ?? "";
+      templateAttachError = null;
+    }
+  });
 
   const resolvePluginAttachSourceNode = (): StudioNode | null => {
     const rootConnectorName = activePluginSourceRootConnectorName.trim();
@@ -4486,6 +4727,38 @@
         (node) => node.data.definitionRole === "root" || Boolean(node.data.tabRoot),
       ) ?? candidates[0]
     );
+  };
+
+  const createStudioPluginNode = (
+    plugin: StudioPluginDescriptor,
+    position: { x: number; y: number } | null = null,
+  ): StudioNode => ({
+    id: `plugin-${plugin.id}-${crypto.randomUUID()}`,
+    type: "plugin",
+    selected: true,
+    position: position ?? getCanvasCenter(),
+    data: {
+      label: plugin.name,
+      kind: "plugin",
+      sourceId: plugin.id,
+      fromNetwork: false,
+    },
+  });
+
+  const addStandaloneStudioPlugin = (
+    plugin: StudioPluginDescriptor,
+    options?: { position?: { x: number; y: number } | null },
+  ) => {
+    ensureEditableTabForInsertion();
+    const pluginNode = createStudioPluginNode(plugin, options?.position ?? null);
+    const nextNodes = [...nodes.map((node) => ({ ...node, selected: false })), pluginNode];
+    nodes = nextNodes;
+    selectedNodeId = pluginNode.id;
+    selectedEdgeId = null;
+    setConnectorDropTarget(null);
+    refreshPluginOutputs(activeRunOutput ?? [], nextNodes, edges);
+    pluginAttachStatus = `Added '${plugin.name}' as a standalone plugin. Connect it to a compatible root connector when the draft is ready.`;
+    scheduleLayout();
   };
 
   const attachStudioPluginToRoot = (
@@ -4533,21 +4806,16 @@
         return sourcePluginNode?.data.kind === "plugin";
       }).length;
 
-    const pluginNode: StudioNode = {
-      id: `plugin-${plugin.id}-${crypto.randomUUID()}`,
-      type: "plugin",
-      selected: true,
-      position: options?.position ?? {
+    const pluginNode: StudioNode = createStudioPluginNode(
+      plugin,
+      options?.position ?? {
         x: sourceNode.position.x + attachedPluginCount * 26,
         y: sourceNode.position.y - 220 - attachedPluginCount * 24,
       },
-      data: {
-        label: plugin.name,
-        kind: "plugin",
-        sourceId: plugin.id,
-        networkId: resolveNodeName(sourceNode),
-        fromNetwork: false,
-      },
+    );
+    pluginNode.data = {
+      ...pluginNode.data,
+      networkId: resolveNodeName(sourceNode),
     };
 
     const pluginEdge: Edge = {
@@ -4581,6 +4849,21 @@
 
     pluginAttachStatus = `Connected '${plugin.name}' to '${resolveNodeName(sourceNode)}'.`;
     scheduleLayout();
+  };
+
+  const addStudioPluginToFlow = (
+    plugin: StudioPluginDescriptor,
+    options?: { position?: { x: number; y: number } | null },
+  ) => {
+    pluginAttachStatus = null;
+    pluginAttachError = null;
+
+    if (canAttachStudioPlugin(plugin)) {
+      attachStudioPluginToRoot(plugin, options);
+      return;
+    }
+
+    addStandaloneStudioPlugin(plugin, options);
   };
 
   let executePreviewCopyStatus = $state<string | null>(null);
@@ -5518,6 +5801,11 @@
     tabs = [...tabs, nextTab];
     activeTabId = nextTab.id;
     loadTabGraph(nextTab.id);
+  };
+
+  const ensureEditableTabForInsertion = () => {
+    if (!activeTabReadOnly) return;
+    createEmptyTab();
   };
 
   const closeTab = (tabId: string) => {
@@ -6754,6 +7042,219 @@
     }
   };
 
+  const listTemplateConnectorNames = (template: StudioPluginTemplateDescriptor): string[] => {
+    const seen = new SvelteSet<string>();
+    return [...template.archetypeConnectors, ...template.slotConnectors]
+      .map((name) => name.trim())
+      .filter((name) => {
+        if (!name) return false;
+        const key = normalizeKey(name);
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+  };
+
+  const resolveKnownTemplateConnectorName = (connectorName: string): string | null => {
+    const trimmed = connectorName.trim();
+    if (!trimmed) return null;
+    if (deployedRegistry.connectors[trimmed]) return trimmed;
+    const normalized = normalizeKey(trimmed);
+    const registryName = Object.keys(deployedRegistry.connectors).find(
+      (name) => normalizeKey(name) === normalized,
+    );
+    if (registryName) return registryName;
+    const libraryItem = networkLibrary.feature.find(
+      (item) => normalizeKey(getLibraryRegistryName(item)) === normalized,
+    );
+    return libraryItem ? getLibraryRegistryName(libraryItem) : null;
+  };
+
+  const getTemplateInsertTitle = (template: StudioPluginTemplateDescriptor) =>
+    `Insert ${template.name} template`;
+
+  const loadTemplateConnectorDefinitions = async (
+    template: StudioPluginTemplateDescriptor,
+  ): Promise<boolean> => {
+    templateAttachError = null;
+
+    const connectorNames = listTemplateConnectorNames(template);
+    for (const connectorName of connectorNames) {
+      const knownName = resolveKnownTemplateConnectorName(connectorName) ?? connectorName;
+      const loaded = await ensureLibraryConnectorDetailLoaded(knownName);
+      const loadedName = resolveKnownTemplateConnectorName(connectorName) ?? knownName;
+      if (!loaded || !deployedRegistry.connectors[loadedName]) {
+        templateAttachError = `Could not load required score connector archetype '${knownName}' from chain.`;
+        return false;
+      }
+    }
+
+    return true;
+  };
+
+  const createTemplateConnectorNode = ({
+    connectorName,
+    position,
+    selected = false,
+  }: {
+    connectorName: string;
+    position: { x: number; y: number };
+    selected?: boolean;
+  }): StudioNode | null => {
+    const definition = deployedRegistry.connectors[connectorName];
+    if (!definition) return null;
+
+    return {
+      id: `connector-${slugify(connectorName) || "connector"}-${crypto.randomUUID()}`,
+      position,
+      selected,
+      type: "connector",
+      data: {
+        label: getConnectorLibraryLabel(connectorName),
+        kind: "connector",
+        dimensions: definition.dimensions.length,
+        connectorRows: definition.dimensions.map((dimension, dimIndex) => ({
+          dimension: dimIndex + 1,
+          transformations: dimension.transformations.map((transformation) =>
+            formatTransformationPreviewLabel(transformation.name, transformation.args),
+          ),
+        })),
+        conditionLabel: definition.conditionName ? definition.conditionName : null,
+        sourceId: `feature-${connectorName}`,
+        networkId: connectorName,
+        fromNetwork: true,
+        riStart: 0,
+        riShift: 0,
+        riLocked: false,
+        staticRi: cloneStaticRiMap(definition.staticRi),
+      },
+    };
+  };
+
+  const createTemplateDimensionNodes = (connector: StudioNode): StudioNode[] => {
+    const connectorName = connector.data.networkId?.trim() ?? "";
+    const definition: StudioConnectorDef | null = connectorName
+      ? (deployedRegistry.connectors[connectorName] ?? null)
+      : null;
+    const dimensionCount =
+      definition?.dimensions.length ?? Math.max(0, connector.data.dimensions ?? 0);
+
+    return Array.from({ length: dimensionCount }, (_, index) => {
+      const dimensionNode = createDimensionNode(connector, index, Math.max(1, dimensionCount));
+      return {
+        ...dimensionNode,
+        data: {
+          ...dimensionNode.data,
+          transformations: (definition?.dimensions[index]?.transformations ?? []).map(
+            (transformation) =>
+              createTransformationInstance(transformation.name, transformation.args, "network"),
+          ),
+          fromNetwork: true,
+        },
+      };
+    });
+  };
+
+  const createTemplateDimensionEdges = (connector: StudioNode, dimensions: StudioNode[]): Edge[] =>
+    dimensions.map((dimension) => ({
+      id: `edge-${connector.id}-${dimension.id}-${crypto.randomUUID()}`,
+      source: connector.id,
+      sourceHandle: `dim-${dimension.data.dimensionIndex ?? 0}`,
+      target: dimension.id,
+      targetHandle: "in",
+    }));
+
+  const insertStudioPluginTemplate = async (
+    template: StudioPluginTemplateDescriptor,
+    position: { x: number; y: number } | null = null,
+  ) => {
+    ensureEditableTabForInsertion();
+    const loaded = await loadTemplateConnectorDefinitions(template);
+    if (!loaded) return;
+
+    const rootName =
+      resolveKnownTemplateConnectorName(template.archetypeConnectors[0] ?? "") ??
+      template.archetypeConnectors[0] ??
+      "";
+    const rootDefinition = deployedRegistry.connectors[rootName];
+    if (!rootDefinition) {
+      templateAttachError = `Could not resolve root connector archetype for '${template.name}'.`;
+      return;
+    }
+    if (rootDefinition.dimensions.length < template.slotConnectors.length) {
+      templateAttachError = `Connector archetype '${rootName}' exposes ${rootDefinition.dimensions.length} dimension(s), but the '${template.name}' template requires ${template.slotConnectors.length}.`;
+      return;
+    }
+
+    const rootPosition = position ?? getCanvasCenter();
+    const root = createTemplateConnectorNode({
+      connectorName: rootName,
+      position: rootPosition,
+      selected: true,
+    });
+    if (!root) {
+      templateAttachError = `Could not create root connector node for '${rootName}'.`;
+      return;
+    }
+
+    const columns = Math.min(3, Math.max(1, template.slotConnectors.length));
+    const slotNodes = template.slotConnectors.flatMap((connectorName, index) => {
+      const knownName = resolveKnownTemplateConnectorName(connectorName);
+      if (!knownName) return [];
+      const column = index % columns;
+      const row = Math.floor(index / columns);
+      const node = createTemplateConnectorNode({
+        connectorName: knownName,
+        position: {
+          x: rootPosition.x + (column - (columns - 1) / 2) * 260,
+          y: rootPosition.y + 260 + row * 220,
+        },
+      });
+      return node ? [node] : [];
+    });
+
+    if (slotNodes.length !== template.slotConnectors.length) {
+      templateAttachError = `Could not create all connector nodes for '${template.name}'.`;
+      return;
+    }
+
+    const connectors = [root, ...slotNodes];
+    const dimensionNodes = connectors.flatMap((connector) =>
+      createTemplateDimensionNodes(connector),
+    );
+    const dimensionEdges = connectors.flatMap((connector) =>
+      createTemplateDimensionEdges(
+        connector,
+        dimensionNodes.filter((node) => node.data.parentFeatureId === connector.id),
+      ),
+    );
+    const compositeEdges: Edge[] = slotNodes.map((slotNode, index) => ({
+      id: `edge-${root.id}-${slotNode.id}-${crypto.randomUUID()}`,
+      source: root.id,
+      sourceHandle: `dim-${index}`,
+      target: slotNode.id,
+      targetHandle: "in",
+      label: `composite · D${index + 1}`,
+      data: { relation: "composite" },
+    }));
+
+    const nextNodes = [
+      ...nodes.map((node) => ({ ...node, selected: false })),
+      ...connectors,
+      ...dimensionNodes,
+    ];
+    const nextEdges = [...edges, ...dimensionEdges, ...compositeEdges];
+
+    nodes = nextNodes;
+    edges = nextEdges;
+    selectedNodeId = root.id;
+    selectedEdgeId = null;
+    setConnectorDropTarget(null);
+    connectors.forEach((connector) => syncConnectorRowPreview(connector.id, { schedule: false }));
+    scheduleLayout({ connectorTrees: true });
+    templateAttachError = null;
+  };
+
   const handleLibraryDragStart = (event: DragEvent, item: LibraryItem) => {
     event.dataTransfer?.setData("application/x-hypermusic-library", JSON.stringify(item));
     event.dataTransfer?.setData("text/plain", item.name);
@@ -6767,12 +7268,6 @@
   };
 
   const handlePluginDragStart = (event: DragEvent, plugin: StudioPluginDescriptor) => {
-    if (!pluginAttachEnabled) {
-      event.preventDefault();
-      pluginAttachError =
-        "Plugins can be dragged only when a deployed root connector is active in this tab.";
-      return;
-    }
     writeStudioPluginDragData(event.dataTransfer, plugin);
   };
 
@@ -6806,7 +7301,7 @@
       const position = screenToFlowPosition
         ? screenToFlowPosition({ x: event.clientX, y: event.clientY })
         : { x: event.clientX, y: event.clientY };
-      attachStudioPluginToRoot(plugin, { position });
+      addStudioPluginToFlow(plugin, { position });
       return;
     }
     const quickPayload = event.dataTransfer?.getData("application/x-hypermusic-quick");
@@ -6977,6 +7472,7 @@
 
     edges = edges.filter((item) => item.id !== edgeId);
     if (selectedEdgeId === edgeId) selectedEdgeId = null;
+    selectedEdgeIds = selectedEdgeIds.filter((id) => id !== edgeId);
 
     const sourceNode = edge.source ? nodesById[edge.source] : null;
     if (sourceNode && isConnectorKind(sourceNode.data.kind)) {
@@ -7014,6 +7510,7 @@
 
     nodes = nodes.filter((item) => !removeIds.has(item.id));
     edges = edges.filter((edge) => !removeIds.has(edge.source) && !removeIds.has(edge.target));
+    const removedEdgeIds = new SvelteSet(edgesToRemove.map((edge) => edge.id));
 
     connectorSourcesToRefresh.forEach((sourceId) => {
       syncConnectorRowPreview(sourceId, { schedule: false });
@@ -7021,24 +7518,152 @@
     scheduleLayout();
 
     if (selectedNodeId && removeIds.has(selectedNodeId)) selectedNodeId = null;
+    selectedNodeIds = selectedNodeIds.filter((id) => !removeIds.has(id));
     if (selectedEdgeId && edgesToRemove.some((edge) => edge.id === selectedEdgeId)) {
       selectedEdgeId = null;
     }
+    selectedEdgeIds = selectedEdgeIds.filter((id) => !removedEdgeIds.has(id));
     return true;
   };
 
   const removeSelectedGraphEntity = (): boolean => {
-    if (selectedEdgeId) return removeEdgeById(selectedEdgeId);
-    if (selectedNodeId) return removeNodeById(selectedNodeId);
-    return false;
+    const selectedNodeIdsForRemoval = nodes.filter((node) => node.selected).map((node) => node.id);
+    const selectedEdgeIdsForRemoval = edges.filter((edge) => edge.selected).map((edge) => edge.id);
+
+    let removed = false;
+    const nodeIdsToRemove =
+      selectedNodeIdsForRemoval.length > 0
+        ? selectedNodeIdsForRemoval
+        : selectedNodeId
+          ? [selectedNodeId]
+          : [];
+    nodeIdsToRemove.forEach((nodeId) => {
+      removed = removeNodeById(nodeId) || removed;
+    });
+
+    const edgeIdsToRemove =
+      selectedEdgeIdsForRemoval.length > 0
+        ? selectedEdgeIdsForRemoval
+        : selectedEdgeId
+          ? [selectedEdgeId]
+          : [];
+    edgeIdsToRemove.forEach((edgeId) => {
+      removed = removeEdgeById(edgeId) || removed;
+    });
+
+    return removed;
   };
 
   const handleSelectionChange: OnSelectionChange<StudioNode, Edge> = ({
     nodes: selectedNodes,
     edges: selectedEdges,
   }) => {
-    selectedNodeId = selectedNodes[0]?.id ?? null;
+    selectedNodeIds = selectedNodes.map((node) => node.id);
+    selectedEdgeIds = selectedEdges.map((edge) => edge.id);
+    selectedNodeId = selectedNodes.find((node) => !node.hidden)?.id ?? selectedNodes[0]?.id ?? null;
     selectedEdgeId = selectedNodes.length > 0 ? null : (selectedEdges[0]?.id ?? null);
+  };
+
+  const clearGraphSelection = () => {
+    let changed = false;
+    const nextNodes = nodes.map((node) => {
+      if (!node.selected) return node;
+      changed = true;
+      return { ...node, selected: false };
+    });
+    const nextEdges = edges.map((edge) => {
+      if (!edge.selected) return edge;
+      changed = true;
+      return { ...edge, selected: false };
+    });
+
+    if (changed) {
+      nodes = nextNodes;
+      edges = nextEdges;
+    }
+    selectedNodeIds = [];
+    selectedEdgeIds = [];
+    selectedNodeId = null;
+    selectedEdgeId = null;
+  };
+
+  const syncDraggedNodePositions = (draggedNodes: StudioNode[]): boolean => {
+    if (draggedNodes.length === 0) return false;
+    const draggedById = new SvelteMap(draggedNodes.map((node) => [node.id, node] as const));
+    let changed = false;
+
+    const nextNodes = nodes.map((node) => {
+      const draggedNode = draggedById.get(node.id);
+      if (!draggedNode) return node;
+      if (
+        Math.abs(node.position.x - draggedNode.position.x) <= 0.5 &&
+        Math.abs(node.position.y - draggedNode.position.y) <= 0.5
+      ) {
+        return node;
+      }
+      changed = true;
+      return {
+        ...node,
+        position: { ...draggedNode.position },
+      };
+    });
+
+    if (!changed) return false;
+    nodes = nextNodes;
+    return true;
+  };
+
+  const persistDraggedNodePositions = (draggedNodes: StudioNode[]) => {
+    if (draggedNodes.length === 0) return;
+    cancelLayoutFrames();
+    syncDraggedNodePositions(draggedNodes);
+    saveActiveGraph();
+    schedulePersistStudioTabsSession();
+  };
+
+  const handleNodeDragStart = ({ nodes: draggedNodes }: { nodes: StudioNode[] }) => {
+    if (draggedNodes.length === 0) return;
+    beginManualGraphDrag();
+  };
+
+  const handleNodeDrag = ({ nodes: draggedNodes }: { nodes: StudioNode[] }) => {
+    beginManualGraphDrag();
+    syncDraggedNodePositions(draggedNodes);
+  };
+
+  const handleNodeDragStop = ({ nodes: draggedNodes }: { nodes: StudioNode[] }) => {
+    persistDraggedNodePositions(draggedNodes);
+    endManualGraphDrag();
+  };
+
+  const handleSelectionDrag = (_event: MouseEvent, draggedNodes: StudioNode[]) => {
+    beginManualGraphDrag();
+    syncDraggedNodePositions(draggedNodes);
+  };
+
+  const handleSelectionDragStop = (_event: MouseEvent, draggedNodes: StudioNode[]) => {
+    persistDraggedNodePositions(draggedNodes);
+    endManualGraphDrag();
+  };
+
+  const handlePaneClick = () => {
+    window.setTimeout(clearGraphSelection, 0);
+  };
+
+  const handleFlowAreaPointerDown = (event: PointerEvent) => {
+    if (event.button !== 0) return;
+    if (event.metaKey || event.ctrlKey || event.shiftKey) return;
+    const target = event.target;
+    if (!(target instanceof Element)) return;
+    if (!target.closest(".svelte-flow")) return;
+    if (
+      target.closest(
+        ".svelte-flow__node, .svelte-flow__edge, .svelte-flow__edge-label, .svelte-flow__selection-wrapper, .svelte-flow__handle",
+      )
+    ) {
+      return;
+    }
+    clearGraphSelection();
   };
 
   const handleBeforeDelete = async ({
@@ -7705,6 +8330,13 @@
           >
             Plugins
           </button>
+          <button
+            type="button"
+            class={`source-tab ${explorerSource === "templates" ? "is-active" : ""}`}
+            onclick={() => (explorerSource = "templates")}
+          >
+            Templates
+          </button>
         </div>
         {#if explorerSource === "network" && (chainSyncStatus || chainSyncError)}
           <div
@@ -7738,7 +8370,7 @@
             </div>
           </div>
         {/if}
-        {#if explorerSource !== "plugins"}
+        {#if explorerSource === "network" || explorerSource === "toolbox"}
           <div class="left-tabs">
             <button
               type="button"
@@ -7866,7 +8498,7 @@
               showHeader={false}
             />
           {/if}
-        {:else}
+        {:else if explorerSource === "plugins"}
           <div class="plugins-panel">
             <div class="plugins-panel-header">
               <div class="list-title">Plugins</div>
@@ -7898,17 +8530,21 @@
             {#if pluginSourceInfoMessage}
               <p class="plugins-empty">{pluginSourceInfoMessage}</p>
             {/if}
-            {#if compatibleStudioPlugins.length > 0}
+            {#if allStudioPlugins.length > 0}
               <div class="plugins-list">
-                {#each compatibleStudioPlugins as plugin (plugin.id)}
+                {#each allStudioPlugins as plugin (plugin.id)}
+                  {@const canAttachPlugin = canAttachStudioPlugin(plugin)}
                   <article
                     class="plugin-card"
-                    draggable={pluginAttachEnabled}
-                    data-disabled={!pluginAttachEnabled}
+                    draggable
+                    data-disabled={false}
                     ondragstart={(event) => handlePluginDragStart(event, plugin)}
                   >
                     <header class="plugin-card-header">
                       <h4>{plugin.name}</h4>
+                      <span class={`plugin-status ${canAttachPlugin ? "is-compatible" : ""}`}>
+                        {getPluginAttachStatusLabel(plugin)}
+                      </span>
                     </header>
                     <p>{plugin.summary}</p>
                     <footer class="plugin-card-footer">
@@ -7916,8 +8552,76 @@
                       <Button
                         variant="ghost"
                         type="button"
-                        disabled={!pluginAttachEnabled}
-                        onclick={() => attachStudioPluginToRoot(plugin)}
+                        onclick={() => addStudioPluginToFlow(plugin)}
+                      >
+                        +
+                      </Button>
+                    </footer>
+                  </article>
+                {/each}
+              </div>
+            {/if}
+          </div>
+        {:else if explorerSource === "templates"}
+          <div class="templates-panel">
+            <div class="templates-panel-header">
+              <div class="list-title">Templates</div>
+              {#if templatePluginOptions.length > 0}
+                <label class="template-plugin-picker">
+                  <span>Plugin</span>
+                  <select
+                    value={templatePluginId}
+                    onchange={(event) => {
+                      const target = event.target as HTMLSelectElement | null;
+                      templatePluginId = target?.value ?? "";
+                      templateAttachError = null;
+                    }}
+                  >
+                    {#each templatePluginOptions as plugin (plugin.id)}
+                      <option value={plugin.id}>{plugin.name}</option>
+                    {/each}
+                  </select>
+                </label>
+              {/if}
+            </div>
+
+            {#if !activeTemplatePlugin}
+              <p class="templates-empty">No plugin selected.</p>
+            {:else if activePluginTemplates.length === 0}
+              <p class="templates-empty">No templates for {activeTemplatePlugin.name}.</p>
+            {:else}
+              {#if templateAttachError}
+                <p class="plugins-feedback is-error">{templateAttachError}</p>
+              {/if}
+              <div
+                class="templates-list"
+                role="list"
+                aria-label={`${activeTemplatePlugin.name} templates`}
+              >
+                {#each activePluginTemplates as template (template.id)}
+                  <article class="template-card" role="listitem" data-status="available">
+                    <header class="template-card-header">
+                      <h4>{template.name}</h4>
+                      <span>Ready</span>
+                    </header>
+                    <p>{template.summary}</p>
+                    <div class="template-chip-group" aria-label="Archetype connectors">
+                      {#each template.archetypeConnectors as connectorName (connectorName)}
+                        <code>{connectorName}</code>
+                      {/each}
+                    </div>
+                    <div class="template-chip-group is-muted" aria-label="Slot connectors">
+                      {#each template.slotConnectors as connectorName (connectorName)}
+                        <code>{connectorName}</code>
+                      {/each}
+                    </div>
+                    <footer class="template-card-footer">
+                      <span>{template.id}</span>
+                      <Button
+                        variant="ghost"
+                        type="button"
+                        title={getTemplateInsertTitle(template)}
+                        onclick={() => void insertStudioPluginTemplate(template)}
                       >
                         +
                       </Button>
@@ -7946,7 +8650,7 @@
         </svg>
       </button>
     {/if}
-    <div class="flow-area">
+    <div class="flow-area" role="presentation" onpointerdowncapture={handleFlowAreaPointerDown}>
       <SvelteFlow
         bind:nodes
         bind:edges
@@ -7954,14 +8658,23 @@
         onconnect={handleConnect}
         onselectionchange={handleSelectionChange}
         onbeforedelete={handleBeforeDelete}
+        onnodedragstart={handleNodeDragStart}
+        onnodedrag={handleNodeDrag}
+        onnodedragstop={handleNodeDragStop}
+        onselectiondrag={handleSelectionDrag}
+        onselectiondragstop={handleSelectionDragStop}
         {isValidConnection}
         onnodeclick={handleNodeClick}
         onedgeclick={handleEdgeClick}
+        onpaneclick={handlePaneClick}
         fitView
         minZoom={STUDIO_FLOW_MIN_ZOOM}
         nodesDraggable
         nodesConnectable
         deleteKey={activeTabReadOnly ? null : ["Backspace", "Delete"]}
+        selectionKey={["Meta", "Control"]}
+        multiSelectionKey={["Meta", "Control"]}
+        selectionMode={SelectionMode.Partial}
         zoomOnScroll
         zoomOnDoubleClick={false}
         zoomOnPinch
@@ -9669,23 +10382,16 @@
   }
 
   .source-tabs {
-    @apply flex border-b border-white/10;
+    @apply grid grid-cols-2 gap-1 rounded-md border border-white/10 bg-black/30 p-1;
   }
 
   .source-tab {
-    @apply px-3 py-2 text-[0.6rem] uppercase tracking-[0.24em]
-      text-white/60 border border-white/10 border-b-0
-      bg-black/30;
-    margin-bottom: -1px;
-  }
-
-  .source-tab + .source-tab {
-    margin-left: -1px;
+    @apply rounded px-2 py-1.5 text-[0.55rem] uppercase tracking-[0.16em]
+      text-white/60 border border-transparent bg-transparent;
   }
 
   .source-tab.is-active {
-    @apply text-white border-white/30 bg-black/80;
-    border-bottom-color: transparent;
+    @apply text-white border-white/20 bg-black/80;
   }
 
   .left-tabs {
@@ -9804,16 +10510,21 @@
     cursor: grabbing;
   }
 
-  .plugin-card[data-disabled="true"] {
-    @apply cursor-not-allowed opacity-60;
-  }
-
   .plugin-card-header {
     @apply flex items-center justify-between gap-2;
   }
 
   .plugin-card-header h4 {
     @apply m-0 text-[0.72rem] font-semibold text-white/90;
+  }
+
+  .plugin-status {
+    @apply shrink-0 rounded-full border border-white/10 bg-white/5 px-1.5 py-0.5 text-[0.48rem]
+      uppercase tracking-[0.16em] text-white/45;
+  }
+
+  .plugin-status.is-compatible {
+    @apply border-emerald-300/30 bg-emerald-500/10 text-emerald-100/90;
   }
 
   .plugin-card p {
@@ -9825,6 +10536,83 @@
   }
 
   .plugin-card-footer span {
+    @apply text-[0.53rem] uppercase tracking-[0.16em] text-white/45;
+    word-break: break-all;
+  }
+
+  .templates-panel {
+    @apply mt-1 flex min-h-0 flex-1 flex-col gap-2;
+  }
+
+  .templates-panel-header {
+    @apply flex flex-col gap-2;
+  }
+
+  .template-plugin-picker {
+    @apply flex flex-col gap-1 rounded-md border border-white/10 bg-black/40 px-2 py-1.5;
+  }
+
+  .template-plugin-picker span {
+    @apply text-[0.52rem] uppercase tracking-[0.2em] text-white/45;
+  }
+
+  .template-plugin-picker select {
+    @apply rounded-md border border-white/10 bg-black/60 px-2 py-1 text-[0.65rem] text-white/75
+      outline-none focus:border-emerald-400/60;
+  }
+
+  .templates-empty {
+    @apply rounded-md border border-dashed border-white/15 bg-black/30 px-2 py-2 text-[0.64rem] text-white/55;
+  }
+
+  .templates-list {
+    @apply flex min-h-0 flex-1 flex-col gap-2 overflow-auto pr-1;
+  }
+
+  .template-card {
+    @apply rounded-md border border-white/10 bg-black/70 p-2;
+  }
+
+  .template-card-header {
+    @apply flex items-start justify-between gap-2;
+  }
+
+  .template-card-header h4 {
+    @apply m-0 text-[0.72rem] font-semibold text-white/90;
+  }
+
+  .template-card-header span {
+    @apply shrink-0 rounded-full border border-amber-300/25 bg-amber-500/10 px-1.5 py-0.5
+      text-[0.48rem] uppercase tracking-[0.16em] text-amber-100/80;
+  }
+
+  .template-card[data-status="available"] .template-card-header span {
+    @apply border-emerald-300/30 bg-emerald-500/10 text-emerald-100/90;
+  }
+
+  .template-card p {
+    @apply mt-2 text-[0.62rem] leading-5 text-white/70;
+  }
+
+  .template-chip-group {
+    @apply mt-2 flex flex-wrap gap-1;
+  }
+
+  .template-chip-group code {
+    @apply rounded border border-cyan-300/20 bg-cyan-500/10 px-1.5 py-0.5 text-[0.55rem]
+      text-cyan-100/85;
+    word-break: break-word;
+  }
+
+  .template-chip-group.is-muted code {
+    @apply border-white/10 bg-white/5 text-white/55;
+  }
+
+  .template-card-footer {
+    @apply mt-2 flex items-center justify-between gap-2;
+  }
+
+  .template-card-footer span {
     @apply text-[0.53rem] uppercase tracking-[0.16em] text-white/45;
     word-break: break-all;
   }

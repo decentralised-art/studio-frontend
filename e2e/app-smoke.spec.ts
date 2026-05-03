@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 
 const collectPageErrors = (page: Page) => {
   const errors: string[] = [];
@@ -436,6 +436,199 @@ const seedRestoredConnectorPluginSession = async (page: Page) => {
   });
 };
 
+const seedRestoredScorePluginSession = async (page: Page) => {
+  await page.addInitScript(() => {
+    const rootNode = {
+      id: "connector-score-root-restored",
+      type: "connector",
+      draggable: true,
+      position: { x: 280, y: 120 },
+      data: {
+        label: "score_root",
+        kind: "connector",
+        dimensions: 4,
+        connectorRows: [
+          { dimension: 1, transformations: [] },
+          { dimension: 2, transformations: [] },
+          { dimension: 3, transformations: [] },
+          { dimension: 4, transformations: [] },
+        ],
+        conditionLabel: null,
+        sourceId: "feature-score_root",
+        networkId: "score_root",
+        fromNetwork: true,
+        tabRoot: true,
+        hideOutlets: false,
+        riPosition: 0,
+        riStart: 0,
+        riShift: 0,
+        riLocked: false,
+      },
+    };
+    const pluginNode = {
+      id: "plugin-music-score-v1-restored",
+      type: "plugin",
+      draggable: true,
+      position: { x: 280, y: 420 },
+      data: {
+        label: "Music Score",
+        kind: "plugin",
+        sourceId: "music-score-v1",
+        fromNetwork: true,
+        pluginTargets: ["score_root"],
+        pluginData: {
+          pluginId: "music-score-v1",
+          connectorTargets: ["score_root"],
+          streams: [
+            { feature_path: "/score_root:0/pitch:0", data: [60, 64, 67] },
+            { feature_path: "/score_root:0/time:0", data: [0, 1, 2] },
+            { feature_path: "/score_root:0/duration:0", data: [1, 1, 2] },
+            { feature_path: "/score_root:0/velocity:0", data: [64, 80, 96] },
+          ],
+          midiGroups: [
+            {
+              groupPath: "/score_root:0",
+              pitch: { feature_path: "/score_root:0/pitch:0", data: [60, 64, 67] },
+              time: { feature_path: "/score_root:0/time:0", data: [0, 1, 2] },
+              duration: { feature_path: "/score_root:0/duration:0", data: [1, 1, 2] },
+              velocity: { feature_path: "/score_root:0/velocity:0", data: [64, 80, 96] },
+            },
+          ],
+        },
+      },
+    };
+    const pluginEdge = {
+      id: "edge-plugin-music-score-v1-restored-score-root",
+      source: pluginNode.id,
+      sourceHandle: "out",
+      target: rootNode.id,
+      targetHandle: "plugin-in",
+      label: "plugin",
+      data: { relation: "plugin", pluginId: "music-score-v1" },
+    };
+
+    window.sessionStorage.setItem(
+      "dcn_studio_tabs_session_v1",
+      JSON.stringify({
+        version: 1,
+        tabs: [
+          {
+            id: "tab-score-root",
+            label: "score_root",
+            particleId: "score_root",
+          },
+        ],
+        activeTabId: "tab-score-root",
+        tabGraphs: {
+          "tab-score-root": {
+            nodes: [rootNode, pluginNode],
+            edges: [pluginEdge],
+          },
+        },
+        connectorTreeModels: {
+          "tab-score-root": {
+            rootConnectorName: "score_root",
+            nodes: [rootNode],
+            edges: [],
+          },
+        },
+      }),
+    );
+  });
+};
+
+const seedMovableTemplateConnectorSession = async (page: Page) => {
+  await page.addInitScript(() => {
+    const makeConnector = (
+      id: string,
+      label: string,
+      x: number,
+      y: number,
+      dimensions = 1,
+      selected = false,
+    ) => ({
+      id,
+      type: "connector",
+      draggable: true,
+      position: { x, y },
+      selected,
+      data: {
+        label,
+        kind: "connector",
+        dimensions,
+        connectorRows: Array.from({ length: dimensions }, (_, index) => ({
+          dimension: index + 1,
+          transformations: [],
+        })),
+        conditionLabel: null,
+        sourceId: `feature-${label}`,
+        networkId: label,
+        fromNetwork: true,
+        tabRoot: false,
+        hideOutlets: false,
+        riPosition: 0,
+        riStart: 0,
+        riShift: 0,
+        riLocked: false,
+      },
+    });
+
+    const notesNode = makeConnector(
+      "connector-template-notes",
+      "score_notes_v1",
+      520,
+      260,
+      2,
+      true,
+    );
+    const eventIdNode = makeConnector(
+      "connector-template-event-id",
+      "score_event_id",
+      420,
+      560,
+      1,
+      true,
+    );
+    const pitchNode = makeConnector("connector-template-pitch", "score_pitch", 720, 560, 1, true);
+    const templateEdges = [
+      {
+        id: "edge-template-notes-event-id",
+        source: notesNode.id,
+        sourceHandle: "dim-0",
+        target: eventIdNode.id,
+        targetHandle: "in",
+        label: "composite · D1",
+        data: { relation: "composite" },
+      },
+      {
+        id: "edge-template-notes-pitch",
+        source: notesNode.id,
+        sourceHandle: "dim-1",
+        target: pitchNode.id,
+        targetHandle: "in",
+        label: "composite · D2",
+        data: { relation: "composite" },
+      },
+    ];
+
+    window.sessionStorage.setItem(
+      "dcn_studio_tabs_session_v1",
+      JSON.stringify({
+        version: 1,
+        tabs: [{ id: "tab-movable-connectors", label: "template_workbench" }],
+        activeTabId: "tab-movable-connectors",
+        tabGraphs: {
+          "tab-movable-connectors": {
+            nodes: [notesNode, eventIdNode, pitchNode],
+            edges: templateEdges,
+          },
+        },
+        connectorTreeModels: {},
+      }),
+    );
+  });
+};
+
 test("redirects anonymous root visitors to login", async ({ page }) => {
   const assertNoPageErrors = collectPageErrors(page);
 
@@ -608,6 +801,78 @@ test("keeps restored Studio connector trees when plugin overlays are present", a
   await expect(networkConnectorCard).toBeVisible({ timeout: 15_000 });
   await expect(restoredConnector).toBeVisible();
   await expect(restoredPlugin).toBeVisible();
+  assertNoPageErrors();
+});
+
+test("keeps multi-selected Studio template connectors at their dragged positions after deselect", async ({
+  page,
+}) => {
+  const assertNoPageErrors = collectPageErrors(page);
+  await stubRemoteApis(page);
+  await authenticateFixtureSession(page);
+  await seedMovableTemplateConnectorSession(page);
+
+  await page.goto("/studio");
+  const canvas = page.getByRole("application", { name: "Flow canvas" });
+  await expect(canvas).toBeVisible({ timeout: 15_000 });
+
+  async function getRequiredBox(locator: Locator, label = "element") {
+    const box = await locator.boundingBox();
+    if (!box) throw new Error(`Expected ${label} to have a bounding box.`);
+    return box;
+  }
+
+  const pane = page.locator(".svelte-flow__pane").first();
+  const paneBox = await getRequiredBox(pane, "Studio flow pane");
+
+  const notesNode = page.locator(".connector-node").filter({ hasText: "score_notes_v1" });
+  const eventIdNode = page.locator(".connector-node").filter({ hasText: "score_event_id" });
+  const pitchNode = page.locator(".connector-node").filter({ hasText: "score_pitch" });
+  await expect(notesNode).toBeVisible();
+  await expect(eventIdNode).toBeVisible();
+  await expect(pitchNode).toBeVisible();
+
+  const notesBefore = await getRequiredBox(notesNode, "score_notes_v1 connector node");
+  const eventIdBefore = await getRequiredBox(eventIdNode, "score_event_id connector node");
+  const pitchBefore = await getRequiredBox(pitchNode, "score_pitch connector node");
+
+  await expect(page.locator(".svelte-flow__node.selected")).toHaveCount(3);
+
+  const dragStartX = notesBefore.x + Math.min(notesBefore.width / 2, 120);
+  const dragStartY = notesBefore.y + 24;
+  await page.mouse.move(dragStartX, dragStartY);
+  await page.mouse.down();
+  await page.mouse.move(dragStartX + 90, dragStartY + 60, { steps: 8 });
+  await page.mouse.up();
+
+  await page.mouse.click(paneBox.x + 16, paneBox.y + 16);
+  await expect(page.locator(".svelte-flow__node.selected")).toHaveCount(0);
+  await page.waitForTimeout(600);
+
+  const notesAfter = await getRequiredBox(notesNode, "score_notes_v1 connector node after drag");
+  const eventIdAfter = await getRequiredBox(
+    eventIdNode,
+    "score_event_id connector node after drag",
+  );
+  const pitchAfter = await getRequiredBox(pitchNode, "score_pitch connector node after drag");
+  expect(notesAfter.x).toBeGreaterThan(notesBefore.x + 40);
+  expect(eventIdAfter.x).toBeGreaterThan(eventIdBefore.x + 40);
+  expect(pitchAfter.x).toBeGreaterThan(pitchBefore.x + 40);
+  assertNoPageErrors();
+});
+
+test("renders restored Music Score plugin notation in Studio", async ({ page }) => {
+  const assertNoPageErrors = collectPageErrors(page);
+  await stubRemoteApis(page);
+  await authenticateFixtureSession(page);
+  await seedRestoredScorePluginSession(page);
+
+  await page.goto("/studio");
+
+  const restoredPlugin = page.locator(".plugin-node").filter({ hasText: "Music Score" });
+  await expect(restoredPlugin).toBeVisible();
+  await expect(restoredPlugin.getByRole("button", { name: "Download MusicXML" })).toBeVisible();
+  await expect(restoredPlugin.locator(".score-osmd svg")).toBeVisible({ timeout: 15_000 });
   assertNoPageErrors();
 });
 

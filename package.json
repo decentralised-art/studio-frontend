@@ -60,6 +60,7 @@
     "d3-transition": "^3.0.1",
     "d3-zoom": "^3.0.0",
     "monaco-editor": "^0.55.1",
+    "opensheetmusicdisplay": "^1.9.7",
     "tone": "^14.8.49"
   }
 }

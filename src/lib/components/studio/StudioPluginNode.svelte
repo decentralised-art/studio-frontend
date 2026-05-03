@@ -2,6 +2,7 @@
   import { onDestroy, untrack } from "svelte";
   import { browser } from "$app/environment";
   import { Handle, NodeResizer, Position, type Node, type NodeProps } from "@xyflow/svelte";
+  import ScorePluginNodeBody from "$lib/components/studio/ScorePluginNodeBody.svelte";
   import Button from "$lib/components/ui/Button.svelte";
   import {
     formatMidiSkippedReason,
@@ -9,6 +10,7 @@
     midiNoteName,
     type MidiSkippedNoteReason,
   } from "$lib/midi/midiClip";
+  import { MUSIC_SCORE_PLUGIN_ID } from "$lib/score/codebook";
   import { downloadMidiClip, pluginRuntimeToMidiClip } from "$lib/studio/plugins/midiExport";
   import {
     SALAMANDER_GRAND_PIANO_SAMPLE_BASE_URL,
@@ -45,6 +47,7 @@
   const skippedCount = $derived(midiClip?.skippedNotes ?? 0);
   const groupsCount = $derived(runtimeData?.midiGroups.length ?? 0);
   const pluginId = $derived(data.sourceId ?? runtimeData?.pluginId ?? "");
+  const isScorePlugin = $derived(pluginId === MUSIC_SCORE_PLUGIN_ID);
   const tempo = $derived(midiClip?.tempo ?? 120);
   const channelCount = $derived(midiClip?.channels ?? 1);
   const selectedConnectorContextNames = $derived(data.selectedConnectorContextNames ?? []);
@@ -407,7 +410,9 @@
   {#if pluginId}
     <div class="plugin-id">{pluginId}</div>
   {/if}
-  {#if !runtimeData}
+  {#if isScorePlugin}
+    <ScorePluginNodeBody label={data.label} {runtimeData} />
+  {:else if !runtimeData}
     <div class="plugin-empty">No plugin runtime data yet.</div>
   {:else if !hasOutput}
     <div class="plugin-empty">No MIDI notes mapped yet.</div>

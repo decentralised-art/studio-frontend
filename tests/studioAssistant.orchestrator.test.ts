@@ -19,6 +19,10 @@ describe("studio assistant orchestrator helpers", () => {
     expect(prompt).toContain("duration=0 is invalid");
     expect(prompt).toContain("Salamander Grand Piano sample preview");
     expect(prompt).toContain("not separate packages");
+    expect(prompt).toContain("Studio templates are local editable draft arrangements");
+    expect(prompt).toContain("not special connector types");
+    expect(prompt).toContain("score_notes_v1");
+    expect(prompt).toContain("trees within trees");
   });
 
   it("splits low/high risk calls for confirmation gate", () => {

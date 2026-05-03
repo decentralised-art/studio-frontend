@@ -74,7 +74,33 @@ const toneMock = vi.hoisted(() => {
   };
 });
 
+const osmdMock = vi.hoisted(() => {
+  const instances: unknown[] = [];
+  const load = vi.fn(async (_musicXml: string) => ({}));
+  const render = vi.fn(async () => undefined);
+  const clear = vi.fn();
+
+  class OpenSheetMusicDisplay {
+    Zoom = 1;
+    load = load;
+    render = render;
+    clear = clear;
+
+    constructor(
+      public container: HTMLElement,
+      public options: Record<string, unknown>,
+    ) {
+      instances.push(this);
+    }
+  }
+
+  return { OpenSheetMusicDisplay, clear, instances, load, render };
+});
+
 vi.mock("tone", () => toneMock);
+vi.mock("opensheetmusicdisplay", () => ({
+  OpenSheetMusicDisplay: osmdMock.OpenSheetMusicDisplay,
+}));
 
 vi.mock("$app/environment", () => ({
   browser: true,
@@ -117,6 +143,10 @@ beforeEach(() => {
   toneMock.polySynthArgs.length = 0;
   toneMock.samplerArgs.length = 0;
   toneMock.start.mockClear();
+  osmdMock.clear.mockClear();
+  osmdMock.instances.length = 0;
+  osmdMock.load.mockClear();
+  osmdMock.render.mockClear();
 });
 
 const loadComponent = async () =>
@@ -176,6 +206,38 @@ const renderPluginNode = async (
   });
 };
 
+const renderScorePluginNode = async (pluginData: StudioPluginRuntimeData = runtimeData) => {
+  const StudioPluginNode = await loadComponent();
+
+  return render(StudioPluginNode, {
+    props: {
+      id: "plugin-node-score",
+      type: "plugin",
+      selected: true,
+      dragging: false,
+      zIndex: 0,
+      selectable: true,
+      deletable: true,
+      draggable: true,
+      isConnectable: true,
+      positionAbsoluteX: 0,
+      positionAbsoluteY: 0,
+      width: undefined,
+      height: undefined,
+      sourcePosition: undefined,
+      targetPosition: undefined,
+      dragHandle: undefined,
+      parentId: undefined,
+      data: {
+        label: "Music Score",
+        sourceId: "music-score-v1",
+        pluginData: { ...pluginData, pluginId: "music-score-v1" },
+        pluginTargets: ["midi_root"],
+      },
+    },
+  });
+};
+
 describe("StudioPluginNode", () => {
   it("exposes unbounded corner and edge resize controls when selected", async () => {
     await renderPluginNode(true);
@@ -228,6 +290,18 @@ describe("StudioPluginNode", () => {
       "title",
       "C4 · beat 0 · duration 1 · velocity 80 · /midi_root:0",
     );
+  });
+
+  it("renders score plugin data through OSMD without showing MIDI controls", async () => {
+    await renderScorePluginNode();
+
+    expect(screen.queryByRole("button", { name: "Play" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Download MusicXML" })).toBeEnabled();
+    expect(screen.getByLabelText("Music score preview")).toBeInTheDocument();
+
+    await waitFor(() => expect(osmdMock.load).toHaveBeenCalledTimes(1));
+    expect(osmdMock.load.mock.calls[0][0]).toContain('<score-partwise version="4.0">');
+    expect(osmdMock.render).toHaveBeenCalledTimes(1);
   });
 
   it("highlights only notes contributed by the selected connector lineage", async () => {
