@@ -823,7 +823,7 @@ test("keeps multi-selected Studio template connectors at their dragged positions
   }
 
   const pane = page.locator(".svelte-flow__pane").first();
-  const paneBox = await getRequiredBox(pane, "Studio flow pane");
+  await expect(pane).toBeVisible();
 
   const notesNode = page.locator(".connector-node").filter({ hasText: "score_notes_v1" });
   const eventIdNode = page.locator(".connector-node").filter({ hasText: "score_event_id" });
@@ -845,7 +845,29 @@ test("keeps multi-selected Studio template connectors at their dragged positions
   await page.mouse.move(dragStartX + 90, dragStartY + 60, { steps: 8 });
   await page.mouse.up();
 
-  await page.mouse.click(paneBox.x + 16, paneBox.y + 16);
+  const canvasBox = await getRequiredBox(canvas, "Studio flow canvas");
+  const selectedBoxesAfterDrag = await Promise.all(
+    [notesNode, eventIdNode, pitchNode].map((locator) => getRequiredBox(locator)),
+  );
+  const clearCandidates = [
+    { x: canvasBox.x + 32, y: canvasBox.y + 32 },
+    { x: canvasBox.x + 32, y: canvasBox.y + canvasBox.height - 32 },
+    { x: canvasBox.x + canvasBox.width - 32, y: canvasBox.y + 32 },
+    { x: canvasBox.x + canvasBox.width - 32, y: canvasBox.y + canvasBox.height - 32 },
+    { x: canvasBox.x + canvasBox.width / 2, y: canvasBox.y + 32 },
+  ];
+  const clearPoint = clearCandidates.find(
+    (point) =>
+      !selectedBoxesAfterDrag.some(
+        (box) =>
+          point.x >= box.x - 12 &&
+          point.x <= box.x + box.width + 12 &&
+          point.y >= box.y - 12 &&
+          point.y <= box.y + box.height + 12,
+      ),
+  );
+  if (!clearPoint) throw new Error("Expected an empty canvas point for clearing selection.");
+  await page.mouse.click(clearPoint.x, clearPoint.y);
   await expect(page.locator(".svelte-flow__node.selected")).toHaveCount(0);
   await page.waitForTimeout(600);
 

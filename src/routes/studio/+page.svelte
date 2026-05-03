@@ -452,6 +452,7 @@
     | null = null;
   let getZoom: (() => number) | null = null;
   let fitView: ((options?: { padding?: number; duration?: number }) => void) | null = null;
+  let clearFlowSelection: (() => void) | null = null;
   let clearConfirmOpen = $state(false);
   let runOutputByTab = $state<Record<string, PtOutputFeature[]>>({});
   let runWarningsByTab = $state<Record<string, string[]>>({});
@@ -7565,6 +7566,7 @@
   };
 
   const clearGraphSelection = () => {
+    clearFlowSelection?.();
     let changed = false;
     const nextNodes = nodes.map((node) => {
       if (!node.selected) return node;
@@ -8683,10 +8685,16 @@
       >
         <Background bgColor="var(--studio-flow-bg)" patternColor="var(--studio-flow-pattern)" />
         <FlowInstanceBridge
-          onReady={({ screenToFlowPosition: toFlow, getZoom: zoomFn, fitView: fitViewFn }) => {
+          onReady={({
+            screenToFlowPosition: toFlow,
+            getZoom: zoomFn,
+            fitView: fitViewFn,
+            clearSelection,
+          }) => {
             screenToFlowPosition = toFlow;
             getZoom = zoomFn;
             fitView = fitViewFn;
+            clearFlowSelection = clearSelection;
           }}
         />
       </SvelteFlow>
