@@ -167,6 +167,11 @@ const runtimeData: StudioPluginRuntimeData = {
   ],
 };
 
+const scoreTemplateStream = (collector: string, field: string, data: number[]) => ({
+  feature_path: `/score_root:0/${collector}:0/${field}:0`,
+  data,
+});
+
 const renderPluginNode = async (
   selected = true,
   pluginData = runtimeData,
@@ -302,6 +307,47 @@ describe("StudioPluginNode", () => {
     await waitFor(() => expect(osmdMock.load).toHaveBeenCalledTimes(1));
     expect(osmdMock.load.mock.calls[0][0]).toContain('<score-partwise version="4.0">');
     expect(osmdMock.render).toHaveBeenCalledTimes(1);
+  });
+
+  it("logs complete score diagnostics to the console instead of listing them in the node", async () => {
+    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const scoreRuntimeData: StudioPluginRuntimeData = {
+      pluginId: "music-score-v1",
+      connectorTargets: ["score_root"],
+      streams: [
+        scoreTemplateStream("score_notes_v1", "score_event_id", [42]),
+        scoreTemplateStream("score_notes_v1", "score_onset", [0]),
+        scoreTemplateStream("score_notes_v1", "score_duration", [2520]),
+        scoreTemplateStream("score_notes_v1", "score_pitch", [60]),
+        scoreTemplateStream("score_articulations_v1", "score_event_id", [42]),
+        scoreTemplateStream("score_articulations_v1", "score_articulation_code", [999]),
+      ],
+      midiGroups: [],
+    };
+
+    try {
+      await renderScorePluginNode(scoreRuntimeData);
+
+      await waitFor(() => expect(consoleWarn).toHaveBeenCalledTimes(1));
+      expect(screen.getByText("2 warnings logged to browser console")).toBeInTheDocument();
+      expect(screen.queryByText(/articulation_code is unsupported/i)).not.toBeInTheDocument();
+      expect(consoleWarn.mock.calls[0]?.[0]).toContain("2 score diagnostic");
+      expect(consoleWarn.mock.calls[0]?.[1]).toMatchObject({
+        plugin: "Music Score",
+      });
+      expect(consoleWarn.mock.calls[0]?.[1]).toEqual(
+        expect.objectContaining({
+          diagnostics: expect.arrayContaining([
+            expect.objectContaining({
+              code: "invalid-score-articulation-code",
+              message: expect.stringContaining("articulation_code is unsupported"),
+            }),
+          ]),
+        }),
+      );
+    } finally {
+      consoleWarn.mockRestore();
+    }
   });
 
   it("highlights only notes contributed by the selected connector lineage", async () => {

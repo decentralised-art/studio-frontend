@@ -11,7 +11,13 @@ describe("studio plugin templates", () => {
     const templates = listStudioPluginTemplatesForPlugin(MUSIC_SCORE_PLUGIN_ID);
 
     expect(templates.map((template) => template.id)).toEqual([
+      "score-full-v2",
       "score-notes-v1",
+      "score-meter-v2",
+      "score-parts-v2",
+      "score-clefs-v2",
+      "score-tempo-v2",
+      "score-key-v2",
       "score-articulations-v1",
       "score-slurs-v1",
     ]);
@@ -24,7 +30,6 @@ describe("studio plugin templates", () => {
     expect(notes?.archetypeConnectors).toEqual(["score_notes_v1"]);
     expect(notes?.slotConnectors).toEqual([
       "score_event_id",
-      "score_measure",
       "score_onset",
       "score_duration",
       "score_pitch",
@@ -32,6 +37,24 @@ describe("studio plugin templates", () => {
       "score_part",
       "score_staff",
       "score_voice",
+    ]);
+  });
+
+  it("defines the full score layered template shape", () => {
+    const fullScore = listStudioPluginTemplates().find(
+      (template) => template.id === "score-full-v2",
+    );
+
+    expect(fullScore?.archetypeConnectors).toEqual(["score_full_v2"]);
+    expect(fullScore?.slotConnectors).toEqual([
+      "score_parts_v2",
+      "score_meter_v2",
+      "score_clefs_v2",
+      "score_tempo_v2",
+      "score_key_v2",
+      "score_notes_v1",
+      "score_articulations_v1",
+      "score_slurs_v1",
     ]);
   });
 

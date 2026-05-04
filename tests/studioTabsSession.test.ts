@@ -76,6 +76,10 @@ describe("Studio tabs session helpers", () => {
       activeTabId: "tab-1",
       tabGraphs: new Map([["tab-1", graph]]),
       connectorTreeModels: new Map([["tab-2", treeModel]]),
+      tabViewports: new Map([
+        ["tab-1", { x: 12, y: -24, zoom: 0.5 }],
+        ["tab-bad", { x: 1, y: 2, zoom: 0 }],
+      ]),
     });
 
     graph.nodes[0].data!.label = "Mutated";
@@ -84,6 +88,8 @@ describe("Studio tabs session helpers", () => {
     expect(payload.tabs).toEqual([{ id: "tab-1", label: "Draft", particleId: undefined }]);
     expect(payload.tabGraphs["tab-1"].nodes[0].data?.label).toBe("Root");
     expect(payload.connectorTreeModels["tab-2"].nodes[0].id).toBe("tree-node");
+    expect(payload.tabViewports?.["tab-1"]).toEqual({ x: 12, y: -24, zoom: 0.5 });
+    expect(payload.tabViewports?.["tab-bad"]).toBeUndefined();
   });
 
   it("restores only valid tab-owned graphs and tree models", () => {
@@ -120,6 +126,12 @@ describe("Studio tabs session helpers", () => {
           edges: [],
         },
       },
+      tabViewports: {
+        "tab-1": { x: 10, y: 20, zoom: 0.75 },
+        "particle-tab": { x: -5, y: 0, zoom: 1.2 },
+        "unknown-tab": { x: 99, y: 99, zoom: 0.5 },
+        "bad-tab": { x: 0, y: 0, zoom: 0 },
+      },
     });
 
     expect(restored?.activeTabId).toBe("tab-1");
@@ -129,6 +141,10 @@ describe("Studio tabs session helpers", () => {
       rootConnectorName: "pitch",
       nodes: [{ id: "particle-root" }],
       edges: [],
+    });
+    expect(restored?.tabViewports).toEqual({
+      "tab-1": { x: 10, y: 20, zoom: 0.75 },
+      "particle-tab": { x: -5, y: 0, zoom: 1.2 },
     });
   });
 });

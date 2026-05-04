@@ -10,6 +10,7 @@ import {
   type ConnectorTreeNode,
 } from "../src/lib/studio/connectorTreeGraph";
 import type { StudioConnectorDef } from "../src/lib/studio/domain/connectorModel";
+import { listStudioPluginTemplates } from "../src/lib/studio/plugins/templates";
 
 const ids = () => {
   let index = 0;
@@ -61,6 +62,9 @@ const connectorNode = (model: ConnectorTreeModel, name: string): ConnectorTreeNo
   if (!node) throw new Error(`Missing connector node ${name}`);
   return node;
 };
+
+const connectorNodes = (model: ConnectorTreeModel): ConnectorTreeNode[] =>
+  model.nodes.filter((node) => node.data.kind === "connector");
 
 const edgeData = (edge: ConnectorTreeModel["edges"][number]) =>
   (edge.data ?? {}) as {
@@ -213,6 +217,108 @@ describe("connectorTreeGraph", () => {
     expect(() => computeConnectorOpenSlotsInRegistry(registry, "root")).toThrowError(
       /Connector cycle/,
     );
+  });
+
+  it("keeps template children on depth rows sized by the tallest parent row", () => {
+    const slotNames = [
+      "parts",
+      "meter",
+      "clefs",
+      "tempo",
+      "key",
+      "notes",
+      "articulations",
+      "slurs",
+    ];
+    const registry = {
+      score_full_v2: connector(
+        "score_full_v2",
+        slotNames.map((name) => ({ composite: name })),
+      ),
+      ...Object.fromEntries(
+        slotNames.map((name) => [
+          name,
+          connector(
+            name,
+            Array.from({ length: name === "notes" ? 9 : 2 }, (_, index) => ({
+              composite: `${name}_slot_${index}`,
+            })),
+          ),
+        ]),
+      ),
+      ...Object.fromEntries(
+        slotNames.flatMap((name) =>
+          Array.from({ length: name === "notes" ? 9 : 2 }, (_, index) => [
+            `${name}_slot_${index}`,
+            connector(`${name}_slot_${index}`, [{}]),
+          ]),
+        ),
+      ),
+    };
+
+    const model = build(registry, "score_full_v2");
+    const root = connectorNode(model, "score_full_v2");
+    const levelOne = slotNames.map((name) => connectorNode(model, name));
+    const levelTwo = ["parts_slot_0", "notes_slot_0", "slurs_slot_0"].map((name) =>
+      connectorNode(model, name),
+    );
+
+    expect(new Set(levelOne.map((node) => node.position.y)).size).toBe(1);
+    expect(new Set(levelTwo.map((node) => node.position.y)).size).toBe(1);
+    expect(levelOne[0].position.y - root.position.y).toBeGreaterThan(500);
+    expect(levelTwo[0].position.y).toBeGreaterThan(levelOne[0].position.y);
+  });
+
+  it("keeps connector child rows ordered for every registered template", () => {
+    const templates = listStudioPluginTemplates();
+    const archetypeNames = new Set(templates.flatMap((template) => template.archetypeConnectors));
+    const registry: Record<string, StudioConnectorDef> = {};
+
+    templates.forEach((template) => {
+      template.archetypeConnectors.forEach((name) => {
+        registry[name] = connector(
+          name,
+          template.slotConnectors.map((slotName) => ({ composite: slotName })),
+        );
+      });
+    });
+
+    templates
+      .flatMap((template) => template.slotConnectors)
+      .filter((name) => !archetypeNames.has(name))
+      .forEach((name) => {
+        registry[name] = connector(name, [{}]);
+      });
+
+    templates.forEach((template) => {
+      const rootName = template.archetypeConnectors[0];
+      const model = build(registry, rootName);
+      const nodesById = new Map(model.nodes.map((node) => [node.id, node]));
+
+      connectorNodes(model).forEach((parent) => {
+        const childNodes = model.edges
+          .filter((edge) => {
+            const target = nodesById.get(edge.target);
+            return edge.source === parent.id && target?.data.kind === "connector";
+          })
+          .map((edge) => nodesById.get(edge.target))
+          .filter((node): node is ConnectorTreeNode => Boolean(node));
+
+        if (childNodes.length === 0) return;
+
+        const expectedY = childNodes[0].position.y;
+        childNodes.forEach((child) => {
+          expect(
+            child.position.y,
+            `${template.id}: expected ${child.data.networkId} below ${parent.data.networkId}`,
+          ).toBeGreaterThan(parent.position.y);
+          expect(
+            Math.abs(child.position.y - expectedY),
+            `${template.id}: expected children of ${parent.data.networkId} on one row`,
+          ).toBeLessThan(0.1);
+        });
+      });
+    });
   });
 
   it("does not replace a complete restored tree with a placeholder rebuild", () => {

@@ -13,6 +13,7 @@
     type NodeTypes,
     type OnConnect,
     type OnSelectionChange,
+    type Viewport,
   } from "@xyflow/svelte";
   import "@xyflow/svelte/dist/style.css";
 
@@ -223,11 +224,7 @@
     buildStudioPluginRuntimeData,
     type StudioPluginRuntimeData,
   } from "$lib/studio/plugins/runtime";
-  import {
-    listCompatibleStudioPlugins,
-    listStudioPlugins,
-    type StudioPluginDescriptor,
-  } from "$lib/studio/plugins/registry";
+  import { listStudioPlugins, type StudioPluginDescriptor } from "$lib/studio/plugins/registry";
   import {
     listStudioPluginTemplates,
     listStudioPluginTemplatesForPlugin,
@@ -244,6 +241,18 @@
   type InspectorTab = "node" | "api";
 
   const STUDIO_FLOW_MIN_ZOOM = 0.05;
+  const DEFAULT_STUDIO_VIEWPORT: Viewport = { x: 0, y: 0, zoom: 1 };
+
+  const normalizeStudioViewport = (viewport: Partial<Viewport> | null | undefined): Viewport => {
+    const x = Number(viewport?.x);
+    const y = Number(viewport?.y);
+    const zoom = Number(viewport?.zoom);
+    return {
+      x: Number.isFinite(x) ? x : DEFAULT_STUDIO_VIEWPORT.x,
+      y: Number.isFinite(y) ? y : DEFAULT_STUDIO_VIEWPORT.y,
+      zoom: Number.isFinite(zoom) && zoom > 0 ? zoom : DEFAULT_STUDIO_VIEWPORT.zoom,
+    };
+  };
 
   let leftMode = $state<PanelMode>("open");
   let rightMode = $state<RightPanelMode>("hidden");
@@ -451,7 +460,18 @@
     | ((client: { x: number; y: number }) => { x: number; y: number })
     | null = null;
   let getZoom: (() => number) | null = null;
-  let fitView: ((options?: { padding?: number; duration?: number }) => void) | null = null;
+  let setCenter:
+    | ((x: number, y: number, options?: { zoom?: number; duration?: number }) => Promise<boolean>)
+    | null = null;
+  let fitView:
+    | ((options?: {
+        padding?: number;
+        duration?: number;
+        minZoom?: number;
+        maxZoom?: number;
+        nodes?: { id: string }[];
+      }) => Promise<boolean>)
+    | null = null;
   let clearFlowSelection: (() => void) | null = null;
   let clearConfirmOpen = $state(false);
   let runOutputByTab = $state<Record<string, PtOutputFeature[]>>({});
@@ -588,6 +608,7 @@
 
   const tabGraphs = new SvelteMap<string, { nodes: StudioNode[]; edges: Edge[] }>();
   const connectorTreeModelsByTab = new SvelteMap<string, ConnectorTreeModel>();
+  const tabViewports = new SvelteMap<string, Viewport>();
 
   type QuickNodeKind =
     | "feature"
@@ -657,12 +678,14 @@
   const createStudioTab = (label: string, particleId?: string): StudioTab => {
     const id = `tab-${crypto.randomUUID()}`;
     tabGraphs.set(id, { nodes: [], edges: [] });
+    tabViewports.set(id, normalizeStudioViewport(DEFAULT_STUDIO_VIEWPORT));
     return { id, label, particleId };
   };
 
   const initialTab = createStudioTab("Untitled Connector");
   let tabs = $state<StudioTab[]>([initialTab]);
   let activeTabId = $state<string>(initialTab.id);
+  let flowViewport = $state<Viewport>(normalizeStudioViewport(tabViewports.get(initialTab.id)));
   const activeTab = $derived.by(() => tabs.find((tab) => tab.id === activeTabId) ?? null);
   const activeTabReadOnly = $derived.by(
     () => Boolean(activeTab?.particleId) || Boolean(connectorTreeModelsByTab.get(activeTabId)),
@@ -714,6 +737,7 @@
         activeTabId,
         tabGraphs: tabGraphs.entries(),
         connectorTreeModels: connectorTreeModelsByTab.entries(),
+        tabViewports: tabViewports.entries(),
       });
       window.sessionStorage.setItem(STUDIO_TABS_SESSION_STORAGE_KEY, JSON.stringify(payload));
     } catch (error) {
@@ -730,6 +754,7 @@
 
     tabGraphs.clear();
     connectorTreeModelsByTab.clear();
+    tabViewports.clear();
 
     Object.entries(restored.tabGraphs).forEach(([tabId, graph]) => {
       tabGraphs.set(tabId, graph);
@@ -737,6 +762,10 @@
 
     Object.entries(restored.connectorTreeModels).forEach(([tabId, model]) => {
       connectorTreeModelsByTab.set(tabId, model);
+    });
+
+    Object.entries(restored.tabViewports).forEach(([tabId, viewport]) => {
+      tabViewports.set(tabId, normalizeStudioViewport(viewport));
     });
 
     tabs = restored.tabs;
@@ -764,8 +793,12 @@
       tabs.map((tab) => `${tab.id}:${tab.label}:${tab.particleId ?? ""}`).join("|"),
       nodes.length,
       edges.length,
+      flowViewport.x,
+      flowViewport.y,
+      flowViewport.zoom,
       connectorTreeModelsByTab.size,
       tabGraphs.size,
+      tabViewports.size,
     );
     schedulePersistStudioTabsSession();
   });
@@ -2845,9 +2878,10 @@
       });
     });
 
-    const nodeWidth = (node: StudioNode) => measureNodeSize(node.id, fallbackNodeSize(node)).width;
+    const nodeSize = (node: StudioNode) => measureNodeSize(node.id, fallbackNodeSize(node));
+    const nodeWidth = (node: StudioNode) => nodeSize(node).width;
+    const nodeHeight = (node: StudioNode) => nodeSize(node).height;
     const horizontalGap = 96;
-    const verticalGap = 300;
     const subtreeWidthMemo = new SvelteMap<string, number>();
 
     const computeSubtreeWidth = (nodeId: string, stack = new SvelteSet<string>()): number => {
@@ -2871,38 +2905,6 @@
       return width;
     };
 
-    const placed = new SvelteSet<string>();
-    const placeSubtree = (
-      nodeId: string,
-      left: number,
-      top: number,
-      stack = new SvelteSet<string>(),
-    ) => {
-      const node = connectorById.get(nodeId);
-      if (!node || placed.has(nodeId) || stack.has(nodeId)) return;
-      const width = computeSubtreeWidth(nodeId);
-      const ownWidth = nodeWidth(node);
-      updates.set(nodeId, { x: left + width / 2 - ownWidth / 2, y: top });
-      placed.add(nodeId);
-
-      const nextStack = new SvelteSet(stack);
-      nextStack.add(nodeId);
-      const children = (childrenByConnector.get(nodeId) ?? []).filter((edge) =>
-        connectorById.has(edge.target),
-      );
-      const childWidths = children.map((edge) => computeSubtreeWidth(edge.target, nextStack));
-      const totalChildrenWidth =
-        childWidths.reduce((sum, childWidth) => sum + childWidth, 0) +
-        horizontalGap * Math.max(0, childWidths.length - 1);
-      let cursorX = left + Math.max(0, (width - totalChildrenWidth) / 2);
-
-      children.forEach((edge, index) => {
-        const childWidth = childWidths[index] ?? 0;
-        placeSubtree(edge.target, cursorX, top + verticalGap, nextStack);
-        cursorX += childWidth + horizontalGap;
-      });
-    };
-
     const roots = connectorNodes
       .filter((node) => !incomingConnectorIds.has(node.id))
       .sort((a, b) => {
@@ -2918,13 +2920,86 @@
       (node, index, all) => all.findIndex((candidate) => candidate.id === node.id) === index,
     );
 
+    const depthByNodeId = new SvelteMap<string, number>();
+    const assignDepth = (nodeId: string, depth: number, stack = new SvelteSet<string>()) => {
+      const node = connectorById.get(nodeId);
+      if (!node || stack.has(nodeId)) return;
+      const existingDepth = depthByNodeId.get(nodeId);
+      if (existingDepth !== undefined && existingDepth <= depth) return;
+      depthByNodeId.set(nodeId, depth);
+
+      const nextStack = new SvelteSet(stack);
+      nextStack.add(nodeId);
+      (childrenByConnector.get(nodeId) ?? [])
+        .filter((edge) => connectorById.has(edge.target))
+        .forEach((edge) => assignDepth(edge.target, depth + 1, nextStack));
+    };
+    roots.forEach((root) => assignDepth(root.id, 0));
+    connectorNodes
+      .filter((node) => !depthByNodeId.has(node.id))
+      .sort((a, b) => a.position.x - b.position.x || a.position.y - b.position.y)
+      .forEach((node) => assignDepth(node.id, 0));
+
+    const rowHeightByDepth = new SvelteMap<number, number>();
+    connectorNodes.forEach((node) => {
+      const depth = depthByNodeId.get(node.id) ?? 0;
+      rowHeightByDepth.set(depth, Math.max(rowHeightByDepth.get(depth) ?? 0, nodeHeight(node)));
+    });
+    const maxDepth = Math.max(0, ...Array.from(rowHeightByDepth.keys()));
+    const rowGap = 140;
+    const rowOffsetByDepth = new SvelteMap<number, number>();
+    let rowOffset = 0;
+    for (let depth = 0; depth <= maxDepth; depth += 1) {
+      rowOffsetByDepth.set(depth, rowOffset);
+      rowOffset += (rowHeightByDepth.get(depth) ?? 190) + rowGap;
+    }
+
+    const placed = new SvelteSet<string>();
+    const placeSubtree = (
+      nodeId: string,
+      left: number,
+      rootTop: number,
+      stack = new SvelteSet<string>(),
+    ) => {
+      const node = connectorById.get(nodeId);
+      if (!node || placed.has(nodeId) || stack.has(nodeId)) return;
+      const width = computeSubtreeWidth(nodeId);
+      const ownWidth = nodeWidth(node);
+      const depth = depthByNodeId.get(nodeId) ?? 0;
+      const y = rootTop + (rowOffsetByDepth.get(depth) ?? depth * 300);
+      updates.set(nodeId, { x: left + width / 2 - ownWidth / 2, y });
+      placed.add(nodeId);
+
+      const nextStack = new SvelteSet(stack);
+      nextStack.add(nodeId);
+      const children = (childrenByConnector.get(nodeId) ?? []).filter((edge) =>
+        connectorById.has(edge.target),
+      );
+      const childWidths = children.map((edge) => computeSubtreeWidth(edge.target, nextStack));
+      const totalChildrenWidth =
+        childWidths.reduce((sum, childWidth) => sum + childWidth, 0) +
+        horizontalGap * Math.max(0, childWidths.length - 1);
+      let cursorX = left + Math.max(0, (width - totalChildrenWidth) / 2);
+
+      children.forEach((edge, index) => {
+        const childWidth = childWidths[index] ?? 0;
+        placeSubtree(edge.target, cursorX, rootTop, nextStack);
+        cursorX += childWidth + horizontalGap;
+      });
+    };
+
     let cursorX = Math.min(...connectorNodes.map((node) => node.position.x));
     const rootY = Math.min(...connectorNodes.map((node) => node.position.y));
+    let placedRootCount = 0;
     orderedRoots.forEach((root) => {
       if (placed.has(root.id)) return;
       const width = computeSubtreeWidth(root.id);
-      placeSubtree(root.id, cursorX, rootY);
-      cursorX += width + horizontalGap * 1.5;
+      const ownWidth = nodeWidth(root);
+      const preferredLeft = root.position.x + ownWidth / 2 - width / 2;
+      const left = placedRootCount === 0 ? preferredLeft : Math.max(preferredLeft, cursorX);
+      placeSubtree(root.id, left, rootY);
+      placedRootCount += 1;
+      cursorX = left + width + horizontalGap * 1.5;
     });
 
     return updates;
@@ -3569,6 +3644,56 @@
     fitView?.({ padding: 0.2, duration: 300 });
   };
 
+  const scheduleCanvasFitView = (padding = 0.2, nodeIds: string[] = [], tabId?: string) => {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        if (tabId && activeTabId !== tabId) return;
+        void fitView?.({
+          padding,
+          duration: 250,
+          minZoom: STUDIO_FLOW_MIN_ZOOM,
+          maxZoom: 1,
+          ...(nodeIds.length ? { nodes: nodeIds.map((id) => ({ id })) } : {}),
+        });
+      });
+    });
+  };
+
+  const scheduleCanvasCenter = (center: { x: number; y: number }, zoom = 0.7, tabId?: string) => {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        if (tabId && activeTabId !== tabId) return;
+        void setCenter?.(center.x, center.y, { zoom, duration: 250 });
+      });
+    });
+  };
+
+  const scheduleDraftTabRootViewportReset = (tabId: string, attempts = 6) => {
+    requestAnimationFrame(() => {
+      if (activeTabId !== tabId) return;
+      const rootNode =
+        nodes.find(
+          (node) => isConnectorKind(node.data.kind) && Boolean(node.data.tabRoot) && !node.hidden,
+        ) ?? null;
+      if (!rootNode) {
+        if (attempts > 0) scheduleDraftTabRootViewportReset(tabId, attempts - 1);
+        return;
+      }
+      if (!setCenter) {
+        if (attempts > 0) scheduleDraftTabRootViewportReset(tabId, attempts - 1);
+        return;
+      }
+      void setCenter(rootNode.position.x + 120, rootNode.position.y + 90, {
+        zoom: 1,
+        duration: 0,
+      }).then(() => {
+        if (attempts > 0) {
+          window.setTimeout(() => scheduleDraftTabRootViewportReset(tabId, attempts - 1), 60);
+        }
+      });
+    });
+  };
+
   const getPluginTargetNames = (
     pluginId: string,
     nodeLookup: Record<string, StudioNode>,
@@ -3840,6 +3965,23 @@
     return Array.from(names);
   };
 
+  const collectTemplateSlotReferenceNames = (connectorName: string): string[] => {
+    const normalized = normalizeKey(connectorName);
+    if (!normalized) return [];
+    const names = new SvelteSet<string>();
+    listStudioPluginTemplates()
+      .filter((template) =>
+        template.archetypeConnectors.some((name) => normalizeKey(name) === normalized),
+      )
+      .forEach((template) => {
+        template.slotConnectors.forEach((slotName) => {
+          const trimmed = slotName.trim();
+          if (trimmed) names.add(trimmed);
+        });
+      });
+    return Array.from(names);
+  };
+
   const syncConnectorTreeFromChain = async (
     connectorName: string,
   ): Promise<{ loaded: string[]; missing: string[] }> => {
@@ -3873,7 +4015,10 @@
         continue;
       }
 
-      collectConnectorReferenceNames(connector).forEach((childName) => {
+      [
+        ...collectConnectorReferenceNames(connector),
+        ...collectTemplateSlotReferenceNames(connector.name),
+      ].forEach((childName) => {
         if (!visited.has(childName)) queued.push(childName);
       });
     }
@@ -4491,15 +4636,15 @@
       if (treeRoot) return treeRoot;
     }
 
-    const fromTab = activeTab.particleId?.trim();
-    if (fromTab) return fromTab;
-
     // Plugin discovery is strictly tab-root based: no fallback to arbitrary connector nodes.
     const rootNode =
       graphNodes.find(
         (node) => isConnectorKind(node.data.kind) && node.data.definitionRole === "root",
       ) ?? graphNodes.find((node) => isConnectorKind(node.data.kind) && Boolean(node.data.tabRoot));
-    return rootNode ? resolveNodeName(rootNode).trim() : "";
+    const rootName = rootNode ? resolveNodeName(rootNode).trim() : "";
+    if (rootName) return rootName;
+
+    return activeTab.particleId?.trim() ?? "";
   };
 
   const buildEmptyExecuteRequestBody = (particlesCount: number): ChainExecutePayload => ({
@@ -4638,13 +4783,37 @@
   const chainApiExecutePreviewError = $derived.by(() => executeRequestPreview.error);
   const chainApiExecutePreviewWarnings = $derived.by(() => executeRequestPreview.warnings);
   const chainApiExecutePreviewSummary = $derived.by(() => executeRequestPreview.summary);
+
+  const getDeployedConnectorDefinition = (connectorName: string): StudioConnectorDef | null => {
+    const trimmed = connectorName.trim();
+    if (!trimmed) return null;
+    if (deployedRegistry.connectors[trimmed]) return deployedRegistry.connectors[trimmed];
+    const normalized = normalizeKey(trimmed);
+    const registryName = Object.keys(deployedRegistry.connectors).find(
+      (name) => normalizeKey(name) === normalized,
+    );
+    return registryName ? deployedRegistry.connectors[registryName] : null;
+  };
+
+  const normalizeConnectorFormatHash = (
+    connector: StudioConnectorDef | null | undefined,
+  ): string => {
+    const formatHash = connector?.formatHash?.trim();
+    if (!formatHash) return "";
+    try {
+      return normalizeFormatHash(formatHash);
+    } catch {
+      return "";
+    }
+  };
+
   const activePluginSourceRootConnectorName = $derived.by(() =>
     resolveActiveTabRootConnectorName(nodes).trim(),
   );
   const activePluginSourceRootConnector = $derived.by(() => {
     const connectorName = activePluginSourceRootConnectorName;
     if (!connectorName) return null;
-    return deployedRegistry.connectors[connectorName] ?? null;
+    return getDeployedConnectorDefinition(connectorName);
   });
   const activePluginSourceFormatHash = $derived.by(() => {
     const formatHash = activePluginSourceRootConnector?.formatHash?.trim();
@@ -4656,14 +4825,6 @@
     }
   });
   const allStudioPlugins = $derived.by<StudioPluginDescriptor[]>(() => listStudioPlugins());
-  const compatibleStudioPlugins = $derived.by<StudioPluginDescriptor[]>(() => {
-    const formatHash = activePluginSourceFormatHash;
-    if (!formatHash) return [];
-    return listCompatibleStudioPlugins(formatHash);
-  });
-  const compatibleStudioPluginIds = $derived.by(
-    () => new SvelteSet(compatibleStudioPlugins.map((plugin) => plugin.id)),
-  );
   const templatePluginOptions = $derived.by<StudioPluginDescriptor[]>(() => allStudioPlugins);
   const selectedPluginNodeTemplateId = $derived.by(() => {
     if (selectedNode?.data.kind !== "plugin") return "";
@@ -4690,14 +4851,6 @@
   const pluginAttachEnabled = $derived.by(
     () => Boolean(activePluginSourceRootConnectorName) && Boolean(activePluginSourceRootConnector),
   );
-  const canAttachStudioPlugin = (plugin: StudioPluginDescriptor): boolean =>
-    pluginAttachEnabled && compatibleStudioPluginIds.has(plugin.id);
-  const getPluginAttachStatusLabel = (plugin: StudioPluginDescriptor): string => {
-    if (!pluginAttachEnabled) return "Needs root";
-    if (!activePluginSourceFormatHash) return "Format unavailable";
-    if (!compatibleStudioPluginIds.has(plugin.id)) return "Different format";
-    return "Compatible";
-  };
 
   $effect(() => {
     const options = templatePluginOptions;
@@ -4728,6 +4881,30 @@
         (node) => node.data.definitionRole === "root" || Boolean(node.data.tabRoot),
       ) ?? candidates[0]
     );
+  };
+
+  const getPluginAttachSourceFormatHash = (): string => {
+    const sourceNode = resolvePluginAttachSourceNode();
+    if (!sourceNode) return "";
+    return normalizeConnectorFormatHash(
+      getDeployedConnectorDefinition(resolveNodeName(sourceNode)),
+    );
+  };
+
+  const canAttachPluginToCurrentRoot = (plugin: StudioPluginDescriptor): boolean => {
+    const sourceNode = resolvePluginAttachSourceNode();
+    if (!sourceNode) return false;
+    const formatHash = getPluginAttachSourceFormatHash();
+    return Boolean(formatHash) && plugin.supportedFormatHashes.includes(formatHash);
+  };
+
+  const canAttachStudioPlugin = (plugin: StudioPluginDescriptor): boolean =>
+    pluginAttachEnabled && canAttachPluginToCurrentRoot(plugin);
+  const getPluginAttachStatusLabel = (plugin: StudioPluginDescriptor): string => {
+    if (!pluginAttachEnabled) return "Needs root";
+    if (!getPluginAttachSourceFormatHash()) return "Format unavailable";
+    if (!canAttachPluginToCurrentRoot(plugin)) return "Different format";
+    return "Compatible";
   };
 
   const createStudioPluginNode = (
@@ -4769,18 +4946,6 @@
     pluginAttachStatus = null;
     pluginAttachError = null;
 
-    if (!pluginAttachEnabled) {
-      pluginAttachError =
-        "Plugins can be attached only when a deployed root connector is active in this tab.";
-      return;
-    }
-
-    const formatHash = activePluginSourceFormatHash;
-    if (!formatHash || !plugin.supportedFormatHashes.includes(formatHash)) {
-      pluginAttachError = `Plugin '${plugin.name}' is not compatible with the active root format.`;
-      return;
-    }
-
     const sourceNode = resolvePluginAttachSourceNode();
     if (!sourceNode) {
       pluginAttachError = "Could not resolve root connector node for plugin attachment.";
@@ -4800,6 +4965,13 @@
       return;
     }
 
+    const reusablePluginNode = nodes.find(
+      (node) =>
+        node.data.kind === "plugin" &&
+        node.data.sourceId === plugin.id &&
+        !edges.some((edge) => edge.source === node.id && edge.target === sourceNode.id),
+    );
+
     const attachedPluginCount = edges
       .filter((edge) => edge.target === sourceNode.id)
       .filter((edge) => {
@@ -4807,21 +4979,27 @@
         return sourcePluginNode?.data.kind === "plugin";
       }).length;
 
-    const pluginNode: StudioNode = createStudioPluginNode(
-      plugin,
-      options?.position ?? {
-        x: sourceNode.position.x + attachedPluginCount * 26,
-        y: sourceNode.position.y - 220 - attachedPluginCount * 24,
+    const pluginNode: StudioNode =
+      reusablePluginNode ??
+      createStudioPluginNode(
+        plugin,
+        options?.position ?? {
+          x: sourceNode.position.x + attachedPluginCount * 26,
+          y: sourceNode.position.y - 220 - attachedPluginCount * 24,
+        },
+      );
+    const attachedPluginNode: StudioNode = {
+      ...pluginNode,
+      selected: true,
+      data: {
+        ...pluginNode.data,
+        networkId: resolveNodeName(sourceNode),
       },
-    );
-    pluginNode.data = {
-      ...pluginNode.data,
-      networkId: resolveNodeName(sourceNode),
     };
 
     const pluginEdge: Edge = {
-      id: `edge-${pluginNode.id}-${sourceNode.id}-${crypto.randomUUID()}`,
-      source: pluginNode.id,
+      id: `edge-${attachedPluginNode.id}-${sourceNode.id}-${crypto.randomUUID()}`,
+      source: attachedPluginNode.id,
       sourceHandle: "out",
       target: sourceNode.id,
       targetHandle: "plugin-in",
@@ -4830,15 +5008,15 @@
     };
 
     const nextNodes: StudioNode[] = nodes.map((node) => ({
-      ...node,
-      selected: false,
+      ...(node.id === attachedPluginNode.id ? attachedPluginNode : node),
+      selected: node.id === attachedPluginNode.id,
     }));
-    nextNodes.push(pluginNode);
+    if (!reusablePluginNode) nextNodes.push(attachedPluginNode);
     const nextEdges = [...edges, pluginEdge];
 
     nodes = nextNodes;
     edges = nextEdges;
-    selectedNodeId = pluginNode.id;
+    selectedNodeId = attachedPluginNode.id;
     selectedEdgeId = null;
     setConnectorDropTarget(null);
 
@@ -4850,6 +5028,14 @@
 
     pluginAttachStatus = `Connected '${plugin.name}' to '${resolveNodeName(sourceNode)}'.`;
     scheduleLayout();
+    scheduleCanvasFitView(0.25, [attachedPluginNode.id, sourceNode.id]);
+    scheduleCanvasCenter(
+      {
+        x: (attachedPluginNode.position.x + sourceNode.position.x) / 2,
+        y: (attachedPluginNode.position.y + sourceNode.position.y) / 2,
+      },
+      0.55,
+    );
   };
 
   const addStudioPluginToFlow = (
@@ -4859,7 +5045,7 @@
     pluginAttachStatus = null;
     pluginAttachError = null;
 
-    if (canAttachStudioPlugin(plugin)) {
+    if (resolvePluginAttachSourceNode()) {
       attachStudioPluginToRoot(plugin, options);
       return;
     }
@@ -5740,9 +5926,11 @@
     const nodeIds = new SvelteSet(nodes.map((node) => node.id));
     const safeEdges = edges.filter((edge) => nodeIds.has(edge.source) && nodeIds.has(edge.target));
     tabGraphs.set(activeTabId, { nodes, edges: safeEdges });
+    tabViewports.set(activeTabId, normalizeStudioViewport(flowViewport));
   };
 
   const loadTabGraph = (tabId: string) => {
+    flowViewport = normalizeStudioViewport(tabViewports.get(tabId));
     const projectedTree = projectConnectorTreeGraph(tabId);
     if (projectedTree) {
       const overlay = tabGraphs.get(tabId);
@@ -5802,6 +5990,7 @@
     tabs = [...tabs, nextTab];
     activeTabId = nextTab.id;
     loadTabGraph(nextTab.id);
+    scheduleDraftTabRootViewportReset(nextTab.id);
   };
 
   const ensureEditableTabForInsertion = () => {
@@ -5813,16 +6002,19 @@
     if (tabs.length <= 1) {
       tabGraphs.delete(tabId);
       connectorTreeModelsByTab.delete(tabId);
+      tabViewports.delete(tabId);
       const fallback = createStudioTab("Untitled Connector");
       tabs = [fallback];
       activeTabId = fallback.id;
       loadTabGraph(fallback.id);
+      scheduleDraftTabRootViewportReset(fallback.id);
       return;
     }
     const remaining = tabs.filter((tab) => tab.id !== tabId);
     tabs = remaining;
     tabGraphs.delete(tabId);
     connectorTreeModelsByTab.delete(tabId);
+    tabViewports.delete(tabId);
     if (activeTabId === tabId) {
       const nextActive = remaining[remaining.length - 1];
       activeTabId = nextActive.id;
@@ -5966,10 +6158,75 @@
     return computeConnectorOpenSlotsInRegistry(deployedRegistry.connectors, trimmed);
   };
 
+  const cloneConnectorTreeDefinition = (connector: StudioConnectorDef): StudioConnectorDef => ({
+    name: connector.name,
+    dimensions: connector.dimensions.map((dimension) => ({
+      transformations: dimension.transformations.map((transformation) => ({
+        name: transformation.name,
+        args: [...transformation.args],
+      })),
+      ...(dimension.composite ? { composite: dimension.composite } : {}),
+      bindings: { ...(dimension.bindings ?? {}) },
+      ...(typeof dimension.riStart === "number" ? { riStart: dimension.riStart } : {}),
+      ...(typeof dimension.riShift === "number" ? { riShift: dimension.riShift } : {}),
+    })),
+    ...(connector.conditionName ? { conditionName: connector.conditionName } : {}),
+    ...(connector.conditionArgs ? { conditionArgs: [...connector.conditionArgs] } : {}),
+    ...(connector.staticRi ? { staticRi: cloneStaticRiMap(connector.staticRi) } : {}),
+    ...(connector.formatHash ? { formatHash: connector.formatHash } : {}),
+    ...(connector.localAddress ? { localAddress: connector.localAddress } : {}),
+    ...(connector.ownerAddress ? { ownerAddress: connector.ownerAddress } : {}),
+  });
+
+  const resolveConnectorNameInRegistry = (
+    connectorRegistry: Record<string, StudioConnectorDef>,
+    connectorName: string,
+  ): string | null => {
+    const trimmed = connectorName.trim();
+    if (!trimmed) return null;
+    if (connectorRegistry[trimmed]) return trimmed;
+    const normalized = normalizeKey(trimmed);
+    return Object.keys(connectorRegistry).find((name) => normalizeKey(name) === normalized) ?? null;
+  };
+
+  const buildConnectorTreeRegistryWithTemplateSlots = (
+    baseRegistry: Record<string, StudioConnectorDef>,
+  ): Record<string, StudioConnectorDef> => {
+    const registry = Object.fromEntries(
+      Object.entries(baseRegistry).map(([name, connector]) => [
+        name,
+        cloneConnectorTreeDefinition(connector),
+      ]),
+    );
+
+    listStudioPluginTemplates().forEach((template) => {
+      template.archetypeConnectors.forEach((archetypeName) => {
+        const knownArchetypeName = resolveConnectorNameInRegistry(registry, archetypeName);
+        if (!knownArchetypeName) return;
+        const definition = registry[knownArchetypeName];
+        if (!definition) return;
+
+        definition.dimensions = definition.dimensions.map((dimension, index) => {
+          if (dimension.composite?.trim()) return dimension;
+          const slotName = template.slotConnectors[index]?.trim();
+          if (!slotName) return dimension;
+          return {
+            ...dimension,
+            composite: resolveConnectorNameInRegistry(registry, slotName) ?? slotName,
+            bindings: { ...(dimension.bindings ?? {}) },
+          };
+        });
+      });
+    });
+
+    return registry;
+  };
+
   const buildConnectorTreeGraph = (
     rootConnectorName: string,
     origin: { x: number; y: number },
     options: {
+      connectorRegistry?: Record<string, StudioConnectorDef>;
       hideReadOnlyLeafOutlets?: boolean;
       markRootAsTabRoot?: boolean;
       idFactoryScope?: string;
@@ -5980,8 +6237,11 @@
     const idPrefix = options.idFactoryScope
       ? `${baseIdPrefix}-${options.idFactoryScope}`
       : baseIdPrefix;
+    const connectorRegistry =
+      options.connectorRegistry ??
+      buildConnectorTreeRegistryWithTemplateSlots(deployedRegistry.connectors);
     return buildConnectorTreeGraphFromRegistry({
-      connectorRegistry: deployedRegistry.connectors,
+      connectorRegistry,
       rootConnectorName,
       origin,
       options: {
@@ -6475,11 +6735,18 @@
     nextNodes = nextNodes.map((node) => {
       if (!isConnectorKind(node.data.kind)) return node;
       const shouldBeRoot = node.id === rootId;
-      const nextLabel = shouldBeRoot ? tab.label : node.data.label;
-      const nextFromNetwork = shouldBeRoot ? false : node.data.fromNetwork;
+      const keepDeployedRootIdentity = shouldBeRoot && Boolean(node.data.fromNetwork);
+      const nextLabel = shouldBeRoot && !keepDeployedRootIdentity ? tab.label : node.data.label;
+      const nextFromNetwork = shouldBeRoot
+        ? keepDeployedRootIdentity
+          ? node.data.fromNetwork
+          : false
+        : node.data.fromNetwork;
       const nextTabRoot = shouldBeRoot;
-      const nextNetworkId = shouldBeRoot ? undefined : node.data.networkId;
-      const nextParticleId = shouldBeRoot ? undefined : node.data.particleId;
+      const nextNetworkId =
+        shouldBeRoot && !keepDeployedRootIdentity ? undefined : node.data.networkId;
+      const nextParticleId =
+        shouldBeRoot && !keepDeployedRootIdentity ? undefined : node.data.particleId;
       const nextDimensions = Math.max(1, Math.round(node.data.dimensions ?? 1));
       if (
         node.data.label === nextLabel &&
@@ -6899,7 +7166,17 @@
 
     chainSyncError = null;
     chainSyncStatus = `Fetching ${name} from chain...`;
-    const result = await withChainAuthRetry(() => syncConnectorTreeFromChain(name));
+    let result: Awaited<ReturnType<typeof syncConnectorTreeFromChain>>;
+    try {
+      result = await withChainAuthRetry(() => syncConnectorTreeFromChain(name));
+    } catch (error) {
+      chainSyncStatus = null;
+      chainSyncError =
+        error instanceof Error
+          ? `Could not load connector ${name} from chain: ${error.message}`
+          : `Could not load connector ${name} from chain.`;
+      return false;
+    }
     const nextGraph = buildConnectorTreeGraph(name, { x: 0, y: 0 });
     const loaded =
       nextGraph.nodes.length > 0 && !nextGraph.nodes.some((node) => Boolean(node.data.placeholder));
@@ -7043,17 +7320,47 @@
     }
   };
 
+  const findPluginTemplateByArchetype = (
+    connectorName: string,
+    templates: StudioPluginTemplateDescriptor[],
+  ): StudioPluginTemplateDescriptor | null => {
+    const normalized = normalizeKey(connectorName);
+    if (!normalized) return null;
+    return (
+      templates.find((candidate) =>
+        candidate.archetypeConnectors.some((name) => normalizeKey(name) === normalized),
+      ) ?? null
+    );
+  };
+
   const listTemplateConnectorNames = (template: StudioPluginTemplateDescriptor): string[] => {
+    const pluginTemplates = listStudioPluginTemplatesForPlugin(template.pluginId);
     const seen = new SvelteSet<string>();
-    return [...template.archetypeConnectors, ...template.slotConnectors]
-      .map((name) => name.trim())
-      .filter((name) => {
-        if (!name) return false;
-        const key = normalizeKey(name);
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
+    const visitedTemplates = new SvelteSet<string>();
+    const names: string[] = [];
+
+    const appendName = (name: string) => {
+      const trimmed = name.trim();
+      if (!trimmed) return;
+      const key = normalizeKey(trimmed);
+      if (seen.has(key)) return;
+      seen.add(key);
+      names.push(trimmed);
+    };
+
+    const visitTemplate = (candidate: StudioPluginTemplateDescriptor) => {
+      if (visitedTemplates.has(candidate.id)) return;
+      visitedTemplates.add(candidate.id);
+      candidate.archetypeConnectors.forEach(appendName);
+      candidate.slotConnectors.forEach((connectorName) => {
+        appendName(connectorName);
+        const childTemplate = findPluginTemplateByArchetype(connectorName, pluginTemplates);
+        if (childTemplate) visitTemplate(childTemplate);
       });
+    };
+
+    visitTemplate(template);
+    return names;
   };
 
   const resolveKnownTemplateConnectorName = (connectorName: string): string | null => {
@@ -7074,13 +7381,83 @@
   const getTemplateInsertTitle = (template: StudioPluginTemplateDescriptor) =>
     `Insert ${template.name} template`;
 
+  const cloneTemplateConnectorDefinition = (connector: StudioConnectorDef): StudioConnectorDef => ({
+    name: connector.name,
+    dimensions: connector.dimensions.map((dimension) => ({
+      transformations: dimension.transformations.map((transformation) => ({
+        name: transformation.name,
+        args: [...transformation.args],
+      })),
+      ...(dimension.composite ? { composite: dimension.composite } : {}),
+      bindings: { ...(dimension.bindings ?? {}) },
+      ...(typeof dimension.riStart === "number" ? { riStart: dimension.riStart } : {}),
+      ...(typeof dimension.riShift === "number" ? { riShift: dimension.riShift } : {}),
+    })),
+    ...(connector.conditionName ? { conditionName: connector.conditionName } : {}),
+    ...(connector.conditionArgs ? { conditionArgs: [...connector.conditionArgs] } : {}),
+    ...(connector.staticRi ? { staticRi: cloneStaticRiMap(connector.staticRi) } : {}),
+    ...(connector.formatHash ? { formatHash: connector.formatHash } : {}),
+    ...(connector.localAddress ? { localAddress: connector.localAddress } : {}),
+    ...(connector.ownerAddress ? { ownerAddress: connector.ownerAddress } : {}),
+  });
+
+  const buildTemplateConnectorRegistry = (
+    template: StudioPluginTemplateDescriptor,
+  ): Record<string, StudioConnectorDef> => {
+    const registry = Object.fromEntries(
+      Object.entries(deployedRegistry.connectors).map(([name, connector]) => [
+        name,
+        cloneTemplateConnectorDefinition(connector),
+      ]),
+    );
+    const pluginTemplates = listStudioPluginTemplatesForPlugin(template.pluginId);
+    const visitedTemplates = new SvelteSet<string>();
+
+    const applyTemplateSlots = (candidate: StudioPluginTemplateDescriptor) => {
+      if (visitedTemplates.has(candidate.id)) return;
+      visitedTemplates.add(candidate.id);
+
+      candidate.archetypeConnectors.forEach((archetypeName) => {
+        const knownArchetypeName = resolveKnownTemplateConnectorName(archetypeName);
+        if (!knownArchetypeName) return;
+        const definition = registry[knownArchetypeName];
+        if (!definition) return;
+
+        definition.dimensions = definition.dimensions.map((dimension, index) => {
+          if (dimension.composite?.trim()) return dimension;
+          const slotName = candidate.slotConnectors[index]?.trim();
+          if (!slotName) return dimension;
+          const knownSlotName = resolveKnownTemplateConnectorName(slotName) ?? slotName;
+          return {
+            ...dimension,
+            composite: knownSlotName,
+            bindings: { ...(dimension.bindings ?? {}) },
+          };
+        });
+      });
+
+      candidate.slotConnectors.forEach((connectorName) => {
+        const childTemplate = findPluginTemplateByArchetype(connectorName, pluginTemplates);
+        if (childTemplate) applyTemplateSlots(childTemplate);
+      });
+    };
+
+    applyTemplateSlots(template);
+    return registry;
+  };
+
   const loadTemplateConnectorDefinitions = async (
     template: StudioPluginTemplateDescriptor,
   ): Promise<boolean> => {
     templateAttachError = null;
 
-    const connectorNames = listTemplateConnectorNames(template);
-    for (const connectorName of connectorNames) {
+    const seen = new SvelteSet<string>();
+    const loadConnectorTreeDefinitions = async (connectorName: string): Promise<boolean> => {
+      const normalized = normalizeKey(connectorName);
+      if (!normalized) return true;
+      if (seen.has(normalized)) return true;
+      seen.add(normalized);
+
       const knownName = resolveKnownTemplateConnectorName(connectorName) ?? connectorName;
       const loaded = await ensureLibraryConnectorDetailLoaded(knownName);
       const loadedName = resolveKnownTemplateConnectorName(connectorName) ?? knownName;
@@ -7088,82 +7465,26 @@
         templateAttachError = `Could not load required score connector archetype '${knownName}' from chain.`;
         return false;
       }
+
+      const definition = deployedRegistry.connectors[loadedName];
+      for (const dimension of definition.dimensions) {
+        const compositeName = dimension.composite?.trim();
+        if (!compositeName) continue;
+        const compositeLoaded = await loadConnectorTreeDefinitions(compositeName);
+        if (!compositeLoaded) return false;
+      }
+
+      return true;
+    };
+
+    const connectorNames = listTemplateConnectorNames(template);
+    for (const connectorName of connectorNames) {
+      const loaded = await loadConnectorTreeDefinitions(connectorName);
+      if (!loaded) return false;
     }
 
     return true;
   };
-
-  const createTemplateConnectorNode = ({
-    connectorName,
-    position,
-    selected = false,
-  }: {
-    connectorName: string;
-    position: { x: number; y: number };
-    selected?: boolean;
-  }): StudioNode | null => {
-    const definition = deployedRegistry.connectors[connectorName];
-    if (!definition) return null;
-
-    return {
-      id: `connector-${slugify(connectorName) || "connector"}-${crypto.randomUUID()}`,
-      position,
-      selected,
-      type: "connector",
-      data: {
-        label: getConnectorLibraryLabel(connectorName),
-        kind: "connector",
-        dimensions: definition.dimensions.length,
-        connectorRows: definition.dimensions.map((dimension, dimIndex) => ({
-          dimension: dimIndex + 1,
-          transformations: dimension.transformations.map((transformation) =>
-            formatTransformationPreviewLabel(transformation.name, transformation.args),
-          ),
-        })),
-        conditionLabel: definition.conditionName ? definition.conditionName : null,
-        sourceId: `feature-${connectorName}`,
-        networkId: connectorName,
-        fromNetwork: true,
-        riStart: 0,
-        riShift: 0,
-        riLocked: false,
-        staticRi: cloneStaticRiMap(definition.staticRi),
-      },
-    };
-  };
-
-  const createTemplateDimensionNodes = (connector: StudioNode): StudioNode[] => {
-    const connectorName = connector.data.networkId?.trim() ?? "";
-    const definition: StudioConnectorDef | null = connectorName
-      ? (deployedRegistry.connectors[connectorName] ?? null)
-      : null;
-    const dimensionCount =
-      definition?.dimensions.length ?? Math.max(0, connector.data.dimensions ?? 0);
-
-    return Array.from({ length: dimensionCount }, (_, index) => {
-      const dimensionNode = createDimensionNode(connector, index, Math.max(1, dimensionCount));
-      return {
-        ...dimensionNode,
-        data: {
-          ...dimensionNode.data,
-          transformations: (definition?.dimensions[index]?.transformations ?? []).map(
-            (transformation) =>
-              createTransformationInstance(transformation.name, transformation.args, "network"),
-          ),
-          fromNetwork: true,
-        },
-      };
-    });
-  };
-
-  const createTemplateDimensionEdges = (connector: StudioNode, dimensions: StudioNode[]): Edge[] =>
-    dimensions.map((dimension) => ({
-      id: `edge-${connector.id}-${dimension.id}-${crypto.randomUUID()}`,
-      source: connector.id,
-      sourceHandle: `dim-${dimension.data.dimensionIndex ?? 0}`,
-      target: dimension.id,
-      targetHandle: "in",
-    }));
 
   const insertStudioPluginTemplate = async (
     template: StudioPluginTemplateDescriptor,
@@ -7188,71 +7509,50 @@
     }
 
     const rootPosition = position ?? getCanvasCenter();
-    const root = createTemplateConnectorNode({
-      connectorName: rootName,
-      position: rootPosition,
-      selected: true,
+    const templateGraph = buildConnectorTreeGraph(rootName, rootPosition, {
+      connectorRegistry: buildTemplateConnectorRegistry(template),
+      hideReadOnlyLeafOutlets: false,
+      markRootAsTabRoot: false,
+      idFactoryScope: `template-${crypto.randomUUID()}`,
     });
-    if (!root) {
-      templateAttachError = `Could not create root connector node for '${rootName}'.`;
+    const root = templateGraph.nodes.find(
+      (node) =>
+        isConnectorKind(node.data.kind) &&
+        normalizeKey(resolveNodeName(node)) === normalizeKey(rootName),
+    );
+    if (!root || !isCompleteConnectorTreeModel(templateGraph)) {
+      templateAttachError = `Could not create complete connector tree for '${rootName}'.`;
       return;
     }
-
-    const columns = Math.min(3, Math.max(1, template.slotConnectors.length));
-    const slotNodes = template.slotConnectors.flatMap((connectorName, index) => {
-      const knownName = resolveKnownTemplateConnectorName(connectorName);
-      if (!knownName) return [];
-      const column = index % columns;
-      const row = Math.floor(index / columns);
-      const node = createTemplateConnectorNode({
-        connectorName: knownName,
-        position: {
-          x: rootPosition.x + (column - (columns - 1) / 2) * 260,
-          y: rootPosition.y + 260 + row * 220,
-        },
-      });
-      return node ? [node] : [];
-    });
-
-    if (slotNodes.length !== template.slotConnectors.length) {
-      templateAttachError = `Could not create all connector nodes for '${template.name}'.`;
-      return;
-    }
-
-    const connectors = [root, ...slotNodes];
-    const dimensionNodes = connectors.flatMap((connector) =>
-      createTemplateDimensionNodes(connector),
-    );
-    const dimensionEdges = connectors.flatMap((connector) =>
-      createTemplateDimensionEdges(
-        connector,
-        dimensionNodes.filter((node) => node.data.parentFeatureId === connector.id),
-      ),
-    );
-    const compositeEdges: Edge[] = slotNodes.map((slotNode, index) => ({
-      id: `edge-${root.id}-${slotNode.id}-${crypto.randomUUID()}`,
-      source: root.id,
-      sourceHandle: `dim-${index}`,
-      target: slotNode.id,
-      targetHandle: "in",
-      label: `composite · D${index + 1}`,
-      data: { relation: "composite" },
-    }));
 
     const nextNodes = [
-      ...nodes.map((node) => ({ ...node, selected: false })),
-      ...connectors,
-      ...dimensionNodes,
+      ...nodes.map((node) => ({
+        ...node,
+        selected: false,
+      })),
+      ...templateGraph.nodes.map((node) => ({
+        ...node,
+        selected: node.id === root.id,
+        data: isConnectorKind(node.data.kind)
+          ? {
+              ...node.data,
+              tabRoot: false,
+            }
+          : node.data,
+      })),
     ];
-    const nextEdges = [...edges, ...dimensionEdges, ...compositeEdges];
+    const nextEdges = [...edges, ...templateGraph.edges];
 
     nodes = nextNodes;
     edges = nextEdges;
     selectedNodeId = root.id;
     selectedEdgeId = null;
     setConnectorDropTarget(null);
-    connectors.forEach((connector) => syncConnectorRowPreview(connector.id, { schedule: false }));
+    templateGraph.nodes
+      .filter((node) => isConnectorKind(node.data.kind))
+      .forEach((connector) => syncConnectorRowPreview(connector.id, { schedule: false }));
     scheduleLayout({ connectorTrees: true });
+    scheduleCanvasFitView(0.2, [root.id]);
     templateAttachError = null;
   };
 
@@ -8656,6 +8956,7 @@
       <SvelteFlow
         bind:nodes
         bind:edges
+        bind:viewport={flowViewport}
         {nodeTypes}
         onconnect={handleConnect}
         onselectionchange={handleSelectionChange}
@@ -8688,11 +8989,13 @@
           onReady={({
             screenToFlowPosition: toFlow,
             getZoom: zoomFn,
+            setCenter: setCenterFn,
             fitView: fitViewFn,
             clearSelection,
           }) => {
             screenToFlowPosition = toFlow;
             getZoom = zoomFn;
+            setCenter = setCenterFn;
             fitView = fitViewFn;
             clearFlowSelection = clearSelection;
           }}

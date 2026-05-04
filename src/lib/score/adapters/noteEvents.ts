@@ -8,8 +8,13 @@ import { scoreDiagnostic } from "$lib/score/diagnostics";
 import type {
   ScoreArticulationEvent,
   ScoreBuildResult,
+  ScoreClefEvent,
+  ScoreKeyEvent,
+  ScoreMeterEvent,
   ScoreNoteEvent,
+  ScorePartEvent,
   ScoreSlurEvent,
+  ScoreTempoEvent,
   ScoreXmlNode,
 } from "$lib/score/types";
 import type { StudioPluginMidiStreamGroup } from "$lib/studio/plugins/runtime";
@@ -17,8 +22,11 @@ import type { StudioPluginMidiStreamGroup } from "$lib/studio/plugins/runtime";
 export const SCORE_NOTE_EVENTS_ADAPTER_ID = "music-note-events-v1";
 
 const DEFAULT_DIVISIONS = 480;
-const DEFAULT_BEATS_PER_MEASURE = 4;
+const DEFAULT_METER_BEATS = 4;
+const DEFAULT_METER_BEAT_TYPE = 4;
 const EPSILON = 0.000001;
+const SUPPORTED_SCORE_BEAT_TYPES = new Set([1, 2, 4, 8, 16, 32, 64, 128]);
+const RENDERABLE_KEY_MODES = new Set(["major", "minor", "none"]);
 
 type PitchSpelling = {
   step: string;
@@ -52,6 +60,32 @@ type StaffClef = {
   line: string;
 };
 
+type NormalizedMeter = {
+  time: number;
+  beats: number;
+  beatType: number;
+  sourcePath?: string;
+};
+
+type MeasureDefinition = {
+  number: number;
+  startBeat: number;
+  endBeat: number;
+  meter: NormalizedMeter;
+  meterChanged: boolean;
+};
+
+type ScoreBuildOptions = {
+  adapterId?: string;
+  streamCount?: number;
+  divisions?: number;
+  meters?: readonly ScoreMeterEvent[];
+  parts?: readonly ScorePartEvent[];
+  clefs?: readonly ScoreClefEvent[];
+  tempos?: readonly ScoreTempoEvent[];
+  keys?: readonly ScoreKeyEvent[];
+};
+
 const PITCH_SPELLINGS: PitchSpelling[] = [
   { step: "C" },
   { step: "C", alter: 1 },
@@ -77,6 +111,7 @@ const NOTE_TYPE_BEATS: Array<{ beats: number; type: string }> = [
   { beats: 0.0625, type: "64th" },
   { beats: 0.03125, type: "128th" },
 ];
+const MIN_RENDERABLE_MEASURE_BEATS = NOTE_TYPE_BEATS.at(-1)?.beats ?? 0.03125;
 
 const isFiniteNumber = (value: unknown): value is number =>
   typeof value === "number" && Number.isFinite(value);
@@ -85,6 +120,15 @@ const clampPositiveInteger = (value: unknown, fallback: number): number => {
   if (!isFiniteNumber(value)) return fallback;
   return Math.max(1, Math.round(value));
 };
+
+const quantizeBeatToRendererGrid = (value: number): number =>
+  Math.max(0, Math.round(value / MIN_RENDERABLE_MEASURE_BEATS) * MIN_RENDERABLE_MEASURE_BEATS);
+
+const quantizeDurationToRendererGrid = (value: number): number =>
+  Math.max(
+    MIN_RENDERABLE_MEASURE_BEATS,
+    Math.round(value / MIN_RENDERABLE_MEASURE_BEATS) * MIN_RENDERABLE_MEASURE_BEATS,
+  );
 
 const durationToDivisions = (beats: number, divisions = DEFAULT_DIVISIONS): string =>
   String(Math.max(1, Math.round(beats * divisions)));
@@ -112,7 +156,7 @@ const pitchToNode = (pitch: number): ScoreXmlNode => {
   if (typeof spelling.alter === "number") {
     children.push(textNode("alter", String(spelling.alter)));
   }
-  children.push(textNode("octave", String(Math.floor(pitch / 12) - 1)));
+  children.push(textNode("octave", String(Math.max(0, Math.min(9, Math.floor(pitch / 12) - 1)))));
   return { name: "pitch", children };
 };
 
@@ -124,11 +168,16 @@ const makeDurationTypeNodes = (duration: number): ScoreXmlNode[] => {
   ];
 };
 
-const makeRestNote = (duration: number, voice: number, staff?: number): ScoreXmlNode => ({
+const makeRestNote = (
+  duration: number,
+  voice: number,
+  staff: number | undefined,
+  divisions: number,
+): ScoreXmlNode => ({
   name: "note",
   children: [
     { name: "rest" },
-    textNode("duration", durationToDivisions(duration)),
+    textNode("duration", durationToDivisions(duration, divisions)),
     textNode("voice", String(voice)),
     ...makeDurationTypeNodes(duration),
     ...(typeof staff === "number" ? [textNode("staff", String(staff))] : []),
@@ -150,6 +199,18 @@ const makeDynamicDirection = (dynamicCode: number): ScoreXmlNode | null => {
   };
 };
 
+const makeTempoDirection = (bpm: number): ScoreXmlNode => ({
+  name: "direction",
+  attributes: { placement: "above" },
+  children: [
+    {
+      name: "direction-type",
+      children: [{ name: "words", text: `${formatNumericXmlValue(bpm)} bpm` }],
+    },
+    { name: "sound", attributes: { tempo: formatNumericXmlValue(bpm) } },
+  ],
+});
+
 const makeArticulationNode = (articulation: ScoreArticulationEvent): ScoreXmlNode => ({
   name: articulation.element,
   ...(articulation.placement ? { attributes: { placement: articulation.placement } } : {}),
@@ -168,9 +229,10 @@ const makePitchedNote = (
   note: ScoreNoteEvent,
   segment: VoiceSegment,
   chordNote: boolean,
+  divisions: number,
 ): ScoreXmlNode => {
   const durationNodes = [
-    textNode("duration", durationToDivisions(segment.duration)),
+    textNode("duration", durationToDivisions(segment.duration, divisions)),
     ...(segment.tieStop ? [{ name: "tie", attributes: { type: "stop" } }] : []),
     ...(segment.tieStart ? [{ name: "tie", attributes: { type: "start" } }] : []),
   ];
@@ -264,6 +326,19 @@ const validateNoteEvents = (
       return;
     }
 
+    const time = quantizeBeatToRendererGrid(event.time);
+    const duration = quantizeDurationToRendererGrid(event.duration);
+    if (Math.abs(time - event.time) > EPSILON || Math.abs(duration - event.duration) > EPSILON) {
+      diagnostics.push(
+        scoreDiagnostic(
+          "warning",
+          "quantized-note-grid",
+          `Quantized note ${index} to the smallest duration the score renderer can notate reliably.`,
+          path,
+        ),
+      );
+    }
+
     notes.push({
       ...event,
       eventId:
@@ -271,6 +346,8 @@ const validateNoteEvents = (
           ? Math.round(event.eventId)
           : undefined,
       pitch: Math.round(event.pitch),
+      time,
+      duration,
       part: clampPositiveInteger(event.part, 1),
       voice: typeof event.voice === "number" ? clampPositiveInteger(event.voice, 1) : undefined,
       staff: typeof event.staff === "number" ? clampPositiveInteger(event.staff, 1) : undefined,
@@ -340,22 +417,174 @@ const assignVoices = (chords: readonly TimedChord[]): TimedChord[] => {
   });
 };
 
+const meterLengthBeats = (meter: Pick<NormalizedMeter, "beats" | "beatType">): number =>
+  meter.beats * (4 / meter.beatType);
+
+const normalizeMeterEvents = (
+  meters: readonly ScoreMeterEvent[] | undefined,
+  diagnostics: ScoreBuildResult["diagnostics"],
+): NormalizedMeter[] => {
+  const candidates = (meters ?? [])
+    .flatMap((meter, index): NormalizedMeter[] => {
+      if (
+        !isFiniteNumber(meter.time) ||
+        meter.time < 0 ||
+        !isFiniteNumber(meter.beats) ||
+        meter.beats <= 0 ||
+        !isFiniteNumber(meter.beatType) ||
+        meter.beatType <= 0 ||
+        !SUPPORTED_SCORE_BEAT_TYPES.has(Math.round(meter.beatType))
+      ) {
+        diagnostics.push(
+          scoreDiagnostic(
+            "warning",
+            "invalid-meter-event",
+            `Skipped meter event ${index}: time and beats must be positive, and beat_type must be a standard notation denominator.`,
+            meter.sourcePath,
+          ),
+        );
+        return [];
+      }
+      return [
+        {
+          time: meter.time,
+          beats: Math.max(1, Math.round(meter.beats)),
+          beatType: Math.max(1, Math.round(meter.beatType)),
+          sourcePath: meter.sourcePath,
+        },
+      ];
+    })
+    .sort((a, b) => a.time - b.time);
+
+  const normalized: NormalizedMeter[] = [];
+  candidates.forEach((meter, index) => {
+    const previousTime = normalized.at(-1)?.time ?? 0;
+    if (
+      meter.time > EPSILON &&
+      meter.time - previousTime < MIN_RENDERABLE_MEASURE_BEATS - EPSILON
+    ) {
+      diagnostics.push(
+        scoreDiagnostic(
+          "warning",
+          "short-score-meter-span",
+          `Skipped meter event ${index}: the resulting measure would be shorter than the score renderer can notate reliably.`,
+          meter.sourcePath,
+        ),
+      );
+      return;
+    }
+    normalized.push(meter);
+  });
+
+  if (normalized.length === 0) {
+    diagnostics.push(
+      scoreDiagnostic(
+        "warning",
+        "missing-score-meter",
+        "No explicit score_meter_v2 layer was available; rendered with a 4/4 fallback.",
+      ),
+    );
+    return [{ time: 0, beats: DEFAULT_METER_BEATS, beatType: DEFAULT_METER_BEAT_TYPE }];
+  }
+
+  if (normalized[0] && normalized[0].time > EPSILON) {
+    diagnostics.push(
+      scoreDiagnostic(
+        "warning",
+        "missing-initial-score-meter",
+        "The first score_meter_v2 event starts after tick 0; rendered the opening span with a 4/4 fallback.",
+      ),
+    );
+    return [
+      { time: 0, beats: DEFAULT_METER_BEATS, beatType: DEFAULT_METER_BEAT_TYPE },
+      ...normalized,
+    ];
+  }
+
+  return normalized;
+};
+
+const buildMeasureMap = (
+  maxEndBeat: number,
+  meters: readonly ScoreMeterEvent[] | undefined,
+  diagnostics: ScoreBuildResult["diagnostics"],
+): MeasureDefinition[] => {
+  const normalizedMeters = normalizeMeterEvents(meters, diagnostics);
+  const measures: MeasureDefinition[] = [];
+  let measureStart = 0;
+  let meterIndex = 0;
+  let previousMeterKey = "";
+  const finalBeat = Math.max(maxEndBeat, meterLengthBeats(normalizedMeters[0]!));
+
+  while (measureStart < finalBeat - EPSILON || measures.length === 0) {
+    while (
+      normalizedMeters[meterIndex + 1] &&
+      normalizedMeters[meterIndex + 1]!.time <= measureStart + EPSILON
+    ) {
+      meterIndex += 1;
+    }
+
+    const meter = normalizedMeters[meterIndex]!;
+    const meterKey = `${meter.beats}/${meter.beatType}`;
+    const naturalEnd = measureStart + meterLengthBeats(meter);
+    const nextMeter = normalizedMeters[meterIndex + 1];
+    let measureEnd = naturalEnd;
+
+    if (
+      nextMeter &&
+      nextMeter.time > measureStart + EPSILON &&
+      nextMeter.time < naturalEnd - EPSILON
+    ) {
+      diagnostics.push(
+        scoreDiagnostic(
+          "warning",
+          "mid-measure-meter-change",
+          `Meter changes at beat ${formatNumericXmlValue(nextMeter.time)} before the current bar completes; rendered a shortened measure before the change.`,
+          nextMeter.sourcePath,
+        ),
+      );
+      measureEnd = nextMeter.time;
+    }
+
+    measures.push({
+      number: measures.length + 1,
+      startBeat: measureStart,
+      endBeat: measureEnd,
+      meter,
+      meterChanged: meterKey !== previousMeterKey,
+    });
+    previousMeterKey = meterKey;
+    measureStart = measureEnd;
+  }
+
+  return measures;
+};
+
+const findMeasureForBeat = (
+  beat: number,
+  measures: readonly MeasureDefinition[],
+): MeasureDefinition | null =>
+  measures.find(
+    (measure, index) =>
+      beat >= measure.startBeat - EPSILON &&
+      (beat < measure.endBeat - EPSILON || index === measures.length - 1),
+  ) ?? null;
+
 const splitChordIntoMeasures = (
   chord: TimedChord,
-  beatsPerMeasure: number,
+  measures: readonly MeasureDefinition[],
 ): Array<{ measure: number; segment: VoiceSegment }> => {
   const segments: Array<{ measure: number; segment: VoiceSegment }> = [];
   const endTime = chord.time + chord.duration;
   let cursor = chord.time;
   while (cursor < endTime - EPSILON) {
-    const measureIndex = Math.floor(cursor / beatsPerMeasure);
-    const measureStart = measureIndex * beatsPerMeasure;
-    const nextBoundary = measureStart + beatsPerMeasure;
-    const segmentEnd = Math.min(endTime, nextBoundary);
+    const measure = findMeasureForBeat(cursor, measures);
+    if (!measure) break;
+    const segmentEnd = Math.min(endTime, measure.endBeat);
     segments.push({
-      measure: measureIndex + 1,
+      measure: measure.number,
       segment: {
-        startBeat: cursor - measureStart,
+        startBeat: cursor - measure.startBeat,
         duration: segmentEnd - cursor,
         voice: chord.voice ?? 1,
         staff: chord.staff,
@@ -377,36 +606,146 @@ const inferClef = (notes: readonly ScoreNoteEvent[]): { sign: string; line: stri
   return median < 60 ? { sign: "F", line: "4" } : { sign: "G", line: "2" };
 };
 
-const makeAttributesNode = (clefs: readonly StaffClef[], staffCount: number): ScoreXmlNode => ({
-  name: "attributes",
-  children: [
-    textNode("divisions", String(DEFAULT_DIVISIONS)),
-    { name: "key", children: [textNode("fifths", "0")] },
-    {
-      name: "time",
-      children: [textNode("beats", String(DEFAULT_BEATS_PER_MEASURE)), textNode("beat-type", "4")],
-    },
-    ...(staffCount > 1 ? [textNode("staves", String(staffCount))] : []),
-    ...clefs.map((clef) => ({
-      name: "clef",
-      ...(staffCount > 1 ? { attributes: { number: String(clef.staff) } } : {}),
-      children: [textNode("sign", clef.sign), textNode("line", clef.line)],
-    })),
-  ],
-});
+const activeClefForStaff = (
+  clefs: readonly ScoreClefEvent[] | undefined,
+  part: number,
+  staff: number,
+  time: number,
+  fallback: { sign: string; line: string },
+): StaffClef => {
+  const active = (clefs ?? [])
+    .filter(
+      (clef) =>
+        clef.part === part &&
+        clef.staff === staff &&
+        clef.time <= time + EPSILON &&
+        clef.sign.trim(),
+    )
+    .sort((a, b) => a.time - b.time)
+    .at(-1);
+  return {
+    staff,
+    sign: active?.sign ?? fallback.sign,
+    line: String(active?.line ?? Number(fallback.line)),
+  };
+};
+
+const normalizeRenderableClef = (clef: StaffClef): StaffClef => {
+  const line = Number(clef.line);
+  const roundedLine = Number.isFinite(line) ? Math.round(line) : Number.NaN;
+  if (clef.sign === "G") return { ...clef, line: "2" };
+  if (clef.sign === "F") return { ...clef, line: "4" };
+  if (clef.sign === "C") return { ...clef, line: roundedLine <= 3 ? "3" : "4" };
+  if (clef.sign === "percussion") return { ...clef, line: "2" };
+  return { ...clef, sign: "G", line: "2" };
+};
+
+const activeKeyAt = (
+  keys: readonly ScoreKeyEvent[] | undefined,
+  part: number,
+  time: number,
+): ScoreKeyEvent | null =>
+  (keys ?? [])
+    .filter(
+      (key) =>
+        (typeof key.part !== "number" || key.part === part) &&
+        key.time <= time + EPSILON &&
+        Number.isFinite(key.fifths),
+    )
+    .sort((a, b) => a.time - b.time)
+    .at(-1) ?? null;
+
+const normalizeRenderableKey = (key: ScoreKeyEvent | null): ScoreKeyEvent | null => {
+  if (!key) return null;
+  const fifths = Math.round(key.fifths);
+  if (fifths < -7 || fifths > 7) return null;
+  const mode = key.mode && RENDERABLE_KEY_MODES.has(key.mode) ? key.mode : undefined;
+  if (mode) return { ...key, fifths, mode };
+  return {
+    time: key.time,
+    fifths,
+    ...(typeof key.part === "number" ? { part: key.part } : {}),
+    ...(key.sourcePath ? { sourcePath: key.sourcePath } : {}),
+  };
+};
+
+const activeTempoAt = (
+  tempos: readonly ScoreTempoEvent[] | undefined,
+  time: number,
+): ScoreTempoEvent | null =>
+  (tempos ?? [])
+    .filter((tempo) => tempo.time <= time + EPSILON && tempo.bpm > 0)
+    .sort((a, b) => a.time - b.time)
+    .at(-1) ?? null;
+
+const makeAttributesNode = ({
+  clefs,
+  staffCount,
+  meter,
+  key,
+  divisions,
+}: {
+  clefs: readonly StaffClef[];
+  staffCount: number;
+  meter: NormalizedMeter;
+  key: ScoreKeyEvent | null;
+  divisions: number;
+}): ScoreXmlNode => {
+  const renderableKey = normalizeRenderableKey(key);
+  const renderableClefs = clefs.map(normalizeRenderableClef);
+  return {
+    name: "attributes",
+    children: [
+      textNode("divisions", String(divisions)),
+      {
+        name: "key",
+        children: [
+          textNode("fifths", String(renderableKey?.fifths ?? 0)),
+          ...(renderableKey?.mode && renderableKey.mode !== "none"
+            ? [textNode("mode", renderableKey.mode)]
+            : []),
+        ],
+      },
+      {
+        name: "time",
+        children: [
+          textNode("beats", String(meter.beats)),
+          textNode("beat-type", String(meter.beatType)),
+        ],
+      },
+      ...(staffCount > 1 ? [textNode("staves", String(staffCount))] : []),
+      ...renderableClefs.map((clef) => ({
+        name: "clef",
+        ...(staffCount > 1 ? { attributes: { number: String(clef.staff) } } : {}),
+        children: [textNode("sign", clef.sign), textNode("line", clef.line)],
+      })),
+    ],
+  };
+};
 
 const makeMeasureNode = (
-  measureNumber: number,
+  measure: MeasureDefinition,
   segments: readonly VoiceSegment[],
-  clefs: readonly StaffClef[] | null,
+  attributes: { clefs: readonly StaffClef[]; key: ScoreKeyEvent | null } | null,
   staffCount: number,
   dynamicCodesByVoice: Map<number, number | null>,
+  divisions: number,
+  tempo: ScoreTempoEvent | null,
 ): { node: ScoreXmlNode; diagnostics: ScoreBuildResult["diagnostics"] } => {
   const diagnostics: ScoreBuildResult["diagnostics"] = [];
   const children: ScoreXmlNode[] = [];
-  if (clefs) {
-    children.push(makeAttributesNode(clefs, staffCount));
+  if (attributes) {
+    children.push(
+      makeAttributesNode({
+        clefs: attributes.clefs,
+        staffCount,
+        meter: measure.meter,
+        key: attributes.key,
+        divisions,
+      }),
+    );
   }
+  if (tempo) children.push(makeTempoDirection(tempo.bpm));
 
   const segmentsByVoice = new Map<number, VoiceSegment[]>();
   segments.forEach((segment) => {
@@ -419,18 +758,24 @@ const makeMeasureNode = (
   const activeVoices = voices.length > 0 ? voices : [1];
 
   activeVoices.forEach((voice, voiceIndex) => {
+    const voiceSegments = (segmentsByVoice.get(voice) ?? []).sort(
+      (a, b) => a.startBeat - b.startBeat || a.duration - b.duration,
+    );
+    const fallbackStaff =
+      voiceSegments.find((segment) => typeof segment.staff === "number")?.staff ??
+      (staffCount > 1 ? 1 : undefined);
+
     if (voiceIndex > 0) {
       children.push({
         name: "backup",
-        children: [textNode("duration", durationToDivisions(DEFAULT_BEATS_PER_MEASURE))],
+        children: [
+          textNode("duration", durationToDivisions(measure.endBeat - measure.startBeat, divisions)),
+        ],
       });
     }
 
     let cursor = 0;
     let lastDynamicCode = dynamicCodesByVoice.get(voice) ?? null;
-    const voiceSegments = (segmentsByVoice.get(voice) ?? []).sort(
-      (a, b) => a.startBeat - b.startBeat || a.duration - b.duration,
-    );
 
     voiceSegments.forEach((segment) => {
       if (segment.startBeat < cursor - EPSILON) {
@@ -438,14 +783,14 @@ const makeMeasureNode = (
           scoreDiagnostic(
             "warning",
             "overlapping-note",
-            `Skipped an overlapping note in measure ${measureNumber}, voice ${voice}.`,
+            `Skipped an overlapping note in measure ${measure.number}, voice ${voice}.`,
           ),
         );
         return;
       }
 
       if (segment.startBeat > cursor + EPSILON) {
-        children.push(makeRestNote(segment.startBeat - cursor, voice, segment.staff));
+        children.push(makeRestNote(segment.startBeat - cursor, voice, segment.staff, divisions));
       }
 
       if (lastDynamicCode !== segment.dynamicCode) {
@@ -456,24 +801,19 @@ const makeMeasureNode = (
       }
 
       segment.notes.forEach((note, index) => {
-        children.push(makePitchedNote(note, segment, index > 0));
+        children.push(makePitchedNote(note, segment, index > 0, divisions));
       });
       cursor = segment.startBeat + segment.duration;
     });
 
-    if (cursor < DEFAULT_BEATS_PER_MEASURE - EPSILON) {
-      children.push(
-        makeRestNote(
-          DEFAULT_BEATS_PER_MEASURE - cursor,
-          voice,
-          voiceSegments.find((segment) => typeof segment.staff === "number")?.staff,
-        ),
-      );
+    const measureLength = measure.endBeat - measure.startBeat;
+    if (cursor < measureLength - EPSILON) {
+      children.push(makeRestNote(measureLength - cursor, voice, fallbackStaff, divisions));
     }
   });
 
   return {
-    node: { name: "measure", attributes: { number: String(measureNumber) }, children },
+    node: { name: "measure", attributes: { number: String(measure.number) }, children },
     diagnostics,
   };
 };
@@ -482,11 +822,18 @@ const buildPartNode = (
   partNumber: number,
   notes: readonly ScoreNoteEvent[],
   chords: readonly TimedChord[],
-  measureCount: number,
+  measures: readonly MeasureDefinition[],
+  options: Required<Pick<ScoreBuildOptions, "divisions">> &
+    Pick<ScoreBuildOptions, "parts" | "clefs" | "tempos" | "keys">,
 ): { node: ScoreXmlNode; diagnostics: ScoreBuildResult["diagnostics"] } => {
   const diagnostics: ScoreBuildResult["diagnostics"] = [];
-  const staffCount = Math.max(1, ...notes.map((note) => note.staff ?? 1));
-  const clefs = Array.from({ length: staffCount }, (_, index) => {
+  const partLayer = (options.parts ?? []).find((part) => part.part === partNumber);
+  const staffCount = Math.max(
+    1,
+    partLayer?.staffCount ?? 1,
+    ...notes.map((note) => note.staff ?? 1),
+  );
+  const inferredClefs = Array.from({ length: staffCount }, (_, index) => {
     const staff = index + 1;
     return {
       staff,
@@ -496,21 +843,41 @@ const buildPartNode = (
   const dynamicCodesByVoice = new Map<number, number | null>();
   const segmentsByMeasure = new Map<number, VoiceSegment[]>();
   chords.forEach((chord) => {
-    splitChordIntoMeasures(chord, DEFAULT_BEATS_PER_MEASURE).forEach(({ measure, segment }) => {
+    splitChordIntoMeasures(chord, measures).forEach(({ measure, segment }) => {
       const current = segmentsByMeasure.get(measure) ?? [];
       current.push(segment);
       segmentsByMeasure.set(measure, current);
     });
   });
 
-  const children = Array.from({ length: measureCount }, (_, index) => {
-    const measureNumber = index + 1;
+  let lastAttributesKey = "";
+  let lastTempoBpm: number | null = null;
+  const children = measures.map((measure) => {
+    const clefs = inferredClefs.map((fallback) =>
+      activeClefForStaff(options.clefs, partNumber, fallback.staff, measure.startBeat, fallback),
+    );
+    const key = activeKeyAt(options.keys, partNumber, measure.startBeat);
+    const attributesKey = JSON.stringify({
+      meter: [measure.meter.beats, measure.meter.beatType],
+      key: [key?.fifths ?? 0, key?.mode ?? ""],
+      clefs,
+      staffCount,
+    });
+    const includeAttributes = measure.number === 1 || attributesKey !== lastAttributesKey;
+    if (includeAttributes) lastAttributesKey = attributesKey;
+
+    const tempo = activeTempoAt(options.tempos, measure.startBeat);
+    const includeTempo = tempo && tempo.bpm !== lastTempoBpm;
+    if (tempo) lastTempoBpm = tempo.bpm;
+
     const { node, diagnostics: measureDiagnostics } = makeMeasureNode(
-      measureNumber,
-      segmentsByMeasure.get(measureNumber) ?? [],
-      measureNumber === 1 ? clefs : null,
+      measure,
+      segmentsByMeasure.get(measure.number) ?? [],
+      includeAttributes ? { clefs, key } : null,
       staffCount,
       dynamicCodesByVoice,
+      options.divisions,
+      includeTempo ? tempo : null,
     );
     diagnostics.push(...measureDiagnostics);
     return node;
@@ -524,9 +891,10 @@ const buildPartNode = (
 
 export const buildScoreFromNoteEvents = (
   events: readonly ScoreNoteEvent[],
-  options: { adapterId?: string; streamCount?: number } = {},
+  options: ScoreBuildOptions = {},
 ): ScoreBuildResult => {
   const adapterId = options.adapterId ?? SCORE_NOTE_EVENTS_ADAPTER_ID;
+  const divisions = Math.max(1, Math.round(options.divisions ?? DEFAULT_DIVISIONS));
   const { notes, diagnostics } = validateNoteEvents(events);
 
   if (notes.length === 0) {
@@ -547,14 +915,15 @@ export const buildScoreFromNoteEvents = (
   }
 
   const chords = assignVoices(groupChordEvents(notes));
-  const partNumbers = [...new Set(notes.map((note) => note.part ?? 1))].sort((a, b) => a - b);
-  const measureCount = Math.max(
-    1,
-    Math.ceil(
-      notes.reduce((max, note) => Math.max(max, note.time + note.duration), 0) /
-        DEFAULT_BEATS_PER_MEASURE,
-    ),
-  );
+  const partNumbers = [
+    ...new Set([
+      ...notes.map((note) => note.part ?? 1),
+      ...(options.parts ?? []).map((part) => part.part),
+    ]),
+  ].sort((a, b) => a - b);
+  const maxEndBeat = notes.reduce((max, note) => Math.max(max, note.time + note.duration), 0);
+  const measures = buildMeasureMap(maxEndBeat, options.meters, diagnostics);
+  const measureCount = measures.length;
 
   const partList: ScoreXmlNode = {
     name: "part-list",
@@ -572,7 +941,14 @@ export const buildScoreFromNoteEvents = (
       partNumber,
       partNotes,
       partChords,
-      measureCount,
+      measures,
+      {
+        divisions,
+        parts: options.parts,
+        clefs: options.clefs,
+        tempos: options.tempos,
+        keys: options.keys,
+      },
     );
     diagnostics.push(...partDiagnostics);
     return node;

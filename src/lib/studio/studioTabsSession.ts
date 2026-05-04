@@ -19,6 +19,12 @@ export type PersistedStudioTreeModel<TNode = unknown, TEdge = unknown> = Persist
   rootConnectorName: string;
 };
 
+export type StudioViewport = {
+  x: number;
+  y: number;
+  zoom: number;
+};
+
 export type PersistedStudioTabsSession<
   TTab extends StudioTabSessionTab = StudioTabSessionTab,
   TNode = unknown,
@@ -29,6 +35,7 @@ export type PersistedStudioTabsSession<
   activeTabId: string;
   tabGraphs: Record<string, PersistedStudioGraph<TNode, TEdge>>;
   connectorTreeModels: Record<string, PersistedStudioTreeModel<TNode, TEdge>>;
+  tabViewports?: Record<string, StudioViewport>;
 };
 
 export type RestoredStudioTabsSession<TNode = unknown, TEdge = unknown> = {
@@ -36,6 +43,7 @@ export type RestoredStudioTabsSession<TNode = unknown, TEdge = unknown> = {
   activeTabId: string;
   tabGraphs: Record<string, PersistedStudioGraph<TNode, TEdge>>;
   connectorTreeModels: Record<string, PersistedStudioTreeModel<TNode, TEdge>>;
+  tabViewports: Record<string, StudioViewport>;
 };
 
 type ReadableStorage = Pick<Storage, "getItem">;
@@ -98,6 +106,17 @@ export const sanitizePersistedTreeModel = <TNode, TEdge>(
   };
 };
 
+export const sanitizePersistedViewport = (value: unknown): StudioViewport | null => {
+  if (!isRecord(value)) return null;
+  const x = Number(value.x);
+  const y = Number(value.y);
+  const zoom = Number(value.zoom);
+  if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(zoom) || zoom <= 0) {
+    return null;
+  }
+  return { x, y, zoom };
+};
+
 export const readStudioTabsSession = (
   storage: ReadableStorage | null | undefined,
   key = STUDIO_TABS_SESSION_STORAGE_KEY,
@@ -120,12 +139,14 @@ export const buildStudioTabsSessionPayload = <TTab extends StudioTabSessionTab, 
   activeTabId,
   tabGraphs,
   connectorTreeModels,
+  tabViewports,
   version = STUDIO_TABS_SESSION_VERSION,
 }: {
   tabs: readonly TTab[];
   activeTabId: string;
   tabGraphs: Iterable<readonly [string, PersistedStudioGraph<TNode, TEdge>]>;
   connectorTreeModels: Iterable<readonly [string, PersistedStudioTreeModel<TNode, TEdge>]>;
+  tabViewports?: Iterable<readonly [string, StudioViewport]>;
   version?: number;
 }): PersistedStudioTabsSession<StudioTabSessionTab, TNode, TEdge> => {
   const graphSnapshots: Record<string, PersistedStudioGraph<TNode, TEdge>> = {};
@@ -142,6 +163,12 @@ export const buildStudioTabsSessionPayload = <TTab extends StudioTabSessionTab, 
     });
   }
 
+  const viewportSnapshots: Record<string, StudioViewport> = {};
+  for (const [tabId, viewport] of tabViewports ?? []) {
+    const sanitized = sanitizePersistedViewport(viewport);
+    if (sanitized) viewportSnapshots[tabId] = sanitized;
+  }
+
   return {
     version,
     tabs: tabs.map((tab) => ({
@@ -152,6 +179,7 @@ export const buildStudioTabsSessionPayload = <TTab extends StudioTabSessionTab, 
     activeTabId,
     tabGraphs: graphSnapshots,
     connectorTreeModels: treeModelSnapshots,
+    tabViewports: viewportSnapshots,
   };
 };
 
@@ -165,6 +193,7 @@ export const restoreStudioTabsSessionPayload = <TNode, TEdge>(
   const tabIds = new Set(restoredTabs.map((tab) => tab.id));
   const tabGraphs: Record<string, PersistedStudioGraph<TNode, TEdge>> = {};
   const connectorTreeModels: Record<string, PersistedStudioTreeModel<TNode, TEdge>> = {};
+  const tabViewports: Record<string, StudioViewport> = {};
 
   restoredTabs.forEach((tab) => {
     tabGraphs[tab.id] = { nodes: [], edges: [] };
@@ -188,6 +217,14 @@ export const restoreStudioTabsSessionPayload = <TNode, TEdge>(
     connectorTreeModels[tabId] = model;
   });
 
+  const persistedViewports = isRecord(persisted.tabViewports) ? persisted.tabViewports : {};
+  Object.entries(persistedViewports).forEach(([tabId, viewportRaw]) => {
+    if (!tabIds.has(tabId)) return;
+    const viewport = sanitizePersistedViewport(viewportRaw);
+    if (!viewport) return;
+    tabViewports[tabId] = viewport;
+  });
+
   // Keep connector tree behavior for particle tabs even if only graph snapshots were persisted.
   restoredTabs.forEach((tab) => {
     if (!tab.particleId || connectorTreeModels[tab.id]) return;
@@ -205,5 +242,6 @@ export const restoreStudioTabsSessionPayload = <TNode, TEdge>(
     activeTabId: tabIds.has(persisted.activeTabId) ? persisted.activeTabId : restoredTabs[0].id,
     tabGraphs,
     connectorTreeModels,
+    tabViewports,
   };
 };

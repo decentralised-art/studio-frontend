@@ -292,6 +292,15 @@ const createDimensionNode = (
   };
 };
 
+const estimateConnectorTreeNodeHeight = (node: ConnectorTreeNode): number => {
+  if (node.data.kind === "connector") {
+    const dimensions = Math.max(1, Math.round(node.data.dimensions ?? 1));
+    return 220 + Math.max(0, dimensions - 1) * 42;
+  }
+  if (node.data.kind === "condition") return 96;
+  return 90;
+};
+
 export const buildConnectorTreeGraph = ({
   connectorRegistry,
   rootConnectorName,
@@ -329,7 +338,7 @@ export const buildConnectorTreeGraph = ({
   const treeInfo = new Map<string, { depth: number; children: string[] }>();
   const conditionParentById = new Map<string, string>();
   const horizontalSpacing = 380;
-  const verticalSpacing = 340;
+  const fallbackVerticalSpacing = 340;
   let leafCursor = 0;
   let riPositionCursor = 0;
 
@@ -392,7 +401,7 @@ export const buildConnectorTreeGraph = ({
       id,
       type: "particle",
       draggable: true,
-      position: { x: origin.x, y: origin.y + depth * verticalSpacing },
+      position: { x: origin.x, y: origin.y + depth * fallbackVerticalSpacing },
       data: {
         label: kind === "cycle" ? "Connector cycle" : "Loading connector...",
         kind: "particle",
@@ -442,7 +451,7 @@ export const buildConnectorTreeGraph = ({
       id: connectorId,
       type: "connector",
       draggable: true,
-      position: { x: origin.x, y: origin.y + input.depth * verticalSpacing },
+      position: { x: origin.x, y: origin.y + input.depth * fallbackVerticalSpacing },
       data: {
         label: labelForConnector(connectorName),
         kind: "connector",
@@ -478,7 +487,7 @@ export const buildConnectorTreeGraph = ({
         id: conditionNodeId,
         type: "condition",
         draggable: true,
-        position: { x: origin.x, y: origin.y + input.depth * verticalSpacing - 120 },
+        position: { x: origin.x, y: origin.y + input.depth * fallbackVerticalSpacing - 120 },
         data: {
           label: def.conditionName,
           kind: "condition",
@@ -714,11 +723,33 @@ export const buildConnectorTreeGraph = ({
   });
 
   const connectorPositionById = new Map<string, { x: number; y: number }>();
+  const graphNodeById = new Map<string, ConnectorTreeNode>();
+  graphNodes.forEach((node) => graphNodeById.set(node.id, node));
+
+  const rowHeightByDepth = new Map<number, number>();
+  treeInfo.forEach((info, nodeId) => {
+    const node = graphNodeById.get(nodeId);
+    if (!node) return;
+    rowHeightByDepth.set(
+      info.depth,
+      Math.max(rowHeightByDepth.get(info.depth) ?? 0, estimateConnectorTreeNodeHeight(node)),
+    );
+  });
+
+  const rowYByDepth = new Map<number, number>();
+  const maxDepth = Math.max(0, ...Array.from(rowHeightByDepth.keys()));
+  const rowGap = 140;
+  let cursorY = origin.y;
+  for (let depth = 0; depth <= maxDepth; depth += 1) {
+    rowYByDepth.set(depth, cursorY);
+    cursorY += (rowHeightByDepth.get(depth) ?? 190) + rowGap;
+  }
+
   graphNodes.forEach((node) => {
     const info = treeInfo.get(node.id);
     if (info) {
       const x = (xByNodeId.get(node.id) ?? origin.x) + xShift;
-      const y = origin.y + info.depth * verticalSpacing;
+      const y = rowYByDepth.get(info.depth) ?? origin.y + info.depth * fallbackVerticalSpacing;
       node.position = { x, y };
       if (node.data.kind === "connector") {
         connectorPositionById.set(node.id, { x, y });
@@ -752,8 +783,6 @@ export const buildConnectorTreeGraph = ({
     };
   });
 
-  const graphNodeById = new Map<string, ConnectorTreeNode>();
-  graphNodes.forEach((node) => graphNodeById.set(node.id, node));
   graphNodes.forEach((node) => {
     if (node.data.kind !== "connector" || !node.data.fromNetwork) return;
     const info = treeInfo.get(node.id);

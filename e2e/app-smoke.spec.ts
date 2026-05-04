@@ -74,8 +74,139 @@ const stubRemoteApis = async (
       },
     },
   });
+  const terminalScoreConnector = (name: string, formatHash: string) => ({
+    name,
+    owner: fixtureAddress,
+    format_hash: formatHash,
+    condition_name: "",
+    condition_args: [],
+    static_ri: {},
+    dimensions: [
+      {
+        composite: null,
+        transformations: [{ name: "add", args: [1] }],
+      },
+    ],
+  });
+  const collectorScoreConnector = (name: string, formatHash: string, composites: string[]) => ({
+    name,
+    owner: fixtureAddress,
+    format_hash: formatHash,
+    condition_name: "",
+    condition_args: [],
+    static_ri: {},
+    dimensions: composites.map((composite) => ({
+      composite,
+      transformations: [{ name: "add", args: [1] }],
+      bindings: {},
+    })),
+  });
+  const openSlotScoreConnector = (name: string, formatHash: string, dimensions: number) => ({
+    name,
+    owner: fixtureAddress,
+    format_hash: formatHash,
+    condition_name: "",
+    condition_args: [],
+    static_ri: {},
+    dimensions: Array.from({ length: dimensions }, () => ({
+      composite: null,
+      transformations: [{ name: "add", args: [1] }],
+      bindings: {},
+    })),
+  });
+  const scoreConnectors: Record<string, object> = {
+    test_full_score_empty_100604052026: collectorScoreConnector(
+      "test_full_score_empty_100604052026",
+      "0x637d49f0ec85ec68c9abfedb750881d641ebab0bbbe046db6341b128edc42dae",
+      ["score_full_v2"],
+    ),
+    score_full_v2: collectorScoreConnector(
+      "score_full_v2",
+      "0x637d49f0ec85ec68c9abfedb750881d641ebab0bbbe046db6341b128edc42dae",
+      [
+        "score_parts_v2",
+        "score_meter_v2",
+        "score_clefs_v2",
+        "score_tempo_v2",
+        "score_key_v2",
+        "score_notes_v1",
+        "score_articulations_v1",
+        "score_slurs_v1",
+      ],
+    ),
+    score_parts_v2: collectorScoreConnector(
+      "score_parts_v2",
+      "0x9ed0ef3e3aa74c0f4c7cf686947c7d87e98ab96f1829d742d834f568a8649e69",
+      ["score_part", "score_staff_count"],
+    ),
+    score_meter_v2: collectorScoreConnector(
+      "score_meter_v2",
+      "0x30bf53a39f0173459fbc426e731a0f93d92b6bab2d8a14f37d2b84f6a427f891",
+      ["score_meter_time_tick", "score_beats", "score_beat_type"],
+    ),
+    score_clefs_v2: collectorScoreConnector(
+      "score_clefs_v2",
+      "0xb7b53ff86e20bd391efe43a3da33bf1c7c19e00ce93a46a2394def287f1cabb9",
+      [
+        "score_clef_time_tick",
+        "score_part",
+        "score_staff",
+        "score_clef_sign_code",
+        "score_clef_line",
+      ],
+    ),
+    score_tempo_v2: collectorScoreConnector(
+      "score_tempo_v2",
+      "0x7c3feb4f8faa57e3e5950ea982e24aeabaab504a774d2ba7e946cb2266e8c6db",
+      ["score_tempo_time_tick", "score_tempo_bpm"],
+    ),
+    score_key_v2: collectorScoreConnector(
+      "score_key_v2",
+      "0xb5de85796928dc02bacbbd117de5b25f7277d670d37df3a50b5937da2d7343ab",
+      ["score_key_time_tick", "score_key_fifths", "score_key_mode_code", "score_part"],
+    ),
+    score_notes_v1: openSlotScoreConnector(
+      "score_notes_v1",
+      "0xc9ea7ced7294c7b4ec0dfe5eebdb36ca1fe082d81ba79a1fc59f244530f99eca",
+      9,
+    ),
+    score_articulations_v1: openSlotScoreConnector(
+      "score_articulations_v1",
+      "0x4b4ff5b5495d7cec306e7c4a6a423ab1d4ba857ba62886c07d4773ba963885ce",
+      3,
+    ),
+    score_slurs_v1: openSlotScoreConnector(
+      "score_slurs_v1",
+      "0xefa4f226e9e87d8c40856130ba76cc86ed711baa10deba0f264f88d082d4fd8f",
+      4,
+    ),
+    score_event_id: terminalScoreConnector("score_event_id", "0x0001"),
+    score_onset: terminalScoreConnector("score_onset", "0x0002"),
+    score_duration: terminalScoreConnector("score_duration", "0x0003"),
+    score_pitch: terminalScoreConnector("score_pitch", "0x0004"),
+    score_dynamic_code: terminalScoreConnector("score_dynamic_code", "0x0005"),
+    score_part: terminalScoreConnector("score_part", "0x0006"),
+    score_staff: terminalScoreConnector("score_staff", "0x0007"),
+    score_voice: terminalScoreConnector("score_voice", "0x0008"),
+    score_staff_count: terminalScoreConnector("score_staff_count", "0x0009"),
+    score_meter_time_tick: terminalScoreConnector("score_meter_time_tick", "0x0010"),
+    score_beats: terminalScoreConnector("score_beats", "0x0011"),
+    score_beat_type: terminalScoreConnector("score_beat_type", "0x0012"),
+    score_clef_time_tick: terminalScoreConnector("score_clef_time_tick", "0x0013"),
+    score_clef_sign_code: terminalScoreConnector("score_clef_sign_code", "0x0014"),
+    score_clef_line: terminalScoreConnector("score_clef_line", "0x0015"),
+    score_tempo_time_tick: terminalScoreConnector("score_tempo_time_tick", "0x0016"),
+    score_tempo_bpm: terminalScoreConnector("score_tempo_bpm", "0x0017"),
+    score_key_time_tick: terminalScoreConnector("score_key_time_tick", "0x0018"),
+    score_key_fifths: terminalScoreConnector("score_key_fifths", "0x0019"),
+    score_key_mode_code: terminalScoreConnector("score_key_mode_code", "0x0020"),
+    score_articulation_code: terminalScoreConnector("score_articulation_code", "0x0021"),
+    score_placement: terminalScoreConnector("score_placement", "0x0022"),
+    score_slur_number: terminalScoreConnector("score_slur_number", "0x0023"),
+    score_slur_type: terminalScoreConnector("score_slur_type", "0x0024"),
+  };
 
-  await page.route("https://api.decentralised.art/**", async (route) => {
+  await page.route(/.*\/(?:services|chain)\/.*/, async (route) => {
     const url = route.request().url();
 
     if (url.includes("/services/auth/me")) {
@@ -226,6 +357,25 @@ const stubRemoteApis = async (
               },
             },
             {
+              feed_id: "feed-full-score",
+              event_type: "connector_added",
+              status: "safe",
+              visible: true,
+              tx_hash: "0xf05",
+              block_number: 1,
+              tx_index: 5,
+              log_index: 0,
+              history_cursor: "0000000000000001:0005:0000",
+              created_at_ms: 500,
+              updated_at_ms: 500,
+              projector_version: 1,
+              payload: {
+                type: "connector",
+                name: "test_full_score_empty_100604052026",
+                owner: fixtureAddress,
+              },
+            },
+            {
               feed_id: "feed-add",
               event_type: "transformation_added",
               status: "safe",
@@ -258,6 +408,20 @@ const stubRemoteApis = async (
         body: JSON.stringify([]),
       });
       return;
+    }
+
+    const scoreConnectorMatch = url.match(/\/chain\/connector\/([^/?#]+)/);
+    if (scoreConnectorMatch) {
+      const connectorName = decodeURIComponent(scoreConnectorMatch[1]);
+      const connector = scoreConnectors[connectorName];
+      if (connector) {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(connector),
+        });
+        return;
+      }
     }
 
     if (url.includes("/chain/connector/unlisted_connector")) {
@@ -537,6 +701,120 @@ const seedRestoredScorePluginSession = async (page: Page) => {
   });
 };
 
+const seedRawFullScorePluginSession = async (page: Page) => {
+  await page.addInitScript(() => {
+    const values = Array.from({ length: 12 }, (_, index) => index);
+    const stream = (path: string) => ({
+      feature_path: `/test_full_score_empty_100604052026:0/score_full_v2:${path}`,
+      data: values,
+    });
+    const rootNode = {
+      id: "connector-raw-full-score-restored",
+      type: "connector",
+      draggable: true,
+      position: { x: 280, y: 120 },
+      data: {
+        label: "test_full_score_empty_100604052026",
+        kind: "connector",
+        dimensions: 1,
+        connectorRows: [{ dimension: 1, transformations: ["add (1)"] }],
+        conditionLabel: null,
+        sourceId: "feature-test_full_score_empty_100604052026",
+        networkId: "test_full_score_empty_100604052026",
+        fromNetwork: true,
+        tabRoot: true,
+        hideOutlets: false,
+        riPosition: 0,
+        riStart: 0,
+        riShift: 0,
+        riLocked: false,
+      },
+    };
+    const pluginNode = {
+      id: "plugin-music-score-v1-raw-full-score",
+      type: "plugin",
+      draggable: true,
+      position: { x: 280, y: 420 },
+      data: {
+        label: "Music Score",
+        kind: "plugin",
+        sourceId: "music-score-v1",
+        fromNetwork: true,
+        pluginTargets: ["test_full_score_empty_100604052026"],
+        pluginData: {
+          pluginId: "music-score-v1",
+          connectorTargets: ["test_full_score_empty_100604052026"],
+          streams: [
+            stream("0/score_parts_v2:0/score_part:0"),
+            stream("0/score_parts_v2:1/score_staff_count:0"),
+            stream("1/score_meter_v2:0/score_meter_time_tick:0"),
+            stream("1/score_meter_v2:1/score_beats:0"),
+            stream("1/score_meter_v2:2/score_beat_type:0"),
+            stream("2/score_clefs_v2:0/score_clef_time_tick:0"),
+            stream("2/score_clefs_v2:1/score_part:0"),
+            stream("2/score_clefs_v2:2/score_staff:0"),
+            stream("2/score_clefs_v2:3/score_clef_sign_code:0"),
+            stream("2/score_clefs_v2:4/score_clef_line:0"),
+            stream("3/score_tempo_v2:0/score_tempo_time_tick:0"),
+            stream("3/score_tempo_v2:1/score_tempo_bpm:0"),
+            stream("4/score_key_v2:0/score_key_time_tick:0"),
+            stream("4/score_key_v2:1/score_key_fifths:0"),
+            stream("4/score_key_v2:2/score_key_mode_code:0"),
+            stream("4/score_key_v2:3/score_part:0"),
+            stream("5/score_notes_v1:0"),
+            stream("5/score_notes_v1:1"),
+            stream("5/score_notes_v1:2"),
+            stream("5/score_notes_v1:3"),
+            stream("5/score_notes_v1:4"),
+            stream("5/score_notes_v1:5"),
+            stream("5/score_notes_v1:6"),
+            stream("5/score_notes_v1:7"),
+            stream("5/score_notes_v1:8"),
+          ],
+          midiGroups: [],
+        },
+      },
+    };
+    const pluginEdge = {
+      id: "edge-plugin-music-score-v1-raw-full-score",
+      source: pluginNode.id,
+      sourceHandle: "out",
+      target: rootNode.id,
+      targetHandle: "plugin-in",
+      label: "plugin",
+      data: { relation: "plugin", pluginId: "music-score-v1" },
+    };
+
+    window.sessionStorage.setItem(
+      "dcn_studio_tabs_session_v1",
+      JSON.stringify({
+        version: 1,
+        tabs: [
+          {
+            id: "tab-raw-full-score",
+            label: "test_full_score_empty_100604052026",
+            particleId: "test_full_score_empty_100604052026",
+          },
+        ],
+        activeTabId: "tab-raw-full-score",
+        tabGraphs: {
+          "tab-raw-full-score": {
+            nodes: [rootNode, pluginNode],
+            edges: [pluginEdge],
+          },
+        },
+        connectorTreeModels: {
+          "tab-raw-full-score": {
+            rootConnectorName: "test_full_score_empty_100604052026",
+            nodes: [rootNode],
+            edges: [],
+          },
+        },
+      }),
+    );
+  });
+};
+
 const seedMovableTemplateConnectorSession = async (page: Page) => {
   await page.addInitScript(() => {
     const makeConnector = (
@@ -714,6 +992,71 @@ test("renders the Studio workspace shell", async ({ page }) => {
   assertNoPageErrors();
 });
 
+test("opens new connector tabs with a reset root-focused viewport", async ({ page }) => {
+  const assertNoPageErrors = collectPageErrors(page);
+  await stubRemoteApis(page);
+  await authenticateFixtureSession(page);
+
+  await page.goto("/studio");
+
+  const canvas = page.getByRole("application", { name: "Flow canvas" });
+  await expect(canvas).toBeVisible();
+  await expect(
+    page.locator(".connector-node").filter({ hasText: "Untitled Connector" }),
+  ).toBeVisible();
+
+  const viewport = page.locator(".svelte-flow__viewport");
+  const getViewportScale = async () =>
+    viewport.evaluate((element) => {
+      const transform = window.getComputedStyle(element).transform;
+      if (!transform || transform === "none") return 1;
+      return new DOMMatrixReadOnly(transform).a;
+    });
+
+  const canvasBox = await canvas.boundingBox();
+  if (!canvasBox) throw new Error("Expected Studio canvas to have a bounding box.");
+  await page.mouse.move(canvasBox.x + canvasBox.width / 2, canvasBox.y + canvasBox.height / 2);
+  await page.mouse.wheel(0, 2200);
+  await expect.poll(getViewportScale, { timeout: 5_000 }).toBeLessThan(0.85);
+
+  await page.getByRole("button", { name: "Create new connector tab" }).click();
+
+  const newRoot = page.locator(".connector-node").filter({ hasText: "Untitled Connector 2" });
+  await expect(newRoot).toBeVisible();
+  await expect.poll(getViewportScale, { timeout: 5_000 }).toBeGreaterThan(0.95);
+  await expect(newRoot).toBeInViewport();
+
+  await page.getByRole("tab", { name: /Untitled Connector in-progress/ }).click();
+  await expect.poll(getViewportScale, { timeout: 5_000 }).toBeLessThan(0.85);
+
+  await page.getByRole("tab", { name: /Untitled Connector 2 in-progress/ }).click();
+  await expect.poll(getViewportScale, { timeout: 5_000 }).toBeGreaterThan(0.95);
+  assertNoPageErrors();
+});
+
+test("attaches plugins to the draft root connector", async ({ page }) => {
+  const assertNoPageErrors = collectPageErrors(page);
+  await stubRemoteApis(page);
+  await authenticateFixtureSession(page);
+
+  await page.goto("/studio");
+  await page.getByRole("button", { name: "Plugins", exact: true }).click();
+
+  const musicScorePlugin = page.locator(".plugin-card").filter({ hasText: "Music Score" });
+  await musicScorePlugin.getByRole("button", { name: "+" }).click();
+
+  await expect(page.locator(".plugins-feedback")).toContainText(
+    "Connected 'Music Score' to 'untitled-connector'.",
+  );
+  await expect(page.locator(".plugin-node").filter({ hasText: "Music Score" })).toContainText(
+    "connected to untitled-connector",
+  );
+  await expect(
+    page.locator('.svelte-flow__edge[data-id^="edge-plugin-music-score-v1"]'),
+  ).toHaveCount(1);
+  assertNoPageErrors();
+});
+
 test("renders the resolvable saved connector toolbox in Studio", async ({ page }) => {
   const assertNoPageErrors = collectPageErrors(page);
   await stubRemoteApis(page);
@@ -731,6 +1074,94 @@ test("renders the resolvable saved connector toolbox in Studio", async ({ page }
   await expect(page.getByText("test_random_add_connector_20260420_01")).toHaveCount(0);
   await expect(page.getByText("score-weave")).toHaveCount(0);
   await expect(page.getByText("aurora-still")).toHaveCount(0);
+  assertNoPageErrors();
+});
+
+test("inserts Full Score templates recursively without attaching or replacing the root", async ({
+  page,
+}) => {
+  const assertNoPageErrors = collectPageErrors(page);
+  await stubRemoteApis(page);
+  await authenticateFixtureSession(page);
+
+  await page.goto("/studio");
+  await page.getByRole("button", { name: "Templates", exact: true }).click();
+  await page.locator(".template-plugin-picker select").selectOption("music-score-v1");
+
+  const fullScoreTemplate = page.locator(".template-card").filter({ hasText: "Full Score" });
+  await expect(fullScoreTemplate).toBeVisible();
+  await fullScoreTemplate.getByRole("button", { name: "+" }).click();
+
+  await expect(page.locator(".connector-node").filter({ hasText: "score_full_v2" })).toHaveCount(1);
+  await expect(page.locator(".connector-node").filter({ hasText: "score_meter_v2" })).toHaveCount(
+    1,
+  );
+  await expect(
+    page.locator(".connector-node").filter({ hasText: "score_meter_time_tick" }),
+  ).toHaveCount(1);
+  await expect(page.locator(".connector-node").filter({ hasText: "score_tempo_bpm" })).toHaveCount(
+    1,
+  );
+  await expect(page.locator(".connector-node").filter({ hasText: "score_key_fifths" })).toHaveCount(
+    1,
+  );
+  await expect(page.locator(".connector-node").filter({ hasText: "score_event_id" })).toHaveCount(
+    3,
+  );
+  await expect(page.locator(".connector-node").filter({ hasText: "score_onset" })).toHaveCount(1);
+  await expect(page.locator(".connector-node").filter({ hasText: "score_duration" })).toHaveCount(
+    1,
+  );
+  await expect(page.locator(".connector-node").filter({ hasText: "score_pitch" })).toHaveCount(1);
+  await expect(
+    page.locator(".connector-node").filter({ hasText: "score_articulation_code" }),
+  ).toHaveCount(1);
+  await expect(page.locator(".connector-node").filter({ hasText: "score_slur_type" })).toHaveCount(
+    1,
+  );
+  await expect(
+    page.locator(".connector-node").filter({ hasText: "Untitled Connector" }),
+  ).toHaveCount(1);
+
+  const scoreFullNode = page.locator(".connector-node").filter({ hasText: "score_full_v2" });
+  const scoreMeterNode = page.locator(".connector-node").filter({ hasText: "score_meter_v2" });
+  const scoreNotesNode = page.locator(".connector-node").filter({ hasText: "score_notes_v1" });
+  const scoreMeterTickNode = page
+    .locator(".connector-node")
+    .filter({ hasText: "score_meter_time_tick" });
+  const scorePitchNode = page.locator(".connector-node").filter({ hasText: "score_pitch" });
+
+  const getRequiredBox = async (locator: Locator, label: string) => {
+    const box = await locator.boundingBox();
+    if (!box) throw new Error(`Expected ${label} to have a bounding box.`);
+    return box;
+  };
+
+  await expect
+    .poll(
+      async () => {
+        const root = await getRequiredBox(scoreFullNode, "score_full_v2");
+        const meter = await getRequiredBox(scoreMeterNode, "score_meter_v2");
+        const notes = await getRequiredBox(scoreNotesNode, "score_notes_v1");
+        const meterTick = await getRequiredBox(scoreMeterTickNode, "score_meter_time_tick");
+        const pitch = await getRequiredBox(scorePitchNode, "score_pitch");
+        const levelOneYSpread = Math.abs(meter.y - notes.y);
+        const levelTwoYSpread = Math.abs(meterTick.y - pitch.y);
+        return (
+          root.y < meter.y - 20 &&
+          root.y < notes.y - 20 &&
+          levelOneYSpread < 12 &&
+          meter.y < meterTick.y - 20 &&
+          notes.y < pitch.y - 20 &&
+          levelTwoYSpread < 12
+        );
+      },
+      { timeout: 5_000 },
+    )
+    .toBe(true);
+
+  await expect(scoreFullNode).toBeInViewport();
+  await expect(page.locator(".plugin-node")).toHaveCount(0);
   assertNoPageErrors();
 });
 
@@ -771,6 +1202,44 @@ test("opens and adds a Studio Network connector discovered from the feed", async
   await expect(page.getByRole("tab", { name: /profile_connector/ })).toBeVisible();
   expect(remoteApis.chainFeedRequests.some((url) => url.includes("/chain/feed"))).toBe(true);
   expect(remoteApis.chainAccountRequests).toEqual([]);
+  assertNoPageErrors();
+});
+
+test("loads deployed score template connector trees with semantic slot nodes", async ({ page }) => {
+  const assertNoPageErrors = collectPageErrors(page);
+  await stubRemoteApis(page);
+  await authenticateFixtureSession(page);
+
+  await page.goto("/studio");
+
+  const fullScoreCard = page
+    .getByRole("listitem")
+    .filter({ hasText: "test_full_score_empty_100604052026" })
+    .first();
+  await expect(fullScoreCard).toBeVisible({ timeout: 15_000 });
+  await fullScoreCard.getByTitle("Add to flow").click();
+
+  await expect(
+    page.locator(".connector-node").filter({ hasText: "test_full_score_empty_100604052026" }),
+  ).toHaveCount(1);
+  await expect(page.locator(".connector-node").filter({ hasText: "score_full_v2" })).toHaveCount(1);
+  await expect(page.locator(".connector-node").filter({ hasText: "score_notes_v1" })).toHaveCount(
+    1,
+  );
+  await expect(page.locator(".connector-node").filter({ hasText: "score_event_id" })).toHaveCount(
+    3,
+  );
+  await expect(page.locator(".connector-node").filter({ hasText: "score_onset" })).toHaveCount(1);
+  await expect(page.locator(".connector-node").filter({ hasText: "score_duration" })).toHaveCount(
+    1,
+  );
+  await expect(page.locator(".connector-node").filter({ hasText: "score_pitch" })).toHaveCount(1);
+  await expect(
+    page.locator(".connector-node").filter({ hasText: "score_articulation_code" }),
+  ).toHaveCount(1);
+  await expect(page.locator(".connector-node").filter({ hasText: "score_slur_type" })).toHaveCount(
+    1,
+  );
   assertNoPageErrors();
 });
 
@@ -895,6 +1364,22 @@ test("renders restored Music Score plugin notation in Studio", async ({ page }) 
   await expect(restoredPlugin).toBeVisible();
   await expect(restoredPlugin.getByRole("button", { name: "Download MusicXML" })).toBeVisible();
   await expect(restoredPlugin.locator(".score-osmd svg")).toBeVisible({ timeout: 15_000 });
+  assertNoPageErrors();
+});
+
+test("renders raw full-score archetype output in the Music Score plugin", async ({ page }) => {
+  const assertNoPageErrors = collectPageErrors(page);
+  await stubRemoteApis(page);
+  await authenticateFixtureSession(page);
+  await seedRawFullScorePluginSession(page);
+
+  await page.goto("/studio");
+
+  const restoredPlugin = page.locator(".plugin-node").filter({ hasText: "Music Score" });
+  await expect(restoredPlugin).toBeVisible();
+  await expect(restoredPlugin.getByText(/notes .* measures .* parts/)).toBeVisible();
+  await expect(restoredPlugin.locator(".score-osmd svg")).toBeVisible({ timeout: 15_000 });
+  await expect(restoredPlugin.locator(".score-render-status.is-error")).toHaveCount(0);
   assertNoPageErrors();
 });
 

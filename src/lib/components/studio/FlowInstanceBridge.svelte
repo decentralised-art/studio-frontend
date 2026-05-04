@@ -9,12 +9,23 @@
     onReady?: (payload: {
       screenToFlowPosition: (client: { x: number; y: number }) => { x: number; y: number };
       getZoom: () => number;
-      fitView: (options?: { padding?: number; duration?: number }) => void;
+      setCenter: (
+        x: number,
+        y: number,
+        options?: { zoom?: number; duration?: number },
+      ) => Promise<boolean>;
+      fitView: (options?: {
+        padding?: number;
+        duration?: number;
+        minZoom?: number;
+        maxZoom?: number;
+        nodes?: { id: string }[];
+      }) => Promise<boolean>;
       clearSelection: () => void;
     }) => void;
   } = $props();
 
-  const { screenToFlowPosition, getZoom, fitView } = useSvelteFlow();
+  const { screenToFlowPosition, getZoom, setCenter, fitView } = useSvelteFlow();
   const store = useStore();
 
   const clearSelection = () => {
@@ -24,6 +35,6 @@
   };
 
   onMount(() => {
-    onReady?.({ screenToFlowPosition, getZoom, fitView, clearSelection });
+    onReady?.({ screenToFlowPosition, getZoom, setCenter, fitView, clearSelection });
   });
 </script>

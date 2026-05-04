@@ -27,15 +27,24 @@
   let renderMessage = $state("");
   let zoom = $state(0.82);
   let renderRunId = 0;
+  let loggedDiagnosticSignature = "";
   let osmd: OsmdInstance | null = null;
 
   const scoreData = $derived(runtimeData ? buildScorePluginRuntimeData(runtimeData) : null);
   const hasMusicXml = $derived(Boolean(scoreData?.musicXml));
   const diagnostics = $derived<ScoreDiagnostic[]>(scoreData?.diagnostics ?? []);
-  const visibleDiagnostics = $derived(diagnostics.slice(0, 5));
-  const hiddenDiagnosticCount = $derived(
-    Math.max(0, diagnostics.length - visibleDiagnostics.length),
-  );
+  const diagnosticSummaryText = $derived.by(() => {
+    if (diagnostics.length === 0) return "";
+    const errorCount = diagnostics.filter((diagnostic) => diagnostic.level === "error").length;
+    const warningCount = diagnostics.filter((diagnostic) => diagnostic.level === "warning").length;
+    const infoCount = diagnostics.length - errorCount - warningCount;
+    const parts = [
+      errorCount ? `${errorCount} error${errorCount === 1 ? "" : "s"}` : "",
+      warningCount ? `${warningCount} warning${warningCount === 1 ? "" : "s"}` : "",
+      infoCount ? `${infoCount} info` : "",
+    ].filter(Boolean);
+    return `${parts.join(" · ")} logged to browser console`;
+  });
   const statsText = $derived.by(() => {
     if (!scoreData) return "";
     const { stats } = scoreData;
@@ -48,10 +57,57 @@
   const zoomOut = () => (zoom = clampZoom(zoom - 0.08));
   const resetZoom = () => (zoom = 0.82);
 
+  const formatRenderError = (error: unknown): string => {
+    if (error instanceof Error && error.message) return error.message;
+    if (typeof error === "object" && error && "message" in error) {
+      const message = (error as { message?: unknown }).message;
+      if (typeof message === "string" && message.trim()) return message;
+    }
+    return "The score renderer could not load this MusicXML.";
+  };
+
+  const formatDiagnosticLog = (items: readonly ScoreDiagnostic[]) =>
+    items
+      .map((diagnostic, index) => {
+        const path = diagnostic.path ? ` path=${diagnostic.path}` : "";
+        return `${index + 1}. ${diagnostic.level.toUpperCase()} ${diagnostic.code}${path}: ${diagnostic.message}`;
+      })
+      .join("\n");
+
   const download = () => {
     if (!scoreData?.musicXml) return;
     downloadMusicXml(scoreData.musicXml, label);
   };
+
+  $effect(() => {
+    if (!browser || !scoreData || diagnostics.length === 0) {
+      loggedDiagnosticSignature = "";
+      return;
+    }
+
+    const signature = JSON.stringify({
+      label,
+      adapterId: scoreData.adapterId,
+      stats: scoreData.stats,
+      diagnostics,
+    });
+    if (signature === loggedDiagnosticSignature) return;
+    loggedDiagnosticSignature = signature;
+
+    const message = `[HyperMusic Score Plugin] ${diagnostics.length} score diagnostic(s) for ${label}`;
+    const payload = {
+      plugin: label,
+      adapterId: scoreData.adapterId,
+      stats: scoreData.stats,
+      diagnostics,
+    };
+    const copyableLog = `${message}\n${formatDiagnosticLog(diagnostics)}`;
+    if (diagnostics.some((diagnostic) => diagnostic.level === "error")) {
+      console.error(copyableLog, payload);
+    } else {
+      console.warn(copyableLog, payload);
+    }
+  });
 
   $effect(() => {
     const container = scoreContainer;
@@ -95,10 +151,12 @@
       } catch (error) {
         if (currentRunId !== renderRunId) return;
         renderStatus = "error";
-        renderMessage =
-          error instanceof Error
-            ? error.message
-            : "The score renderer could not load this MusicXML.";
+        renderMessage = formatRenderError(error);
+        console.error(`[HyperMusic Score Plugin] Renderer failed for ${label}`, {
+          plugin: label,
+          error,
+          message: renderMessage,
+        });
       }
     })();
   });
@@ -136,19 +194,9 @@
     </div>
   {/if}
 
-  {#if visibleDiagnostics.length}
-    <div class="score-diagnostics">
-      {#each visibleDiagnostics as diagnostic (`${diagnostic.code}-${diagnostic.message}-${diagnostic.path ?? ""}`)}
-        <div class={`score-diagnostic is-${diagnostic.level}`}>
-          <span>{diagnostic.level}</span>
-          {diagnostic.message}
-        </div>
-      {/each}
-      {#if hiddenDiagnosticCount > 0}
-        <div class="score-diagnostic">
-          + {hiddenDiagnosticCount} more issue{hiddenDiagnosticCount === 1 ? "" : "s"}
-        </div>
-      {/if}
+  {#if diagnosticSummaryText}
+    <div class="score-diagnostic-summary">
+      {diagnosticSummaryText}
     </div>
   {/if}
 </div>
@@ -201,12 +249,8 @@
     @apply mt-3 text-[0.55rem] uppercase tracking-[0.2em] text-white/40;
   }
 
-  .score-diagnostics {
+  .score-diagnostic-summary {
     @apply mt-2 space-y-1 rounded-md border border-amber-300/20 bg-amber-300/8 px-2 py-2 text-[0.5rem] leading-relaxed tracking-[0.12em] text-amber-100/85;
-  }
-
-  .score-diagnostic span {
-    @apply mr-1 font-semibold uppercase;
   }
 
   :global(:root[data-theme="light"] .score-meta),
@@ -237,7 +281,7 @@
     color: var(--text-primary) !important;
   }
 
-  :global(:root[data-theme="light"] .score-diagnostics) {
+  :global(:root[data-theme="light"] .score-diagnostic-summary) {
     background: rgba(217, 119, 6, 0.1) !important;
     border-color: rgba(217, 119, 6, 0.28) !important;
     color: #92400e !important;

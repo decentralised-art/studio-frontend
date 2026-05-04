@@ -50,6 +50,42 @@ export type ScoreSlurEvent = {
   sourcePath?: string;
 };
 
+export type ScoreMeterEvent = {
+  time: number;
+  beats: number;
+  beatType: number;
+  sourcePath?: string;
+};
+
+export type ScorePartEvent = {
+  part: number;
+  staffCount?: number;
+  sourcePath?: string;
+};
+
+export type ScoreClefEvent = {
+  time: number;
+  part: number;
+  staff: number;
+  sign: string;
+  line: number;
+  sourcePath?: string;
+};
+
+export type ScoreTempoEvent = {
+  time: number;
+  bpm: number;
+  sourcePath?: string;
+};
+
+export type ScoreKeyEvent = {
+  time: number;
+  part?: number;
+  fifths: number;
+  mode?: string;
+  sourcePath?: string;
+};
+
 export type ScoreNoteEvent = {
   eventId?: number;
   pitch: number;

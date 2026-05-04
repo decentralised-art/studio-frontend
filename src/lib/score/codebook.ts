@@ -36,6 +36,26 @@ const SCORE_PLACEMENT_BY_CODE: Record<number, "above" | "below"> = {
   1: "below",
 };
 
+const SCORE_CLEF_SIGN_BY_CODE: Record<number, string> = {
+  0: "G",
+  1: "F",
+  2: "C",
+  3: "percussion",
+};
+
+const SCORE_KEY_MODE_BY_CODE: Record<number, string> = {
+  0: "major",
+  1: "minor",
+  2: "none",
+  3: "dorian",
+  4: "phrygian",
+  5: "lydian",
+  6: "mixolydian",
+  7: "aeolian",
+  8: "ionian",
+  9: "locrian",
+};
+
 export const MUSICXML_ELEMENT_BY_CODE: Record<number, string> = {
   1: "score-partwise",
   2: "part-list",
@@ -252,6 +272,18 @@ export const resolvePlacement = (code: number): "above" | "below" | null => {
   if (enumValue === "above" || enumValue === "below") return enumValue;
   return SCORE_PLACEMENT_BY_CODE[normalized] ?? null;
 };
+
+export const resolveClefSign = (code: number): string | null => {
+  const normalized = normalizeScoreCode(code);
+  const enumValue = resolveMusicXmlEnumValue(normalized);
+  if (enumValue === "G" || enumValue === "F" || enumValue === "C" || enumValue === "percussion") {
+    return enumValue;
+  }
+  return SCORE_CLEF_SIGN_BY_CODE[normalized] ?? null;
+};
+
+export const resolveKeyMode = (code: number): string | null =>
+  SCORE_KEY_MODE_BY_CODE[normalizeScoreCode(code)] ?? null;
 
 export const isValidXmlName = (value: string): boolean =>
   /^[:A-Z_a-z][:A-Z_a-z0-9.-]*$/.test(value);
