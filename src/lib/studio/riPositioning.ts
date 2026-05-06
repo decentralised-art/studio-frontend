@@ -205,6 +205,15 @@ export const computeRiPositioning = (
 
     for (let dimIndex = 0; dimIndex < connector.dimensions.length; dimIndex += 1) {
       const dimension = connector.dimensions[dimIndex];
+      const dimensionPosition = currentPosition;
+      dimensions.push({
+        key: `${nodeKey}/d${dimIndex + 1}`,
+        nodeKey,
+        connectorName,
+        depth: input.depth,
+        dimensionIndex: dimIndex,
+        position: dimensionPosition,
+      });
 
       if (!dimension.composite) {
         const replacement = input.incomingBindings.get(openSlotId) ?? null;

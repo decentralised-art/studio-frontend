@@ -8,6 +8,8 @@ describe("runtime RI overrides", () => {
       id: "connector-root",
       data: {
         kind: "connector",
+        networkId: "root",
+        riPosition: 0,
         riStart: 0,
         riShift: 0,
         riLocked: false,
@@ -18,6 +20,8 @@ describe("runtime RI overrides", () => {
       id: "connector-root",
       data: {
         kind: "connector",
+        networkId: "root",
+        riPosition: 0,
         riStart: 12,
         riShift: 3,
         riLocked: true,
@@ -29,6 +33,8 @@ describe("runtime RI overrides", () => {
       id: "connector-root",
       data: {
         kind: "connector",
+        networkId: "root",
+        riPosition: 0,
         riStart: 12,
         riShift: 3,
         riLocked: true,
@@ -44,6 +50,62 @@ describe("runtime RI overrides", () => {
     );
 
     expect(result.data).toMatchObject({ riStart: 7, riShift: 0 });
+  });
+
+  it("ignores stale overrides for a different projected connector position", () => {
+    const projectedNode = {
+      id: "connector-reused",
+      data: {
+        kind: "connector",
+        networkId: "major_scale_steps",
+        riPosition: 5,
+        riStart: 0,
+        riShift: 0,
+        riLocked: false,
+      },
+    };
+    const result = mergeRuntimeRiOverridesIntoProjectedNode(projectedNode, {
+      id: "connector-reused",
+      data: {
+        kind: "connector",
+        networkId: "constant_value",
+        riPosition: 3,
+        riStart: 2520,
+        riShift: 0,
+        riLocked: true,
+      },
+    });
+
+    expect(result).toBe(projectedNode);
+  });
+
+  it("ignores stale overrides for a different RI target position", () => {
+    const projectedNode = {
+      id: "connector-reused",
+      data: {
+        kind: "connector",
+        networkId: "constant_value",
+        riPosition: 3,
+        riTargetPosition: 4,
+        riStart: 0,
+        riShift: 0,
+        riLocked: false,
+      },
+    };
+    const result = mergeRuntimeRiOverridesIntoProjectedNode(projectedNode, {
+      id: "connector-reused",
+      data: {
+        kind: "connector",
+        networkId: "constant_value",
+        riPosition: 3,
+        riTargetPosition: 6,
+        riStart: 2520,
+        riShift: 0,
+        riLocked: true,
+      },
+    });
+
+    expect(result).toBe(projectedNode);
   });
 
   it("ignores nodes that do not expose RI controls", () => {

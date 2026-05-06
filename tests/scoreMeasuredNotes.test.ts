@@ -132,7 +132,187 @@ describe("score measured-note adapter", () => {
     );
   });
 
-  it("maps deployed open score collector dimensions by position", () => {
+  it("builds notes from terminal score fields under any shared parent", () => {
+    const result = buildScoreFromMeasuredNoteStreams([
+      { feature_path: "/event1:0/score_onset:0", data: [0, quarter] },
+      { feature_path: "/event1:0/score_duration:0", data: [quarter, quarter] },
+      { feature_path: "/event1:0/score_pitch:0", data: [60, 62] },
+    ]);
+
+    expect(result?.tree).not.toBeNull();
+    expect(result?.stats.noteCount).toBe(2);
+    expect(result?.diagnostics.map((diagnostic) => diagnostic.code)).not.toContain(
+      "missing-measured-note-stream",
+    );
+    const musicXml = serializeScoreTreeToMusicXml(result!.tree!);
+    expect(musicXml).toContain("<step>C</step>");
+    expect(musicXml).toContain("<step>D</step>");
+  });
+
+  it("groups terminal score fields through shapers by their deepest complete ancestor", () => {
+    const result = buildScoreFromMeasuredNoteStreams([
+      { feature_path: "/major_scale_notes_layer:0/counter:0/score_event_id:0", data: [1, 2] },
+      {
+        feature_path: "/major_scale_notes_layer:0/score_quarter_note_tick_grid:0/score_onset:0",
+        data: [0, quarter],
+      },
+      {
+        feature_path: "/major_scale_notes_layer:0/constant_value:0/score_duration:0",
+        data: [quarter, quarter],
+      },
+      {
+        feature_path: "/major_scale_notes_layer:0/major_scale_steps:0/score_pitch:0",
+        data: [60, 62],
+      },
+    ]);
+
+    expect(result?.tree).not.toBeNull();
+    expect(result?.stats.noteCount).toBe(2);
+    expect(result?.diagnostics.map((diagnostic) => diagnostic.code)).not.toContain(
+      "missing-measured-note-stream",
+    );
+    const musicXml = serializeScoreTreeToMusicXml(result!.tree!);
+    expect(musicXml).toContain("<step>C</step>");
+    expect(musicXml).toContain("<step>D</step>");
+  });
+
+  it("groups terminal score fields connected to sibling dimensions of the same parent", () => {
+    const result = buildScoreFromMeasuredNoteStreams([
+      {
+        feature_path:
+          "/major_scale_score_version6_05052026:0/score_quarter_note_tick_grid:0/score_onset:0",
+        data: [0, quarter],
+      },
+      {
+        feature_path: "/major_scale_score_version6_05052026:1/constant_value:0/score_duration:0",
+        data: [quarter, quarter],
+      },
+      {
+        feature_path: "/major_scale_score_version6_05052026:2/major_scale_steps:0/score_pitch:0",
+        data: [60, 62],
+      },
+    ]);
+
+    expect(result?.tree).not.toBeNull();
+    expect(result?.stats.noteCount).toBe(2);
+    expect(result?.diagnostics.map((diagnostic) => diagnostic.code)).not.toContain(
+      "missing-measured-note-stream",
+    );
+    const musicXml = serializeScoreTreeToMusicXml(result!.tree!);
+    expect(musicXml).toContain("<step>C</step>");
+    expect(musicXml).toContain("<step>D</step>");
+  });
+
+  it("reads arbitrary value-generator names through the positional note schema", () => {
+    const streams: PtOutputFeature[] = [
+      { feature_path: "/positional_score:0/note_table:0/quarter_tick_grid:0", data: [0, quarter] },
+      {
+        feature_path: "/positional_score:0/note_table:1/constant_duration:0",
+        data: [quarter, quarter],
+      },
+      { feature_path: "/positional_score:0/note_table:2/scale_logic:0", data: [60, 62] },
+    ];
+    const result = buildScoreFromMeasuredNoteStreams(streams, ["positional_score"]);
+
+    expect(hasMeasuredNoteStreams(streams, ["positional_score"])).toBe(true);
+    expect(result?.tree).not.toBeNull();
+    expect(result?.stats.noteCount).toBe(2);
+    const musicXml = serializeScoreTreeToMusicXml(result!.tree!);
+    expect(musicXml).toContain("<step>C</step>");
+    expect(musicXml).toContain("<step>D</step>");
+  });
+
+  it("reads multiple positional note tables from one notes event set", () => {
+    const result = buildScoreFromMeasuredNoteStreams(
+      [
+        {
+          feature_path: "/positional_score:0/note_set:0/melody:0/onset_logic:0",
+          data: [0, quarter],
+        },
+        {
+          feature_path: "/positional_score:0/note_set:0/melody:1/duration_logic:0",
+          data: [quarter, quarter],
+        },
+        {
+          feature_path: "/positional_score:0/note_set:0/melody:2/pitch_logic:0",
+          data: [60, 62],
+        },
+        {
+          feature_path: "/positional_score:0/note_set:1/bass:0/onset_logic:0",
+          data: [0, quarter],
+        },
+        {
+          feature_path: "/positional_score:0/note_set:1/bass:1/duration_logic:0",
+          data: [quarter, quarter],
+        },
+        {
+          feature_path: "/positional_score:0/note_set:1/bass:2/pitch_logic:0",
+          data: [48, 50],
+        },
+      ],
+      ["positional_score"],
+    );
+
+    expect(result?.tree).not.toBeNull();
+    expect(result?.stats.noteCount).toBe(4);
+    const musicXml = serializeScoreTreeToMusicXml(result!.tree!);
+    expect(musicXml).toContain("<step>C</step>");
+    expect(musicXml).toContain("<octave>3</octave>");
+    expect(musicXml).toContain("<step>D</step>");
+  });
+
+  it("reads positional parts and meter layers when they are connected to the score root", () => {
+    const result = buildScoreFromMeasuredNoteStreams(
+      [
+        { feature_path: "/positional_score:0/note_table:0/onsets:0", data: [0] },
+        { feature_path: "/positional_score:0/note_table:1/durations:0", data: [quarter] },
+        { feature_path: "/positional_score:0/note_table:2/pitches:0", data: [60] },
+        { feature_path: "/positional_score:1/parts_table:0/part_ids:0", data: [1] },
+        { feature_path: "/positional_score:1/parts_table:1/staff_counts:0", data: [1] },
+        { feature_path: "/positional_score:2/meter_table:0/meter_time:0", data: [0] },
+        { feature_path: "/positional_score:2/meter_table:1/beats:0", data: [3] },
+        { feature_path: "/positional_score:2/meter_table:2/beat_types:0", data: [4] },
+      ],
+      ["positional_score"],
+    );
+
+    expect(result?.tree).not.toBeNull();
+    expect(result?.diagnostics.map((diagnostic) => diagnostic.code)).not.toContain(
+      "missing-score-meter",
+    );
+    const musicXml = serializeScoreTreeToMusicXml(result!.tree!);
+    expect(musicXml).toContain("<beats>3</beats>");
+    expect(musicXml).toContain("<beat-type>4</beat-type>");
+  });
+
+  it("preserves non-notatable tick durations instead of quantizing them", () => {
+    const result = buildScoreFromMeasuredNoteStreams([
+      {
+        feature_path:
+          "/major_scale_score_version6_05052026:0/score_quarter_note_tick_grid:0/score_onset:0",
+        data: [0, quarter],
+      },
+      {
+        feature_path: "/major_scale_score_version6_05052026:1/counter:0/score_duration:0",
+        data: [quarter, quarter + 1],
+      },
+      {
+        feature_path: "/major_scale_score_version6_05052026:2/major_scale_steps:0/score_pitch:0",
+        data: [60, 62],
+      },
+    ]);
+
+    expect(result?.tree).not.toBeNull();
+    expect(result?.stats.noteCount).toBe(2);
+    expect(result?.diagnostics.map((diagnostic) => diagnostic.code)).not.toContain(
+      "quantized-note-grid",
+    );
+    const musicXml = serializeScoreTreeToMusicXml(result!.tree!);
+    expect(musicXml).toContain("<duration>2520</duration>");
+    expect(musicXml).toContain("<duration>2521</duration>");
+  });
+
+  it("ignores bare open score collector dimensions with no connected slot or shaper", () => {
     const result = buildScoreFromMeasuredNoteStreams([
       { feature_path: "/score_full_v2:5/score_notes_v1:0", data: [1] },
       { feature_path: "/score_full_v2:5/score_notes_v1:1", data: [0] },
@@ -143,11 +323,30 @@ describe("score measured-note adapter", () => {
       { feature_path: "/score_full_v2:1/score_meter_v2:2/score_beat_type:0", data: [4] },
     ]);
 
+    expect(result).toBeNull();
+  });
+
+  it("maps shaped score collector dimensions by nearest collector position", () => {
+    const result = buildScoreFromMeasuredNoteStreams([
+      { feature_path: "/score_notes_v1:0/counter:0", data: [1, 2] },
+      { feature_path: "/score_notes_v1:1/score_quarter_note_tick_grid:0", data: [0, quarter] },
+      { feature_path: "/score_notes_v1:2/constant_value:0", data: [quarter, quarter] },
+      { feature_path: "/score_notes_v1:3/major_scale_steps:0", data: [60, 62] },
+      { feature_path: "/score_meter_v2:0/constant_value:0", data: [0] },
+      { feature_path: "/score_meter_v2:1/constant_value:0", data: [4] },
+      { feature_path: "/score_meter_v2:2/constant_value:0", data: [4] },
+      { feature_path: "/score_parts_v2:0/constant_value:0", data: [1] },
+      { feature_path: "/score_parts_v2:1/constant_value:0", data: [1] },
+    ]);
+
     expect(result?.tree).not.toBeNull();
-    expect(result?.stats.adapterId).toBe("music-measured-notes-v1");
-    expect(result?.stats.noteCount).toBe(1);
+    expect(result?.stats.noteCount).toBe(2);
+    expect(result?.diagnostics.map((diagnostic) => diagnostic.code)).not.toContain(
+      "missing-score-meter",
+    );
     const musicXml = serializeScoreTreeToMusicXml(result!.tree!);
     expect(musicXml).toContain("<step>C</step>");
+    expect(musicXml).toContain("<step>D</step>");
   });
 
   it("renders meter changes from the meter layer", () => {

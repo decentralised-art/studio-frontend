@@ -31,14 +31,26 @@ describe("connector tree overlay merging", () => {
   it("preserves RI overrides without re-adding stale projected connector trees", () => {
     const projected = {
       nodes: [
-        connectorNode("connector-root", { riStart: 0, riShift: 0, riLocked: false }),
+        connectorNode("connector-root", {
+          networkId: "root",
+          riPosition: 0,
+          riStart: 0,
+          riShift: 0,
+          riLocked: false,
+        }),
         connectorNode("connector-child"),
       ],
       edges: [edge("projected-edge", "connector-root", "connector-child")],
     };
     const overlay = {
       nodes: [
-        connectorNode("connector-root", { riStart: 12, riShift: 3, riLocked: true }),
+        connectorNode("connector-root", {
+          networkId: "root",
+          riPosition: 0,
+          riStart: 12,
+          riShift: 3,
+          riLocked: true,
+        }),
         connectorNode("old-connector-root"),
         connectorNode("old-connector-child"),
         connectorNode("plugin-midi", { kind: "plugin" }),
@@ -63,5 +75,42 @@ describe("connector tree overlay merging", () => {
       riLocked: true,
     });
     expect(merged.edges.map((item) => item.id)).toEqual(["projected-edge", "plugin-edge"]);
+  });
+
+  it("does not copy stale RI overrides onto a different projected connector", () => {
+    const projected = {
+      nodes: [
+        connectorNode("connector-reused", {
+          networkId: "major_scale_steps",
+          riPosition: 5,
+          riStart: 0,
+          riShift: 0,
+          riLocked: false,
+        }),
+      ],
+      edges: [],
+    };
+    const overlay = {
+      nodes: [
+        connectorNode("connector-reused", {
+          networkId: "constant_value",
+          riPosition: 3,
+          riStart: 2520,
+          riShift: 0,
+          riLocked: true,
+        }),
+      ],
+      edges: [],
+    };
+
+    const merged = mergeConnectorTreeProjectionWithOverlay(projected, overlay);
+
+    expect(merged.nodes[0]?.data).toMatchObject({
+      networkId: "major_scale_steps",
+      riPosition: 5,
+      riStart: 0,
+      riShift: 0,
+      riLocked: false,
+    });
   });
 });

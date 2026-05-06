@@ -10,29 +10,25 @@ The plugin accepts subformats from most specific to broadest:
    - Canonical MusicXML tree rows.
    - Best for full scores, multiple parts, text, articulations, directions, lyrics, and notation details.
 2. `music-measured-notes-v1`
-   - Layered score-template streams. Inside `score_notes_v1`, notes use global tick coordinates: `score_onset`, `score_duration`, `score_pitch`, plus optional `score_event_id`, `score_dynamic_code`, `score_part`, `score_voice`, and `score_staff`.
-   - Full score drafts should also include explicit global layers: `score_parts_v2`, `score_meter_v2`, `score_clefs_v2`, `score_tempo_v2`, and `score_key_v2`.
-   - `score_articulations_v1` and `score_slurs_v1` attach to notes by matching `score_event_id`.
-   - Legacy standalone measure-local streams (`score_measure`, `score_onset`, `score_duration`) are still accepted for compatibility outside `score_notes_v1`, but they are not the preferred composition model.
+   - Current Studio-authored scores use the positional schema rooted at the connector target: root D1 is notes, D2 parts, D3 meter, D4 clefs, D5 tempo, D6 key, D7 articulations, and D8 slurs.
+   - Inside a notes table, D1 is onset tick, D2 duration tick, D3 pitch, D4 event id, D5 part, D6 staff, D7 voice, and D8 dynamic code. Connector names under those slots are reusable value generators and do not define score meaning.
+   - Legacy terminal score-field streams are still accepted for compatibility. The minimal legacy note layer is any shared parent containing `score_onset`, `score_duration`, and `score_pitch`.
+   - Legacy `score_notes_v1` and `score_notes_v2` collectors remain accepted when their slots contain connected shapers or terminal score-field connectors.
+   - Legacy measure-local streams (`measure`, `onset`, `duration`, without the `score_` terminal prefix) are still accepted for compatibility, but they are not the preferred composition model.
 3. `music-note-events-v1`
    - Pitch/time/duration/velocity streams, currently shared with the MIDI plugin format.
    - Best for quick rendering of existing PTDV-compatible connectors.
 
-## Studio Templates
+## Studio Position Schema
 
-Templates are local editable arrangements of deployed connector archetypes. They insert ordinary on-chain connectors into the Studio flow; the arrangement itself remains a draft until the user deploys it.
+Studio no longer has score templates. The visible connector flow is the deploy source of truth, and the Music Score plugin interprets output with the position schema documented in
+[`studio-music-score-position-schema.md`](./studio-music-score-position-schema.md).
 
-- `score_full_v2`: slots `score_parts_v2`, `score_meter_v2`, `score_clefs_v2`, `score_tempo_v2`, `score_key_v2`, `score_notes_v1`, `score_articulations_v1`, and `score_slurs_v1`
-- `score_notes_v1`: slots `score_event_id`, `score_onset`, `score_duration`, `score_pitch`, `score_dynamic_code`, `score_part`, `score_staff`, and `score_voice`
-- `score_meter_v2`: slots `score_meter_time_tick`, `score_beats`, and `score_beat_type`
-- `score_parts_v2`: slots `score_part` and `score_staff_count`
-- `score_clefs_v2`: slots `score_clef_time_tick`, `score_part`, `score_staff`, `score_clef_sign_code`, and `score_clef_line`
-- `score_tempo_v2`: slots `score_tempo_time_tick` and `score_tempo_bpm`
-- `score_key_v2`: slots `score_key_time_tick`, `score_key_fifths`, `score_key_mode_code`, and `score_part`
-- `score_articulations_v1`: slots `score_event_id`, `score_articulation_code`, and `score_placement`
-- `score_slurs_v1`: slots `score_event_id`, `score_slur_number`, `score_slur_type`, and `score_placement`
+Existing on-chain connectors stay reusable references. If a score uses already-deployed generators such as `constant_value`, `counter`, `score_quarter_note_tick_grid`, or `major_scale_steps`, Studio should reference them by name and store usage-specific static RI values in the deployed root connector's `static_ri` map.
 
-Within `score_notes_v1`, `score_onset` and `score_duration` are interpreted as global ticks. The score-template adapter uses `2520` ticks per quarter note. This gives exact integer positions for common binary rhythms, triplets, quintuplets, septuplets, and grids such as 36 positions in a 4/4 bar. The renderer derives MusicXML measures from `score_meter_v2`; users should compose with global tick time, not with measure-local note coordinates.
+The plugin reads connected score subtrees and ignores bare unconnected collector dimensions. For example, a root D1 notes branch only yields note rows when it contains connected D1 onset, D2 duration, and D3 pitch streams.
+
+`score_onset` and `score_duration` terminal connectors are interpreted as global ticks in legacy flows. The current positional adapter also uses global ticks, with `2520` ticks per quarter note. This gives exact integer positions for common binary rhythms, triplets, quintuplets, septuplets, and grids such as 36 positions in a 4/4 bar. Users should compose with global tick time, not with measure-local note coordinates.
 
 Semantic pass-through slot connectors canonically use the `add` transformation with argument `1`.
 Collector archetypes with semantic child slots also use `add(1)` on each dimension so every dimension advances through the child stream.
@@ -55,7 +51,7 @@ Text is connector-derived by codepoint or token mapping. For example, dynamics a
 
 - The renderer targets MusicXML 4.0 partwise scores.
 - PTDV streams are interpreted as MIDI note numbers, beat positions, beat durations, and MIDI velocities.
-- Score-template streams are interpreted as global ticks plus explicit score layers; if no meter layer is present, the renderer emits a diagnostic and uses 4/4 only as a preview fallback.
+- Positional score streams are interpreted as global ticks plus explicit score layers; if no meter layer is present, the renderer emits a diagnostic and uses 4/4 only as a preview fallback.
 - Invalid note values are skipped with diagnostics rather than normalized silently.
 - Long notes crossing meter-derived measure boundaries are split and tied.
 - Simultaneous notes with the same onset and duration are emitted as chords.

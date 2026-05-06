@@ -1,4 +1,4 @@
-import type { RiConnectorNodePosition } from "$lib/studio/riPositioning";
+import type { RiConnectorNodePosition, RiDimensionPosition } from "$lib/studio/riPositioning";
 
 export type RiProjectionGraphNode = {
   id: string;
@@ -17,6 +17,7 @@ export type RiProjectionGraphEdge = {
 
 export type RiProjectionResult = {
   positionByNodeId: Record<string, number>;
+  targetPositionByNodeId: Record<string, number>;
   mappedNodeIdByPlanKey: Record<string, string>;
   warnings: string[];
 };
@@ -77,20 +78,22 @@ const scoreProjectionCandidate = (input: {
 export const projectRiPositionsToConnectorNodes = (input: {
   rootConnectorName: string;
   planNodes: RiConnectorNodePosition[];
+  planDimensions?: RiDimensionPosition[];
   graphNodes: RiProjectionGraphNode[];
   graphEdges: RiProjectionGraphEdge[];
 }): RiProjectionResult => {
   const positionByNodeId: Record<string, number> = {};
+  const targetPositionByNodeId: Record<string, number> = {};
   const mappedNodeIdByPlanKey: Record<string, string> = {};
   const warnings: string[] = [];
 
   if (!input.rootConnectorName.trim()) {
-    return { positionByNodeId, mappedNodeIdByPlanKey, warnings };
+    return { positionByNodeId, targetPositionByNodeId, mappedNodeIdByPlanKey, warnings };
   }
 
   const connectorNodes = input.graphNodes.filter((node) => node.id.trim().length > 0);
   if (!connectorNodes.length) {
-    return { positionByNodeId, mappedNodeIdByPlanKey, warnings };
+    return { positionByNodeId, targetPositionByNodeId, mappedNodeIdByPlanKey, warnings };
   }
 
   const nodeById = new Map(connectorNodes.map((node) => [node.id, node]));
@@ -106,11 +109,17 @@ export const projectRiPositionsToConnectorNodes = (input: {
     warnings.push(
       `Unable to project RI positions: root '${input.rootConnectorName}' is not present in graph.`,
     );
-    return { positionByNodeId, mappedNodeIdByPlanKey, warnings };
+    return { positionByNodeId, targetPositionByNodeId, mappedNodeIdByPlanKey, warnings };
   }
 
   const usedNodeIds = new Set<string>();
   const mappedNodeIdByKey = new Map<string, string>();
+  const firstDimensionPositionByNodeKey = new Map<string, number>();
+  (input.planDimensions ?? []).forEach((dimension) => {
+    if (dimension.dimensionIndex !== 0) return;
+    if (firstDimensionPositionByNodeKey.has(dimension.nodeKey)) return;
+    firstDimensionPositionByNodeKey.set(dimension.nodeKey, dimension.position);
+  });
 
   input.planNodes.forEach((entry) => {
     let mappedNodeId: string | null = null;
@@ -187,7 +196,11 @@ export const projectRiPositionsToConnectorNodes = (input: {
     mappedNodeIdByPlanKey[entry.key] = mappedNodeId;
     usedNodeIds.add(mappedNodeId);
     positionByNodeId[mappedNodeId] = entry.position;
+    targetPositionByNodeId[mappedNodeId] =
+      entry.relation === "root"
+        ? entry.position
+        : (firstDimensionPositionByNodeKey.get(entry.key) ?? entry.position);
   });
 
-  return { positionByNodeId, mappedNodeIdByPlanKey, warnings };
+  return { positionByNodeId, targetPositionByNodeId, mappedNodeIdByPlanKey, warnings };
 };

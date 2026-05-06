@@ -16,6 +16,7 @@ import {
 
 const INT32_MIN = -0x8000_0000;
 const INT32_MAX = 0x7fff_ffff;
+const UINT32_MAX = 0xffff_ffff;
 
 const normalizeName = (value: unknown, label: string): string => {
   if (typeof value !== "string") {
@@ -51,6 +52,16 @@ const toInt32 = (value: unknown, label: string): number => {
   }
   if (value < INT32_MIN || value > INT32_MAX) {
     throw new Error(`${label} must fit int32 range.`);
+  }
+  return value;
+};
+
+const toUInt32 = (value: unknown, label: string): number => {
+  if (typeof value !== "number" || !Number.isInteger(value)) {
+    throw new Error(`${label} must be an integer.`);
+  }
+  if (value < 0 || value > UINT32_MAX) {
+    throw new Error(`${label} must fit uint32 range.`);
   }
   return value;
 };
@@ -131,11 +142,11 @@ const normalizeStaticRi = (
       const startPoint =
         startPointRaw === undefined
           ? 0
-          : toInt32(startPointRaw, `${label}['${slotKey}'].start_point`);
+          : toUInt32(startPointRaw, `${label}['${slotKey}'].start_point`);
       const transformationShift =
         transformationShiftRaw === undefined
           ? 0
-          : toInt32(transformationShiftRaw, `${label}['${slotKey}'].transformation_shift`);
+          : toUInt32(transformationShiftRaw, `${label}['${slotKey}'].transformation_shift`);
 
       return {
         slotId,
@@ -283,10 +294,9 @@ export function toProtocolConnectorPayload(connector: StudioConnectorDef): Chain
   });
 
   const conditionName = normalizeOptionalName(connector.conditionName);
-  const conditionArgs =
-    connector.conditionArgs && connector.conditionArgs.length > 0
-      ? normalizeInt32Array(connector.conditionArgs, "condition_args")
-      : undefined;
+  const conditionArgs = connector.conditionArgs
+    ? normalizeInt32Array(connector.conditionArgs, "condition_args")
+    : undefined;
 
   if (!conditionName && conditionArgs && conditionArgs.length > 0) {
     throw new Error(`Connector ${name} has condition args without a condition name.`);
@@ -308,8 +318,11 @@ export function toProtocolConnectorPayload(connector: StudioConnectorDef): Chain
             slotId,
             slotKey,
             value: {
-              start_point: toInt32(value.startPoint, `connector.staticRi['${slotKey}'].startPoint`),
-              transformation_shift: toInt32(
+              start_point: toUInt32(
+                value.startPoint,
+                `connector.staticRi['${slotKey}'].startPoint`,
+              ),
+              transformation_shift: toUInt32(
                 value.transformationShift,
                 `connector.staticRi['${slotKey}'].transformationShift`,
               ),
@@ -326,8 +339,8 @@ export function toProtocolConnectorPayload(connector: StudioConnectorDef): Chain
   return {
     name,
     dimensions,
-    ...(conditionName ? { condition_name: conditionName } : {}),
-    ...(conditionArgs ? { condition_args: conditionArgs } : {}),
+    condition_name: conditionName ?? "",
+    condition_args: conditionName ? (conditionArgs ?? []) : [],
     ...(Object.keys(staticRiOut).length > 0 ? { static_ri: staticRiOut } : {}),
   };
 }

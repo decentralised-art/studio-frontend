@@ -115,6 +115,28 @@ const stubRemoteApis = async (
     })),
   });
   const scoreConnectors: Record<string, object> = {
+    test_position_score_e2e_06052026: collectorScoreConnector(
+      "test_position_score_e2e_06052026",
+      "0x637d49f0ec85ec68c9abfedb750881d641ebab0bbbe046db6341b128edc42dae",
+      ["score_position_note_table_e2e"],
+    ),
+    score_position_note_table_e2e: collectorScoreConnector(
+      "score_position_note_table_e2e",
+      "0xc9ea7ced7294c7b4ec0dfe5eebdb36ca1fe082d81ba79a1fc59f244530f99eca",
+      ["score_quarter_note_tick_grid", "constant_value", "major_scale_steps"],
+    ),
+    score_quarter_note_tick_grid: terminalScoreConnector(
+      "score_quarter_note_tick_grid",
+      "0x0000000000000000000000000000000000000000000000000000000000002520",
+    ),
+    constant_value: terminalScoreConnector(
+      "constant_value",
+      "0x0000000000000000000000000000000000000000000000000000000000000000",
+    ),
+    major_scale_steps: terminalScoreConnector(
+      "major_scale_steps",
+      "0x0000000000000000000000000000000000000000000000000000000000000060",
+    ),
     test_full_score_empty_100604052026: collectorScoreConnector(
       "test_full_score_empty_100604052026",
       "0x637d49f0ec85ec68c9abfedb750881d641ebab0bbbe046db6341b128edc42dae",
@@ -372,6 +394,25 @@ const stubRemoteApis = async (
               payload: {
                 type: "connector",
                 name: "test_full_score_empty_100604052026",
+                owner: fixtureAddress,
+              },
+            },
+            {
+              feed_id: "feed-position-score",
+              event_type: "connector_added",
+              status: "safe",
+              visible: true,
+              tx_hash: "0xf06",
+              block_number: 1,
+              tx_index: 6,
+              log_index: 0,
+              history_cursor: "0000000000000001:0006:0000",
+              created_at_ms: 450,
+              updated_at_ms: 450,
+              projector_version: 1,
+              payload: {
+                type: "connector",
+                name: "test_position_score_e2e_06052026",
                 owner: fixtureAddress,
               },
             },
@@ -815,7 +856,7 @@ const seedRawFullScorePluginSession = async (page: Page) => {
   });
 };
 
-const seedMovableTemplateConnectorSession = async (page: Page) => {
+const seedMovableConnectorTreeSession = async (page: Page) => {
   await page.addInitScript(() => {
     const makeConnector = (
       id: string,
@@ -1052,6 +1093,12 @@ test("attaches plugins to the draft root connector", async ({ page }) => {
     "connected to untitled-connector",
   );
   await expect(
+    page
+      .locator(".plugin-node")
+      .filter({ hasText: "Music Score" })
+      .getByLabel("Empty music score preview"),
+  ).toBeVisible();
+  await expect(
     page.locator('.svelte-flow__edge[data-id^="edge-plugin-music-score-v1"]'),
   ).toHaveCount(1);
   assertNoPageErrors();
@@ -1077,91 +1124,17 @@ test("renders the resolvable saved connector toolbox in Studio", async ({ page }
   assertNoPageErrors();
 });
 
-test("inserts Full Score templates recursively without attaching or replacing the root", async ({
-  page,
-}) => {
+test("does not expose the removed Templates source in Studio", async ({ page }) => {
   const assertNoPageErrors = collectPageErrors(page);
   await stubRemoteApis(page);
   await authenticateFixtureSession(page);
 
   await page.goto("/studio");
-  await page.getByRole("button", { name: "Templates", exact: true }).click();
-  await page.locator(".template-plugin-picker select").selectOption("music-score-v1");
-
-  const fullScoreTemplate = page.locator(".template-card").filter({ hasText: "Full Score" });
-  await expect(fullScoreTemplate).toBeVisible();
-  await fullScoreTemplate.getByRole("button", { name: "+" }).click();
-
-  await expect(page.locator(".connector-node").filter({ hasText: "score_full_v2" })).toHaveCount(1);
-  await expect(page.locator(".connector-node").filter({ hasText: "score_meter_v2" })).toHaveCount(
-    1,
-  );
-  await expect(
-    page.locator(".connector-node").filter({ hasText: "score_meter_time_tick" }),
-  ).toHaveCount(1);
-  await expect(page.locator(".connector-node").filter({ hasText: "score_tempo_bpm" })).toHaveCount(
-    1,
-  );
-  await expect(page.locator(".connector-node").filter({ hasText: "score_key_fifths" })).toHaveCount(
-    1,
-  );
-  await expect(page.locator(".connector-node").filter({ hasText: "score_event_id" })).toHaveCount(
-    3,
-  );
-  await expect(page.locator(".connector-node").filter({ hasText: "score_onset" })).toHaveCount(1);
-  await expect(page.locator(".connector-node").filter({ hasText: "score_duration" })).toHaveCount(
-    1,
-  );
-  await expect(page.locator(".connector-node").filter({ hasText: "score_pitch" })).toHaveCount(1);
-  await expect(
-    page.locator(".connector-node").filter({ hasText: "score_articulation_code" }),
-  ).toHaveCount(1);
-  await expect(page.locator(".connector-node").filter({ hasText: "score_slur_type" })).toHaveCount(
-    1,
-  );
-  await expect(
-    page.locator(".connector-node").filter({ hasText: "Untitled Connector" }),
-  ).toHaveCount(1);
-
-  const scoreFullNode = page.locator(".connector-node").filter({ hasText: "score_full_v2" });
-  const scoreMeterNode = page.locator(".connector-node").filter({ hasText: "score_meter_v2" });
-  const scoreNotesNode = page.locator(".connector-node").filter({ hasText: "score_notes_v1" });
-  const scoreMeterTickNode = page
-    .locator(".connector-node")
-    .filter({ hasText: "score_meter_time_tick" });
-  const scorePitchNode = page.locator(".connector-node").filter({ hasText: "score_pitch" });
-
-  const getRequiredBox = async (locator: Locator, label: string) => {
-    const box = await locator.boundingBox();
-    if (!box) throw new Error(`Expected ${label} to have a bounding box.`);
-    return box;
-  };
-
-  await expect
-    .poll(
-      async () => {
-        const root = await getRequiredBox(scoreFullNode, "score_full_v2");
-        const meter = await getRequiredBox(scoreMeterNode, "score_meter_v2");
-        const notes = await getRequiredBox(scoreNotesNode, "score_notes_v1");
-        const meterTick = await getRequiredBox(scoreMeterTickNode, "score_meter_time_tick");
-        const pitch = await getRequiredBox(scorePitchNode, "score_pitch");
-        const levelOneYSpread = Math.abs(meter.y - notes.y);
-        const levelTwoYSpread = Math.abs(meterTick.y - pitch.y);
-        return (
-          root.y < meter.y - 20 &&
-          root.y < notes.y - 20 &&
-          levelOneYSpread < 12 &&
-          meter.y < meterTick.y - 20 &&
-          notes.y < pitch.y - 20 &&
-          levelTwoYSpread < 12
-        );
-      },
-      { timeout: 5_000 },
-    )
-    .toBe(true);
-
-  await expect(scoreFullNode).toBeInViewport();
-  await expect(page.locator(".plugin-node")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Connectors", exact: true })).toBeVisible({
+    timeout: 15_000,
+  });
+  await expect(page.getByRole("button", { name: "Templates", exact: true })).toHaveCount(0);
+  await expect(page.locator(".templates-panel")).toHaveCount(0);
   assertNoPageErrors();
 });
 
@@ -1205,41 +1178,37 @@ test("opens and adds a Studio Network connector discovered from the feed", async
   assertNoPageErrors();
 });
 
-test("loads deployed score template connector trees with semantic slot nodes", async ({ page }) => {
+test("loads deployed positional score connector trees with reusable shapers", async ({ page }) => {
   const assertNoPageErrors = collectPageErrors(page);
   await stubRemoteApis(page);
   await authenticateFixtureSession(page);
 
   await page.goto("/studio");
 
-  const fullScoreCard = page
+  const scoreCard = page
     .getByRole("listitem")
-    .filter({ hasText: "test_full_score_empty_100604052026" })
+    .filter({ hasText: "test_position_score_e2e_06052026" })
     .first();
-  await expect(fullScoreCard).toBeVisible({ timeout: 15_000 });
-  await fullScoreCard.getByTitle("Add to flow").click();
+  await expect(scoreCard).toBeVisible({ timeout: 15_000 });
+  await scoreCard.getByTitle("Add to flow").click();
 
   await expect(
-    page.locator(".connector-node").filter({ hasText: "test_full_score_empty_100604052026" }),
+    page.locator(".connector-node").filter({ hasText: "test_position_score_e2e_06052026" }),
   ).toHaveCount(1);
-  await expect(page.locator(".connector-node").filter({ hasText: "score_full_v2" })).toHaveCount(1);
-  await expect(page.locator(".connector-node").filter({ hasText: "score_notes_v1" })).toHaveCount(
-    1,
-  );
-  await expect(page.locator(".connector-node").filter({ hasText: "score_event_id" })).toHaveCount(
-    3,
-  );
-  await expect(page.locator(".connector-node").filter({ hasText: "score_onset" })).toHaveCount(1);
-  await expect(page.locator(".connector-node").filter({ hasText: "score_duration" })).toHaveCount(
-    1,
-  );
-  await expect(page.locator(".connector-node").filter({ hasText: "score_pitch" })).toHaveCount(1);
   await expect(
-    page.locator(".connector-node").filter({ hasText: "score_articulation_code" }),
+    page.locator(".connector-node").filter({ hasText: "score_position_note_table_e2e" }),
   ).toHaveCount(1);
-  await expect(page.locator(".connector-node").filter({ hasText: "score_slur_type" })).toHaveCount(
+  await expect(
+    page.locator(".connector-node").filter({ hasText: "score_quarter_note_tick_grid" }),
+  ).toHaveCount(1);
+  await expect(page.locator(".connector-node").filter({ hasText: "constant_value" })).toHaveCount(
     1,
   );
+  await expect(
+    page.locator(".connector-node").filter({ hasText: "major_scale_steps" }),
+  ).toHaveCount(1);
+  await expect(page.locator(".connector-node").filter({ hasText: "score_onset" })).toHaveCount(0);
+  await expect(page.locator(".connector-node").filter({ hasText: "score_pitch" })).toHaveCount(0);
   assertNoPageErrors();
 });
 
@@ -1273,13 +1242,13 @@ test("keeps restored Studio connector trees when plugin overlays are present", a
   assertNoPageErrors();
 });
 
-test("keeps multi-selected Studio template connectors at their dragged positions after deselect", async ({
+test("keeps multi-selected Studio connector trees at their dragged positions after deselect", async ({
   page,
 }) => {
   const assertNoPageErrors = collectPageErrors(page);
   await stubRemoteApis(page);
   await authenticateFixtureSession(page);
-  await seedMovableTemplateConnectorSession(page);
+  await seedMovableConnectorTreeSession(page);
 
   await page.goto("/studio");
   const canvas = page.getByRole("application", { name: "Flow canvas" });
@@ -1367,7 +1336,7 @@ test("renders restored Music Score plugin notation in Studio", async ({ page }) 
   assertNoPageErrors();
 });
 
-test("renders raw full-score archetype output in the Music Score plugin", async ({ page }) => {
+test("shows an empty staff for raw unconnected full-score archetype output", async ({ page }) => {
   const assertNoPageErrors = collectPageErrors(page);
   await stubRemoteApis(page);
   await authenticateFixtureSession(page);
@@ -1377,8 +1346,8 @@ test("renders raw full-score archetype output in the Music Score plugin", async 
 
   const restoredPlugin = page.locator(".plugin-node").filter({ hasText: "Music Score" });
   await expect(restoredPlugin).toBeVisible();
-  await expect(restoredPlugin.getByText(/notes .* measures .* parts/)).toBeVisible();
-  await expect(restoredPlugin.locator(".score-osmd svg")).toBeVisible({ timeout: 15_000 });
+  await expect(restoredPlugin.getByLabel("Empty music score preview")).toBeVisible();
+  await expect(restoredPlugin.locator(".score-osmd svg")).toHaveCount(0);
   await expect(restoredPlugin.locator(".score-render-status.is-error")).toHaveCount(0);
   assertNoPageErrors();
 });

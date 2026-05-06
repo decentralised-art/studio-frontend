@@ -64,6 +64,7 @@ export type ApiGraphInputNodeData = {
   riShift?: number;
   riLocked?: boolean;
   riPosition?: number;
+  riTargetPosition?: number;
   staticRi?: Record<string, StudioRunningInstanceRef>;
 };
 
@@ -130,6 +131,25 @@ const parseDimensionHandle = (handle?: string | null) => {
   if (!handle || !handle.startsWith("dim-")) return null;
   const value = Number(handle.replace("dim-", ""));
   return Number.isFinite(value) ? value : null;
+};
+
+const parseIntegerArray = (value: unknown): number[] => {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => Number(item))
+    .filter((item) => Number.isFinite(item))
+    .map((item) => Math.trunc(item));
+};
+
+const isConditionTargetHandle = (handle?: string | null) => {
+  const normalized = handle ?? "in";
+  return normalized === "condition" || normalized === "in";
+};
+
+const parseConditionArgsFromEdge = (edge: Edge): number[] => {
+  if (!edge.data || typeof edge.data !== "object" || Array.isArray(edge.data)) return [];
+  const data = edge.data as { conditionArgs?: unknown; condition_args?: unknown };
+  return parseIntegerArray(data.conditionArgs ?? data.condition_args);
 };
 
 export const resolveApiGraphNodeName = (node: ApiGraphInputNode): string => {
@@ -260,6 +280,7 @@ export const buildApiResolvedConnectorTreePreview = ({
   const rootConnectorName = resolveApiGraphNodeName(rootNode);
   const links: Array<Record<string, unknown>> = [];
   const linkKeySet = new Set<string>();
+  const conditionArgsByConnectorId = new Map<string, number[]>();
 
   const pushLink = (link: Record<string, unknown>) => {
     const key = JSON.stringify(link);
@@ -326,6 +347,15 @@ export const buildApiResolvedConnectorTreePreview = ({
     }
 
     if (
+      sourceNode.data.kind === "condition" &&
+      isConnectorKind(targetNode.data.kind) &&
+      isConditionTargetHandle(edge.targetHandle)
+    ) {
+      conditionArgsByConnectorId.set(targetNode.id, parseConditionArgsFromEdge(edge));
+      return;
+    }
+
+    if (
       sourceNode.data.kind === "dimension" &&
       (isConnectorKind(targetNode.data.kind) || targetNode.data.kind === "particle")
     ) {
@@ -362,6 +392,9 @@ export const buildApiResolvedConnectorTreePreview = ({
       dimensions: Math.max(1, Math.round(node.data.dimensions ?? 1)),
       connector_rows: node.data.connectorRows ?? [],
       condition: node.data.conditionLabel ?? "",
+      ...(node.data.conditionLabel
+        ? { condition_args: conditionArgsByConnectorId.get(node.id) ?? [] }
+        : {}),
       from_network: Boolean(node.data.fromNetwork),
       definition_role: node.data.definitionRole ?? null,
       ...serializeStaticRiForApi(node.data.staticRi),
@@ -476,7 +509,7 @@ export const convertResolvedTreePreviewToDraft = ({
         ...(Object.keys(dimension.bindings).length ? { bindings: { ...dimension.bindings } } : {}),
       })),
       condition_name: `${connector.condition ?? ""}`.trim(),
-      condition_args: [],
+      condition_args: parseIntegerArray(connector.condition_args),
       ...serializeParsedStaticRiForApi(staticRi),
     });
   });
@@ -907,6 +940,8 @@ export const buildApiGraphFromPreviewJson = ({
       (connectorBody as { static_ri?: unknown }).static_ri,
     );
     const selfStaticRiFromApi = resolveConnectorSelfStaticRi(staticRiFromApi);
+    const conditionNameFromApi =
+      typeof connectorBody.condition_name === "string" ? connectorBody.condition_name.trim() : "";
 
     const connectorNode: ApiGraphNode = {
       id: `feature-${idFactory()}`,
@@ -925,11 +960,13 @@ export const buildApiGraphFromPreviewJson = ({
         connectorRows: connectorRowsFromApi,
         fromNetwork: connectorIsReadOnly,
         tabRoot: connectorName === rootConnectorName,
+        conditionLabel: conditionNameFromApi || null,
         hideOutlets: connectorIsReadOnly && (adjacency.get(connectorName)?.length ?? 0) === 0,
         riStart: selfStaticRiFromApi?.startPoint ?? 0,
         riShift: selfStaticRiFromApi?.transformationShift ?? 0,
         riLocked: Boolean(selfStaticRiFromApi),
         riPosition: undefined,
+        riTargetPosition: undefined,
         staticRi: staticRiFromApi,
       },
     };
@@ -964,6 +1001,7 @@ export const buildApiGraphFromPreviewJson = ({
     const conditionName =
       typeof connectorBody.condition_name === "string" ? connectorBody.condition_name.trim() : "";
     if (conditionName) {
+      const conditionArgs = parseIntegerArray(connectorBody.condition_args);
       let conditionNode = conditionNodeByName.get(conditionName) ?? null;
       if (!conditionNode) {
         const isDraftCondition = conditionSourceByName.has(conditionName);
@@ -995,7 +1033,8 @@ export const buildApiGraphFromPreviewJson = ({
         source: conditionNode.id,
         sourceHandle: "out",
         target: connectorNode.id,
-        targetHandle: "in",
+        targetHandle: "condition",
+        ...(conditionArgs.length ? { data: { conditionArgs } } : {}),
       });
     }
 

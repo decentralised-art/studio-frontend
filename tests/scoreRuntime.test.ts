@@ -83,7 +83,7 @@ describe("score plugin runtime", () => {
     expect(score.musicXml).toContain("<step>G</step>");
   });
 
-  it("renders deployed full-score template streams with positional open collectors", () => {
+  it("renders deployed score template streams with connected shapers under collector dimensions", () => {
     const runtime = buildStudioPluginRuntimeData(
       "music-score-v1",
       ["test_full_score_empty_100604052026"],
@@ -93,15 +93,18 @@ describe("score plugin runtime", () => {
           data: [1],
         },
         {
-          feature_path: "/test_full_score_empty_100604052026:0/score_full_v2:5/score_notes_v1:1",
+          feature_path:
+            "/test_full_score_empty_100604052026:0/score_full_v2:5/score_notes_v1:1/score_quarter_note_tick_grid:0",
           data: [0],
         },
         {
-          feature_path: "/test_full_score_empty_100604052026:0/score_full_v2:5/score_notes_v1:2",
+          feature_path:
+            "/test_full_score_empty_100604052026:0/score_full_v2:5/score_notes_v1:2/constant_value:0",
           data: [2520],
         },
         {
-          feature_path: "/test_full_score_empty_100604052026:0/score_full_v2:5/score_notes_v1:3",
+          feature_path:
+            "/test_full_score_empty_100604052026:0/score_full_v2:5/score_notes_v1:3/major_scale_steps:0",
           data: [60],
         },
         {
@@ -128,7 +131,25 @@ describe("score plugin runtime", () => {
     expect(score.musicXml).toContain("<step>C</step>");
   });
 
-  it("keeps raw full-score archetype output renderable for OSMD", () => {
+  it("renders positional score-root streams using connector targets as schema roots", () => {
+    const runtime = buildStudioPluginRuntimeData(
+      "music-score-v1",
+      ["positional_score"],
+      [
+        { feature_path: "/positional_score:0/note_table:0/onsets:0", data: [0, 2520] },
+        { feature_path: "/positional_score:0/note_table:1/durations:0", data: [2520, 2520] },
+        { feature_path: "/positional_score:0/note_table:2/pitches:0", data: [60, 62] },
+      ],
+    );
+    const score = buildScorePluginRuntimeData(runtime);
+
+    expect(score.adapterId).toBe("music-measured-notes-v1");
+    expect(score.stats.noteCount).toBe(2);
+    expect(score.musicXml).toContain("<step>C</step>");
+    expect(score.musicXml).toContain("<step>D</step>");
+  });
+
+  it("ignores raw unconnected full-score archetype output instead of rendering junk notation", () => {
     const runtime = buildStudioPluginRuntimeData(
       "music-score-v1",
       ["test_full_score_empty_100604052026"],
@@ -162,17 +183,11 @@ describe("score plugin runtime", () => {
     );
     const score = buildScorePluginRuntimeData(runtime);
 
-    expect(score.adapterId).toBe("music-measured-notes-v1");
-    expect(score.stats.noteCount).toBeGreaterThan(0);
-    expect(score.stats.measureCount).toBe(1);
-    expect(score.musicXml).toContain('<score-partwise version="4.0">');
-    expect(score.musicXml).not.toContain("<fifths>8</fifths>");
-    expect(score.musicXml).not.toContain("<mode>dorian</mode>");
-    expect(score.musicXml).not.toContain("<beat-type>3</beat-type>");
-    expect(score.musicXml).not.toContain("<line>1</line>");
-    expect(score.musicXml).not.toContain("<octave>-1</octave>");
+    expect(score.adapterId).toBe("music-note-events-v1");
+    expect(score.stats.noteCount).toBe(0);
+    expect(score.musicXml).toBe("");
     expect(score.diagnostics.map((diagnostic) => diagnostic.code)).toContain(
-      "unsupported-score-key-mode",
+      "no-compatible-streams",
     );
   });
 

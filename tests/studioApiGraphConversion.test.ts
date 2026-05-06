@@ -143,6 +143,7 @@ describe("Studio API graph conversion", () => {
             body: {
               name: "root",
               condition_name: "is_ready",
+              condition_args: [7, -2],
               dimensions: [
                 {
                   transformations: [{ name: "shift", args: [3] }],
@@ -182,8 +183,17 @@ describe("Studio API graph conversion", () => {
     expect(result.nodes[0]?.data.staticRi).toEqual({
       "0": { startPoint: 8, transformationShift: 5 },
     });
+    expect(result.nodes[0]?.data.conditionLabel).toBe("is_ready");
     expect(Array.from(result.conditionCodeByNodeId.values())).toEqual(["return true;"]);
     expect(Array.from(result.transformationCodeById.values())).toEqual(["return x + args[0];"]);
+    expect(result.edges).toContainEqual(
+      expect.objectContaining({
+        source: "condition-id-3",
+        target: "feature-id-1",
+        targetHandle: "condition",
+        data: { conditionArgs: [7, -2] },
+      }),
+    );
     expect(result.edges).toContainEqual(
       expect.objectContaining({
         source: "feature-id-1",
@@ -279,7 +289,86 @@ describe("Studio API graph conversion", () => {
     ).toEqual({
       name: "network_root",
       dimensions: [{ transformations: [{ name: "scale", args: [2] }] }],
+      condition_name: "",
+      condition_args: [],
       static_ri: { "0": { start_point: 1, transformation_shift: 3 } },
     });
+  });
+
+  it("serializes condition edges and legacy condition handles into connector request bodies", () => {
+    const root = connectorNode("root-node", "root", {
+      tabRoot: true,
+      fromNetwork: false,
+    });
+    const condition: ApiGraphInputNode = {
+      id: "condition-node",
+      type: "condition",
+      position: { x: 0, y: -120 },
+      data: {
+        label: "is_ready",
+        kind: "condition",
+      },
+    };
+
+    expect(
+      buildApiConnectorRequestBodyPreview({
+        activeTab: { label: "root", particleId: "root" },
+        nodes: [root, condition],
+        edges: [
+          edge({
+            source: condition.id,
+            sourceHandle: "out",
+            target: root.id,
+            targetHandle: "in",
+            data: { conditionArgs: [5] },
+          }),
+        ],
+        selectedConnectorNode: root,
+        deployedConnectors: {},
+      }),
+    ).toEqual({
+      name: "root",
+      dimensions: [{ transformations: [] }],
+      condition_name: "is_ready",
+      condition_args: [5],
+    });
+  });
+
+  it("includes condition args in resolved tree previews", () => {
+    const root = connectorNode("root-node", "root", {
+      label: "Root Connector",
+      tabRoot: true,
+      conditionLabel: "is_ready",
+    });
+    const condition: ApiGraphInputNode = {
+      id: "condition-node",
+      type: "condition",
+      position: { x: 0, y: -120 },
+      data: {
+        label: "is_ready",
+        kind: "condition",
+      },
+    };
+
+    const preview = buildApiResolvedConnectorTreePreview({
+      nodes: [root, condition],
+      edges: [
+        edge({
+          source: condition.id,
+          sourceHandle: "out",
+          target: root.id,
+          targetHandle: "condition",
+          data: { conditionArgs: [3, 4] },
+        }),
+      ],
+      rootParticleId: "root",
+    });
+
+    expect(preview.connectors[0]).toEqual(
+      expect.objectContaining({
+        condition: "is_ready",
+        condition_args: [3, 4],
+      }),
+    );
   });
 });

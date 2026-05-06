@@ -56,6 +56,41 @@ describe("riPositioning", () => {
     expect(result.totalPositions).toBeGreaterThan(Math.max(...positions));
   });
 
+  it("records connector occurrence and local dimension DFS positions separately", () => {
+    const connectors: Record<string, StudioConnectorDef> = {
+      test_note_table: createConnector("test_note_table", [
+        { composite: "score_quarter_note_tick_grid" },
+        { composite: "constant_value" },
+        { composite: "major_scale_steps" },
+      ]),
+      score_quarter_note_tick_grid: createConnector("score_quarter_note_tick_grid", [{}]),
+      constant_value: createConnector("constant_value", [{}]),
+      major_scale_steps: createConnector("major_scale_steps", [{}]),
+    };
+
+    const result = computeRiPositioning(connectors, "test_note_table");
+
+    expect(
+      result.nodes.map((entry) => [entry.connectorName, entry.position, entry.relation]),
+    ).toEqual([
+      ["test_note_table", 0, "root"],
+      ["score_quarter_note_tick_grid", 1, "composite"],
+      ["constant_value", 3, "composite"],
+      ["major_scale_steps", 5, "composite"],
+    ]);
+    expect(
+      result.dimensions.map((entry) => [entry.connectorName, entry.dimensionIndex, entry.position]),
+    ).toEqual([
+      ["test_note_table", 0, 1],
+      ["score_quarter_note_tick_grid", 0, 2],
+      ["test_note_table", 1, 3],
+      ["constant_value", 0, 4],
+      ["test_note_table", 2, 5],
+      ["major_scale_steps", 0, 6],
+    ]);
+    expect(result.totalPositions).toBe(7);
+  });
+
   it("throws explicit cycle errors", () => {
     const connectors: Record<string, StudioConnectorDef> = {
       a: createConnector("a", [{ composite: "b" }]),

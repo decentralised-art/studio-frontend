@@ -211,7 +211,7 @@ const renderPluginNode = async (
   });
 };
 
-const renderScorePluginNode = async (pluginData: StudioPluginRuntimeData = runtimeData) => {
+const renderScorePluginNode = async (pluginData: StudioPluginRuntimeData | null = runtimeData) => {
   const StudioPluginNode = await loadComponent();
 
   return render(StudioPluginNode, {
@@ -236,7 +236,7 @@ const renderScorePluginNode = async (pluginData: StudioPluginRuntimeData = runti
       data: {
         label: "Music Score",
         sourceId: "music-score-v1",
-        pluginData: { ...pluginData, pluginId: "music-score-v1" },
+        pluginData: pluginData ? { ...pluginData, pluginId: "music-score-v1" } : undefined,
         pluginTargets: ["midi_root"],
       },
     },
@@ -309,6 +309,15 @@ describe("StudioPluginNode", () => {
     expect(osmdMock.render).toHaveBeenCalledTimes(1);
   });
 
+  it("renders an empty score staff before plugin runtime data is available", async () => {
+    await renderScorePluginNode(null);
+
+    expect(screen.getByLabelText("Empty music score preview")).toBeInTheDocument();
+    expect(screen.queryByText("No plugin runtime data yet.")).not.toBeInTheDocument();
+    expect(osmdMock.load).not.toHaveBeenCalled();
+    expect(osmdMock.render).not.toHaveBeenCalled();
+  });
+
   it("logs complete score diagnostics to the console instead of listing them in the node", async () => {
     const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const scoreRuntimeData: StudioPluginRuntimeData = {
@@ -329,7 +338,7 @@ describe("StudioPluginNode", () => {
       await renderScorePluginNode(scoreRuntimeData);
 
       await waitFor(() => expect(consoleWarn).toHaveBeenCalledTimes(1));
-      expect(screen.getByText("2 warnings logged to browser console")).toBeInTheDocument();
+      expect(screen.queryByText(/logged to browser console/i)).not.toBeInTheDocument();
       expect(screen.queryByText(/articulation_code is unsupported/i)).not.toBeInTheDocument();
       expect(consoleWarn.mock.calls[0]?.[0]).toContain("2 score diagnostic");
       expect(consoleWarn.mock.calls[0]?.[1]).toMatchObject({

@@ -4,6 +4,7 @@ export type RiMaterializationCandidate = {
   fromNetwork: boolean;
   riLocked: boolean;
   riPosition?: number | null;
+  riTargetPosition?: number | null;
   riStart?: number | null;
   riShift?: number | null;
   lockToggleDisabled: boolean;
@@ -103,7 +104,7 @@ export const materializeReferencedRiIntoRootStatic = (
 
   candidates.forEach((candidate) => {
     if (!candidate.fromNetwork || !candidate.riLocked || candidate.lockToggleDisabled) return;
-    const positionKey = toPositionKey(candidate.riPosition ?? null);
+    const positionKey = toPositionKey(candidate.riTargetPosition ?? candidate.riPosition ?? null);
     if (!positionKey) return;
     nextMaterializedByPosition.set(positionKey, {
       startPoint: toNonNegativeInt(candidate.riStart) ?? 0,

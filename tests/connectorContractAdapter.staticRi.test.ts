@@ -51,6 +51,32 @@ describe("connectorContractAdapter static_ri mapping", () => {
     });
   });
 
+  it("accepts uint32 static_ri boundary values", () => {
+    const payload = toProtocolConnectorPayload({
+      name: "root",
+      dimensions: [{ transformations: [], bindings: {} }],
+      staticRi: {
+        "0": { startPoint: 2_147_483_648, transformationShift: 4_294_967_295 },
+      },
+    });
+
+    expect(payload.static_ri).toEqual({
+      "0": { start_point: 2_147_483_648, transformation_shift: 4_294_967_295 },
+    });
+  });
+
+  it("rejects static_ri values outside uint32 range", () => {
+    expect(() =>
+      toProtocolConnectorPayload({
+        name: "root",
+        dimensions: [{ transformations: [], bindings: {} }],
+        staticRi: {
+          "0": { startPoint: 4_294_967_296, transformationShift: 0 },
+        },
+      }),
+    ).toThrow(/uint32/);
+  });
+
   it("omits static_ri when connector has no staticRi", () => {
     const payload = toProtocolConnectorPayload({
       name: "root",
@@ -58,5 +84,15 @@ describe("connectorContractAdapter static_ri mapping", () => {
     });
 
     expect(payload.static_ri).toBeUndefined();
+  });
+
+  it("serializes empty condition fields required by the connector API", () => {
+    const payload = toProtocolConnectorPayload({
+      name: "root",
+      dimensions: [{ transformations: [], bindings: {} }],
+    });
+
+    expect(payload.condition_name).toBe("");
+    expect(payload.condition_args).toEqual([]);
   });
 });

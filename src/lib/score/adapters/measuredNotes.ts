@@ -115,6 +115,11 @@ type ScoreCollectorKind =
 
 type ScoreField = MeasuredNoteField | ScoreDecorationField | ScoreLayerField;
 
+type GenericScoreGroup = {
+  groupPath: string;
+  fields: Partial<Record<ScoreField, PtOutputFeature>>;
+};
+
 const isFiniteNumber = (value: unknown): value is number =>
   typeof value === "number" && Number.isFinite(value);
 
@@ -157,13 +162,16 @@ const parseSegmentDimensionIndex = (segment: string): number | null => {
   return Number(rawIndex);
 };
 
+const findNearestPositionalCollectorField = (segments: string[]): ScoreField | null => {
+  for (let index = segments.length - 2; index >= 0; index -= 1) {
+    const field = parsePositionalCollectorField(segments[index] ?? "");
+    if (field) return field;
+  }
+  return null;
+};
+
 const parseScoreField = (path: string): ScoreField | null => {
   const segments = parsePathSegments(path);
-  const nearestCollector = parseCollectorContext(path).kind;
-  const positionalCollectorField = parsePositionalCollectorField(
-    segments[segments.length - 1] ?? "",
-  );
-  if (positionalCollectorField) return positionalCollectorField;
   const normalizedSegments = segments.map((segment) =>
     normalizeMeasuredFieldLeaf(normalizePluginPathSegmentName(segment)),
   );
@@ -184,10 +192,8 @@ const parseScoreField = (path: string): ScoreField | null => {
   if (leaf === "time_tick") return "timeTick";
   if (leaf === "duration_tick") return "durationTick";
   if (leaf === "measure" || leaf === "bar") return "measure";
-  if (nearestCollector === "notes" && rawLeaf === "score_onset") return "timeTick";
-  if (nearestCollector === "notes" && rawLeaf === "score_duration") {
-    return "durationTick";
-  }
+  if (rawLeaf === "score_onset") return "timeTick";
+  if (rawLeaf === "score_duration") return "durationTick";
   if (leaf === "onset" || leaf === "beat" || leaf === "time_in_measure") return "onset";
   if (leaf === "duration" || leaf === "durationv2") return "duration";
   if (leaf === "pitch") return "pitch";
@@ -212,6 +218,8 @@ const parseScoreField = (path: string): ScoreField | null => {
   if (leaf === "key_time_tick") return "keyTimeTick";
   if (leaf === "key_fifths" || leaf === "fifths") return "keyFifths";
   if (leaf === "key_mode_code" || leaf === "mode_code") return "keyModeCode";
+  const positionalCollectorField = findNearestPositionalCollectorField(segments);
+  if (positionalCollectorField) return positionalCollectorField;
   return null;
 };
 
@@ -257,14 +265,22 @@ const TEMPO_FIELDS = new Set<ScoreLayerField>(["tempoTimeTick", "tempoBpm"]);
 const KEY_FIELDS = new Set<ScoreLayerField>(["keyTimeTick", "keyFifths", "keyModeCode", "part"]);
 
 const NOTE_COLLECTOR_NAMES = new Set([
+  "score_notes_v2",
   "score_notes_v1",
   "score_notes",
   "score_note",
   "notes",
   "note",
 ]);
-const METER_COLLECTOR_NAMES = new Set(["score_meter_v2", "score_meter_v1", "score_meter", "meter"]);
+const METER_COLLECTOR_NAMES = new Set([
+  "score_meter_v3",
+  "score_meter_v2",
+  "score_meter_v1",
+  "score_meter",
+  "meter",
+]);
 const PART_COLLECTOR_NAMES = new Set([
+  "score_parts_v3",
   "score_parts_v2",
   "score_parts_v1",
   "score_parts",
@@ -272,21 +288,41 @@ const PART_COLLECTOR_NAMES = new Set([
   "part",
 ]);
 const CLEF_COLLECTOR_NAMES = new Set([
+  "score_clefs_v3",
   "score_clefs_v2",
   "score_clefs_v1",
   "score_clefs",
   "clefs",
   "clef",
 ]);
-const TEMPO_COLLECTOR_NAMES = new Set(["score_tempo_v2", "score_tempo_v1", "score_tempo", "tempo"]);
-const KEY_COLLECTOR_NAMES = new Set(["score_key_v2", "score_key_v1", "score_key", "key"]);
+const TEMPO_COLLECTOR_NAMES = new Set([
+  "score_tempo_v3",
+  "score_tempo_v2",
+  "score_tempo_v1",
+  "score_tempo",
+  "tempo",
+]);
+const KEY_COLLECTOR_NAMES = new Set([
+  "score_key_v3",
+  "score_key_v2",
+  "score_key_v1",
+  "score_key",
+  "key",
+]);
 const ARTICULATION_COLLECTOR_NAMES = new Set([
+  "score_articulations_v2",
   "score_articulations_v1",
   "score_articulations",
   "articulations",
   "articulation",
 ]);
-const SLUR_COLLECTOR_NAMES = new Set(["score_slurs_v1", "score_slurs", "slurs", "slur"]);
+const SLUR_COLLECTOR_NAMES = new Set([
+  "score_slurs_v2",
+  "score_slurs_v1",
+  "score_slurs",
+  "slurs",
+  "slur",
+]);
 
 const collectorKindForSegment = (segment: string): ScoreCollectorKind | null => {
   const name = normalizePluginPathSegmentName(segment);
@@ -322,6 +358,52 @@ const POSITIONAL_COLLECTOR_FIELDS: Record<ScoreCollectorKind, readonly (ScoreFie
   slurs: ["eventId", "slurNumber", "slurType", "placement"],
 };
 
+const POSITION_SCHEMA_ROOT_LAYERS: Partial<Record<number, ScoreCollectorKind>> = {
+  0: "notes",
+  1: "parts",
+  2: "meter",
+  3: "clefs",
+  4: "tempo",
+  5: "key",
+  6: "articulations",
+  7: "slurs",
+};
+
+const POSITION_SCHEMA_FIELDS: Record<ScoreCollectorKind, readonly (ScoreField | null)[]> = {
+  notes: [
+    "timeTick",
+    "durationTick",
+    "pitch",
+    "eventId",
+    "part",
+    "staff",
+    "voice",
+    "dynamicCode",
+    null,
+    null,
+    null,
+    null,
+  ],
+  parts: ["part", "staffCount", null, null],
+  meter: ["meterTimeTick", "beats", "beatType"],
+  clefs: ["clefTimeTick", "part", "staff", "clefSignCode", "clefLine"],
+  tempo: ["tempoTimeTick", "tempoBpm"],
+  key: ["keyTimeTick", "keyFifths", "keyModeCode", "part"],
+  articulations: ["eventId", "articulationCode", "placement"],
+  slurs: ["eventId", "slurNumber", "slurType", "placement", null],
+};
+
+const POSITION_SCHEMA_REQUIRED_FIELDS: Record<ScoreCollectorKind, readonly ScoreField[]> = {
+  notes: ["timeTick", "durationTick", "pitch"],
+  parts: ["part", "staffCount"],
+  meter: ["meterTimeTick", "beats", "beatType"],
+  clefs: ["clefTimeTick", "part", "staff", "clefSignCode", "clefLine"],
+  tempo: ["tempoTimeTick", "tempoBpm"],
+  key: ["keyTimeTick", "keyFifths"],
+  articulations: ["eventId", "articulationCode"],
+  slurs: ["eventId", "slurNumber", "slurType"],
+};
+
 const parsePositionalCollectorField = (segment: string): ScoreField | null => {
   const kind = collectorKindForSegment(segment);
   if (!kind) return null;
@@ -336,6 +418,85 @@ const buildCollectorGroupPath = (segments: string[], collectorIndex: number): st
   return groupSegments.length ? `/${groupSegments.join("/")}` : "/";
 };
 
+const buildPositionSchemaGroupPath = (segments: string[], fieldSegmentIndex: number): string => {
+  const groupSegments = [
+    ...segments.slice(0, fieldSegmentIndex),
+    normalizePluginPathSegmentName(segments[fieldSegmentIndex] ?? ""),
+  ].filter(Boolean);
+  return groupSegments.length ? `/${groupSegments.join("/")}` : "/";
+};
+
+const isLegacyNamedScoreSegment = (segment: string): boolean => {
+  const name = normalizePluginPathSegmentName(segment);
+  return (
+    Boolean(collectorKindForSegment(segment)) ||
+    name === "score_full" ||
+    /^score_full_v\d+$/.test(name)
+  );
+};
+
+const isPositionSchemaAncestorGroup = (ancestorPath: string, childPath: string): boolean => {
+  const ancestorSegments = parsePathSegments(ancestorPath).map(normalizePluginPathSegmentName);
+  const childSegments = parsePathSegments(childPath).map(normalizePluginPathSegmentName);
+  return (
+    ancestorSegments.length < childSegments.length &&
+    ancestorSegments.every((segment, index) => childSegments[index] === segment)
+  );
+};
+
+const collectPositionSchemaGroups = (
+  streams: readonly PtOutputFeature[],
+  connectorTargets: readonly string[] = [],
+  kind: ScoreCollectorKind,
+): GenericScoreGroup[] => {
+  const targetNames = new Set(
+    connectorTargets.map((target) => target.trim().toLowerCase()).filter(Boolean),
+  );
+  if (!targetNames.size) return [];
+
+  const groups = new Map<string, GenericScoreGroup>();
+
+  streams.forEach((stream) => {
+    const segments = parsePathSegments(stream.feature_path);
+    const rootIndex = segments.findIndex((segment) =>
+      targetNames.has(normalizePluginPathSegmentName(segment)),
+    );
+    if (rootIndex < 0) return;
+
+    const rootDimensionIndex = parseSegmentDimensionIndex(segments[rootIndex] ?? "");
+    if (rootDimensionIndex === null) return;
+    const rootLayer = POSITION_SCHEMA_ROOT_LAYERS[rootDimensionIndex];
+    if (rootLayer !== kind) return;
+
+    for (let index = rootIndex + 1; index < segments.length; index += 1) {
+      if (segments.slice(rootIndex + 1, index + 1).some(isLegacyNamedScoreSegment)) continue;
+      const fieldIndex = parseSegmentDimensionIndex(segments[index] ?? "");
+      if (fieldIndex === null) continue;
+      const field = POSITION_SCHEMA_FIELDS[kind][fieldIndex] ?? null;
+      if (!field) continue;
+      const groupPath = buildPositionSchemaGroupPath(segments, index);
+      const current = groups.get(groupPath) ?? { groupPath, fields: {} };
+      if (!current.fields[field]) {
+        current.fields[field] = stream;
+      }
+      groups.set(groupPath, current);
+    }
+  });
+
+  const completeGroups = [...groups.values()]
+    .filter((group) =>
+      POSITION_SCHEMA_REQUIRED_FIELDS[kind].every((field) => Boolean(group.fields[field])),
+    )
+    .sort((a, b) => a.groupPath.localeCompare(b.groupPath));
+
+  return completeGroups.filter(
+    (group) =>
+      !completeGroups.some((candidate) =>
+        isPositionSchemaAncestorGroup(group.groupPath, candidate.groupPath),
+      ),
+  );
+};
+
 const parseCollectorContext = (
   path: string,
 ): { kind: ScoreCollectorKind | null; groupPath: string } => {
@@ -348,31 +509,116 @@ const parseCollectorContext = (
   return { kind: null, groupPath: `/${segments.slice(0, -1).join("/")}` };
 };
 
-export const hasMeasuredNoteStreams = (streams: readonly PtOutputFeature[]): boolean => {
+const buildAncestorGroupPaths = (path: string): string[] => {
+  const segments = parsePathSegments(path);
+  if (segments.length <= 1) return ["/"];
+  const paths: string[] = [];
+  const seen = new Set<string>();
+  const pushPath = (pathValue: string) => {
+    if (seen.has(pathValue)) return;
+    seen.add(pathValue);
+    paths.push(pathValue);
+  };
+  segments.slice(0, -1).forEach((_, index) => {
+    const prefix = segments.slice(0, index + 1);
+    pushPath(`/${prefix.join("/")}`);
+
+    const lastSegment = prefix[prefix.length - 1] ?? "";
+    const normalizedLastSegment = normalizePluginPathSegmentName(lastSegment);
+    if (normalizedLastSegment && normalizedLastSegment !== lastSegment) {
+      pushPath(`/${[...prefix.slice(0, -1), normalizedLastSegment].join("/")}`);
+    }
+  });
+  return paths;
+};
+
+const isCompleteMeasuredNoteFieldSet = (fields: Set<MeasuredNoteField>): boolean =>
+  fields.has("pitch") &&
+  ((fields.has("timeTick") && fields.has("durationTick")) ||
+    (fields.has("time") && fields.has("duration")) ||
+    (fields.has("measure") && fields.has("onset") && fields.has("duration")));
+
+export const hasMeasuredNoteStreams = (
+  streams: readonly PtOutputFeature[],
+  connectorTargets: readonly string[] = [],
+): boolean => {
   const fields = new Set(streams.map((stream) => parseScoreField(stream.feature_path)));
   return (
-    fields.has("pitch") &&
-    ((fields.has("timeTick") && fields.has("durationTick")) ||
-      (fields.has("measure") && fields.has("onset") && fields.has("duration")))
+    (fields.has("pitch") &&
+      ((fields.has("timeTick") && fields.has("durationTick")) ||
+        (fields.has("measure") && fields.has("onset") && fields.has("duration")))) ||
+    collectPositionSchemaGroups(streams, connectorTargets, "notes").length > 0
   );
 };
 
-const collectGroups = (streams: readonly PtOutputFeature[]): MeasuredNoteGroup[] => {
+const collectGroups = (
+  streams: readonly PtOutputFeature[],
+  connectorTargets: readonly string[] = [],
+): MeasuredNoteGroup[] => {
   const groups = new Map<string, MeasuredNoteGroup>();
+  const uncollectedEntries: Array<{
+    field: MeasuredNoteField;
+    stream: PtOutputFeature;
+    ancestorPaths: string[];
+    fallbackGroupPath: string;
+  }> = [];
+  const ancestorFields = new Map<string, Set<MeasuredNoteField>>();
+
   streams.forEach((stream) => {
     const field = parseScoreField(stream.feature_path);
     if (!field || !NOTE_FIELDS.has(field as MeasuredNoteField)) return;
     const { kind, groupPath } = parseCollectorContext(stream.feature_path);
     if (kind && kind !== "notes") return;
+
+    if (!kind) {
+      const measuredField = field as MeasuredNoteField;
+      const ancestorPaths = buildAncestorGroupPaths(stream.feature_path);
+      uncollectedEntries.push({
+        field: measuredField,
+        stream,
+        ancestorPaths,
+        fallbackGroupPath: groupPath,
+      });
+      ancestorPaths.forEach((ancestorPath) => {
+        const fields = ancestorFields.get(ancestorPath) ?? new Set<MeasuredNoteField>();
+        fields.add(measuredField);
+        ancestorFields.set(ancestorPath, fields);
+      });
+      return;
+    }
+
     const current = groups.get(groupPath) ?? { groupPath };
     current[field as MeasuredNoteField] = stream;
     groups.set(groupPath, current);
   });
+
+  uncollectedEntries.forEach((entry) => {
+    const groupPath =
+      [...entry.ancestorPaths]
+        .reverse()
+        .find((ancestorPath) =>
+          isCompleteMeasuredNoteFieldSet(ancestorFields.get(ancestorPath) ?? new Set()),
+        ) ?? entry.fallbackGroupPath;
+    const current = groups.get(groupPath) ?? { groupPath };
+    current[entry.field] = entry.stream;
+    groups.set(groupPath, current);
+  });
+
+  collectPositionSchemaGroups(streams, connectorTargets, "notes").forEach((group) => {
+    const current = groups.get(group.groupPath) ?? { groupPath: group.groupPath };
+    NOTE_FIELDS.forEach((field) => {
+      const stream = group.fields[field];
+      if (stream) current[field] = stream;
+    });
+    groups.set(group.groupPath, current);
+  });
+
   return [...groups.values()].sort((a, b) => a.groupPath.localeCompare(b.groupPath));
 };
 
 const collectArticulationGroups = (
   streams: readonly PtOutputFeature[],
+  connectorTargets: readonly string[] = [],
 ): ScoreArticulationGroup[] => {
   const groups = new Map<string, ScoreArticulationGroup>();
   streams.forEach((stream) => {
@@ -384,10 +630,21 @@ const collectArticulationGroups = (
     current[field as keyof Omit<ScoreArticulationGroup, "groupPath">] = stream;
     groups.set(groupPath, current);
   });
+  collectPositionSchemaGroups(streams, connectorTargets, "articulations").forEach((group) => {
+    const current = groups.get(group.groupPath) ?? { groupPath: group.groupPath };
+    ARTICULATION_FIELDS.forEach((field) => {
+      const stream = group.fields[field];
+      if (stream) current[field as keyof Omit<ScoreArticulationGroup, "groupPath">] = stream;
+    });
+    groups.set(group.groupPath, current);
+  });
   return [...groups.values()].sort((a, b) => a.groupPath.localeCompare(b.groupPath));
 };
 
-const collectSlurGroups = (streams: readonly PtOutputFeature[]): ScoreSlurGroup[] => {
+const collectSlurGroups = (
+  streams: readonly PtOutputFeature[],
+  connectorTargets: readonly string[] = [],
+): ScoreSlurGroup[] => {
   const groups = new Map<string, ScoreSlurGroup>();
   streams.forEach((stream) => {
     const field = parseScoreField(stream.feature_path);
@@ -398,10 +655,21 @@ const collectSlurGroups = (streams: readonly PtOutputFeature[]): ScoreSlurGroup[
     current[field as keyof Omit<ScoreSlurGroup, "groupPath">] = stream;
     groups.set(groupPath, current);
   });
+  collectPositionSchemaGroups(streams, connectorTargets, "slurs").forEach((group) => {
+    const current = groups.get(group.groupPath) ?? { groupPath: group.groupPath };
+    SLUR_FIELDS.forEach((field) => {
+      const stream = group.fields[field];
+      if (stream) current[field as keyof Omit<ScoreSlurGroup, "groupPath">] = stream;
+    });
+    groups.set(group.groupPath, current);
+  });
   return [...groups.values()].sort((a, b) => a.groupPath.localeCompare(b.groupPath));
 };
 
-const collectMeterGroups = (streams: readonly PtOutputFeature[]): ScoreMeterGroup[] => {
+const collectMeterGroups = (
+  streams: readonly PtOutputFeature[],
+  connectorTargets: readonly string[] = [],
+): ScoreMeterGroup[] => {
   const groups = new Map<string, ScoreMeterGroup>();
   streams.forEach((stream) => {
     const field = parseScoreField(stream.feature_path);
@@ -412,10 +680,21 @@ const collectMeterGroups = (streams: readonly PtOutputFeature[]): ScoreMeterGrou
     current[field as keyof Omit<ScoreMeterGroup, "groupPath">] = stream;
     groups.set(groupPath, current);
   });
+  collectPositionSchemaGroups(streams, connectorTargets, "meter").forEach((group) => {
+    const current = groups.get(group.groupPath) ?? { groupPath: group.groupPath };
+    METER_FIELDS.forEach((field) => {
+      const stream = group.fields[field];
+      if (stream) current[field as keyof Omit<ScoreMeterGroup, "groupPath">] = stream;
+    });
+    groups.set(group.groupPath, current);
+  });
   return [...groups.values()].sort((a, b) => a.groupPath.localeCompare(b.groupPath));
 };
 
-const collectPartGroups = (streams: readonly PtOutputFeature[]): ScorePartGroup[] => {
+const collectPartGroups = (
+  streams: readonly PtOutputFeature[],
+  connectorTargets: readonly string[] = [],
+): ScorePartGroup[] => {
   const groups = new Map<string, ScorePartGroup>();
   streams.forEach((stream) => {
     const field = parseScoreField(stream.feature_path);
@@ -426,10 +705,21 @@ const collectPartGroups = (streams: readonly PtOutputFeature[]): ScorePartGroup[
     current[field as keyof Omit<ScorePartGroup, "groupPath">] = stream;
     groups.set(groupPath, current);
   });
+  collectPositionSchemaGroups(streams, connectorTargets, "parts").forEach((group) => {
+    const current = groups.get(group.groupPath) ?? { groupPath: group.groupPath };
+    PART_FIELDS.forEach((field) => {
+      const stream = group.fields[field];
+      if (stream) current[field as keyof Omit<ScorePartGroup, "groupPath">] = stream;
+    });
+    groups.set(group.groupPath, current);
+  });
   return [...groups.values()].sort((a, b) => a.groupPath.localeCompare(b.groupPath));
 };
 
-const collectClefGroups = (streams: readonly PtOutputFeature[]): ScoreClefGroup[] => {
+const collectClefGroups = (
+  streams: readonly PtOutputFeature[],
+  connectorTargets: readonly string[] = [],
+): ScoreClefGroup[] => {
   const groups = new Map<string, ScoreClefGroup>();
   streams.forEach((stream) => {
     const field = parseScoreField(stream.feature_path);
@@ -440,10 +730,21 @@ const collectClefGroups = (streams: readonly PtOutputFeature[]): ScoreClefGroup[
     current[field as keyof Omit<ScoreClefGroup, "groupPath">] = stream;
     groups.set(groupPath, current);
   });
+  collectPositionSchemaGroups(streams, connectorTargets, "clefs").forEach((group) => {
+    const current = groups.get(group.groupPath) ?? { groupPath: group.groupPath };
+    CLEF_FIELDS.forEach((field) => {
+      const stream = group.fields[field];
+      if (stream) current[field as keyof Omit<ScoreClefGroup, "groupPath">] = stream;
+    });
+    groups.set(group.groupPath, current);
+  });
   return [...groups.values()].sort((a, b) => a.groupPath.localeCompare(b.groupPath));
 };
 
-const collectTempoGroups = (streams: readonly PtOutputFeature[]): ScoreTempoGroup[] => {
+const collectTempoGroups = (
+  streams: readonly PtOutputFeature[],
+  connectorTargets: readonly string[] = [],
+): ScoreTempoGroup[] => {
   const groups = new Map<string, ScoreTempoGroup>();
   streams.forEach((stream) => {
     const field = parseScoreField(stream.feature_path);
@@ -454,10 +755,21 @@ const collectTempoGroups = (streams: readonly PtOutputFeature[]): ScoreTempoGrou
     current[field as keyof Omit<ScoreTempoGroup, "groupPath">] = stream;
     groups.set(groupPath, current);
   });
+  collectPositionSchemaGroups(streams, connectorTargets, "tempo").forEach((group) => {
+    const current = groups.get(group.groupPath) ?? { groupPath: group.groupPath };
+    TEMPO_FIELDS.forEach((field) => {
+      const stream = group.fields[field];
+      if (stream) current[field as keyof Omit<ScoreTempoGroup, "groupPath">] = stream;
+    });
+    groups.set(group.groupPath, current);
+  });
   return [...groups.values()].sort((a, b) => a.groupPath.localeCompare(b.groupPath));
 };
 
-const collectKeyGroups = (streams: readonly PtOutputFeature[]): ScoreKeyGroup[] => {
+const collectKeyGroups = (
+  streams: readonly PtOutputFeature[],
+  connectorTargets: readonly string[] = [],
+): ScoreKeyGroup[] => {
   const groups = new Map<string, ScoreKeyGroup>();
   streams.forEach((stream) => {
     const field = parseScoreField(stream.feature_path);
@@ -467,6 +779,14 @@ const collectKeyGroups = (streams: readonly PtOutputFeature[]): ScoreKeyGroup[] 
     const current = groups.get(groupPath) ?? { groupPath };
     current[field as keyof Omit<ScoreKeyGroup, "groupPath">] = stream;
     groups.set(groupPath, current);
+  });
+  collectPositionSchemaGroups(streams, connectorTargets, "key").forEach((group) => {
+    const current = groups.get(group.groupPath) ?? { groupPath: group.groupPath };
+    KEY_FIELDS.forEach((field) => {
+      const stream = group.fields[field];
+      if (stream) current[field as keyof Omit<ScoreKeyGroup, "groupPath">] = stream;
+    });
+    groups.set(group.groupPath, current);
   });
   return [...groups.values()].sort((a, b) => a.groupPath.localeCompare(b.groupPath));
 };
@@ -494,9 +814,10 @@ const eventKey = (value: unknown): string | null =>
 const collectArticulationsByEvent = (
   streams: readonly PtOutputFeature[],
   diagnostics: ScoreBuildResult["diagnostics"],
+  connectorTargets: readonly string[] = [],
 ): Map<string, ScoreArticulationEvent[]> => {
   const byEvent = new Map<string, ScoreArticulationEvent[]>();
-  collectArticulationGroups(streams).forEach((group) => {
+  collectArticulationGroups(streams, connectorTargets).forEach((group) => {
     const count = Math.max(
       group.eventId?.data.length ?? 0,
       group.articulationCode?.data.length ?? 0,
@@ -545,9 +866,10 @@ const collectArticulationsByEvent = (
 const collectSlursByEvent = (
   streams: readonly PtOutputFeature[],
   diagnostics: ScoreBuildResult["diagnostics"],
+  connectorTargets: readonly string[] = [],
 ): Map<string, ScoreSlurEvent[]> => {
   const byEvent = new Map<string, ScoreSlurEvent[]>();
-  collectSlurGroups(streams).forEach((group) => {
+  collectSlurGroups(streams, connectorTargets).forEach((group) => {
     const count = Math.max(
       group.eventId?.data.length ?? 0,
       group.slurNumber?.data.length ?? 0,
@@ -604,9 +926,10 @@ const ticksToBeats = (ticks: number): number => ticks / SCORE_TICKS_PER_QUARTER;
 const collectMeters = (
   streams: readonly PtOutputFeature[],
   diagnostics: ScoreBuildResult["diagnostics"],
+  connectorTargets: readonly string[] = [],
 ): ScoreMeterEvent[] => {
   const meters: ScoreMeterEvent[] = [];
-  collectMeterGroups(streams).forEach((group) => {
+  collectMeterGroups(streams, connectorTargets).forEach((group) => {
     const count = maxLayerValueCount(group.meterTimeTick, group.beats, group.beatType);
     for (let index = 0; index < count; index += 1) {
       const timeTick = group.meterTimeTick?.data[index];
@@ -645,9 +968,10 @@ const collectMeters = (
 const collectParts = (
   streams: readonly PtOutputFeature[],
   diagnostics: ScoreBuildResult["diagnostics"],
+  connectorTargets: readonly string[] = [],
 ): ScorePartEvent[] => {
   const parts: ScorePartEvent[] = [];
-  collectPartGroups(streams).forEach((group) => {
+  collectPartGroups(streams, connectorTargets).forEach((group) => {
     const count = maxLayerValueCount(group.part, group.staffCount);
     for (let index = 0; index < count; index += 1) {
       const part = group.part?.data[index];
@@ -676,9 +1000,10 @@ const collectParts = (
 const collectClefs = (
   streams: readonly PtOutputFeature[],
   diagnostics: ScoreBuildResult["diagnostics"],
+  connectorTargets: readonly string[] = [],
 ): ScoreClefEvent[] => {
   const clefs: ScoreClefEvent[] = [];
-  collectClefGroups(streams).forEach((group) => {
+  collectClefGroups(streams, connectorTargets).forEach((group) => {
     const count = maxLayerValueCount(
       group.clefTimeTick,
       group.part,
@@ -731,9 +1056,10 @@ const collectClefs = (
 const collectTempos = (
   streams: readonly PtOutputFeature[],
   diagnostics: ScoreBuildResult["diagnostics"],
+  connectorTargets: readonly string[] = [],
 ): ScoreTempoEvent[] => {
   const tempos: ScoreTempoEvent[] = [];
-  collectTempoGroups(streams).forEach((group) => {
+  collectTempoGroups(streams, connectorTargets).forEach((group) => {
     const count = maxLayerValueCount(group.tempoTimeTick, group.tempoBpm);
     for (let index = 0; index < count; index += 1) {
       const timeTick = group.tempoTimeTick?.data[index];
@@ -758,9 +1084,10 @@ const collectTempos = (
 const collectKeys = (
   streams: readonly PtOutputFeature[],
   diagnostics: ScoreBuildResult["diagnostics"],
+  connectorTargets: readonly string[] = [],
 ): ScoreKeyEvent[] => {
   const keys: ScoreKeyEvent[] = [];
-  collectKeyGroups(streams).forEach((group) => {
+  collectKeyGroups(streams, connectorTargets).forEach((group) => {
     const count = maxLayerValueCount(
       group.keyTimeTick,
       group.keyFifths,
@@ -815,19 +1142,20 @@ const collectKeys = (
 
 export const buildScoreFromMeasuredNoteStreams = (
   streams: readonly PtOutputFeature[],
+  connectorTargets: readonly string[] = [],
 ): ScoreBuildResult | null => {
-  if (!hasMeasuredNoteStreams(streams)) return null;
+  if (!hasMeasuredNoteStreams(streams, connectorTargets)) return null;
 
   const diagnostics: ScoreBuildResult["diagnostics"] = [];
   const events: ScoreNoteEvent[] = [];
-  const groups = collectGroups(streams);
-  const articulationsByEvent = collectArticulationsByEvent(streams, diagnostics);
-  const slursByEvent = collectSlursByEvent(streams, diagnostics);
-  const meters = collectMeters(streams, diagnostics);
-  const parts = collectParts(streams, diagnostics);
-  const clefs = collectClefs(streams, diagnostics);
-  const tempos = collectTempos(streams, diagnostics);
-  const keys = collectKeys(streams, diagnostics);
+  const groups = collectGroups(streams, connectorTargets);
+  const articulationsByEvent = collectArticulationsByEvent(streams, diagnostics, connectorTargets);
+  const slursByEvent = collectSlursByEvent(streams, diagnostics, connectorTargets);
+  const meters = collectMeters(streams, diagnostics, connectorTargets);
+  const parts = collectParts(streams, diagnostics, connectorTargets);
+  const clefs = collectClefs(streams, diagnostics, connectorTargets);
+  const tempos = collectTempos(streams, diagnostics, connectorTargets);
+  const keys = collectKeys(streams, diagnostics, connectorTargets);
 
   groups.forEach((group) => {
     const hasTickTime = Boolean(group.timeTick && group.durationTick);

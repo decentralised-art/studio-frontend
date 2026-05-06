@@ -111,7 +111,7 @@ const NOTE_TYPE_BEATS: Array<{ beats: number; type: string }> = [
   { beats: 0.0625, type: "64th" },
   { beats: 0.03125, type: "128th" },
 ];
-const MIN_RENDERABLE_MEASURE_BEATS = NOTE_TYPE_BEATS.at(-1)?.beats ?? 0.03125;
+const MIN_SUPPORTED_METER_SPAN_BEATS = NOTE_TYPE_BEATS.at(-1)?.beats ?? 0.03125;
 
 const isFiniteNumber = (value: unknown): value is number =>
   typeof value === "number" && Number.isFinite(value);
@@ -121,32 +121,19 @@ const clampPositiveInteger = (value: unknown, fallback: number): number => {
   return Math.max(1, Math.round(value));
 };
 
-const quantizeBeatToRendererGrid = (value: number): number =>
-  Math.max(0, Math.round(value / MIN_RENDERABLE_MEASURE_BEATS) * MIN_RENDERABLE_MEASURE_BEATS);
-
-const quantizeDurationToRendererGrid = (value: number): number =>
-  Math.max(
-    MIN_RENDERABLE_MEASURE_BEATS,
-    Math.round(value / MIN_RENDERABLE_MEASURE_BEATS) * MIN_RENDERABLE_MEASURE_BEATS,
-  );
-
 const durationToDivisions = (beats: number, divisions = DEFAULT_DIVISIONS): string =>
   String(Math.max(1, Math.round(beats * divisions)));
 
 const textNode = (name: string, text: string): ScoreXmlNode => ({ name, text });
 
-const resolveNoteType = (beats: number): { type: string; dots: number } => {
+const resolveNoteType = (beats: number): { type: string; dots: number } | null => {
   const exact = NOTE_TYPE_BEATS.find((entry) => Math.abs(entry.beats - beats) < EPSILON);
   if (exact) return { type: exact.type, dots: 0 };
 
   const dotted = NOTE_TYPE_BEATS.find((entry) => Math.abs(entry.beats * 1.5 - beats) < EPSILON);
   if (dotted) return { type: dotted.type, dots: 1 };
 
-  const closest = NOTE_TYPE_BEATS.reduce(
-    (best, entry) => (Math.abs(entry.beats - beats) < Math.abs(best.beats - beats) ? entry : best),
-    NOTE_TYPE_BEATS[0] ?? { beats: 1, type: "quarter" },
-  );
-  return { type: closest.type, dots: 0 };
+  return null;
 };
 
 const pitchToNode = (pitch: number): ScoreXmlNode => {
@@ -162,6 +149,7 @@ const pitchToNode = (pitch: number): ScoreXmlNode => {
 
 const makeDurationTypeNodes = (duration: number): ScoreXmlNode[] => {
   const noteType = resolveNoteType(duration);
+  if (!noteType) return [];
   return [
     textNode("type", noteType.type),
     ...Array.from({ length: noteType.dots }, () => ({ name: "dot" })),
@@ -326,19 +314,6 @@ const validateNoteEvents = (
       return;
     }
 
-    const time = quantizeBeatToRendererGrid(event.time);
-    const duration = quantizeDurationToRendererGrid(event.duration);
-    if (Math.abs(time - event.time) > EPSILON || Math.abs(duration - event.duration) > EPSILON) {
-      diagnostics.push(
-        scoreDiagnostic(
-          "warning",
-          "quantized-note-grid",
-          `Quantized note ${index} to the smallest duration the score renderer can notate reliably.`,
-          path,
-        ),
-      );
-    }
-
     notes.push({
       ...event,
       eventId:
@@ -346,8 +321,8 @@ const validateNoteEvents = (
           ? Math.round(event.eventId)
           : undefined,
       pitch: Math.round(event.pitch),
-      time,
-      duration,
+      time: event.time,
+      duration: event.duration,
       part: clampPositiveInteger(event.part, 1),
       voice: typeof event.voice === "number" ? clampPositiveInteger(event.voice, 1) : undefined,
       staff: typeof event.staff === "number" ? clampPositiveInteger(event.staff, 1) : undefined,
@@ -461,7 +436,7 @@ const normalizeMeterEvents = (
     const previousTime = normalized.at(-1)?.time ?? 0;
     if (
       meter.time > EPSILON &&
-      meter.time - previousTime < MIN_RENDERABLE_MEASURE_BEATS - EPSILON
+      meter.time - previousTime < MIN_SUPPORTED_METER_SPAN_BEATS - EPSILON
     ) {
       diagnostics.push(
         scoreDiagnostic(

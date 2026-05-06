@@ -47,6 +47,7 @@ export type StudioNodeData = {
   fromNetwork?: boolean;
   riStart?: number;
   riShift?: number;
+  riTargetPosition?: number;
   staticRi?: Record<string, StudioRunningInstanceRef>;
 };
 
@@ -91,6 +92,11 @@ type RuntimeRegistry = {
   particles: Record<string, MockParticleDef>;
   transformations: TransformationRegistry;
   conditions: ConditionRegistry;
+};
+
+type StudioConditionEdgeData = {
+  conditionArgs?: unknown;
+  condition_args?: unknown;
 };
 
 export type StudioRuntimeSnapshot = {
@@ -278,6 +284,22 @@ const getBindingSlotFromEdge = (edge: StudioEdge): number | null => {
   return parseBindingSlotFromLabel(edge.label);
 };
 
+const isConditionTargetHandle = (handle: string | null | undefined) => {
+  const normalized = handle ?? "in";
+  return normalized === "condition" || normalized === "in";
+};
+
+const parseConditionArgsFromEdge = (edge: StudioEdge): number[] | undefined => {
+  if (!edge.data || typeof edge.data !== "object" || Array.isArray(edge.data)) return undefined;
+  const data = edge.data as StudioConditionEdgeData;
+  const rawArgs = data.conditionArgs ?? data.condition_args;
+  if (!Array.isArray(rawArgs)) return undefined;
+  return rawArgs
+    .map((arg) => Number(arg))
+    .filter((arg) => Number.isFinite(arg))
+    .map((arg) => Math.trunc(arg));
+};
+
 const resolveConnectorDimensionLinks = (
   connectorId: string,
   dimensionIndex: number,
@@ -424,22 +446,50 @@ const buildConnectorFromGraph = (
         )
       : undefined;
 
+  const condition = resolveConditionForFeature(featureNode.id, graph);
+
   return {
     name: connectorName,
     dimensions,
-    conditionName: resolveConditionNameForFeature(featureNode.id, graph) ?? undefined,
+    ...(condition?.name ? { conditionName: condition.name } : {}),
+    ...(condition?.args ? { conditionArgs: condition.args } : {}),
     ...(staticRi && Object.keys(staticRi).length > 0 ? { staticRi } : {}),
   };
 };
 
-const resolveConditionNameForFeature = (featureId: string, graph: StudioGraph) => {
-  const edge = graph.edges.find(
-    (item) => item.target === featureId && (item.targetHandle ?? "") === "condition",
-  );
+const resolveConditionForFeature = (featureId: string, graph: StudioGraph) => {
+  const edge = graph.edges.find((item) => {
+    if (item.target !== featureId || !isConditionTargetHandle(item.targetHandle)) return false;
+    const source = graph.nodes.find((node) => node.id === item.source);
+    return source?.data.kind === "condition";
+  });
   if (!edge?.source) return null;
   const source = graph.nodes.find((node) => node.id === edge.source);
   if (!source || source.data.kind !== "condition") return null;
-  return resolveNodeName(source);
+  return {
+    name: resolveNodeName(source),
+    args: parseConditionArgsFromEdge(edge),
+  };
+};
+
+const preserveNetworkConditionMetadata = (
+  localDef: StudioConnectorDef,
+  networkDef: StudioConnectorDef,
+): Pick<StudioConnectorDef, "conditionName" | "conditionArgs"> => {
+  const conditionName = localDef.conditionName ?? networkDef.conditionName;
+  if (!conditionName) return {};
+
+  const conditionArgs =
+    localDef.conditionArgs !== undefined
+      ? localDef.conditionArgs
+      : conditionName === networkDef.conditionName
+        ? networkDef.conditionArgs
+        : undefined;
+
+  return {
+    conditionName,
+    ...(conditionArgs !== undefined ? { conditionArgs: [...conditionArgs] } : {}),
+  };
 };
 
 const findRootFeature = (graph: StudioGraph) => {
@@ -554,9 +604,9 @@ const validateBindingsForDimension = (
 ) => {
   const dimension = connector.dimensions[dimensionIndex];
   const bindingKeys = Object.keys(dimension.bindings ?? {});
-  if (!bindingKeys.length) return;
 
   if (!dimension.composite) {
+    if (!bindingKeys.length) return;
     warnings.push(
       `Connector ${connector.name} dimension ${dimensionIndex + 1} has bindings without composite.`,
     );
@@ -570,6 +620,8 @@ const validateBindingsForDimension = (
     );
     return;
   }
+
+  if (!bindingKeys.length) return;
 
   let childOpenSlots = 0;
   try {
@@ -672,7 +724,8 @@ export const buildStudioRuntime = (
         warnings.push(`Using local override for network connector: ${def.name}.`);
         registry.connectors[def.name] = {
           ...def,
-          staticRi: exists.staticRi,
+          ...preserveNetworkConditionMetadata(def, exists),
+          staticRi: exists.staticRi ?? def.staticRi,
           formatHash: exists.formatHash,
           localAddress: exists.localAddress,
           ownerAddress: exists.ownerAddress,
@@ -705,7 +758,8 @@ export const buildStudioRuntime = (
     rootFeature.data.fromNetwork && existingRoot
       ? {
           ...builtRoot,
-          staticRi: existingRoot.staticRi,
+          ...preserveNetworkConditionMetadata(builtRoot, existingRoot),
+          staticRi: existingRoot.staticRi ?? builtRoot.staticRi,
           formatHash: existingRoot.formatHash,
           localAddress: existingRoot.localAddress,
           ownerAddress: existingRoot.ownerAddress,

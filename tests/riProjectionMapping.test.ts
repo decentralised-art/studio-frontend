@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { RiConnectorNodePosition } from "../src/lib/studio/riPositioning";
+import type { RiConnectorNodePosition, RiDimensionPosition } from "../src/lib/studio/riPositioning";
 import { projectRiPositionsToConnectorNodes } from "../src/lib/studio/riProjectionMapping";
 
 const node = (
@@ -22,6 +22,21 @@ const node = (
   parentDimensionIndex,
   parentSlot,
   bindingKind: null,
+});
+
+const dimension = (
+  key: string,
+  nodeKey: string,
+  connectorName: string,
+  dimensionIndex: number,
+  position: number,
+): RiDimensionPosition => ({
+  key,
+  nodeKey,
+  connectorName,
+  depth: 0,
+  dimensionIndex,
+  position,
 });
 
 describe("riProjectionMapping", () => {
@@ -206,6 +221,76 @@ describe("riProjectionMapping", () => {
     expect(result.positionByNodeId).toEqual({
       "n-root": 0,
       "n-time-slot4": 7,
+    });
+  });
+
+  it("projects connector RI edits to the connector's first local dimension position", () => {
+    const rootPlanKey = "root@0";
+    const scorePlanKey = "score@1";
+    const constantPlanKey = "constant@2";
+    const majorPlanKey = "major@3";
+    const result = projectRiPositionsToConnectorNodes({
+      rootConnectorName: "test_note_table",
+      planNodes: [
+        node(rootPlanKey, "test_note_table", 0, "root", null, null, null),
+        node(scorePlanKey, "score_quarter_note_tick_grid", 1, "composite", rootPlanKey, 0, null),
+        node(constantPlanKey, "constant_value", 3, "composite", rootPlanKey, 1, null),
+        node(majorPlanKey, "major_scale_steps", 5, "composite", rootPlanKey, 2, null),
+      ],
+      planDimensions: [
+        dimension("root-d1", rootPlanKey, "test_note_table", 0, 1),
+        dimension("score-d1", scorePlanKey, "score_quarter_note_tick_grid", 0, 2),
+        dimension("root-d2", rootPlanKey, "test_note_table", 1, 3),
+        dimension("constant-d1", constantPlanKey, "constant_value", 0, 4),
+        dimension("root-d3", rootPlanKey, "test_note_table", 2, 5),
+        dimension("major-d1", majorPlanKey, "major_scale_steps", 0, 6),
+      ],
+      graphNodes: [
+        { id: "n-root", connectorName: "test_note_table", tabRoot: true },
+        { id: "n-score", connectorName: "score_quarter_note_tick_grid" },
+        { id: "n-constant", connectorName: "constant_value" },
+        { id: "n-major", connectorName: "major_scale_steps" },
+      ],
+      graphEdges: [
+        {
+          source: "n-root",
+          target: "n-score",
+          sourceHandle: "dim-0",
+          targetHandle: "in",
+          relation: "composite",
+          bindingSlot: null,
+        },
+        {
+          source: "n-root",
+          target: "n-constant",
+          sourceHandle: "dim-1",
+          targetHandle: "in",
+          relation: "composite",
+          bindingSlot: null,
+        },
+        {
+          source: "n-root",
+          target: "n-major",
+          sourceHandle: "dim-2",
+          targetHandle: "in",
+          relation: "composite",
+          bindingSlot: null,
+        },
+      ],
+    });
+
+    expect(result.warnings).toEqual([]);
+    expect(result.positionByNodeId).toEqual({
+      "n-root": 0,
+      "n-score": 1,
+      "n-constant": 3,
+      "n-major": 5,
+    });
+    expect(result.targetPositionByNodeId).toEqual({
+      "n-root": 0,
+      "n-score": 2,
+      "n-constant": 4,
+      "n-major": 6,
     });
   });
 });

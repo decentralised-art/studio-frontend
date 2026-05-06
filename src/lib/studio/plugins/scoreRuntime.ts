@@ -25,8 +25,11 @@ export const buildScorePluginRuntimeData = (
     if (result) return toRuntimeData(result);
   }
 
-  if (hasMeasuredNoteStreams(runtimeData.streams)) {
-    const result = buildScoreFromMeasuredNoteStreams(runtimeData.streams);
+  if (hasMeasuredNoteStreams(runtimeData.streams, runtimeData.connectorTargets)) {
+    const result = buildScoreFromMeasuredNoteStreams(
+      runtimeData.streams,
+      runtimeData.connectorTargets,
+    );
     if (result) return toRuntimeData(result);
   }
 

@@ -36,6 +36,7 @@ export type ApiResolvedConnectorPreview = {
     transformations?: string[];
   }>;
   condition?: string;
+  condition_args?: number[];
   from_network?: boolean;
   static_ri?: Record<string, { start_point?: number; transformation_shift?: number }>;
 };

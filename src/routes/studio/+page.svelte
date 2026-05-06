@@ -39,6 +39,7 @@
   import { mockParticleViews, type ExploreParticle } from "$lib/data/exploreParticles";
   import type { PtOutputFeature } from "$lib/particles/ptMidiAdapter";
   import {
+    buildExecutePlanConnectorRegistry,
     buildExecuteRequestBody,
     buildExecuteRiPlan,
     buildExecuteRiPlanFromPositioning,
@@ -187,6 +188,7 @@
     toggleToolboxLibraryItem,
     type ToolboxLibrary,
   } from "$lib/toolbox/toolboxLibrary";
+  import { orderConnectorDefsForDeploy } from "$lib/studio/connectorDeployOrder";
   import { buildStudioRuntime } from "$lib/studio/studioRuntime";
   import { fetchChainParticleForStudio } from "$lib/studio/chainStudioAdapter";
   import {
@@ -225,11 +227,6 @@
     type StudioPluginRuntimeData,
   } from "$lib/studio/plugins/runtime";
   import { listStudioPlugins, type StudioPluginDescriptor } from "$lib/studio/plugins/registry";
-  import {
-    listStudioPluginTemplates,
-    listStudioPluginTemplatesForPlugin,
-    type StudioPluginTemplateDescriptor,
-  } from "$lib/studio/plugins/templates";
   import {
     bindStudioCanvasDragDrop,
     readStudioPluginDropData,
@@ -343,15 +340,6 @@
       can_deploy: boolean;
       high_risk_tools_require_confirmation: string[];
     };
-    plugin_templates: Array<{
-      id: string;
-      plugin_id: string;
-      name: string;
-      archetype_connectors: string[];
-      slot_connectors: string[];
-      purpose: string;
-      editable_draft: boolean;
-    }>;
     network_connector_catalog: string[];
   };
 
@@ -422,6 +410,7 @@
     riShift?: number;
     riLocked?: boolean;
     riPosition?: number;
+    riTargetPosition?: number;
     staticRi?: Record<string, StudioRunningInstanceRef>;
     materializedReferencedRiPositions?: number[];
     materializedReferencedRiSnapshot?: Record<string, StudioRunningInstanceRef>;
@@ -449,7 +438,7 @@
     | { type: "condition"; connectorId: string }
     | null;
   let connectorDropTarget = $state<ConnectorDropTarget>(null);
-  type ExplorerSource = "network" | "toolbox" | "plugins" | "templates";
+  type ExplorerSource = "network" | "toolbox" | "plugins";
   let explorerSource = $state<ExplorerSource>("network");
   let libraryTab = $state<"connectors" | "transformations" | "conditions">("connectors");
   let tooltipX = $state(0);
@@ -563,8 +552,6 @@
   let libraryCreateActionError = $state<string | null>(null);
   let pluginAttachStatus = $state<string | null>(null);
   let pluginAttachError = $state<string | null>(null);
-  let templateAttachError = $state<string | null>(null);
-  let templatePluginId = $state("");
   let standaloneDraftTransformations = $state<StandaloneTransformationDraft[]>([]);
   const conditionCodeById = new SvelteMap<string, string>();
 
@@ -1574,15 +1561,6 @@
           "remove_transformation_from_dimension",
         ],
       },
-      plugin_templates: listStudioPluginTemplates().map((template) => ({
-        id: template.id,
-        plugin_id: template.pluginId,
-        name: template.name,
-        archetype_connectors: template.archetypeConnectors,
-        slot_connectors: template.slotConnectors,
-        purpose: template.summary,
-        editable_draft: true,
-      })),
       network_connector_catalog: networkLibrary.feature
         .map((item) => getLibraryRegistryName(item) || item.name)
         .filter((name, index, all) => name && all.indexOf(name) === index)
@@ -3965,23 +3943,6 @@
     return Array.from(names);
   };
 
-  const collectTemplateSlotReferenceNames = (connectorName: string): string[] => {
-    const normalized = normalizeKey(connectorName);
-    if (!normalized) return [];
-    const names = new SvelteSet<string>();
-    listStudioPluginTemplates()
-      .filter((template) =>
-        template.archetypeConnectors.some((name) => normalizeKey(name) === normalized),
-      )
-      .forEach((template) => {
-        template.slotConnectors.forEach((slotName) => {
-          const trimmed = slotName.trim();
-          if (trimmed) names.add(trimmed);
-        });
-      });
-    return Array.from(names);
-  };
-
   const syncConnectorTreeFromChain = async (
     connectorName: string,
   ): Promise<{ loaded: string[]; missing: string[] }> => {
@@ -4015,10 +3976,7 @@
         continue;
       }
 
-      [
-        ...collectConnectorReferenceNames(connector),
-        ...collectTemplateSlotReferenceNames(connector.name),
-      ].forEach((childName) => {
+      collectConnectorReferenceNames(connector).forEach((childName) => {
         if (!visited.has(childName)) queued.push(childName);
       });
     }
@@ -4222,15 +4180,18 @@
     graphEdges: Edge[],
   ): {
     positionByNodeId: Record<string, number>;
+    targetPositionByNodeId: Record<string, number>;
     staticByPosition: Record<string, { startPoint: number; transformationShift: number }>;
     warnings: string[];
   } => {
     const positionByNodeId: Record<string, number> = {};
+    const targetPositionByNodeId: Record<string, number> = {};
     const staticByPosition: Record<string, { startPoint: number; transformationShift: number }> =
       {};
     const warnings: string[] = [];
     const rootConnectorName = resolveActiveExecuteConnectorName(graphNodes).trim();
-    if (!rootConnectorName) return { positionByNodeId, staticByPosition, warnings };
+    if (!rootConnectorName)
+      return { positionByNodeId, targetPositionByNodeId, staticByPosition, warnings };
 
     let runtime: ReturnType<typeof buildStudioRuntime>;
     try {
@@ -4239,26 +4200,28 @@
         { rootLabel: activeTab?.label ?? "Connector", rootParticleId: activeTab?.particleId },
       );
     } catch {
-      return { positionByNodeId, staticByPosition, warnings };
+      return { positionByNodeId, targetPositionByNodeId, staticByPosition, warnings };
     }
 
     if (!runtime.registry.connectors[rootConnectorName]) {
-      return { positionByNodeId, staticByPosition, warnings };
+      return { positionByNodeId, targetPositionByNodeId, staticByPosition, warnings };
     }
 
     let riPlan: ReturnType<typeof buildExecuteRiPlan>;
     try {
       riPlan = buildExecuteRiPlan(runtime.registry.connectors, rootConnectorName, {});
     } catch {
-      return { positionByNodeId, staticByPosition, warnings };
+      return { positionByNodeId, targetPositionByNodeId, staticByPosition, warnings };
     }
 
     const connectorNodes = graphNodes.filter((node) => isConnectorKind(node.data.kind));
-    if (!connectorNodes.length) return { positionByNodeId, staticByPosition, warnings };
+    if (!connectorNodes.length)
+      return { positionByNodeId, targetPositionByNodeId, staticByPosition, warnings };
 
     const projection = projectRiPositionsToConnectorNodes({
       rootConnectorName,
       planNodes: riPlan.positioning.nodes,
+      planDimensions: riPlan.positioning.dimensions,
       graphNodes: connectorNodes.map((node) => ({
         id: node.id,
         connectorName: resolveNodeName(node),
@@ -4275,25 +4238,30 @@
     });
 
     Object.assign(positionByNodeId, projection.positionByNodeId);
+    Object.assign(targetPositionByNodeId, projection.targetPositionByNodeId);
     warnings.push(...projection.warnings);
 
-    const mappedPositions = new SvelteSet<number>(Object.values(projection.positionByNodeId));
-    riPlan.positioning.nodes.forEach((entry) => {
-      if (!mappedPositions.has(entry.position)) return;
-      const staticEntry = riPlan.staticRiByPosition[String(entry.position)];
+    const mappedPositions = new SvelteSet<number>([
+      ...Object.values(projection.positionByNodeId),
+      ...Object.values(projection.targetPositionByNodeId),
+    ]);
+    Object.entries(riPlan.staticRiByPosition).forEach(([positionKey, staticEntry]) => {
+      const position = toInt(positionKey);
+      if (position === undefined || !mappedPositions.has(position)) return;
       if (!staticEntry) return;
-      staticByPosition[String(entry.position)] = {
+      staticByPosition[positionKey] = {
         startPoint: toInt(staticEntry.startPoint) ?? 0,
         transformationShift: toInt(staticEntry.transformationShift) ?? 0,
       };
     });
 
-    return { positionByNodeId, staticByPosition, warnings };
+    return { positionByNodeId, targetPositionByNodeId, staticByPosition, warnings };
   };
 
   const applyProjectedRiPositionsToGraphNodes = (
     graphNodes: StudioNode[],
     positionByNodeId: Record<string, number>,
+    targetPositionByNodeId: Record<string, number> = {},
   ): StudioNode[] => {
     if (!graphNodes.some((node) => isConnectorKind(node.data.kind))) return graphNodes;
 
@@ -4304,12 +4272,23 @@
         typeof projectedPosition === "number" && Number.isInteger(projectedPosition)
           ? projectedPosition
           : undefined;
-      if (node.data.riPosition === nextPosition) return node;
+      const projectedTargetPosition = targetPositionByNodeId[node.id];
+      const nextTargetPosition =
+        typeof projectedTargetPosition === "number" && Number.isInteger(projectedTargetPosition)
+          ? projectedTargetPosition
+          : nextPosition;
+      if (
+        node.data.riPosition === nextPosition &&
+        node.data.riTargetPosition === nextTargetPosition
+      ) {
+        return node;
+      }
       return {
         ...node,
         data: {
           ...node.data,
           riPosition: nextPosition,
+          riTargetPosition: nextTargetPosition,
         },
       };
     });
@@ -4319,8 +4298,15 @@
     graphNodes: StudioNode[],
     graphEdges: Edge[],
   ): StudioNode[] => {
-    const { positionByNodeId } = computeConnectorRiProjectionForGraph(graphNodes, graphEdges);
-    return applyProjectedRiPositionsToGraphNodes(graphNodes, positionByNodeId);
+    const { positionByNodeId, targetPositionByNodeId } = computeConnectorRiProjectionForGraph(
+      graphNodes,
+      graphEdges,
+    );
+    return applyProjectedRiPositionsToGraphNodes(
+      graphNodes,
+      positionByNodeId,
+      targetPositionByNodeId,
+    );
   };
 
   const materializeLockedReferencedRiAsRootStatic = (graphNodes: StudioNode[]): StudioNode[] => {
@@ -4349,6 +4335,7 @@
         fromNetwork: Boolean(node.data.fromNetwork),
         riLocked: Boolean(node.data.riLocked),
         riPosition: node.data.riPosition,
+        riTargetPosition: node.data.riTargetPosition,
         riStart: toInt(node.data.riStart) ?? 0,
         riShift: toInt(node.data.riShift) ?? 0,
         lockToggleDisabled: isConnectorRiLockToggleDisabled(node),
@@ -4437,19 +4424,40 @@
     if (!runtime) {
       return null;
     }
+    const localConnectorDefs: StudioConnectorDef[] = [];
+    const localConnectorDefNames = new SvelteSet<string>();
     for (const connectorNode of localConnectors) {
       const connectorName = resolveNodeName(connectorNode);
       const def = runtime.registry.connectors[connectorName];
       if (!def) continue;
+      if (localConnectorDefNames.has(def.name)) continue;
+      localConnectorDefNames.add(def.name);
+      localConnectorDefs.push(def);
+    }
+
+    const rootDef = runtime.registry.connectors[runtime.rootConnector];
+    const hasLocalRootConnector = localConnectors.some(
+      (node) => Boolean(node.data.tabRoot) || resolveNodeName(node) === runtime.rootConnector,
+    );
+    if (hasLocalRootConnector && rootDef && !localConnectorDefNames.has(rootDef.name)) {
+      localConnectorDefNames.add(rootDef.name);
+      localConnectorDefs.push(rootDef);
+    }
+
+    const orderedConnectors = orderConnectorDefsForDeploy(localConnectorDefs);
+    if (orderedConnectors.warnings.length) {
+      throw new Error(orderedConnectors.warnings.join(" "));
+    }
+
+    for (const def of orderedConnectors.ordered) {
       const requestBody = toProtocolConnectorPayload(def);
       await publishConnectorWithTrace(traceStudioChainPost, requestBody);
-      addItemToToolboxLibrary("connector", connectorName);
+      addItemToToolboxLibrary("connector", def.name);
     }
 
     if (!localConnectors.length) {
       return null;
     }
-    const rootDef = runtime.registry.connectors[runtime.rootConnector];
     if (!rootDef) return null;
     chainDeployStatus = `Published connector ${rootDef.name}.`;
     return rootDef.name;
@@ -4585,7 +4593,9 @@
       .filter((node) => isConnectorKind(node.data.kind))
       .forEach((connectorNode) => {
         if (connectorNode.data.riLocked) return;
-        const positionKey = toCanonicalPositionKey(connectorNode.data.riPosition);
+        const positionKey = toCanonicalPositionKey(
+          connectorNode.data.riTargetPosition ?? connectorNode.data.riPosition,
+        );
         if (!positionKey) return;
         const startPoint = toInt(connectorNode.data.riStart) ?? 0;
         const transformationShift = toInt(connectorNode.data.riShift) ?? 0;
@@ -4681,23 +4691,30 @@
         buildRuntimeOverrides({}, graphNodes),
       );
 
-      if (!runtime.registry.connectors[connectorName]) {
+      const planConnectors = buildExecutePlanConnectorRegistry({
+        runtimeConnectors: runtime.registry.connectors,
+        deployedConnectors: deployedRegistry.connectors,
+        rootConnectorName: connectorName,
+      });
+
+      if (!planConnectors[connectorName]) {
         return {
           connectorName,
           requestBody: emptyRequestBody,
-          error: `Connector '${connectorName}' is not present in runtime registry.`,
+          error: `Connector '${connectorName}' is not present in the execute registry.`,
           warnings: [...runtime.warnings],
           summary: "Execute preview unavailable.",
           positionedNodes: graphNodes,
         };
       }
 
-      const projectionPlan = buildExecuteRiPlan(runtime.registry.connectors, connectorName, {});
+      const projectionPlan = buildExecuteRiPlan(planConnectors, connectorName, {});
       const connectorNodes = graphNodes.filter((node) => isConnectorKind(node.data.kind));
       const projection = connectorNodes.length
         ? projectRiPositionsToConnectorNodes({
             rootConnectorName: connectorName,
             planNodes: projectionPlan.positioning.nodes,
+            planDimensions: projectionPlan.positioning.dimensions,
             graphNodes: connectorNodes.map((node) => ({
               id: node.id,
               connectorName: resolveNodeName(node),
@@ -4712,14 +4729,15 @@
               bindingSlot: parseConnectorEdgeBindingSlot(edge),
             })),
           })
-        : { positionByNodeId: {}, warnings: [] };
+        : { positionByNodeId: {}, targetPositionByNodeId: {}, warnings: [] };
       const positionedNodes = applyProjectedRiPositionsToGraphNodes(
         graphNodes,
         projection.positionByNodeId,
+        projection.targetPositionByNodeId,
       );
       const dynamicOverrides = collectExecuteNodeOverrides(positionedNodes);
       const riPlan = buildExecuteRiPlanFromPositioning(
-        runtime.registry.connectors,
+        planConnectors,
         projectionPlan.positioning,
         dynamicOverrides,
       );
@@ -4825,17 +4843,6 @@
     }
   });
   const allStudioPlugins = $derived.by<StudioPluginDescriptor[]>(() => listStudioPlugins());
-  const templatePluginOptions = $derived.by<StudioPluginDescriptor[]>(() => allStudioPlugins);
-  const selectedPluginNodeTemplateId = $derived.by(() => {
-    if (selectedNode?.data.kind !== "plugin") return "";
-    return selectedNode.data.sourceId?.trim() ?? "";
-  });
-  const activeTemplatePlugin = $derived.by<StudioPluginDescriptor | null>(
-    () => templatePluginOptions.find((plugin) => plugin.id === templatePluginId) ?? null,
-  );
-  const activePluginTemplates = $derived.by(() =>
-    listStudioPluginTemplatesForPlugin(activeTemplatePlugin?.id),
-  );
   const pluginSourceInfoMessage = $derived.by(() => {
     if (!activePluginSourceRootConnectorName) {
       return "No root connector selected in this tab.";
@@ -4851,22 +4858,6 @@
   const pluginAttachEnabled = $derived.by(
     () => Boolean(activePluginSourceRootConnectorName) && Boolean(activePluginSourceRootConnector),
   );
-
-  $effect(() => {
-    const options = templatePluginOptions;
-    const selectedPluginId = selectedPluginNodeTemplateId;
-    if (selectedPluginId && options.some((plugin) => plugin.id === selectedPluginId)) {
-      if (templatePluginId !== selectedPluginId) {
-        templatePluginId = selectedPluginId;
-        templateAttachError = null;
-      }
-      return;
-    }
-    if (!options.some((plugin) => plugin.id === templatePluginId)) {
-      templatePluginId = options[0]?.id ?? "";
-      templateAttachError = null;
-    }
-  });
 
   const resolvePluginAttachSourceNode = (): StudioNode | null => {
     const rootConnectorName = activePluginSourceRootConnectorName.trim();
@@ -5351,19 +5342,59 @@
           { rootLabel: activeTab.label, rootParticleId: activeTab.particleId },
           buildRuntimeOverrides(compiled.registry),
         );
+        const blockingRuntimeWarnings = runtime.warnings.filter(
+          (warning) => !warning.startsWith("Using local override for network connector:"),
+        );
+        warnings.push(...blockingRuntimeWarnings);
+
         const rootDef = runtime.registry.connectors[runtime.rootConnector];
         if (!rootDef) {
           warnings.push("Graph does not produce a publishable root connector.");
         } else {
+          const localConnectorNodes = nodes.filter(
+            (node) => isConnectorKind(node.data.kind) && !node.data.fromNetwork,
+          );
+          const localConnectorKeys = new SvelteSet(
+            localConnectorNodes.map((node) => normalizeKey(resolveNodeName(node))),
+          );
+          if (
+            localConnectorNodes.some(
+              (node) =>
+                Boolean(node.data.tabRoot) || resolveNodeName(node) === runtime.rootConnector,
+            )
+          ) {
+            localConnectorKeys.add(normalizeKey(runtime.rootConnector));
+          }
+
           rootDef.dimensions.forEach((dimension, index) => {
             const compositeName = dimension.composite ?? null;
             if (!compositeName) return;
-            if (!hasChainConnectorReference(compositeName)) {
+            if (
+              !hasChainConnectorReference(compositeName) &&
+              !localConnectorKeys.has(normalizeKey(compositeName))
+            ) {
               warnings.push(
                 `Dependency connector is not available on chain (sync required): ${compositeName} (dimension ${index + 1}).`,
               );
             }
           });
+
+          const localConnectorDefs: StudioConnectorDef[] = [];
+          const localConnectorDefNames = new SvelteSet<string>();
+          localConnectorNodes.forEach((node) => {
+            const def = runtime.registry.connectors[resolveNodeName(node)];
+            if (!def || localConnectorDefNames.has(def.name)) return;
+            localConnectorDefNames.add(def.name);
+            localConnectorDefs.push(def);
+          });
+          if (localConnectorKeys.has(normalizeKey(runtime.rootConnector))) {
+            const rootConnectorDef = runtime.registry.connectors[runtime.rootConnector];
+            if (rootConnectorDef && !localConnectorDefNames.has(rootConnectorDef.name)) {
+              localConnectorDefNames.add(rootConnectorDef.name);
+              localConnectorDefs.push(rootConnectorDef);
+            }
+          }
+          warnings.push(...orderConnectorDefsForDeploy(localConnectorDefs).warnings);
         }
       } catch (error) {
         warnings.push(error instanceof Error ? error.message : "Failed to build deploy preview.");
@@ -6158,70 +6189,6 @@
     return computeConnectorOpenSlotsInRegistry(deployedRegistry.connectors, trimmed);
   };
 
-  const cloneConnectorTreeDefinition = (connector: StudioConnectorDef): StudioConnectorDef => ({
-    name: connector.name,
-    dimensions: connector.dimensions.map((dimension) => ({
-      transformations: dimension.transformations.map((transformation) => ({
-        name: transformation.name,
-        args: [...transformation.args],
-      })),
-      ...(dimension.composite ? { composite: dimension.composite } : {}),
-      bindings: { ...(dimension.bindings ?? {}) },
-      ...(typeof dimension.riStart === "number" ? { riStart: dimension.riStart } : {}),
-      ...(typeof dimension.riShift === "number" ? { riShift: dimension.riShift } : {}),
-    })),
-    ...(connector.conditionName ? { conditionName: connector.conditionName } : {}),
-    ...(connector.conditionArgs ? { conditionArgs: [...connector.conditionArgs] } : {}),
-    ...(connector.staticRi ? { staticRi: cloneStaticRiMap(connector.staticRi) } : {}),
-    ...(connector.formatHash ? { formatHash: connector.formatHash } : {}),
-    ...(connector.localAddress ? { localAddress: connector.localAddress } : {}),
-    ...(connector.ownerAddress ? { ownerAddress: connector.ownerAddress } : {}),
-  });
-
-  const resolveConnectorNameInRegistry = (
-    connectorRegistry: Record<string, StudioConnectorDef>,
-    connectorName: string,
-  ): string | null => {
-    const trimmed = connectorName.trim();
-    if (!trimmed) return null;
-    if (connectorRegistry[trimmed]) return trimmed;
-    const normalized = normalizeKey(trimmed);
-    return Object.keys(connectorRegistry).find((name) => normalizeKey(name) === normalized) ?? null;
-  };
-
-  const buildConnectorTreeRegistryWithTemplateSlots = (
-    baseRegistry: Record<string, StudioConnectorDef>,
-  ): Record<string, StudioConnectorDef> => {
-    const registry = Object.fromEntries(
-      Object.entries(baseRegistry).map(([name, connector]) => [
-        name,
-        cloneConnectorTreeDefinition(connector),
-      ]),
-    );
-
-    listStudioPluginTemplates().forEach((template) => {
-      template.archetypeConnectors.forEach((archetypeName) => {
-        const knownArchetypeName = resolveConnectorNameInRegistry(registry, archetypeName);
-        if (!knownArchetypeName) return;
-        const definition = registry[knownArchetypeName];
-        if (!definition) return;
-
-        definition.dimensions = definition.dimensions.map((dimension, index) => {
-          if (dimension.composite?.trim()) return dimension;
-          const slotName = template.slotConnectors[index]?.trim();
-          if (!slotName) return dimension;
-          return {
-            ...dimension,
-            composite: resolveConnectorNameInRegistry(registry, slotName) ?? slotName,
-            bindings: { ...(dimension.bindings ?? {}) },
-          };
-        });
-      });
-    });
-
-    return registry;
-  };
-
   const buildConnectorTreeGraph = (
     rootConnectorName: string,
     origin: { x: number; y: number },
@@ -6237,9 +6204,7 @@
     const idPrefix = options.idFactoryScope
       ? `${baseIdPrefix}-${options.idFactoryScope}`
       : baseIdPrefix;
-    const connectorRegistry =
-      options.connectorRegistry ??
-      buildConnectorTreeRegistryWithTemplateSlots(deployedRegistry.connectors);
+    const connectorRegistry = options.connectorRegistry ?? deployedRegistry.connectors;
     return buildConnectorTreeGraphFromRegistry({
       connectorRegistry,
       rootConnectorName,
@@ -7143,7 +7108,7 @@
           source: conditionNode.id,
           sourceHandle: "out",
           target: connectorId,
-          targetHandle: "in",
+          targetHandle: "condition",
         },
       ];
     }
@@ -7318,242 +7283,6 @@
     if (kind === "feature" || kind === "connector") {
       applyDimensionChange(node.id, 1);
     }
-  };
-
-  const findPluginTemplateByArchetype = (
-    connectorName: string,
-    templates: StudioPluginTemplateDescriptor[],
-  ): StudioPluginTemplateDescriptor | null => {
-    const normalized = normalizeKey(connectorName);
-    if (!normalized) return null;
-    return (
-      templates.find((candidate) =>
-        candidate.archetypeConnectors.some((name) => normalizeKey(name) === normalized),
-      ) ?? null
-    );
-  };
-
-  const listTemplateConnectorNames = (template: StudioPluginTemplateDescriptor): string[] => {
-    const pluginTemplates = listStudioPluginTemplatesForPlugin(template.pluginId);
-    const seen = new SvelteSet<string>();
-    const visitedTemplates = new SvelteSet<string>();
-    const names: string[] = [];
-
-    const appendName = (name: string) => {
-      const trimmed = name.trim();
-      if (!trimmed) return;
-      const key = normalizeKey(trimmed);
-      if (seen.has(key)) return;
-      seen.add(key);
-      names.push(trimmed);
-    };
-
-    const visitTemplate = (candidate: StudioPluginTemplateDescriptor) => {
-      if (visitedTemplates.has(candidate.id)) return;
-      visitedTemplates.add(candidate.id);
-      candidate.archetypeConnectors.forEach(appendName);
-      candidate.slotConnectors.forEach((connectorName) => {
-        appendName(connectorName);
-        const childTemplate = findPluginTemplateByArchetype(connectorName, pluginTemplates);
-        if (childTemplate) visitTemplate(childTemplate);
-      });
-    };
-
-    visitTemplate(template);
-    return names;
-  };
-
-  const resolveKnownTemplateConnectorName = (connectorName: string): string | null => {
-    const trimmed = connectorName.trim();
-    if (!trimmed) return null;
-    if (deployedRegistry.connectors[trimmed]) return trimmed;
-    const normalized = normalizeKey(trimmed);
-    const registryName = Object.keys(deployedRegistry.connectors).find(
-      (name) => normalizeKey(name) === normalized,
-    );
-    if (registryName) return registryName;
-    const libraryItem = networkLibrary.feature.find(
-      (item) => normalizeKey(getLibraryRegistryName(item)) === normalized,
-    );
-    return libraryItem ? getLibraryRegistryName(libraryItem) : null;
-  };
-
-  const getTemplateInsertTitle = (template: StudioPluginTemplateDescriptor) =>
-    `Insert ${template.name} template`;
-
-  const cloneTemplateConnectorDefinition = (connector: StudioConnectorDef): StudioConnectorDef => ({
-    name: connector.name,
-    dimensions: connector.dimensions.map((dimension) => ({
-      transformations: dimension.transformations.map((transformation) => ({
-        name: transformation.name,
-        args: [...transformation.args],
-      })),
-      ...(dimension.composite ? { composite: dimension.composite } : {}),
-      bindings: { ...(dimension.bindings ?? {}) },
-      ...(typeof dimension.riStart === "number" ? { riStart: dimension.riStart } : {}),
-      ...(typeof dimension.riShift === "number" ? { riShift: dimension.riShift } : {}),
-    })),
-    ...(connector.conditionName ? { conditionName: connector.conditionName } : {}),
-    ...(connector.conditionArgs ? { conditionArgs: [...connector.conditionArgs] } : {}),
-    ...(connector.staticRi ? { staticRi: cloneStaticRiMap(connector.staticRi) } : {}),
-    ...(connector.formatHash ? { formatHash: connector.formatHash } : {}),
-    ...(connector.localAddress ? { localAddress: connector.localAddress } : {}),
-    ...(connector.ownerAddress ? { ownerAddress: connector.ownerAddress } : {}),
-  });
-
-  const buildTemplateConnectorRegistry = (
-    template: StudioPluginTemplateDescriptor,
-  ): Record<string, StudioConnectorDef> => {
-    const registry = Object.fromEntries(
-      Object.entries(deployedRegistry.connectors).map(([name, connector]) => [
-        name,
-        cloneTemplateConnectorDefinition(connector),
-      ]),
-    );
-    const pluginTemplates = listStudioPluginTemplatesForPlugin(template.pluginId);
-    const visitedTemplates = new SvelteSet<string>();
-
-    const applyTemplateSlots = (candidate: StudioPluginTemplateDescriptor) => {
-      if (visitedTemplates.has(candidate.id)) return;
-      visitedTemplates.add(candidate.id);
-
-      candidate.archetypeConnectors.forEach((archetypeName) => {
-        const knownArchetypeName = resolveKnownTemplateConnectorName(archetypeName);
-        if (!knownArchetypeName) return;
-        const definition = registry[knownArchetypeName];
-        if (!definition) return;
-
-        definition.dimensions = definition.dimensions.map((dimension, index) => {
-          if (dimension.composite?.trim()) return dimension;
-          const slotName = candidate.slotConnectors[index]?.trim();
-          if (!slotName) return dimension;
-          const knownSlotName = resolveKnownTemplateConnectorName(slotName) ?? slotName;
-          return {
-            ...dimension,
-            composite: knownSlotName,
-            bindings: { ...(dimension.bindings ?? {}) },
-          };
-        });
-      });
-
-      candidate.slotConnectors.forEach((connectorName) => {
-        const childTemplate = findPluginTemplateByArchetype(connectorName, pluginTemplates);
-        if (childTemplate) applyTemplateSlots(childTemplate);
-      });
-    };
-
-    applyTemplateSlots(template);
-    return registry;
-  };
-
-  const loadTemplateConnectorDefinitions = async (
-    template: StudioPluginTemplateDescriptor,
-  ): Promise<boolean> => {
-    templateAttachError = null;
-
-    const seen = new SvelteSet<string>();
-    const loadConnectorTreeDefinitions = async (connectorName: string): Promise<boolean> => {
-      const normalized = normalizeKey(connectorName);
-      if (!normalized) return true;
-      if (seen.has(normalized)) return true;
-      seen.add(normalized);
-
-      const knownName = resolveKnownTemplateConnectorName(connectorName) ?? connectorName;
-      const loaded = await ensureLibraryConnectorDetailLoaded(knownName);
-      const loadedName = resolveKnownTemplateConnectorName(connectorName) ?? knownName;
-      if (!loaded || !deployedRegistry.connectors[loadedName]) {
-        templateAttachError = `Could not load required score connector archetype '${knownName}' from chain.`;
-        return false;
-      }
-
-      const definition = deployedRegistry.connectors[loadedName];
-      for (const dimension of definition.dimensions) {
-        const compositeName = dimension.composite?.trim();
-        if (!compositeName) continue;
-        const compositeLoaded = await loadConnectorTreeDefinitions(compositeName);
-        if (!compositeLoaded) return false;
-      }
-
-      return true;
-    };
-
-    const connectorNames = listTemplateConnectorNames(template);
-    for (const connectorName of connectorNames) {
-      const loaded = await loadConnectorTreeDefinitions(connectorName);
-      if (!loaded) return false;
-    }
-
-    return true;
-  };
-
-  const insertStudioPluginTemplate = async (
-    template: StudioPluginTemplateDescriptor,
-    position: { x: number; y: number } | null = null,
-  ) => {
-    ensureEditableTabForInsertion();
-    const loaded = await loadTemplateConnectorDefinitions(template);
-    if (!loaded) return;
-
-    const rootName =
-      resolveKnownTemplateConnectorName(template.archetypeConnectors[0] ?? "") ??
-      template.archetypeConnectors[0] ??
-      "";
-    const rootDefinition = deployedRegistry.connectors[rootName];
-    if (!rootDefinition) {
-      templateAttachError = `Could not resolve root connector archetype for '${template.name}'.`;
-      return;
-    }
-    if (rootDefinition.dimensions.length < template.slotConnectors.length) {
-      templateAttachError = `Connector archetype '${rootName}' exposes ${rootDefinition.dimensions.length} dimension(s), but the '${template.name}' template requires ${template.slotConnectors.length}.`;
-      return;
-    }
-
-    const rootPosition = position ?? getCanvasCenter();
-    const templateGraph = buildConnectorTreeGraph(rootName, rootPosition, {
-      connectorRegistry: buildTemplateConnectorRegistry(template),
-      hideReadOnlyLeafOutlets: false,
-      markRootAsTabRoot: false,
-      idFactoryScope: `template-${crypto.randomUUID()}`,
-    });
-    const root = templateGraph.nodes.find(
-      (node) =>
-        isConnectorKind(node.data.kind) &&
-        normalizeKey(resolveNodeName(node)) === normalizeKey(rootName),
-    );
-    if (!root || !isCompleteConnectorTreeModel(templateGraph)) {
-      templateAttachError = `Could not create complete connector tree for '${rootName}'.`;
-      return;
-    }
-
-    const nextNodes = [
-      ...nodes.map((node) => ({
-        ...node,
-        selected: false,
-      })),
-      ...templateGraph.nodes.map((node) => ({
-        ...node,
-        selected: node.id === root.id,
-        data: isConnectorKind(node.data.kind)
-          ? {
-              ...node.data,
-              tabRoot: false,
-            }
-          : node.data,
-      })),
-    ];
-    const nextEdges = [...edges, ...templateGraph.edges];
-
-    nodes = nextNodes;
-    edges = nextEdges;
-    selectedNodeId = root.id;
-    selectedEdgeId = null;
-    setConnectorDropTarget(null);
-    templateGraph.nodes
-      .filter((node) => isConnectorKind(node.data.kind))
-      .forEach((connector) => syncConnectorRowPreview(connector.id, { schedule: false }));
-    scheduleLayout({ connectorTrees: true });
-    scheduleCanvasFitView(0.2, [root.id]);
-    templateAttachError = null;
   };
 
   const handleLibraryDragStart = (event: DragEvent, item: LibraryItem) => {
@@ -8321,9 +8050,11 @@
 
   const buildChainConnectorRequestBodyPreview = () => {
     const compiled = compileDraftTransformations(nodes);
+    const positionedNodes = applyComputedRiPositionsToGraphNodes(nodes, edges);
+    const previewNodes = materializeLockedReferencedRiAsRootStatic(positionedNodes);
     return buildApiConnectorRequestBodyPreview({
       activeTab,
-      nodes,
+      nodes: previewNodes,
       edges,
       selectedConnectorNode: getSelectedConnectorNode(),
       deployedConnectors: deployedRegistry.connectors,
@@ -8632,13 +8363,6 @@
           >
             Plugins
           </button>
-          <button
-            type="button"
-            class={`source-tab ${explorerSource === "templates" ? "is-active" : ""}`}
-            onclick={() => (explorerSource = "templates")}
-          >
-            Templates
-          </button>
         </div>
         {#if explorerSource === "network" && (chainSyncStatus || chainSyncError)}
           <div
@@ -8855,75 +8579,6 @@
                         variant="ghost"
                         type="button"
                         onclick={() => addStudioPluginToFlow(plugin)}
-                      >
-                        +
-                      </Button>
-                    </footer>
-                  </article>
-                {/each}
-              </div>
-            {/if}
-          </div>
-        {:else if explorerSource === "templates"}
-          <div class="templates-panel">
-            <div class="templates-panel-header">
-              <div class="list-title">Templates</div>
-              {#if templatePluginOptions.length > 0}
-                <label class="template-plugin-picker">
-                  <span>Plugin</span>
-                  <select
-                    value={templatePluginId}
-                    onchange={(event) => {
-                      const target = event.target as HTMLSelectElement | null;
-                      templatePluginId = target?.value ?? "";
-                      templateAttachError = null;
-                    }}
-                  >
-                    {#each templatePluginOptions as plugin (plugin.id)}
-                      <option value={plugin.id}>{plugin.name}</option>
-                    {/each}
-                  </select>
-                </label>
-              {/if}
-            </div>
-
-            {#if !activeTemplatePlugin}
-              <p class="templates-empty">No plugin selected.</p>
-            {:else if activePluginTemplates.length === 0}
-              <p class="templates-empty">No templates for {activeTemplatePlugin.name}.</p>
-            {:else}
-              {#if templateAttachError}
-                <p class="plugins-feedback is-error">{templateAttachError}</p>
-              {/if}
-              <div
-                class="templates-list"
-                role="list"
-                aria-label={`${activeTemplatePlugin.name} templates`}
-              >
-                {#each activePluginTemplates as template (template.id)}
-                  <article class="template-card" role="listitem" data-status="available">
-                    <header class="template-card-header">
-                      <h4>{template.name}</h4>
-                      <span>Ready</span>
-                    </header>
-                    <p>{template.summary}</p>
-                    <div class="template-chip-group" aria-label="Archetype connectors">
-                      {#each template.archetypeConnectors as connectorName (connectorName)}
-                        <code>{connectorName}</code>
-                      {/each}
-                    </div>
-                    <div class="template-chip-group is-muted" aria-label="Slot connectors">
-                      {#each template.slotConnectors as connectorName (connectorName)}
-                        <code>{connectorName}</code>
-                      {/each}
-                    </div>
-                    <footer class="template-card-footer">
-                      <span>{template.id}</span>
-                      <Button
-                        variant="ghost"
-                        type="button"
-                        title={getTemplateInsertTitle(template)}
-                        onclick={() => void insertStudioPluginTemplate(template)}
                       >
                         +
                       </Button>
@@ -10847,83 +10502,6 @@
   }
 
   .plugin-card-footer span {
-    @apply text-[0.53rem] uppercase tracking-[0.16em] text-white/45;
-    word-break: break-all;
-  }
-
-  .templates-panel {
-    @apply mt-1 flex min-h-0 flex-1 flex-col gap-2;
-  }
-
-  .templates-panel-header {
-    @apply flex flex-col gap-2;
-  }
-
-  .template-plugin-picker {
-    @apply flex flex-col gap-1 rounded-md border border-white/10 bg-black/40 px-2 py-1.5;
-  }
-
-  .template-plugin-picker span {
-    @apply text-[0.52rem] uppercase tracking-[0.2em] text-white/45;
-  }
-
-  .template-plugin-picker select {
-    @apply rounded-md border border-white/10 bg-black/60 px-2 py-1 text-[0.65rem] text-white/75
-      outline-none focus:border-emerald-400/60;
-  }
-
-  .templates-empty {
-    @apply rounded-md border border-dashed border-white/15 bg-black/30 px-2 py-2 text-[0.64rem] text-white/55;
-  }
-
-  .templates-list {
-    @apply flex min-h-0 flex-1 flex-col gap-2 overflow-auto pr-1;
-  }
-
-  .template-card {
-    @apply rounded-md border border-white/10 bg-black/70 p-2;
-  }
-
-  .template-card-header {
-    @apply flex items-start justify-between gap-2;
-  }
-
-  .template-card-header h4 {
-    @apply m-0 text-[0.72rem] font-semibold text-white/90;
-  }
-
-  .template-card-header span {
-    @apply shrink-0 rounded-full border border-amber-300/25 bg-amber-500/10 px-1.5 py-0.5
-      text-[0.48rem] uppercase tracking-[0.16em] text-amber-100/80;
-  }
-
-  .template-card[data-status="available"] .template-card-header span {
-    @apply border-emerald-300/30 bg-emerald-500/10 text-emerald-100/90;
-  }
-
-  .template-card p {
-    @apply mt-2 text-[0.62rem] leading-5 text-white/70;
-  }
-
-  .template-chip-group {
-    @apply mt-2 flex flex-wrap gap-1;
-  }
-
-  .template-chip-group code {
-    @apply rounded border border-cyan-300/20 bg-cyan-500/10 px-1.5 py-0.5 text-[0.55rem]
-      text-cyan-100/85;
-    word-break: break-word;
-  }
-
-  .template-chip-group.is-muted code {
-    @apply border-white/10 bg-white/5 text-white/55;
-  }
-
-  .template-card-footer {
-    @apply mt-2 flex items-center justify-between gap-2;
-  }
-
-  .template-card-footer span {
     @apply text-[0.53rem] uppercase tracking-[0.16em] text-white/45;
     word-break: break-all;
   }

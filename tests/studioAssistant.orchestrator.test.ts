@@ -19,10 +19,15 @@ describe("studio assistant orchestrator helpers", () => {
     expect(prompt).toContain("duration=0 is invalid");
     expect(prompt).toContain("Salamander Grand Piano sample preview");
     expect(prompt).toContain("not separate packages");
-    expect(prompt).toContain("Studio templates are local editable draft arrangements");
-    expect(prompt).toContain("not special connector types");
-    expect(prompt).toContain("score_notes_v1");
-    expect(prompt).toContain("trees within trees");
+    expect(prompt).toContain("studio-music-score-position-schema.md");
+    expect(prompt).toContain("semantic meaning comes from slot position");
+    expect(prompt).toContain("NOTE_TABLE maps D1 onset_tick");
+    expect(prompt).toContain("root D1 -> note table or note set");
+    expect(prompt).toContain("Do not rely on removed template workflows");
+    expect(prompt).not.toContain("Studio templates");
+    expect(prompt).toContain("A binding is not an edit to the reused connector");
+    expect(prompt).toContain("with usage-specific RI values in the authored root context");
+    expect(prompt).toContain("constant_value can appear many times in one root");
   });
 
   it("splits low/high risk calls for confirmation gate", () => {

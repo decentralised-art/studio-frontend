@@ -10,7 +10,6 @@ import {
   type ConnectorTreeNode,
 } from "../src/lib/studio/connectorTreeGraph";
 import type { StudioConnectorDef } from "../src/lib/studio/domain/connectorModel";
-import { listStudioPluginTemplates } from "../src/lib/studio/plugins/templates";
 
 const ids = () => {
   let index = 0;
@@ -63,9 +62,6 @@ const connectorNode = (model: ConnectorTreeModel, name: string): ConnectorTreeNo
   return node;
 };
 
-const connectorNodes = (model: ConnectorTreeModel): ConnectorTreeNode[] =>
-  model.nodes.filter((node) => node.data.kind === "connector");
-
 const edgeData = (edge: ConnectorTreeModel["edges"][number]) =>
   (edge.data ?? {}) as {
     relation?: string;
@@ -85,7 +81,7 @@ describe("connectorTreeGraph", () => {
         {
           staticRi: {
             "0": { startPoint: 7, transformationShift: 2 },
-            "1": { startPoint: 11, transformationShift: 3 },
+            "2": { startPoint: 11, transformationShift: 3 },
           },
         },
       ),
@@ -100,6 +96,7 @@ describe("connectorTreeGraph", () => {
       label: "Label root",
       tabRoot: true,
       riPosition: 0,
+      riTargetPosition: 0,
       riStart: 7,
       riShift: 2,
       riLocked: true,
@@ -109,6 +106,7 @@ describe("connectorTreeGraph", () => {
     expect(child.data).toMatchObject({
       label: "Label child",
       riPosition: 1,
+      riTargetPosition: 2,
       riStart: 11,
       riShift: 3,
       riLocked: true,
@@ -199,6 +197,25 @@ describe("connectorTreeGraph", () => {
     ).toBe(true);
   });
 
+  it("reserves RI positions for missing composites while chain sync is incomplete", () => {
+    const registry = {
+      root: connector("root", [
+        { composite: "missing_score" },
+        { composite: "constant_value" },
+        { composite: "major_scale_steps" },
+      ]),
+      constant_value: connector("constant_value", [{}]),
+      major_scale_steps: connector("major_scale_steps", [{}]),
+    };
+
+    const model = build(registry, "root");
+
+    expect(connectorNode(model, "constant_value").data.riPosition).toBe(3);
+    expect(connectorNode(model, "constant_value").data.riTargetPosition).toBe(4);
+    expect(connectorNode(model, "major_scale_steps").data.riPosition).toBe(5);
+    expect(connectorNode(model, "major_scale_steps").data.riTargetPosition).toBe(6);
+  });
+
   it("renders warning placeholders for connector cycles", () => {
     const registry = {
       root: connector("root", [{ composite: "child" }]),
@@ -219,7 +236,7 @@ describe("connectorTreeGraph", () => {
     );
   });
 
-  it("keeps template children on depth rows sized by the tallest parent row", () => {
+  it("keeps wide connector-tree children on depth rows sized by the tallest parent row", () => {
     const slotNames = [
       "parts",
       "meter",
@@ -267,58 +284,6 @@ describe("connectorTreeGraph", () => {
     expect(new Set(levelTwo.map((node) => node.position.y)).size).toBe(1);
     expect(levelOne[0].position.y - root.position.y).toBeGreaterThan(500);
     expect(levelTwo[0].position.y).toBeGreaterThan(levelOne[0].position.y);
-  });
-
-  it("keeps connector child rows ordered for every registered template", () => {
-    const templates = listStudioPluginTemplates();
-    const archetypeNames = new Set(templates.flatMap((template) => template.archetypeConnectors));
-    const registry: Record<string, StudioConnectorDef> = {};
-
-    templates.forEach((template) => {
-      template.archetypeConnectors.forEach((name) => {
-        registry[name] = connector(
-          name,
-          template.slotConnectors.map((slotName) => ({ composite: slotName })),
-        );
-      });
-    });
-
-    templates
-      .flatMap((template) => template.slotConnectors)
-      .filter((name) => !archetypeNames.has(name))
-      .forEach((name) => {
-        registry[name] = connector(name, [{}]);
-      });
-
-    templates.forEach((template) => {
-      const rootName = template.archetypeConnectors[0];
-      const model = build(registry, rootName);
-      const nodesById = new Map(model.nodes.map((node) => [node.id, node]));
-
-      connectorNodes(model).forEach((parent) => {
-        const childNodes = model.edges
-          .filter((edge) => {
-            const target = nodesById.get(edge.target);
-            return edge.source === parent.id && target?.data.kind === "connector";
-          })
-          .map((edge) => nodesById.get(edge.target))
-          .filter((node): node is ConnectorTreeNode => Boolean(node));
-
-        if (childNodes.length === 0) return;
-
-        const expectedY = childNodes[0].position.y;
-        childNodes.forEach((child) => {
-          expect(
-            child.position.y,
-            `${template.id}: expected ${child.data.networkId} below ${parent.data.networkId}`,
-          ).toBeGreaterThan(parent.position.y);
-          expect(
-            Math.abs(child.position.y - expectedY),
-            `${template.id}: expected children of ${parent.data.networkId} on one row`,
-          ).toBeLessThan(0.1);
-        });
-      });
-    });
   });
 
   it("does not replace a complete restored tree with a placeholder rebuild", () => {

@@ -49,6 +49,25 @@ describe("riMaterialization", () => {
     });
   });
 
+  it("materializes referenced connector RIs at their DFS target position", () => {
+    const result = materializeReferencedRiIntoRootStatic({}, [], {}, [
+      {
+        fromNetwork: true,
+        riLocked: true,
+        riPosition: 3,
+        riTargetPosition: 4,
+        riStart: 2520,
+        riShift: 0,
+        lockToggleDisabled: false,
+      },
+    ]);
+
+    expect(result.materializedPositions).toEqual([4]);
+    expect(result.staticRi).toEqual({
+      "4": { startPoint: 2520, transformationShift: 0 },
+    });
+  });
+
   it("removes previously materialized entries when no candidate remains locked", () => {
     const result = materializeReferencedRiIntoRootStatic(
       {

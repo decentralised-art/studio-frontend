@@ -36,6 +36,7 @@
     riShift?: number;
     riLocked?: boolean;
     riPosition?: number;
+    riTargetPosition?: number;
     riLockToggleDisabled?: boolean;
   };
 

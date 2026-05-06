@@ -33,18 +33,6 @@
   const scoreData = $derived(runtimeData ? buildScorePluginRuntimeData(runtimeData) : null);
   const hasMusicXml = $derived(Boolean(scoreData?.musicXml));
   const diagnostics = $derived<ScoreDiagnostic[]>(scoreData?.diagnostics ?? []);
-  const diagnosticSummaryText = $derived.by(() => {
-    if (diagnostics.length === 0) return "";
-    const errorCount = diagnostics.filter((diagnostic) => diagnostic.level === "error").length;
-    const warningCount = diagnostics.filter((diagnostic) => diagnostic.level === "warning").length;
-    const infoCount = diagnostics.length - errorCount - warningCount;
-    const parts = [
-      errorCount ? `${errorCount} error${errorCount === 1 ? "" : "s"}` : "",
-      warningCount ? `${warningCount} warning${warningCount === 1 ? "" : "s"}` : "",
-      infoCount ? `${infoCount} info` : "",
-    ].filter(Boolean);
-    return `${parts.join(" · ")} logged to browser console`;
-  });
   const statsText = $derived.by(() => {
     if (!scoreData) return "";
     const { stats } = scoreData;
@@ -169,10 +157,14 @@
 </script>
 
 <div class="score-shell">
-  {#if !runtimeData}
-    <div class="score-empty">No plugin runtime data yet.</div>
-  {:else if !hasMusicXml}
-    <div class="score-empty">{renderMessage}</div>
+  {#if !hasMusicXml}
+    <div class="score-empty-frame" aria-label="Empty music score preview">
+      <div class="score-empty-staff" aria-hidden="true">
+        {#each Array.from({ length: 5 }, (_, index) => index) as line (line)}
+          <span></span>
+        {/each}
+      </div>
+    </div>
   {:else}
     <div class="score-toolbar">
       <div class="score-meta">{statsText}</div>
@@ -191,12 +183,6 @@
         <div class="score-render-status is-error">{renderMessage}</div>
       {/if}
       <div bind:this={scoreContainer} class="score-osmd" aria-label="Music score preview"></div>
-    </div>
-  {/if}
-
-  {#if diagnosticSummaryText}
-    <div class="score-diagnostic-summary">
-      {diagnosticSummaryText}
     </div>
   {/if}
 </div>
@@ -245,19 +231,43 @@
     @apply border-rose-300/30 bg-rose-950/80 text-rose-100;
   }
 
-  .score-empty {
-    @apply mt-3 text-[0.55rem] uppercase tracking-[0.2em] text-white/40;
+  .score-empty-frame {
+    @apply mt-3 flex min-h-[190px] flex-1 items-start overflow-hidden rounded-md border border-white/10 bg-white px-5 py-10;
   }
 
-  .score-diagnostic-summary {
-    @apply mt-2 space-y-1 rounded-md border border-amber-300/20 bg-amber-300/8 px-2 py-2 text-[0.5rem] leading-relaxed tracking-[0.12em] text-amber-100/85;
+  .score-empty-staff {
+    @apply relative mt-3 h-[48px] w-full min-w-[420px];
   }
 
-  :global(:root[data-theme="light"] .score-meta),
-  :global(:root[data-theme="light"] .score-empty) {
+  .score-empty-staff span {
+    @apply absolute left-0 block h-px w-full bg-slate-900/80;
+  }
+
+  .score-empty-staff span:nth-child(1) {
+    top: 0;
+  }
+
+  .score-empty-staff span:nth-child(2) {
+    top: 12px;
+  }
+
+  .score-empty-staff span:nth-child(3) {
+    top: 24px;
+  }
+
+  .score-empty-staff span:nth-child(4) {
+    top: 36px;
+  }
+
+  .score-empty-staff span:nth-child(5) {
+    top: 48px;
+  }
+
+  :global(:root[data-theme="light"] .score-meta) {
     color: var(--text-muted) !important;
   }
 
+  :global(:root[data-theme="light"] .score-empty-frame),
   :global(:root[data-theme="light"] .score-frame) {
     background: #ffffff !important;
     border-color: var(--studio-node-border) !important;
@@ -279,11 +289,5 @@
     background: var(--surface-floating-hover) !important;
     border-color: var(--border-subtle) !important;
     color: var(--text-primary) !important;
-  }
-
-  :global(:root[data-theme="light"] .score-diagnostic-summary) {
-    background: rgba(217, 119, 6, 0.1) !important;
-    border-color: rgba(217, 119, 6, 0.28) !important;
-    color: #92400e !important;
   }
 </style>

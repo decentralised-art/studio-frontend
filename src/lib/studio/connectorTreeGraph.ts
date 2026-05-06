@@ -47,6 +47,7 @@ export type ConnectorTreeNodeData = {
   riShift?: number;
   riLocked?: boolean;
   riPosition?: number;
+  riTargetPosition?: number;
   staticRi?: Record<string, StudioRunningInstanceRef>;
 };
 
@@ -420,6 +421,7 @@ export const buildConnectorTreeGraph = ({
       connectorName: string;
       incomingBindings: Map<number, IncomingBindingDescriptor>;
       depth: number;
+      reservedOpenSlots?: number;
       boundDescriptor?: {
         kind: "static" | "forwarded";
         slotLabel: string;
@@ -429,24 +431,40 @@ export const buildConnectorTreeGraph = ({
     visiting = new Set<string>(),
   ): string => {
     const connectorName = input.connectorName.trim();
+    const reservePlaceholderRiPositions = () => {
+      const openSlots =
+        Number.isInteger(input.reservedOpenSlots) && Number(input.reservedOpenSlots) >= 0
+          ? Number(input.reservedOpenSlots)
+          : 1;
+      // Missing/cycle placeholders stand in for a connector node plus its exposed scalar slots.
+      riPositionCursor += 1 + openSlots;
+    };
+
     if (!connectorName) {
+      reservePlaceholderRiPositions();
       return createOpenSlotPlaceholder("Unnamed connector reference", input.depth);
     }
 
     if (visiting.has(connectorName)) {
+      reservePlaceholderRiPositions();
       return createOpenSlotPlaceholder(`Connector cycle at ${connectorName}`, input.depth, "cycle");
     }
 
     const def = connectorRegistry[connectorName];
     if (!def) {
+      reservePlaceholderRiPositions();
       return createOpenSlotPlaceholder(connectorName, input.depth, "missing");
     }
 
     const connectorId = `connector-${connectorName}-${createId(idFactory)}`;
     const connectorRiPosition = riPositionCursor;
+    const connectorRiTargetPosition =
+      input.depth === 0 || def.dimensions.length === 0
+        ? connectorRiPosition
+        : connectorRiPosition + 1;
     riPositionCursor += 1;
     const connectorStaticRi = cloneStaticRiMap(def.staticRi);
-    const connectorSelfStaticRi = resolvedStaticByPosition.get(connectorRiPosition) ?? null;
+    const connectorSelfStaticRi = resolvedStaticByPosition.get(connectorRiTargetPosition) ?? null;
     const connectorNode: ConnectorTreeNode = {
       id: connectorId,
       type: "connector",
@@ -472,6 +490,7 @@ export const buildConnectorTreeGraph = ({
         tabRoot: options.markRootAsTabRoot === false ? false : input.depth === 0,
         hideOutlets: false,
         riPosition: connectorRiPosition,
+        riTargetPosition: connectorRiTargetPosition,
         riStart: connectorSelfStaticRi?.startPoint ?? 0,
         riShift: connectorSelfStaticRi?.transformationShift ?? 0,
         riLocked: Boolean(connectorSelfStaticRi),
@@ -527,11 +546,19 @@ export const buildConnectorTreeGraph = ({
             replacement.kind === "forwarded"
               ? `slot ${openSlotId} (from slot ${replacement.fromSlot})`
               : `slot ${openSlotId}`;
+          const replacementOpenSlots = computeConnectorOpenSlotsInRegistry(
+            connectorRegistry,
+            replacement.targetName,
+            openSlotCache,
+            new Set(nextVisiting),
+            { tolerant: true },
+          );
           const childId = expandConnector(
             {
               connectorName: replacement.targetName,
               incomingBindings: cloneIncomingBindingMap(replacement.forwarded),
               depth: input.depth + 1,
+              reservedOpenSlots: replacementOpenSlots,
               boundDescriptor: {
                 kind: replacement.kind,
                 slotLabel,
@@ -657,6 +684,7 @@ export const buildConnectorTreeGraph = ({
           connectorName: dimension.composite,
           incomingBindings: childBindings,
           depth: input.depth + 1,
+          reservedOpenSlots: childOpenSlotsInParent,
           boundDescriptor: null,
         },
         nextVisiting,

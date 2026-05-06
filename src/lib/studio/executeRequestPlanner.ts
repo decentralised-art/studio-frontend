@@ -37,6 +37,23 @@ export type ExecuteRiPlan = {
 
 export type ExecuteNodeOverrides = Record<string, Partial<ExecuteRiValue> | undefined>;
 
+export const buildExecutePlanConnectorRegistry = (input: {
+  runtimeConnectors: Record<string, StudioConnectorDef>;
+  deployedConnectors: Record<string, StudioConnectorDef>;
+  rootConnectorName: string;
+}): Record<string, StudioConnectorDef> => {
+  const rootName = input.rootConnectorName.trim();
+  if (!rootName || !input.deployedConnectors[rootName]) return input.runtimeConnectors;
+
+  // /execute always runs the deployed root connector. When that root is already
+  // on-chain, RI planning must use the deployed definitions/static_ri map so the
+  // frontend does not send dynamic_ri for positions the contract marks static.
+  return {
+    ...input.runtimeConnectors,
+    ...input.deployedConnectors,
+  };
+};
+
 const UINT32_MAX = 0xffff_ffff;
 const clampUint32 = (value: unknown, fallback = 0) => {
   const parsed = Number(value);
@@ -177,6 +194,13 @@ export const buildExecuteRiPlanFromPositioning = (
     nodeByPosition.set(nodePos.position, {
       connectorName: nodePos.connectorName,
       nodeKey: nodePos.key,
+    });
+  });
+  positioning.dimensions.forEach((dimensionPos) => {
+    if (nodeByPosition.has(dimensionPos.position)) return;
+    nodeByPosition.set(dimensionPos.position, {
+      connectorName: dimensionPos.connectorName,
+      nodeKey: dimensionPos.nodeKey,
     });
   });
 
