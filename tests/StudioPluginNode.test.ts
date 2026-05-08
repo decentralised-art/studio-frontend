@@ -297,16 +297,14 @@ describe("StudioPluginNode", () => {
     );
   });
 
-  it("renders score plugin data through OSMD without showing MIDI controls", async () => {
+  it("renders score plugin data through the MusicXML world without showing MIDI controls", async () => {
     await renderScorePluginNode();
 
     expect(screen.queryByRole("button", { name: "Play" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Download MusicXML" })).toBeEnabled();
-    expect(screen.getByLabelText("Music score preview")).toBeInTheDocument();
-
-    await waitFor(() => expect(osmdMock.load).toHaveBeenCalledTimes(1));
-    expect(osmdMock.load.mock.calls[0][0]).toContain('<score-partwise version="4.0">');
-    expect(osmdMock.render).toHaveBeenCalledTimes(1);
+    expect(screen.getByTitle("Music Score MusicXML world preview")).toBeInTheDocument();
+    expect(osmdMock.load).not.toHaveBeenCalled();
+    expect(osmdMock.render).not.toHaveBeenCalled();
   });
 
   it("renders an empty score staff before plugin runtime data is available", async () => {

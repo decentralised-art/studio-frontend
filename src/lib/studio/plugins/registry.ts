@@ -36,7 +36,8 @@ const BUILTIN_STUDIO_PLUGINS: StudioPluginDescriptor[] = [
   {
     id: MUSIC_SCORE_PLUGIN_ID,
     name: MUSIC_SCORE_PLUGIN_NAME,
-    summary: "Renders connector-produced note streams or MusicXML trees as MusicXML 4.0 notation.",
+    summary:
+      "Renders compatible connector/RIs output as MusicXML 4.0 notation in a sandboxed world.",
     supportedFormatHashes: [MIDI_QUAD_FORMAT_HASH, ...MUSIC_SCORE_FORMAT_HASHES],
     status: "alpha",
   },

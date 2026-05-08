@@ -1075,27 +1075,27 @@ test("opens new connector tabs with a reset root-focused viewport", async ({ pag
   assertNoPageErrors();
 });
 
-test("attaches plugins to the draft root connector", async ({ page }) => {
+test("attaches worlds to the draft root connector", async ({ page }) => {
   const assertNoPageErrors = collectPageErrors(page);
   await stubRemoteApis(page);
   await authenticateFixtureSession(page);
 
   await page.goto("/studio");
-  await page.getByRole("button", { name: "Plugins", exact: true }).click();
+  await page.getByRole("button", { name: "Worlds", exact: true }).click();
 
-  const musicScorePlugin = page.locator(".plugin-card").filter({ hasText: "Music Score" });
+  const musicScorePlugin = page.locator(".plugin-card").filter({ hasText: "MusicXML Score World" });
   await musicScorePlugin.getByRole("button", { name: "+" }).click();
 
   await expect(page.locator(".plugins-feedback")).toContainText(
-    "Connected 'Music Score' to 'untitled-connector'.",
+    "Connected 'MusicXML Score World' to 'untitled-connector'.",
   );
-  await expect(page.locator(".plugin-node").filter({ hasText: "Music Score" })).toContainText(
-    "connected to untitled-connector",
-  );
+  await expect(
+    page.locator(".plugin-node").filter({ hasText: "MusicXML Score World" }),
+  ).toContainText("connected to untitled-connector");
   await expect(
     page
       .locator(".plugin-node")
-      .filter({ hasText: "Music Score" })
+      .filter({ hasText: "MusicXML Score World" })
       .getByLabel("Empty music score preview"),
   ).toBeVisible();
   await expect(
@@ -1332,7 +1332,9 @@ test("renders restored Music Score plugin notation in Studio", async ({ page }) 
   const restoredPlugin = page.locator(".plugin-node").filter({ hasText: "Music Score" });
   await expect(restoredPlugin).toBeVisible();
   await expect(restoredPlugin.getByRole("button", { name: "Download MusicXML" })).toBeVisible();
-  await expect(restoredPlugin.locator(".score-osmd svg")).toBeVisible({ timeout: 15_000 });
+  await expect(restoredPlugin.frameLocator("iframe").locator(".score-osmd svg")).toBeVisible({
+    timeout: 15_000,
+  });
   assertNoPageErrors();
 });
 

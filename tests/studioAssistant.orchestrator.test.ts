@@ -18,7 +18,8 @@ describe("studio assistant orchestrator helpers", () => {
     expect(prompt).toContain("duration is note length in beats");
     expect(prompt).toContain("duration=0 is invalid");
     expect(prompt).toContain("Salamander Grand Piano sample preview");
-    expect(prompt).toContain("not separate packages");
+    expect(prompt).toContain("Worlds are in-app Studio visualizers/runtimes");
+    expect(prompt).toContain("legacy code may still call them plugins internally");
     expect(prompt).toContain("studio-music-score-position-schema.md");
     expect(prompt).toContain("semantic meaning comes from slot position");
     expect(prompt).toContain("NOTE_TABLE maps D1 onset_tick");

@@ -10,6 +10,7 @@
     onConnectorOpen,
     onParticleOpen,
     onAddToToolbox,
+    onLoadInWorld,
     toolboxMode = "add",
     authorLabelById,
     authorAvatarUrlById,
@@ -19,6 +20,7 @@
     onConnectorOpen?: ((connectorId: string) => void) | undefined;
     onParticleOpen?: ((particleId: string) => void) | undefined;
     onAddToToolbox?: ((particleId: string) => void) | undefined;
+    onLoadInWorld?: ((particleId: string) => void) | undefined;
     toolboxMode?: "add" | "toggle";
     authorLabelById?: Readonly<Record<string, string>>;
     authorAvatarUrlById?: Readonly<Record<string, string>>;
@@ -92,25 +94,47 @@
     if (toolboxButtonDisabled) return;
     onAddToToolbox?.(event.particleId);
   };
+  const handleLoadInWorldClick = (eventClick: MouseEvent) => {
+    eventClick.preventDefault();
+    eventClick.stopPropagation();
+    onLoadInWorld?.(event.particleId);
+  };
 </script>
 
 <Card variant="soft">
   <article class="social-event-card">
-    <button
-      type="button"
-      class={`toolbox-add-button ${inToolbox ? "is-saved" : ""}`}
-      title={toolboxButtonTitle}
-      aria-label={toolboxButtonLabel}
-      aria-pressed={inToolbox}
-      onclick={handleToolboxClick}
-      disabled={toolboxButtonDisabled}
-    >
-      <svg viewBox="0 0 24 24" aria-hidden="true">
-        <path
-          d="M12 20.4c-.3 0-.7-.1-.9-.3C7.6 17.2 4 14.2 4 9.9 4 7.1 6.1 5 8.9 5c1.4 0 2.7.6 3.6 1.6C13.4 5.6 14.7 5 16.1 5 18.9 5 21 7.1 21 9.9c0 4.3-3.6 7.3-7.1 10.2-.2.2-.6.3-.9.3Z"
-        ></path>
-      </svg>
-    </button>
+    <div class="card-action-buttons">
+      {#if onLoadInWorld}
+        <button
+          type="button"
+          class="world-load-button"
+          title="Load connector in world"
+          aria-label="Load connector in world"
+          onclick={handleLoadInWorldClick}
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M5 12h14"></path>
+            <path d="m13 6 6 6-6 6"></path>
+          </svg>
+        </button>
+      {/if}
+
+      <button
+        type="button"
+        class={`toolbox-add-button ${inToolbox ? "is-saved" : ""}`}
+        title={toolboxButtonTitle}
+        aria-label={toolboxButtonLabel}
+        aria-pressed={inToolbox}
+        onclick={handleToolboxClick}
+        disabled={toolboxButtonDisabled}
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path
+            d="M12 20.4c-.3 0-.7-.1-.9-.3C7.6 17.2 4 14.2 4 9.9 4 7.1 6.1 5 8.9 5c1.4 0 2.7.6 3.6 1.6C13.4 5.6 14.7 5 16.1 5 18.9 5 21 7.1 21 9.9c0 4.3-3.6 7.3-7.1 10.2-.2.2-.6.3-.9.3Z"
+          ></path>
+        </svg>
+      </button>
+    </div>
 
     <header class="event-header">
       <div class="event-author">
@@ -194,8 +218,13 @@
     color: var(--text-primary);
   }
 
-  .toolbox-add-button {
-    @apply absolute right-0.5 top-0.5 z-10 h-8 w-8 rounded-lg border transition;
+  .card-action-buttons {
+    @apply absolute right-0.5 top-0.5 z-10 flex gap-1;
+  }
+
+  .toolbox-add-button,
+  .world-load-button {
+    @apply h-8 w-8 rounded-lg border transition;
     display: grid;
     place-items: center;
     backdrop-filter: blur(8px);
@@ -210,6 +239,12 @@
     color: var(--text-primary);
   }
 
+  .world-load-button:hover {
+    background: var(--surface-floating-hover);
+    border-color: var(--border-strong);
+    color: var(--text-primary);
+  }
+
   .toolbox-add-button:disabled {
     @apply cursor-default opacity-100;
   }
@@ -218,7 +253,8 @@
     @apply border-[#8de58f]/45 bg-[#8de58f]/15 text-[#8de58f];
   }
 
-  .toolbox-add-button svg {
+  .toolbox-add-button svg,
+  .world-load-button svg {
     width: 14px;
     height: 14px;
     fill: none;

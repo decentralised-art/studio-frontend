@@ -4813,18 +4813,6 @@
     return registryName ? deployedRegistry.connectors[registryName] : null;
   };
 
-  const normalizeConnectorFormatHash = (
-    connector: StudioConnectorDef | null | undefined,
-  ): string => {
-    const formatHash = connector?.formatHash?.trim();
-    if (!formatHash) return "";
-    try {
-      return normalizeFormatHash(formatHash);
-    } catch {
-      return "";
-    }
-  };
-
   const activePluginSourceRootConnectorName = $derived.by(() =>
     resolveActiveTabRootConnectorName(nodes).trim(),
   );
@@ -4848,17 +4836,13 @@
       return "No root connector selected in this tab.";
     }
     if (!activePluginSourceRootConnector) {
-      return "Plugins are available only for deployed connectors. Deploy this connector first.";
+      return "Worlds are available only for deployed connectors. Deploy this connector first.";
     }
     if (!activePluginSourceFormatHash) {
-      return "This connector has no normalized format hash, so plugin compatibility cannot be resolved.";
+      return "This connector has no normalized format hash, so world compatibility cannot be resolved.";
     }
     return "";
   });
-  const pluginAttachEnabled = $derived.by(
-    () => Boolean(activePluginSourceRootConnectorName) && Boolean(activePluginSourceRootConnector),
-  );
-
   const resolvePluginAttachSourceNode = (): StudioNode | null => {
     const rootConnectorName = activePluginSourceRootConnectorName.trim();
     if (!rootConnectorName) return null;
@@ -4872,30 +4856,6 @@
         (node) => node.data.definitionRole === "root" || Boolean(node.data.tabRoot),
       ) ?? candidates[0]
     );
-  };
-
-  const getPluginAttachSourceFormatHash = (): string => {
-    const sourceNode = resolvePluginAttachSourceNode();
-    if (!sourceNode) return "";
-    return normalizeConnectorFormatHash(
-      getDeployedConnectorDefinition(resolveNodeName(sourceNode)),
-    );
-  };
-
-  const canAttachPluginToCurrentRoot = (plugin: StudioPluginDescriptor): boolean => {
-    const sourceNode = resolvePluginAttachSourceNode();
-    if (!sourceNode) return false;
-    const formatHash = getPluginAttachSourceFormatHash();
-    return Boolean(formatHash) && plugin.supportedFormatHashes.includes(formatHash);
-  };
-
-  const canAttachStudioPlugin = (plugin: StudioPluginDescriptor): boolean =>
-    pluginAttachEnabled && canAttachPluginToCurrentRoot(plugin);
-  const getPluginAttachStatusLabel = (plugin: StudioPluginDescriptor): string => {
-    if (!pluginAttachEnabled) return "Needs root";
-    if (!getPluginAttachSourceFormatHash()) return "Format unavailable";
-    if (!canAttachPluginToCurrentRoot(plugin)) return "Different format";
-    return "Compatible";
   };
 
   const createStudioPluginNode = (
@@ -4926,7 +4886,7 @@
     selectedEdgeId = null;
     setConnectorDropTarget(null);
     refreshPluginOutputs(activeRunOutput ?? [], nextNodes, edges);
-    pluginAttachStatus = `Added '${plugin.name}' as a standalone plugin. Connect it to a compatible root connector when the draft is ready.`;
+    pluginAttachStatus = `Added '${plugin.name}' as a standalone world. Connect it to a compatible root connector when the draft is ready.`;
     scheduleLayout();
   };
 
@@ -4939,7 +4899,7 @@
 
     const sourceNode = resolvePluginAttachSourceNode();
     if (!sourceNode) {
-      pluginAttachError = "Could not resolve root connector node for plugin attachment.";
+      pluginAttachError = "Could not resolve root connector node for world attachment.";
       return;
     }
 
@@ -4952,7 +4912,7 @@
     if (existingPluginNode) {
       selectedNodeId = existingPluginNode.id;
       selectedEdgeId = null;
-      pluginAttachStatus = `Plugin '${plugin.name}' is already attached to '${resolveNodeName(sourceNode)}'.`;
+      pluginAttachStatus = `World '${plugin.name}' is already attached to '${resolveNodeName(sourceNode)}'.`;
       return;
     }
 
@@ -5106,7 +5066,7 @@
         timings.execute,
       )} · normalize ${formatTimingMs(timings.normalize)} · jsonStringify ${formatTimingMs(
         timings.jsonStringify,
-      )} · store ${formatTimingMs(timings.store)} · plugins ${formatTimingMs(
+      )} · store ${formatTimingMs(timings.store)} · worlds ${formatTimingMs(
         timings.plugins,
       )} · total ${formatTimingMs(totalMs)}`,
     );
@@ -8361,7 +8321,7 @@
             class={`source-tab ${explorerSource === "plugins" ? "is-active" : ""}`}
             onclick={() => (explorerSource = "plugins")}
           >
-            Plugins
+            Worlds
           </button>
         </div>
         {#if explorerSource === "network" && (chainSyncStatus || chainSyncError)}
@@ -8527,7 +8487,7 @@
         {:else if explorerSource === "plugins"}
           <div class="plugins-panel">
             <div class="plugins-panel-header">
-              <div class="list-title">Plugins</div>
+              <div class="list-title">Worlds</div>
               <div class="plugins-root">
                 Root: {activePluginSourceRootConnectorName || "Not selected"}
               </div>
@@ -8559,7 +8519,6 @@
             {#if allStudioPlugins.length > 0}
               <div class="plugins-list">
                 {#each allStudioPlugins as plugin (plugin.id)}
-                  {@const canAttachPlugin = canAttachStudioPlugin(plugin)}
                   <article
                     class="plugin-card"
                     draggable
@@ -8568,9 +8527,6 @@
                   >
                     <header class="plugin-card-header">
                       <h4>{plugin.name}</h4>
-                      <span class={`plugin-status ${canAttachPlugin ? "is-compatible" : ""}`}>
-                        {getPluginAttachStatusLabel(plugin)}
-                      </span>
                     </header>
                     <p>{plugin.summary}</p>
                     <footer class="plugin-card-footer">
@@ -10482,15 +10438,6 @@
 
   .plugin-card-header h4 {
     @apply m-0 text-[0.72rem] font-semibold text-white/90;
-  }
-
-  .plugin-status {
-    @apply shrink-0 rounded-full border border-white/10 bg-white/5 px-1.5 py-0.5 text-[0.48rem]
-      uppercase tracking-[0.16em] text-white/45;
-  }
-
-  .plugin-status.is-compatible {
-    @apply border-emerald-300/30 bg-emerald-500/10 text-emerald-100/90;
   }
 
   .plugin-card p {

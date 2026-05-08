@@ -12,6 +12,7 @@
     onLoadMore,
     onParticleOpen,
     onAddToToolbox,
+    onLoadInWorld,
     toolboxMode = "add",
     toolboxParticleIds = new Set<string>(),
     authorLabelById,
@@ -25,6 +26,7 @@
     onLoadMore?: (() => void | Promise<void>) | undefined;
     onParticleOpen?: ((particleId: string) => void) | undefined;
     onAddToToolbox?: ((particleId: string) => void) | undefined;
+    onLoadInWorld?: ((particleId: string) => void) | undefined;
     toolboxMode?: "add" | "toggle";
     toolboxParticleIds?: ReadonlySet<string>;
     authorLabelById?: Readonly<Record<string, string>>;
@@ -85,6 +87,7 @@
             {event}
             {onParticleOpen}
             {onAddToToolbox}
+            {onLoadInWorld}
             {toolboxMode}
             {authorLabelById}
             {authorAvatarUrlById}

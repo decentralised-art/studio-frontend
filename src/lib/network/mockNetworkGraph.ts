@@ -57,7 +57,7 @@ export const networkNodePalette: Record<NetworkNodeKind, { color: string; label:
   feature: { color: "#f4b247", label: "Connector Schema" },
   transformation: { color: "#f07cbc", label: "Transformation" },
   condition: { color: "#f47a7a", label: "Condition" },
-  plugin: { color: "#a993ff", label: "Plugin" },
+  plugin: { color: "#a993ff", label: "World" },
 };
 
 export const networkEdgePalette: Record<NetworkEdgeKind, { color: string; label: string }> = {
