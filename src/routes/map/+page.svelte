@@ -71,7 +71,7 @@
     feature: { color: "#f4b247", label: "Connector Schema" },
     transformation: { color: "#f07cbc", label: "Transformation" },
     condition: { color: "#f47a7a", label: "Condition" },
-    plugin: { color: "#a993ff", label: "Plugin" },
+    plugin: { color: "#a993ff", label: "World" },
   };
 
   const edgePalette: Record<EdgeKind, { color: string; label: string }> = {
@@ -89,7 +89,7 @@
     { value: "feature", label: "Connector Schemas" },
     { value: "transformation", label: "Transformations" },
     { value: "condition", label: "Conditions" },
-    { value: "plugin", label: "Plugins" },
+    { value: "plugin", label: "Worlds" },
   ];
 
   const edgeOptions: Array<{ value: EdgeKind | "all"; label: string }> = [

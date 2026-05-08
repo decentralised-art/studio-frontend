@@ -413,7 +413,7 @@
   {#if isScorePlugin}
     <ScorePluginNodeBody label={data.label} {runtimeData} />
   {:else if !runtimeData}
-    <div class="plugin-empty">No plugin runtime data yet.</div>
+    <div class="plugin-empty">No world runtime data yet.</div>
   {:else if !hasOutput}
     <div class="plugin-empty">No MIDI notes mapped yet.</div>
     {#if diagnosticLines.length}
@@ -426,7 +426,7 @@
         {/if}
       </div>
     {:else}
-      <div class="plugin-empty">Run the flow to generate plugin data.</div>
+      <div class="plugin-empty">Run the flow to generate world data.</div>
     {/if}
   {:else}
     <div class="plugin-toolbar">

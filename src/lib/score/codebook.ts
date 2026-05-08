@@ -1,5 +1,5 @@
 export const MUSIC_SCORE_PLUGIN_ID = "music-score-v1";
-export const MUSIC_SCORE_PLUGIN_NAME = "Music Score";
+export const MUSIC_SCORE_PLUGIN_NAME = "MusicXML Score World";
 
 export const MUSICXML_CUSTOM_ELEMENT_CODE = 9999;
 export const MUSICXML_CUSTOM_ATTR_CODE = 9999;

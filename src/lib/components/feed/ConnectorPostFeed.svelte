@@ -12,6 +12,7 @@
     onConnectorOpen,
     onParticleOpen,
     onAddToToolbox,
+    onLoadInWorld,
     toolboxMode = "add",
     toolboxConnectorIds,
     toolboxParticleIds,
@@ -27,6 +28,7 @@
     onConnectorOpen?: ((connectorId: string) => void) | undefined;
     onParticleOpen?: ((connectorId: string) => void) | undefined;
     onAddToToolbox?: ((connectorId: string) => void) | undefined;
+    onLoadInWorld?: ((connectorId: string) => void) | undefined;
     toolboxMode?: "add" | "toggle";
     toolboxConnectorIds?: ReadonlySet<string>;
     toolboxParticleIds?: ReadonlySet<string>;
@@ -49,6 +51,7 @@
   {onLoadMore}
   onParticleOpen={resolvedOpenHandler}
   {onAddToToolbox}
+  {onLoadInWorld}
   {toolboxMode}
   toolboxParticleIds={resolvedToolboxIds}
   {authorLabelById}

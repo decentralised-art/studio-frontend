@@ -121,4 +121,8 @@
     background: var(--surface-panel-soft);
     color: var(--text-primary);
   }
+
+  .btn-compact {
+    @apply gap-1 px-2 py-1 text-[0.65rem] leading-none;
+  }
 </style>
