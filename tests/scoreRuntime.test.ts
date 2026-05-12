@@ -60,22 +60,24 @@ const midiRuntime: StudioPluginRuntimeData = {
 };
 
 describe("score plugin runtime", () => {
-  it("falls back to pitch/time/duration/velocity streams for the first score plugin", () => {
+  it("does not render MIDI streams as a MusicXML score compatibility fallback", () => {
     const score = buildScorePluginRuntimeData(midiRuntime);
 
     expect(score.adapterId).toBe("music-note-events-v1");
-    expect(score.musicXml).toContain('<score-partwise version="4.0">');
-    expect(score.stats.noteCount).toBe(1);
+    expect(score.musicXml).toBe("");
+    expect(score.stats.noteCount).toBe(0);
+    expect(score.diagnostics.map((diagnostic) => diagnostic.code)).toContain(
+      "no-compatible-streams",
+    );
   });
 
   it("prefers measured note streams over MIDI grouping when present", () => {
     const score = buildScorePluginRuntimeData({
       ...midiRuntime,
       streams: [
-        { feature_path: "/score_note:0/measure:0", data: [1] },
-        { feature_path: "/score_note:0/onset:0", data: [0] },
-        { feature_path: "/score_note:0/duration:0", data: [1] },
-        { feature_path: "/score_note:0/pitch:0", data: [67] },
+        { feature_path: "/score_note:0/onset_tick:0", data: [0] },
+        { feature_path: "/score_note:0/duration_tick:0", data: [2520] },
+        { feature_path: "/score_note:0/pitch_midi:0", data: [67] },
       ],
     });
 
@@ -83,55 +85,45 @@ describe("score plugin runtime", () => {
     expect(score.musicXml).toContain("<step>G</step>");
   });
 
-  it("renders deployed score template streams with connected shapers under collector dimensions", () => {
+  it("renders semantic MusicXML streams with connected shapers under a shared parent", () => {
     const runtime = buildStudioPluginRuntimeData(
       "music-score-v1",
-      ["test_full_score_empty_100604052026"],
+      ["semantic_score"],
       [
         {
-          feature_path: "/test_full_score_empty_100604052026:0/score_full_v2:5/score_notes_v1:0",
-          data: [1],
-        },
-        {
-          feature_path:
-            "/test_full_score_empty_100604052026:0/score_full_v2:5/score_notes_v1:1/score_quarter_note_tick_grid:0",
+          feature_path: "/semantic_score:0/quarter_tick_grid:0/onset_tick:0",
           data: [0],
         },
         {
-          feature_path:
-            "/test_full_score_empty_100604052026:0/score_full_v2:5/score_notes_v1:2/constant_value:0",
+          feature_path: "/semantic_score:0/constant_value:0/duration_tick:0",
           data: [2520],
         },
         {
-          feature_path:
-            "/test_full_score_empty_100604052026:0/score_full_v2:5/score_notes_v1:3/major_scale_steps:0",
+          feature_path: "/semantic_score:0/major_scale_steps:0/pitch_midi:0",
           data: [60],
         },
         {
-          feature_path:
-            "/test_full_score_empty_100604052026:0/score_full_v2:1/score_meter_v2:0/score_meter_time_tick:0",
+          feature_path: "/semantic_score:1/meter:0/meter_time_tick:0",
           data: [0],
         },
         {
-          feature_path:
-            "/test_full_score_empty_100604052026:0/score_full_v2:1/score_meter_v2:1/score_beats:0",
+          feature_path: "/semantic_score:1/meter:0/meter_beats:0",
           data: [4],
         },
         {
-          feature_path:
-            "/test_full_score_empty_100604052026:0/score_full_v2:1/score_meter_v2:2/score_beat_type:0",
+          feature_path: "/semantic_score:1/meter:0/meter_beat_type:0",
           data: [4],
         },
       ],
     );
     const score = buildScorePluginRuntimeData(runtime);
 
-    expect(runtime.streams).toHaveLength(7);
+    expect(runtime.streams).toHaveLength(6);
     expect(score.adapterId).toBe("music-measured-notes-v1");
     expect(score.musicXml).toContain("<step>C</step>");
   });
 
-  it("renders positional score-root streams using connector targets as schema roots", () => {
+  it("does not render positional score-root streams using connector targets as schema roots", () => {
     const runtime = buildStudioPluginRuntimeData(
       "music-score-v1",
       ["positional_score"],
@@ -143,10 +135,9 @@ describe("score plugin runtime", () => {
     );
     const score = buildScorePluginRuntimeData(runtime);
 
-    expect(score.adapterId).toBe("music-measured-notes-v1");
-    expect(score.stats.noteCount).toBe(2);
-    expect(score.musicXml).toContain("<step>C</step>");
-    expect(score.musicXml).toContain("<step>D</step>");
+    expect(score.adapterId).toBe("music-note-events-v1");
+    expect(score.stats.noteCount).toBe(0);
+    expect(score.musicXml).toBe("");
   });
 
   it("ignores raw unconnected full-score archetype output instead of rendering junk notation", () => {

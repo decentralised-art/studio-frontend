@@ -35,7 +35,6 @@
   import { renderTransformationSolidity } from "$lib/components/solidity-editor/templates/transformationTemplate";
   import { renderConditionSolidity } from "$lib/components/solidity-editor/templates/conditionTemplate";
   import { inferArgsCountFromSnippet } from "$lib/components/solidity-editor/templates/inferArgsCount";
-  import { toProtocolConnectorPayload } from "$lib/chain/connectorContractAdapter";
   import { mockParticleViews, type ExploreParticle } from "$lib/data/exploreParticles";
   import type { PtOutputFeature } from "$lib/particles/ptMidiAdapter";
   import {
@@ -166,6 +165,7 @@
     publishTransformationWithTrace,
     type DeployTraceEntry,
   } from "$lib/studio/studioDeployTrace";
+  import { buildStudioDeployPlan, type StudioDeployPlan } from "$lib/studio/studioDeployPlan";
   import {
     clampPanelWidth,
     getStudioPanelBounds,
@@ -497,7 +497,9 @@
   let apiEditorFocused = $state(false);
   let apiEditorLiveApply = $state(true);
   let apiEditorLastGenerated = $state("");
-  let apiJsonView = $state<"protocol" | "resolved">("protocol");
+  let apiJsonView = $state<"deploy" | "protocol" | "resolved">("deploy");
+  let deployPreviewCopyStatus = $state<string | null>(null);
+  let deployPreviewCopyTimer = $state<ReturnType<typeof setTimeout> | null>(null);
   let compiledTransformationsByTab = $state<
     Record<string, Record<string, RuntimeTransformationDef>>
   >({});
@@ -4175,6 +4177,15 @@
     return sources;
   };
 
+  const collectLocalConditionSources = (graphNodes: StudioNode[]) => {
+    const sources = new SvelteMap<string, string>();
+    graphNodes.forEach((node) => {
+      if (node.data.kind !== "condition" || node.data.fromNetwork) return;
+      sources.set(node.id, getConditionCode(node.id));
+    });
+    return sources;
+  };
+
   const computeConnectorRiProjectionForGraph = (
     graphNodes: StudioNode[],
     graphEdges: Edge[],
@@ -4371,96 +4382,54 @@
     );
   };
 
-  const publishRuntimeToChain = async (
-    runtime: ReturnType<typeof buildStudioRuntime> | null,
+  const buildDeployPlanForGraph = (
+    graphNodes: StudioNode[],
+    graphEdges: Edge[],
     compiled: Record<string, RuntimeTransformationDef>,
-  ) => {
+  ) =>
+    buildStudioDeployPlan({
+      activeTab,
+      nodes: graphNodes,
+      edges: graphEdges,
+      runtimeOverrides: buildRuntimeOverrides(compiled, graphNodes),
+      compiledTransformations: compiled,
+      draftTransformationSources: collectDraftTransformationSources(graphNodes),
+      conditionSourcesByNodeId: collectLocalConditionSources(graphNodes),
+      deployedConnectorNames: Object.keys(deployedRegistry.connectors),
+      networkConnectorNames: networkLibrary.feature.map((item) => item.id.replace(/^feature-/, "")),
+    });
+
+  const publishDeployPlanToChain = async (plan: StudioDeployPlan) => {
     chainDeployError = null;
+    if (!plan.ok) {
+      throw new Error(plan.errors.join(" "));
+    }
+    if (!plan.steps.length) {
+      throw new Error("Nothing to deploy.");
+    }
+
     chainDeployStatus = "Authenticating with chain...";
     await ensureChainAuthForStudio();
 
-    const draftSources = collectDraftTransformationSources(nodes);
-    const localConditions = nodes.filter(
-      (node) => node.data.kind === "condition" && !node.data.fromNetwork,
-    );
-    if (localConditions.length) {
-      chainDeployStatus = `Publishing ${localConditions.length} condition(s)...`;
-      for (const conditionNode of localConditions) {
-        const conditionName = resolveNodeName(conditionNode);
-        const requestBody = {
-          name: conditionName,
-          sol_src: getConditionCode(conditionNode.id),
-        };
-        await publishConditionWithTrace(traceStudioChainPost, requestBody);
-        addItemToToolboxLibrary("condition", conditionName);
+    for (const step of plan.steps) {
+      chainDeployStatus = `Publishing ${step.kind} ${step.name} (${step.order}/${plan.steps.length})...`;
+      if (step.kind === "condition") {
+        await publishConditionWithTrace(traceStudioChainPost, step.body);
+        addItemToToolboxLibrary("condition", step.name);
+      } else if (step.kind === "transformation") {
+        await publishTransformationWithTrace(traceStudioChainPost, step.body);
+        addItemToToolboxLibrary("transformation", step.name);
+      } else {
+        await publishConnectorWithTrace(traceStudioChainPost, step.body);
+        addItemToToolboxLibrary("connector", step.name);
       }
     }
 
-    if (Object.keys(compiled).length) {
-      chainDeployStatus = `Publishing ${Object.keys(compiled).length} transformation(s)...`;
-    }
-    for (const name of Object.keys(compiled)) {
-      const source = draftSources.get(name);
-      if (!source) continue;
-      const requestBody = { name, sol_src: source.code };
-      await publishTransformationWithTrace(traceStudioChainPost, requestBody);
-      addItemToToolboxLibrary("transformation", name);
-    }
-
-    const localConnectors = nodes.filter(
-      (node) => isConnectorKind(node.data.kind) && !node.data.fromNetwork,
-    );
-    if (
-      !runtime &&
-      !localConnectors.length &&
-      !localConditions.length &&
-      !Object.keys(compiled).length
-    ) {
-      throw new Error("Nothing to deploy.");
-    }
-    if (localConnectors.length) {
-      chainDeployStatus = `Publishing ${localConnectors.length} connector(s)...`;
-    }
-    if (!runtime) {
+    if (!plan.localConnectorNames.length) {
       return null;
     }
-    const localConnectorDefs: StudioConnectorDef[] = [];
-    const localConnectorDefNames = new SvelteSet<string>();
-    for (const connectorNode of localConnectors) {
-      const connectorName = resolveNodeName(connectorNode);
-      const def = runtime.registry.connectors[connectorName];
-      if (!def) continue;
-      if (localConnectorDefNames.has(def.name)) continue;
-      localConnectorDefNames.add(def.name);
-      localConnectorDefs.push(def);
-    }
-
-    const rootDef = runtime.registry.connectors[runtime.rootConnector];
-    const hasLocalRootConnector = localConnectors.some(
-      (node) => Boolean(node.data.tabRoot) || resolveNodeName(node) === runtime.rootConnector,
-    );
-    if (hasLocalRootConnector && rootDef && !localConnectorDefNames.has(rootDef.name)) {
-      localConnectorDefNames.add(rootDef.name);
-      localConnectorDefs.push(rootDef);
-    }
-
-    const orderedConnectors = orderConnectorDefsForDeploy(localConnectorDefs);
-    if (orderedConnectors.warnings.length) {
-      throw new Error(orderedConnectors.warnings.join(" "));
-    }
-
-    for (const def of orderedConnectors.ordered) {
-      const requestBody = toProtocolConnectorPayload(def);
-      await publishConnectorWithTrace(traceStudioChainPost, requestBody);
-      addItemToToolboxLibrary("connector", def.name);
-    }
-
-    if (!localConnectors.length) {
-      return null;
-    }
-    if (!rootDef) return null;
-    chainDeployStatus = `Published connector ${rootDef.name}.`;
-    return rootDef.name;
+    chainDeployStatus = `Published connector ${plan.rootConnectorName}.`;
+    return plan.rootConnectorName;
   };
 
   const collectRuntimeConnectorClosure = (graphNodes: StudioNode[]) => {
@@ -5030,6 +4999,29 @@
     }
   };
 
+  const copyDeploySequencePreview = async () => {
+    const text = chainApiDeployJson;
+    if (!text.trim()) {
+      deployPreviewCopyStatus = "No deploy sequence available yet.";
+      return;
+    }
+    try {
+      if (!navigator?.clipboard?.writeText) {
+        throw new Error("Clipboard API unavailable");
+      }
+      await navigator.clipboard.writeText(text);
+      deployPreviewCopyStatus = "Deploy sequence JSON copied.";
+    } catch {
+      deployPreviewCopyStatus = "Copy failed. Select and copy manually.";
+    } finally {
+      if (deployPreviewCopyTimer) clearTimeout(deployPreviewCopyTimer);
+      deployPreviewCopyTimer = setTimeout(() => {
+        deployPreviewCopyStatus = null;
+        deployPreviewCopyTimer = null;
+      }, 2200);
+    }
+  };
+
   type StudioRunTimings = {
     save: number;
     prepare: number;
@@ -5228,7 +5220,7 @@
     );
 
     if (hasLocalConnectors) {
-      const connectorName = activeTab.particleId ?? (slugify(activeTab.label) || activeTab.label);
+      const connectorName = activeTab.particleId ?? (activeTab.label.trim() || activeTab.label);
       const connectorKey = normalizeKey(connectorName);
       const networkConnectorKeys = new SvelteSet([
         ...Object.keys(deployedRegistry.connectors).map(normalizeKey),
@@ -5237,47 +5229,13 @@
       if (!activeTab.particleId && networkConnectorKeys.has(connectorKey)) {
         warnings.push(`Connector already exists in network: ${connectorName}.`);
       }
-
-      if (!isValidChainName(connectorName)) {
-        warnings.push(
-          `Invalid connector name for chain deploy: ${connectorName}. Use letters, numbers, and underscores only (cannot start with a number).`,
-        );
-      }
     }
 
     nodes.forEach((node) => {
       if (node.data.fromNetwork) return;
-      if (isConnectorKind(node.data.kind) || node.data.kind === "condition") {
-        const candidate = resolveNodeName(node);
-        if (!isValidChainName(candidate)) {
-          warnings.push(
-            `Invalid ${node.data.kind} name for chain deploy: ${candidate}. Use letters, numbers, and underscores only (cannot start with a number).`,
-          );
-        }
-      }
       const existing = findRegistryMatch(node.data.kind, node.data.label);
       if (existing && normalizeKey(existing.name) === normalizeKey(node.data.label)) {
         warnings.push(`${titleize(node.data.kind)} already exists: ${node.data.label}.`);
-      }
-    });
-
-    nodes.forEach((node) => {
-      if (node.data.kind !== "dimension") return;
-      (node.data.transformations ?? []).forEach((tx) => {
-        if (tx.status !== "draft") return;
-        if (!isValidChainName(tx.name)) {
-          warnings.push(
-            `Invalid transformation name for chain deploy: ${tx.name}. Use letters, numbers, and underscores only (cannot start with a number).`,
-          );
-        }
-      });
-    });
-
-    standaloneDraftTransformations.forEach((tx) => {
-      if (!isValidChainName(tx.name)) {
-        warnings.push(
-          `Invalid transformation name for chain deploy: ${tx.name}. Use letters, numbers, and underscores only (cannot start with a number).`,
-        );
       }
     });
 
@@ -5383,28 +5341,18 @@
     }
 
     const compiled = compiledTransformationsByTab[activeTabId] ?? {};
-    const hasLocalConnectors = nodes.some(
-      (node) => isConnectorKind(node.data.kind) && !node.data.fromNetwork,
-    );
-    let runtime: ReturnType<typeof buildStudioRuntime> | null = null;
-    if (hasLocalConnectors) {
-      try {
-        runtime = buildStudioRuntime(
-          { nodes, edges },
-          { rootLabel: activeTab.label, rootParticleId: activeTab.particleId },
-          buildRuntimeOverrides(compiled),
-        );
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "Failed to build deploy runtime.";
-        chainDeployError = message;
-        compileWarningsByTab = {
-          ...compileWarningsByTab,
-          [activeTabId]: [message],
-        };
-        compileTimestampByTab = { ...compileTimestampByTab, [activeTabId]: Date.now() };
-        return;
-      }
+    const deployPlan = buildDeployPlanForGraph(nodes, edges, compiled);
+    if (!deployPlan.ok) {
+      const message = deployPlan.errors.join(" ");
+      chainDeployError = message;
+      compileWarningsByTab = {
+        ...compileWarningsByTab,
+        [activeTabId]: [message],
+      };
+      compileTimestampByTab = { ...compileTimestampByTab, [activeTabId]: Date.now() };
+      return;
     }
+    const runtime = deployPlan.runtime;
 
     const localConditionNodes = nodes.filter(
       (node) => node.data.kind === "condition" && !node.data.fromNetwork,
@@ -5414,7 +5362,7 @@
     chainDeployBusy = true;
     let publishedRootConnectorName: string | null = null;
     try {
-      publishedRootConnectorName = await publishRuntimeToChain(runtime, compiled);
+      publishedRootConnectorName = await publishDeployPlanToChain(deployPlan);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Chain deploy failed.";
       chainDeployError = message;
@@ -6322,8 +6270,7 @@
   const resolveNodeName = (node: StudioNode) => {
     if (node.data.networkId) return node.data.networkId;
     if (node.data.particleId) return node.data.particleId;
-    const slugged = slugify(node.data.label);
-    return slugged || node.data.label;
+    return node.data.label.trim() || node.data.label;
   };
 
   const commitNameChange = (node: StudioNode) => {
@@ -8018,17 +7965,45 @@
       edges,
       selectedConnectorNode: getSelectedConnectorNode(),
       deployedConnectors: deployedRegistry.connectors,
-      runtimeOverrides: buildRuntimeOverrides(compiled.registry),
+      runtimeOverrides: buildRuntimeOverrides(compiled.registry, previewNodes),
     });
   };
+
+  const buildChainDeployPlanPreview = () => {
+    const compiled = compileDraftTransformations(nodes);
+    const positionedNodes = applyComputedRiPositionsToGraphNodes(nodes, edges);
+    const previewNodes = materializeLockedReferencedRiAsRootStatic(positionedNodes);
+    return buildDeployPlanForGraph(previewNodes, edges, compiled.registry).preview;
+  };
+
+  const chainDeployPlanPreview = $derived.by(() => buildChainDeployPlanPreview());
+
+  const chainApiDeployPreviewSummary = $derived.by(() => {
+    const { summary, root_connector: rootConnector } = chainDeployPlanPreview;
+    const parts = [
+      `${summary.total_requests} request${summary.total_requests === 1 ? "" : "s"}`,
+      `${summary.conditions} condition${summary.conditions === 1 ? "" : "s"}`,
+      `${summary.transformations} transformation${summary.transformations === 1 ? "" : "s"}`,
+      `${summary.connectors} connector${summary.connectors === 1 ? "" : "s"}`,
+    ];
+    const root = rootConnector ? ` Root: ${rootConnector}.` : "";
+    return `${parts.join(" · ")}.${root}`;
+  });
+
+  const chainApiDeployPreviewErrors = $derived.by(() => chainDeployPlanPreview.errors);
+  const chainApiDeployPreviewWarnings = $derived.by(() => chainDeployPlanPreview.warnings);
 
   const chainApiProtocolJson = $derived.by(() =>
     JSON.stringify(buildChainConnectorRequestBodyPreview(), null, 2),
   );
 
+  const chainApiDeployJson = $derived.by(() => JSON.stringify(chainDeployPlanPreview, null, 2));
+
   const buildResolvedConnectorTreePreview = () =>
     buildApiResolvedConnectorTreePreview({
-      nodes,
+      nodes: materializeLockedReferencedRiAsRootStatic(
+        applyComputedRiPositionsToGraphNodes(nodes, edges),
+      ),
       edges,
       rootParticleId: activeTab?.particleId ?? null,
     });
@@ -9586,6 +9561,15 @@
               <div class="inspector-json-view-tabs" role="tablist" aria-label="JSON view mode">
                 <button
                   type="button"
+                  class={`inspector-tab ${apiJsonView === "deploy" ? "is-active" : ""}`}
+                  role="tab"
+                  aria-selected={apiJsonView === "deploy"}
+                  onclick={() => (apiJsonView = "deploy")}
+                >
+                  Deploy sequence
+                </button>
+                <button
+                  type="button"
                   class={`inspector-tab ${apiJsonView === "protocol" ? "is-active" : ""}`}
                   role="tab"
                   aria-selected={apiJsonView === "protocol"}
@@ -9603,7 +9587,35 @@
                   Resolved tree JSON
                 </button>
               </div>
-              {#if apiJsonView === "protocol"}
+              {#if apiJsonView === "deploy"}
+                <div class="inspector-hint">
+                  Ordered API calls generated from the current flow. Deploy executes this sequence.
+                </div>
+                <div class="inspector-inline-controls">
+                  <button type="button" class="inspector-edit" onclick={copyDeploySequencePreview}>
+                    Copy JSON
+                  </button>
+                  {#if deployPreviewCopyStatus}
+                    <span class="inspector-hint">{deployPreviewCopyStatus}</span>
+                  {/if}
+                </div>
+                <div class="inspector-hint">{chainApiDeployPreviewSummary}</div>
+                {#if chainApiDeployPreviewErrors.length}
+                  <div class="inspector-alert">
+                    <div class="inspector-alert-text">
+                      {chainApiDeployPreviewErrors.join("; ")}
+                    </div>
+                  </div>
+                {/if}
+                {#if chainApiDeployPreviewWarnings.length}
+                  <div class="inspector-alert">
+                    <div class="inspector-alert-text">
+                      {chainApiDeployPreviewWarnings.join("; ")}
+                    </div>
+                  </div>
+                {/if}
+                <pre class="inspector-code-preview">{chainApiDeployJson}</pre>
+              {:else if apiJsonView === "protocol"}
                 <div class="inspector-hint">
                   Canonical protocol JSON for the selected connector (read-only).
                 </div>
@@ -10564,6 +10576,10 @@
   }
 
   .inspector-inline {
+    @apply flex flex-wrap items-center gap-2;
+  }
+
+  .inspector-inline-controls {
     @apply flex flex-wrap items-center gap-2;
   }
 

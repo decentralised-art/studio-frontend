@@ -3,7 +3,7 @@
   import { goto } from "$app/navigation";
   import { resolve } from "$app/paths";
   import { page } from "$app/state";
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
 
   import ConnectorPostFeed from "$lib/components/feed/ConnectorPostFeed.svelte";
   import { listServicesUsers } from "$lib/auth/api";
@@ -11,14 +11,7 @@
   import Button from "$lib/components/ui/Button.svelte";
   import WorldFrame from "$lib/components/worlds/WorldFrame.svelte";
   import { ChainApiRequestError } from "$lib/chain/registryApi";
-  import {
-    getConnectorPostFeedState,
-    listParticlePosts as listConnectorPosts,
-    loadMoreConnectorPostDataFromChain,
-    syncParticlePostDataFromChain,
-    type ConnectorPostEvent,
-    type ParticlePostEvent,
-  } from "$lib/feed/particlePostData";
+  import type { ConnectorPostEvent } from "$lib/feed/particlePostData";
   import type { ScorePluginRuntimeData } from "$lib/score/types";
   import {
     buildAuthorAvatarMapFromServicesUsers,
@@ -27,9 +20,17 @@
     shortAuthorAddress,
   } from "$lib/social/authorLabels";
   import {
+    DEFAULT_MIDI_WORLD_PARTICLES_COUNT,
+    buildMidiRuntimeSearchParams,
+    createRandomMidiRuntimeSelectionFromRegistry,
+    executeMidiWorldRun,
+    normalizeMidiParticlesCount,
+  } from "$lib/worlds/midiWorldRun";
+  import {
     DEFAULT_MUSICXML_WORLD_PARTICLES_COUNT,
     buildMusicXmlRuntimeSearchParams,
-    executeRandomRenderableMusicXmlWorldRun,
+    createDefaultMusicXmlRuntimeSelectionFromRegistry,
+    createRandomMusicXmlRuntimeSelectionFromRegistry,
     executeMusicXmlWorldRun,
     fetchMusicXmlWorldConnectorContext,
     normalizeParticlesCount,
@@ -40,12 +41,13 @@
   } from "$lib/worlds/musicXmlWorldRun";
   import {
     findFirstPartyWorldBySlug,
+    MIDI_CLIP_WORLD_ID,
     MUSICXML_SCORE_WORLD,
-    MUSICXML_SCORE_WORLD_ENTRY,
   } from "$lib/worlds/registry";
+  import { fetchWorldFormatConnectorEvents } from "$lib/worlds/formatDiscovery";
   import type { WorldRuntimeInput } from "$lib/worlds/types";
 
-  const FEED_PAGE_LIMIT = 24;
+  const CONNECTOR_FEED_PAGE_SIZE = 24;
   const UINT32_MAX = 0xffff_ffff;
 
   let connectorName = $state("");
@@ -54,7 +56,7 @@
   let runBusy = $state(false);
   let runError = $state("");
   let worldInput = $state<WorldRuntimeInput | null>(null);
-  let worldFrameSrc = $state<string>(resolve(MUSICXML_SCORE_WORLD_ENTRY));
+  let worldFrameSrc = $state<string>(resolve("/world-runtimes/musicxml-score"));
   let connectorContext = $state<MusicXmlWorldConnectorContext | null>(null);
   let connectorContextLoading = $state(false);
   let appliedRouteConnectorName = $state<string | null>(null);
@@ -63,11 +65,23 @@
   let connectorFeedLoadingMore = $state(false);
   let connectorFeedHasMore = $state(false);
   let connectorFeedError = $state("");
+  let connectorFeedLimit = $state(CONNECTOR_FEED_PAGE_SIZE);
+  let connectorFeedWorldId = $state("");
   let authorLabelById = $state<Record<string, string>>({});
   let authorAvatarUrlById = $state<Record<string, string>>({});
+  let worldStateRevision = $state(0);
+  let selectedRuntimeConnectorContext = $state<{
+    position: number;
+    connectorName: string;
+    contextPathPrefix?: string;
+  } | null>(null);
 
   const selectedWorld = $derived(findFirstPartyWorldBySlug(page.params.slug));
   const activeWorld = $derived(selectedWorld ?? MUSICXML_SCORE_WORLD);
+  const isMidiWorld = $derived(activeWorld.id === MIDI_CLIP_WORLD_ID);
+  const defaultParticlesCount = $derived(
+    isMidiWorld ? DEFAULT_MIDI_WORLD_PARTICLES_COUNT : DEFAULT_MUSICXML_WORLD_PARTICLES_COUNT,
+  );
   const routeConnectorName = $derived.by(() => {
     const routeValue = page.params.connector;
     if (typeof routeValue !== "string") return "";
@@ -77,19 +91,12 @@
       return routeValue.trim();
     }
   });
-  const compatibleConnectorNameSet = $derived.by(
-    () => new Set(activeWorld.compatibleConnectorNames ?? []),
-  );
-  const compatibleConnectorEvents = $derived.by(() => {
-    if (compatibleConnectorNameSet.size === 0) return connectorFeedEvents;
-    return connectorFeedEvents.filter(
-      (event) =>
-        compatibleConnectorNameSet.has(event.particleId) ||
-        compatibleConnectorNameSet.has(event.particleLabel),
-    );
-  });
   const hasLoadedConnector = $derived(Boolean(connectorName.trim()));
   const canOpenStandalone = $derived(Boolean(worldInput && !runBusy));
+  const canLoadRandomConnector = $derived(
+    !connectorFeedLoading &&
+      connectorFeedEvents.some((event) => Boolean(event.particleId || event.particleLabel)),
+  );
   const selectedConnectorEvent = $derived.by(() =>
     connectorFeedEvents.find(
       (event) => event.particleId === connectorName || event.particleLabel === connectorName,
@@ -109,8 +116,51 @@
   });
   const riFields = $derived(connectorContext?.riFields ?? []);
 
-  const buildStandaloneRuntimeUrl = (selection: MusicXmlRuntimeSelection) =>
-    `${resolve(MUSICXML_SCORE_WORLD_ENTRY)}?${buildMusicXmlRuntimeSearchParams(selection).toString()}`;
+  const resolveActiveWorldEntry = () =>
+    isMidiWorld ? resolve("/world-runtimes/midi-clip") : resolve("/world-runtimes/musicxml-score");
+
+  const buildStandaloneRuntimeUrl = (selection: MusicXmlRuntimeSelection) => {
+    const params = isMidiWorld
+      ? buildMidiRuntimeSearchParams(selection)
+      : buildMusicXmlRuntimeSearchParams(selection);
+    return `${resolveActiveWorldEntry()}?${params.toString()}`;
+  };
+
+  const normalizeActiveParticlesCount = (value: unknown) =>
+    isMidiWorld ? normalizeMidiParticlesCount(value) : normalizeParticlesCount(value);
+
+  const randomIndex = (length: number): number => {
+    if (length <= 1) return 0;
+    if (browser && crypto?.getRandomValues) {
+      const values = new Uint32Array(1);
+      crypto.getRandomValues(values);
+      return values[0] % length;
+    }
+    return Math.floor(Math.random() * length);
+  };
+
+  const getRandomCompatibleConnectorId = () => {
+    const currentConnectorName = connectorName.trim();
+    const connectorIds = Array.from(
+      new Set(
+        connectorFeedEvents
+          .map((event) => event.particleId || event.particleLabel)
+          .map((id) => id.trim())
+          .filter(Boolean),
+      ),
+    );
+    const candidates =
+      connectorIds.length > 1
+        ? connectorIds.filter((id) => id !== currentConnectorName)
+        : connectorIds;
+    if (candidates.length === 0) return "";
+    return candidates[randomIndex(candidates.length)];
+  };
+
+  const refreshEmbeddedWorldFrame = () => {
+    worldStateRevision += 1;
+    worldFrameSrc = `${resolveActiveWorldEntry()}?state=${worldStateRevision}`;
+  };
 
   const clampUint32 = (value: unknown) => {
     const parsed = Number(value);
@@ -129,6 +179,42 @@
       ? field.transformationShift
       : getDynamicRiValue(field.position).transformation_shift;
 
+  const withSelectedConnectorContext = (input: WorldRuntimeInput): WorldRuntimeInput => ({
+    ...input,
+    selectedConnectorContextNames: selectedRuntimeConnectorContext
+      ? [selectedRuntimeConnectorContext.connectorName]
+      : [],
+    selectedConnectorContextPathPrefixes: selectedRuntimeConnectorContext?.contextPathPrefix
+      ? [selectedRuntimeConnectorContext.contextPathPrefix]
+      : [],
+  });
+
+  const syncSelectedConnectorContextToWorld = () => {
+    if (!worldInput) return;
+    worldInput = withSelectedConnectorContext(worldInput);
+    refreshEmbeddedWorldFrame();
+  };
+
+  const isRiFieldSelected = (field: MusicXmlWorldRiField) =>
+    selectedRuntimeConnectorContext?.position === field.position;
+
+  const toggleRuntimeConnectorContext = (field: MusicXmlWorldRiField) => {
+    selectedRuntimeConnectorContext = isRiFieldSelected(field)
+      ? null
+      : {
+          position: field.position,
+          connectorName: field.connectorName,
+          contextPathPrefix: field.contextPathPrefix,
+        };
+    syncSelectedConnectorContextToWorld();
+  };
+
+  const handleRiRowClick = (event: MouseEvent, field: MusicXmlWorldRiField) => {
+    const target = event.target;
+    if (target instanceof Element && target.closest("input, button")) return;
+    toggleRuntimeConnectorContext(field);
+  };
+
   const updateDynamicRiField = (
     position: number,
     key: "start_point" | "transformation_shift",
@@ -145,24 +231,23 @@
     };
   };
 
-  const isConnectorPostEvent = (event: ParticlePostEvent): event is ConnectorPostEvent =>
-    event.type === "connector";
-
-  const syncConnectorFeedState = () => {
-    connectorFeedEvents = listConnectorPosts().filter(isConnectorPostEvent);
-    connectorFeedHasMore = getConnectorPostFeedState().hasMoreHistory;
-  };
-
   const refreshConnectorFeed = async (force = false) => {
-    connectorFeedLoading = true;
+    if (!force && connectorFeedEvents.length > 0) return;
+    connectorFeedLoading = !connectorFeedLoadingMore;
     connectorFeedError = "";
     try {
-      await syncParticlePostDataFromChain({
-        force,
-        includeRuntimeCode: false,
-        feedPageLimit: FEED_PAGE_LIMIT,
+      const result = await fetchWorldFormatConnectorEvents({
+        acceptedFormatHashes: activeWorld.acceptedFormatHashes,
+        acceptedScalars: activeWorld.acceptedScalars,
+        requiredScalars: activeWorld.requiredScalars,
+        connectorLimit: connectorFeedLimit,
       });
-      syncConnectorFeedState();
+      connectorFeedEvents = result.events;
+      connectorFeedHasMore = result.hasMore;
+      if (result.errors.length > 0) {
+        connectorFeedError = `Some compatible connector candidates could not be loaded (${result.errors.length}).`;
+        console.warn("[Worlds] Format connector discovery warnings", result.errors);
+      }
     } catch (error) {
       connectorFeedError =
         error instanceof Error ? error.message : "Could not load compatible connector posts.";
@@ -189,7 +274,15 @@
 
     connectorContextLoading = true;
     try {
-      connectorContext = await fetchMusicXmlWorldConnectorContext(normalizedName);
+      const context = await fetchMusicXmlWorldConnectorContext(normalizedName);
+      connectorContext = context;
+      const defaultSelection = createDefaultMusicXmlRuntimeSelectionFromRegistry(
+        normalizedName,
+        context.registry,
+        normalizeActiveParticlesCount(particlesCountInput),
+      );
+      particlesCountInput = String(defaultSelection.particlesCount);
+      dynamicRiInput = { ...defaultSelection.dynamicRiInput };
     } catch (error) {
       runError = getErrorMessage(error);
     } finally {
@@ -200,16 +293,9 @@
   const loadMoreConnectorPosts = async () => {
     if (connectorFeedLoadingMore || !connectorFeedHasMore) return;
     connectorFeedLoadingMore = true;
-    connectorFeedError = "";
+    connectorFeedLimit += CONNECTOR_FEED_PAGE_SIZE;
     try {
-      await loadMoreConnectorPostDataFromChain({
-        includeRuntimeCode: false,
-        feedPageLimit: FEED_PAGE_LIMIT,
-      });
-      syncConnectorFeedState();
-    } catch (error) {
-      connectorFeedError =
-        error instanceof Error ? error.message : "Could not load more compatible connector posts.";
+      await refreshConnectorFeed(true);
     } finally {
       connectorFeedLoadingMore = false;
     }
@@ -231,6 +317,21 @@
         connector: targetConnectorId,
       }),
     );
+  };
+
+  const loadRandomConnectorInWorld = async () => {
+    runError = "";
+    if (connectorFeedLoading || connectorFeedLoadingMore) return;
+    if (connectorFeedEvents.length === 0) {
+      await refreshConnectorFeed(true);
+    }
+
+    const targetConnectorId = getRandomCompatibleConnectorId();
+    if (!targetConnectorId) {
+      runError = connectorFeedError || "No compatible connectors are available for this world yet.";
+      return;
+    }
+    loadConnectorInWorld(targetConnectorId);
   };
 
   const getErrorMessage = (error: unknown) => {
@@ -267,11 +368,36 @@
     dynamicRiInput = { ...selection.dynamicRiInput };
   };
 
-  const runSelection = async (selection: MusicXmlRuntimeSelection) => {
+  const waitForRuntimeSettingsPaint = async () => {
+    await tick();
+    if (!browser) return;
+    await new Promise<void>((resolvePaint) => requestAnimationFrame(() => resolvePaint()));
+  };
+
+  const runSelection = async (
+    selection: MusicXmlRuntimeSelection,
+    diagnosticContext = "Manual runtime",
+  ) => {
     runBusy = true;
     runError = "";
 
     try {
+      if (isMidiWorld) {
+        const result = await executeMidiWorldRun({
+          connectorName: selection.connectorName,
+          particlesCount: selection.particlesCount,
+          dynamicRiInput: selection.dynamicRiInput,
+          surface: "world-page",
+          worldName: activeWorld.name,
+        });
+        worldInput = withSelectedConnectorContext(result.worldInput);
+        refreshEmbeddedWorldFrame();
+        if (result.midiClip.notes.length === 0) {
+          runError = "The connector ran, but this world did not receive MIDI-compatible output.";
+        }
+        return;
+      }
+
       const result = await executeMusicXmlWorldRun({
         connectorName: selection.connectorName,
         particlesCount: selection.particlesCount,
@@ -279,9 +405,9 @@
         surface: "world-page",
         worldName: activeWorld.name,
       });
-      logScoreDiagnostics(result.scoreData, "Manual runtime");
-      worldInput = result.worldInput;
-      worldFrameSrc = buildStandaloneRuntimeUrl(selection);
+      logScoreDiagnostics(result.scoreData, diagnosticContext);
+      worldInput = withSelectedConnectorContext(result.worldInput);
+      refreshEmbeddedWorldFrame();
       if (!result.scoreData.musicXml) {
         runError = "The connector ran, but this world did not receive MusicXML-compatible output.";
       }
@@ -303,23 +429,25 @@
     runError = "";
 
     try {
-      const result = await executeRandomRenderableMusicXmlWorldRun({
-        connectorName: name,
-        surface: "world-page",
-        worldName: activeWorld.name,
-      });
-      applySelection(result.selection);
-      logScoreDiagnostics(result.scoreData, "Random runtime");
-      worldInput = result.worldInput;
-      worldFrameSrc = buildStandaloneRuntimeUrl(result.selection);
-      if (!result.scoreData.musicXml) {
-        runError = "The connector ran, but this world did not receive MusicXML-compatible output.";
+      let context = connectorContext?.connectorName === name ? connectorContext : null;
+      if (!context) {
+        connectorContextLoading = true;
+        context = await fetchMusicXmlWorldConnectorContext(name);
+        connectorContext = context;
       }
+
+      const selection = isMidiWorld
+        ? createRandomMidiRuntimeSelectionFromRegistry(name, context.registry)
+        : createRandomMusicXmlRuntimeSelectionFromRegistry(name, context.registry);
+      applySelection(selection);
+      await waitForRuntimeSettingsPaint();
+      await runSelection(selection, "Random runtime");
     } catch (error) {
       runError = getErrorMessage(error);
       worldInput = null;
     } finally {
       runBusy = false;
+      connectorContextLoading = false;
     }
   };
 
@@ -332,7 +460,7 @@
 
     const selection: MusicXmlRuntimeSelection = {
       connectorName: name,
-      particlesCount: normalizeParticlesCount(particlesCountInput),
+      particlesCount: normalizeActiveParticlesCount(particlesCountInput),
       dynamicRiInput,
     };
     applySelection(selection);
@@ -343,7 +471,7 @@
     if (!browser || !worldInput) return;
     const standaloneUrl = buildStandaloneRuntimeUrl({
       connectorName: connectorName.trim(),
-      particlesCount: normalizeParticlesCount(particlesCountInput),
+      particlesCount: normalizeActiveParticlesCount(particlesCountInput),
       dynamicRiInput,
     });
     window.open(standaloneUrl, "_blank", "noopener,noreferrer");
@@ -351,19 +479,32 @@
 
   $effect(() => {
     const nextConnectorName = routeConnectorName;
-    if (appliedRouteConnectorName === nextConnectorName) return;
-    appliedRouteConnectorName = nextConnectorName;
+    const routeKey = `${activeWorld.id}:${nextConnectorName}`;
+    if (appliedRouteConnectorName === routeKey) return;
+    appliedRouteConnectorName = routeKey;
     connectorName = nextConnectorName;
-    particlesCountInput = String(DEFAULT_MUSICXML_WORLD_PARTICLES_COUNT);
+    particlesCountInput = String(defaultParticlesCount);
     dynamicRiInput = {};
+    selectedRuntimeConnectorContext = null;
     worldInput = null;
-    worldFrameSrc = resolve(MUSICXML_SCORE_WORLD_ENTRY);
+    worldFrameSrc = resolveActiveWorldEntry();
     runError = "";
     void loadConnectorContext(nextConnectorName);
   });
 
+  $effect(() => {
+    if (!browser) return;
+    const worldId = activeWorld.id;
+    if (connectorFeedWorldId === worldId) return;
+    connectorFeedWorldId = worldId;
+    connectorFeedEvents = [];
+    connectorFeedLimit = CONNECTOR_FEED_PAGE_SIZE;
+    connectorFeedHasMore = false;
+    connectorFeedError = "";
+    void refreshConnectorFeed(true);
+  });
+
   onMount(() => {
-    void refreshConnectorFeed(false);
     void refreshAuthorIdentityMaps();
   });
 </script>
@@ -379,6 +520,28 @@
         <WorldFrame world={activeWorld} input={worldInput} srcOverride={worldFrameSrc} />
       </div>
       <div class="world-renderer-actions" aria-label="World actions">
+        <Button
+          className="world-icon-button"
+          variant="ghost"
+          onclick={() => void loadRandomConnectorInWorld()}
+          disabled={runBusy ||
+            connectorFeedLoading ||
+            connectorFeedLoadingMore ||
+            !canLoadRandomConnector}
+          ariaLabel={connectorFeedLoading ? "Loading compatible connectors" : "Random connector"}
+          title={canLoadRandomConnector
+            ? "Random compatible connector"
+            : "No compatible connectors loaded yet"}
+        >
+          <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24">
+            <rect x="4" y="4" width="6" height="6" rx="1.4"></rect>
+            <rect x="14" y="4" width="6" height="6" rx="1.4"></rect>
+            <rect x="9" y="14" width="6" height="6" rx="1.4"></rect>
+            <path d="M10 7h4"></path>
+            <path d="M7 10v1a3 3 0 0 0 3 3h2"></path>
+            <path d="M17 10v1a3 3 0 0 1-3 3h-2"></path>
+          </svg>
+        </Button>
         <Button
           className="world-icon-button"
           onclick={() => void runRandomWorld()}
@@ -479,9 +642,31 @@
             {:else}
               <div class="ri-scroll">
                 {#each riFields as field (field.position)}
-                  <div class={`ri-row ${field.isStatic ? "is-static" : ""}`}>
+                  <div
+                    class={`ri-row ${field.isStatic ? "is-static" : ""} ${isRiFieldSelected(field) ? "is-selected" : ""}`}
+                    role="button"
+                    tabindex="0"
+                    aria-pressed={isRiFieldSelected(field)}
+                    aria-label={`Show output from ${field.label}`}
+                    onclick={(event) => handleRiRowClick(event, field)}
+                    onkeydown={(event) => {
+                      if (event.key !== "Enter" && event.key !== " ") return;
+                      event.preventDefault();
+                      toggleRuntimeConnectorContext(field);
+                    }}
+                  >
                     <div class="ri-row-head">
-                      <strong>{field.label}</strong>
+                      <button
+                        type="button"
+                        class="ri-select-button"
+                        aria-pressed={isRiFieldSelected(field)}
+                        aria-label={`Show output from ${field.label}`}
+                        title="Show output from this connector in the world preview"
+                        onclick={() => toggleRuntimeConnectorContext(field)}
+                      >
+                        <span aria-hidden="true"></span>
+                        <strong>{field.label}</strong>
+                      </button>
                       <span>{field.isStatic ? "Static" : "Open"} · RI {field.position}</span>
                     </div>
                     <div class="ri-values">
@@ -547,7 +732,7 @@
       loading={connectorFeedLoading}
       loadingMore={connectorFeedLoadingMore}
       hasMore={connectorFeedHasMore}
-      events={compatibleConnectorEvents}
+      events={connectorFeedEvents}
       onLoadMore={loadMoreConnectorPosts}
       onConnectorOpen={openConnectorInStudio}
       onLoadInWorld={loadConnectorInWorld}
@@ -731,6 +916,15 @@
     background: var(--surface-panel);
   }
 
+  .ri-row[role="button"] {
+    @apply cursor-pointer;
+  }
+
+  .ri-row.is-selected {
+    border-color: color-mix(in srgb, var(--accent-primary) 62%, var(--border-subtle));
+    background: color-mix(in srgb, var(--accent-primary) 12%, var(--surface-panel));
+  }
+
   .ri-row.is-static {
     opacity: 0.82;
   }
@@ -741,6 +935,27 @@
 
   .ri-row-head strong {
     @apply truncate text-[0.72rem] font-semibold;
+  }
+
+  .ri-select-button {
+    @apply flex min-w-0 items-center gap-1.5 text-left;
+    color: var(--text-primary);
+  }
+
+  .ri-select-button > span {
+    @apply h-1.5 w-1.5 shrink-0 rounded-full border;
+    border-color: var(--border-subtle);
+    background: transparent;
+  }
+
+  .ri-select-button[aria-pressed="true"] > span {
+    border-color: var(--accent-primary);
+    background: var(--accent-primary);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-primary) 18%, transparent);
+  }
+
+  .ri-select-button:hover strong {
+    color: var(--accent-primary);
   }
 
   .ri-row-head span {
@@ -779,7 +994,8 @@
   }
 
   .compatible-connectors :global(.social-feed) {
-    max-height: 58rem;
+    max-height: none;
+    overflow-y: visible;
   }
 
   @media (max-width: 900px) {

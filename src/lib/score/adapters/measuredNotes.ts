@@ -115,11 +115,6 @@ type ScoreCollectorKind =
 
 type ScoreField = MeasuredNoteField | ScoreDecorationField | ScoreLayerField;
 
-type GenericScoreGroup = {
-  groupPath: string;
-  fields: Partial<Record<ScoreField, PtOutputFeature>>;
-};
-
 const isFiniteNumber = (value: unknown): value is number =>
   typeof value === "number" && Number.isFinite(value);
 
@@ -153,62 +148,38 @@ const parsePathSegments = (path: string): string[] =>
     .map((segment) => segment.trim())
     .filter(Boolean);
 
-const normalizeMeasuredFieldLeaf = (leaf: string): string =>
-  leaf.startsWith("score_") ? leaf.slice("score_".length) : leaf;
-
-const parseSegmentDimensionIndex = (segment: string): number | null => {
-  const rawIndex = segment.trim().split(":").at(-1);
-  if (!rawIndex || !/^\d+$/.test(rawIndex)) return null;
-  return Number(rawIndex);
-};
-
-const findNearestPositionalCollectorField = (segments: string[]): ScoreField | null => {
-  for (let index = segments.length - 2; index >= 0; index -= 1) {
-    const field = parsePositionalCollectorField(segments[index] ?? "");
-    if (field) return field;
-  }
-  return null;
-};
-
 const parseScoreField = (path: string): ScoreField | null => {
   const segments = parsePathSegments(path);
-  const normalizedSegments = segments.map((segment) =>
-    normalizeMeasuredFieldLeaf(normalizePluginPathSegmentName(segment)),
-  );
+  const normalizedSegments = segments.map((segment) => normalizePluginPathSegmentName(segment));
   for (const [fieldName, field] of [
     ["meter_time_tick", "meterTimeTick"],
     ["clef_time_tick", "clefTimeTick"],
     ["tempo_time_tick", "tempoTimeTick"],
     ["key_time_tick", "keyTimeTick"],
-    ["time_tick", "timeTick"],
+    ["onset_tick", "timeTick"],
     ["duration_tick", "durationTick"],
+    ["pitch_midi", "pitch"],
+    ["velocity_midi", "velocity"],
   ] as const) {
     if (normalizedSegments.includes(fieldName)) return field;
   }
-  const rawLeaf = normalizePluginPathSegmentName(segments[segments.length - 1] ?? "");
-  const leaf = normalizeMeasuredFieldLeaf(rawLeaf);
+  const leaf = normalizePluginPathSegmentName(segments[segments.length - 1] ?? "");
   if (leaf === "event_id" || leaf === "eventid") return "eventId";
-  if (leaf === "time" || leaf === "score_time") return "time";
-  if (leaf === "time_tick") return "timeTick";
+  if (leaf === "onset_tick") return "timeTick";
   if (leaf === "duration_tick") return "durationTick";
-  if (leaf === "measure" || leaf === "bar") return "measure";
-  if (rawLeaf === "score_onset") return "timeTick";
-  if (rawLeaf === "score_duration") return "durationTick";
-  if (leaf === "onset" || leaf === "beat" || leaf === "time_in_measure") return "onset";
-  if (leaf === "duration" || leaf === "durationv2") return "duration";
-  if (leaf === "pitch") return "pitch";
-  if (leaf === "velocity") return "velocity";
+  if (leaf === "pitch_midi") return "pitch";
+  if (leaf === "velocity_midi") return "velocity";
   if (leaf === "dynamic_code" || leaf === "dynamic") return "dynamicCode";
   if (leaf === "voice") return "voice";
-  if (leaf === "staff") return "staff";
-  if (leaf === "part") return "part";
+  if (leaf === "staff" || leaf === "clef_staff") return "staff";
+  if (leaf === "part" || leaf === "clef_part" || leaf === "key_part") return "part";
   if (leaf === "articulation_code" || leaf === "articulation") return "articulationCode";
   if (leaf === "placement") return "placement";
   if (leaf === "slur_number" || leaf === "slur") return "slurNumber";
   if (leaf === "slur_type" || leaf === "type") return "slurType";
   if (leaf === "meter_time_tick") return "meterTimeTick";
-  if (leaf === "beats") return "beats";
-  if (leaf === "beat_type") return "beatType";
+  if (leaf === "beats" || leaf === "meter_beats") return "beats";
+  if (leaf === "beat_type" || leaf === "meter_beat_type") return "beatType";
   if (leaf === "staff_count") return "staffCount";
   if (leaf === "clef_time_tick") return "clefTimeTick";
   if (leaf === "clef_sign_code" || leaf === "clef_sign") return "clefSignCode";
@@ -218,8 +189,6 @@ const parseScoreField = (path: string): ScoreField | null => {
   if (leaf === "key_time_tick") return "keyTimeTick";
   if (leaf === "key_fifths" || leaf === "fifths") return "keyFifths";
   if (leaf === "key_mode_code" || leaf === "mode_code") return "keyModeCode";
-  const positionalCollectorField = findNearestPositionalCollectorField(segments);
-  if (positionalCollectorField) return positionalCollectorField;
   return null;
 };
 
@@ -337,171 +306,17 @@ const collectorKindForSegment = (segment: string): ScoreCollectorKind | null => 
   return null;
 };
 
-const POSITIONAL_COLLECTOR_FIELDS: Record<ScoreCollectorKind, readonly (ScoreField | null)[]> = {
-  notes: [
-    "eventId",
-    "timeTick",
-    "durationTick",
-    "pitch",
-    "dynamicCode",
-    "part",
-    "staff",
-    "voice",
-    null,
-  ],
-  meter: ["meterTimeTick", "beats", "beatType"],
-  parts: ["part", "staffCount"],
-  clefs: ["clefTimeTick", "part", "staff", "clefSignCode", "clefLine"],
-  tempo: ["tempoTimeTick", "tempoBpm"],
-  key: ["keyTimeTick", "keyFifths", "keyModeCode", "part"],
-  articulations: ["eventId", "articulationCode", "placement"],
-  slurs: ["eventId", "slurNumber", "slurType", "placement"],
-};
-
-const POSITION_SCHEMA_ROOT_LAYERS: Partial<Record<number, ScoreCollectorKind>> = {
-  0: "notes",
-  1: "parts",
-  2: "meter",
-  3: "clefs",
-  4: "tempo",
-  5: "key",
-  6: "articulations",
-  7: "slurs",
-};
-
-const POSITION_SCHEMA_FIELDS: Record<ScoreCollectorKind, readonly (ScoreField | null)[]> = {
-  notes: [
-    "timeTick",
-    "durationTick",
-    "pitch",
-    "eventId",
-    "part",
-    "staff",
-    "voice",
-    "dynamicCode",
-    null,
-    null,
-    null,
-    null,
-  ],
-  parts: ["part", "staffCount", null, null],
-  meter: ["meterTimeTick", "beats", "beatType"],
-  clefs: ["clefTimeTick", "part", "staff", "clefSignCode", "clefLine"],
-  tempo: ["tempoTimeTick", "tempoBpm"],
-  key: ["keyTimeTick", "keyFifths", "keyModeCode", "part"],
-  articulations: ["eventId", "articulationCode", "placement"],
-  slurs: ["eventId", "slurNumber", "slurType", "placement", null],
-};
-
-const POSITION_SCHEMA_REQUIRED_FIELDS: Record<ScoreCollectorKind, readonly ScoreField[]> = {
-  notes: ["timeTick", "durationTick", "pitch"],
-  parts: ["part", "staffCount"],
-  meter: ["meterTimeTick", "beats", "beatType"],
-  clefs: ["clefTimeTick", "part", "staff", "clefSignCode", "clefLine"],
-  tempo: ["tempoTimeTick", "tempoBpm"],
-  key: ["keyTimeTick", "keyFifths"],
-  articulations: ["eventId", "articulationCode"],
-  slurs: ["eventId", "slurNumber", "slurType"],
-};
-
-const parsePositionalCollectorField = (segment: string): ScoreField | null => {
-  const kind = collectorKindForSegment(segment);
-  if (!kind) return null;
-  const dimensionIndex = parseSegmentDimensionIndex(segment);
-  if (dimensionIndex === null) return null;
-  return POSITIONAL_COLLECTOR_FIELDS[kind][dimensionIndex] ?? null;
-};
-
 const buildCollectorGroupPath = (segments: string[], collectorIndex: number): string => {
   const collectorName = normalizePluginPathSegmentName(segments[collectorIndex] ?? "");
   const groupSegments = [...segments.slice(0, collectorIndex), collectorName].filter(Boolean);
   return groupSegments.length ? `/${groupSegments.join("/")}` : "/";
 };
 
-const buildPositionSchemaGroupPath = (segments: string[], fieldSegmentIndex: number): string => {
-  const groupSegments = [
-    ...segments.slice(0, fieldSegmentIndex),
-    normalizePluginPathSegmentName(segments[fieldSegmentIndex] ?? ""),
-  ].filter(Boolean);
-  return groupSegments.length ? `/${groupSegments.join("/")}` : "/";
-};
-
-const isLegacyNamedScoreSegment = (segment: string): boolean => {
-  const name = normalizePluginPathSegmentName(segment);
-  return (
-    Boolean(collectorKindForSegment(segment)) ||
-    name === "score_full" ||
-    /^score_full_v\d+$/.test(name)
-  );
-};
-
-const isPositionSchemaAncestorGroup = (ancestorPath: string, childPath: string): boolean => {
-  const ancestorSegments = parsePathSegments(ancestorPath).map(normalizePluginPathSegmentName);
-  const childSegments = parsePathSegments(childPath).map(normalizePluginPathSegmentName);
-  return (
-    ancestorSegments.length < childSegments.length &&
-    ancestorSegments.every((segment, index) => childSegments[index] === segment)
-  );
-};
-
-const collectPositionSchemaGroups = (
-  streams: readonly PtOutputFeature[],
-  connectorTargets: readonly string[] = [],
-  kind: ScoreCollectorKind,
-): GenericScoreGroup[] => {
-  const targetNames = new Set(
-    connectorTargets.map((target) => target.trim().toLowerCase()).filter(Boolean),
-  );
-  if (!targetNames.size) return [];
-
-  const groups = new Map<string, GenericScoreGroup>();
-
-  streams.forEach((stream) => {
-    const segments = parsePathSegments(stream.feature_path);
-    const rootIndex = segments.findIndex((segment) =>
-      targetNames.has(normalizePluginPathSegmentName(segment)),
-    );
-    if (rootIndex < 0) return;
-
-    const rootDimensionIndex = parseSegmentDimensionIndex(segments[rootIndex] ?? "");
-    if (rootDimensionIndex === null) return;
-    const rootLayer = POSITION_SCHEMA_ROOT_LAYERS[rootDimensionIndex];
-    if (rootLayer !== kind) return;
-
-    for (let index = rootIndex + 1; index < segments.length; index += 1) {
-      if (segments.slice(rootIndex + 1, index + 1).some(isLegacyNamedScoreSegment)) continue;
-      const fieldIndex = parseSegmentDimensionIndex(segments[index] ?? "");
-      if (fieldIndex === null) continue;
-      const field = POSITION_SCHEMA_FIELDS[kind][fieldIndex] ?? null;
-      if (!field) continue;
-      const groupPath = buildPositionSchemaGroupPath(segments, index);
-      const current = groups.get(groupPath) ?? { groupPath, fields: {} };
-      if (!current.fields[field]) {
-        current.fields[field] = stream;
-      }
-      groups.set(groupPath, current);
-    }
-  });
-
-  const completeGroups = [...groups.values()]
-    .filter((group) =>
-      POSITION_SCHEMA_REQUIRED_FIELDS[kind].every((field) => Boolean(group.fields[field])),
-    )
-    .sort((a, b) => a.groupPath.localeCompare(b.groupPath));
-
-  return completeGroups.filter(
-    (group) =>
-      !completeGroups.some((candidate) =>
-        isPositionSchemaAncestorGroup(group.groupPath, candidate.groupPath),
-      ),
-  );
-};
-
 const parseCollectorContext = (
   path: string,
 ): { kind: ScoreCollectorKind | null; groupPath: string } => {
   const segments = parsePathSegments(path);
-  for (let index = segments.length - 1; index >= 0; index -= 1) {
+  for (let index = segments.length - 2; index >= 0; index -= 1) {
     const kind = collectorKindForSegment(segments[index] ?? "");
     if (kind) return { kind, groupPath: buildCollectorGroupPath(segments, index) };
   }
@@ -533,28 +348,81 @@ const buildAncestorGroupPaths = (path: string): string[] => {
 };
 
 const isCompleteMeasuredNoteFieldSet = (fields: Set<MeasuredNoteField>): boolean =>
-  fields.has("pitch") &&
-  ((fields.has("timeTick") && fields.has("durationTick")) ||
-    (fields.has("time") && fields.has("duration")) ||
-    (fields.has("measure") && fields.has("onset") && fields.has("duration")));
+  fields.has("pitch") && fields.has("timeTick") && fields.has("durationTick");
+
+const collectSemanticLayerGroups = <
+  TField extends ScoreLayerField,
+  TGroup extends { groupPath: string },
+>(
+  streams: readonly PtOutputFeature[],
+  fields: ReadonlySet<ScoreLayerField>,
+  expectedKind: ScoreCollectorKind,
+  requiredFields: readonly TField[],
+): TGroup[] => {
+  const assignGroupField = (group: TGroup, field: TField, stream: PtOutputFeature) => {
+    (group as unknown as Record<string, PtOutputFeature | string>)[field] = stream;
+  };
+  const groups = new Map<string, TGroup>();
+  const uncollectedEntries: Array<{
+    field: TField;
+    stream: PtOutputFeature;
+    ancestorPaths: string[];
+  }> = [];
+  const ancestorFields = new Map<string, Set<TField>>();
+
+  streams.forEach((stream) => {
+    const field = parseScoreField(stream.feature_path);
+    if (!field || !fields.has(field as ScoreLayerField)) return;
+
+    const layerField = field as TField;
+    const { kind, groupPath } = parseCollectorContext(stream.feature_path);
+    if (kind && kind !== expectedKind) return;
+
+    if (!kind) {
+      const ancestorPaths = buildAncestorGroupPaths(stream.feature_path);
+      uncollectedEntries.push({ field: layerField, stream, ancestorPaths });
+      ancestorPaths.forEach((ancestorPath) => {
+        const currentFields = ancestorFields.get(ancestorPath) ?? new Set<TField>();
+        currentFields.add(layerField);
+        ancestorFields.set(ancestorPath, currentFields);
+      });
+      return;
+    }
+
+    const current = groups.get(groupPath) ?? ({ groupPath } as TGroup);
+    assignGroupField(current, layerField, stream);
+    groups.set(groupPath, current);
+  });
+
+  uncollectedEntries.forEach((entry) => {
+    const groupPath = [...entry.ancestorPaths].reverse().find((ancestorPath) => {
+      const fieldsAtPath = ancestorFields.get(ancestorPath) ?? new Set<TField>();
+      return requiredFields.every((requiredField) => fieldsAtPath.has(requiredField));
+    });
+    if (!groupPath) return;
+
+    const current = groups.get(groupPath) ?? ({ groupPath } as TGroup);
+    assignGroupField(current, entry.field, entry.stream);
+    groups.set(groupPath, current);
+  });
+
+  return [...groups.values()].sort((a, b) => a.groupPath.localeCompare(b.groupPath));
+};
 
 export const hasMeasuredNoteStreams = (
   streams: readonly PtOutputFeature[],
   connectorTargets: readonly string[] = [],
 ): boolean => {
+  void connectorTargets;
   const fields = new Set(streams.map((stream) => parseScoreField(stream.feature_path)));
-  return (
-    (fields.has("pitch") &&
-      ((fields.has("timeTick") && fields.has("durationTick")) ||
-        (fields.has("measure") && fields.has("onset") && fields.has("duration")))) ||
-    collectPositionSchemaGroups(streams, connectorTargets, "notes").length > 0
-  );
+  return fields.has("pitch") && fields.has("timeTick") && fields.has("durationTick");
 };
 
 const collectGroups = (
   streams: readonly PtOutputFeature[],
   connectorTargets: readonly string[] = [],
 ): MeasuredNoteGroup[] => {
+  void connectorTargets;
   const groups = new Map<string, MeasuredNoteGroup>();
   const uncollectedEntries: Array<{
     field: MeasuredNoteField;
@@ -604,15 +472,6 @@ const collectGroups = (
     groups.set(groupPath, current);
   });
 
-  collectPositionSchemaGroups(streams, connectorTargets, "notes").forEach((group) => {
-    const current = groups.get(group.groupPath) ?? { groupPath: group.groupPath };
-    NOTE_FIELDS.forEach((field) => {
-      const stream = group.fields[field];
-      if (stream) current[field] = stream;
-    });
-    groups.set(group.groupPath, current);
-  });
-
   return [...groups.values()].sort((a, b) => a.groupPath.localeCompare(b.groupPath));
 };
 
@@ -620,6 +479,7 @@ const collectArticulationGroups = (
   streams: readonly PtOutputFeature[],
   connectorTargets: readonly string[] = [],
 ): ScoreArticulationGroup[] => {
+  void connectorTargets;
   const groups = new Map<string, ScoreArticulationGroup>();
   streams.forEach((stream) => {
     const field = parseScoreField(stream.feature_path);
@@ -630,14 +490,6 @@ const collectArticulationGroups = (
     current[field as keyof Omit<ScoreArticulationGroup, "groupPath">] = stream;
     groups.set(groupPath, current);
   });
-  collectPositionSchemaGroups(streams, connectorTargets, "articulations").forEach((group) => {
-    const current = groups.get(group.groupPath) ?? { groupPath: group.groupPath };
-    ARTICULATION_FIELDS.forEach((field) => {
-      const stream = group.fields[field];
-      if (stream) current[field as keyof Omit<ScoreArticulationGroup, "groupPath">] = stream;
-    });
-    groups.set(group.groupPath, current);
-  });
   return [...groups.values()].sort((a, b) => a.groupPath.localeCompare(b.groupPath));
 };
 
@@ -645,6 +497,7 @@ const collectSlurGroups = (
   streams: readonly PtOutputFeature[],
   connectorTargets: readonly string[] = [],
 ): ScoreSlurGroup[] => {
+  void connectorTargets;
   const groups = new Map<string, ScoreSlurGroup>();
   streams.forEach((stream) => {
     const field = parseScoreField(stream.feature_path);
@@ -655,14 +508,6 @@ const collectSlurGroups = (
     current[field as keyof Omit<ScoreSlurGroup, "groupPath">] = stream;
     groups.set(groupPath, current);
   });
-  collectPositionSchemaGroups(streams, connectorTargets, "slurs").forEach((group) => {
-    const current = groups.get(group.groupPath) ?? { groupPath: group.groupPath };
-    SLUR_FIELDS.forEach((field) => {
-      const stream = group.fields[field];
-      if (stream) current[field as keyof Omit<ScoreSlurGroup, "groupPath">] = stream;
-    });
-    groups.set(group.groupPath, current);
-  });
   return [...groups.values()].sort((a, b) => a.groupPath.localeCompare(b.groupPath));
 };
 
@@ -670,125 +515,65 @@ const collectMeterGroups = (
   streams: readonly PtOutputFeature[],
   connectorTargets: readonly string[] = [],
 ): ScoreMeterGroup[] => {
-  const groups = new Map<string, ScoreMeterGroup>();
-  streams.forEach((stream) => {
-    const field = parseScoreField(stream.feature_path);
-    if (!field || !METER_FIELDS.has(field as ScoreLayerField)) return;
-    const { kind, groupPath } = parseCollectorContext(stream.feature_path);
-    if (kind !== "meter") return;
-    const current = groups.get(groupPath) ?? { groupPath };
-    current[field as keyof Omit<ScoreMeterGroup, "groupPath">] = stream;
-    groups.set(groupPath, current);
-  });
-  collectPositionSchemaGroups(streams, connectorTargets, "meter").forEach((group) => {
-    const current = groups.get(group.groupPath) ?? { groupPath: group.groupPath };
-    METER_FIELDS.forEach((field) => {
-      const stream = group.fields[field];
-      if (stream) current[field as keyof Omit<ScoreMeterGroup, "groupPath">] = stream;
-    });
-    groups.set(group.groupPath, current);
-  });
-  return [...groups.values()].sort((a, b) => a.groupPath.localeCompare(b.groupPath));
+  void connectorTargets;
+  return collectSemanticLayerGroups<keyof Omit<ScoreMeterGroup, "groupPath">, ScoreMeterGroup>(
+    streams,
+    METER_FIELDS,
+    "meter",
+    ["meterTimeTick", "beats", "beatType"],
+  );
 };
 
 const collectPartGroups = (
   streams: readonly PtOutputFeature[],
   connectorTargets: readonly string[] = [],
 ): ScorePartGroup[] => {
-  const groups = new Map<string, ScorePartGroup>();
-  streams.forEach((stream) => {
-    const field = parseScoreField(stream.feature_path);
-    if (!field || !PART_FIELDS.has(field as ScoreLayerField)) return;
-    const { kind, groupPath } = parseCollectorContext(stream.feature_path);
-    if (kind !== "parts") return;
-    const current = groups.get(groupPath) ?? { groupPath };
-    current[field as keyof Omit<ScorePartGroup, "groupPath">] = stream;
-    groups.set(groupPath, current);
-  });
-  collectPositionSchemaGroups(streams, connectorTargets, "parts").forEach((group) => {
-    const current = groups.get(group.groupPath) ?? { groupPath: group.groupPath };
-    PART_FIELDS.forEach((field) => {
-      const stream = group.fields[field];
-      if (stream) current[field as keyof Omit<ScorePartGroup, "groupPath">] = stream;
-    });
-    groups.set(group.groupPath, current);
-  });
-  return [...groups.values()].sort((a, b) => a.groupPath.localeCompare(b.groupPath));
+  void connectorTargets;
+  return collectSemanticLayerGroups<keyof Omit<ScorePartGroup, "groupPath">, ScorePartGroup>(
+    streams,
+    PART_FIELDS,
+    "parts",
+    ["part", "staffCount"],
+  );
 };
 
 const collectClefGroups = (
   streams: readonly PtOutputFeature[],
   connectorTargets: readonly string[] = [],
 ): ScoreClefGroup[] => {
-  const groups = new Map<string, ScoreClefGroup>();
-  streams.forEach((stream) => {
-    const field = parseScoreField(stream.feature_path);
-    if (!field || !CLEF_FIELDS.has(field as ScoreLayerField)) return;
-    const { kind, groupPath } = parseCollectorContext(stream.feature_path);
-    if (kind !== "clefs") return;
-    const current = groups.get(groupPath) ?? { groupPath };
-    current[field as keyof Omit<ScoreClefGroup, "groupPath">] = stream;
-    groups.set(groupPath, current);
-  });
-  collectPositionSchemaGroups(streams, connectorTargets, "clefs").forEach((group) => {
-    const current = groups.get(group.groupPath) ?? { groupPath: group.groupPath };
-    CLEF_FIELDS.forEach((field) => {
-      const stream = group.fields[field];
-      if (stream) current[field as keyof Omit<ScoreClefGroup, "groupPath">] = stream;
-    });
-    groups.set(group.groupPath, current);
-  });
-  return [...groups.values()].sort((a, b) => a.groupPath.localeCompare(b.groupPath));
+  void connectorTargets;
+  return collectSemanticLayerGroups<keyof Omit<ScoreClefGroup, "groupPath">, ScoreClefGroup>(
+    streams,
+    CLEF_FIELDS,
+    "clefs",
+    ["clefTimeTick", "part", "staff", "clefSignCode", "clefLine"],
+  );
 };
 
 const collectTempoGroups = (
   streams: readonly PtOutputFeature[],
   connectorTargets: readonly string[] = [],
 ): ScoreTempoGroup[] => {
-  const groups = new Map<string, ScoreTempoGroup>();
-  streams.forEach((stream) => {
-    const field = parseScoreField(stream.feature_path);
-    if (!field || !TEMPO_FIELDS.has(field as ScoreLayerField)) return;
-    const { kind, groupPath } = parseCollectorContext(stream.feature_path);
-    if (kind !== "tempo") return;
-    const current = groups.get(groupPath) ?? { groupPath };
-    current[field as keyof Omit<ScoreTempoGroup, "groupPath">] = stream;
-    groups.set(groupPath, current);
-  });
-  collectPositionSchemaGroups(streams, connectorTargets, "tempo").forEach((group) => {
-    const current = groups.get(group.groupPath) ?? { groupPath: group.groupPath };
-    TEMPO_FIELDS.forEach((field) => {
-      const stream = group.fields[field];
-      if (stream) current[field as keyof Omit<ScoreTempoGroup, "groupPath">] = stream;
-    });
-    groups.set(group.groupPath, current);
-  });
-  return [...groups.values()].sort((a, b) => a.groupPath.localeCompare(b.groupPath));
+  void connectorTargets;
+  return collectSemanticLayerGroups<keyof Omit<ScoreTempoGroup, "groupPath">, ScoreTempoGroup>(
+    streams,
+    TEMPO_FIELDS,
+    "tempo",
+    ["tempoTimeTick", "tempoBpm"],
+  );
 };
 
 const collectKeyGroups = (
   streams: readonly PtOutputFeature[],
   connectorTargets: readonly string[] = [],
 ): ScoreKeyGroup[] => {
-  const groups = new Map<string, ScoreKeyGroup>();
-  streams.forEach((stream) => {
-    const field = parseScoreField(stream.feature_path);
-    if (!field || !KEY_FIELDS.has(field as ScoreLayerField)) return;
-    const { kind, groupPath } = parseCollectorContext(stream.feature_path);
-    if (kind !== "key") return;
-    const current = groups.get(groupPath) ?? { groupPath };
-    current[field as keyof Omit<ScoreKeyGroup, "groupPath">] = stream;
-    groups.set(groupPath, current);
-  });
-  collectPositionSchemaGroups(streams, connectorTargets, "key").forEach((group) => {
-    const current = groups.get(group.groupPath) ?? { groupPath: group.groupPath };
-    KEY_FIELDS.forEach((field) => {
-      const stream = group.fields[field];
-      if (stream) current[field as keyof Omit<ScoreKeyGroup, "groupPath">] = stream;
-    });
-    groups.set(group.groupPath, current);
-  });
-  return [...groups.values()].sort((a, b) => a.groupPath.localeCompare(b.groupPath));
+  void connectorTargets;
+  return collectSemanticLayerGroups<keyof Omit<ScoreKeyGroup, "groupPath">, ScoreKeyGroup>(
+    streams,
+    KEY_FIELDS,
+    "key",
+    ["keyTimeTick", "keyFifths"],
+  );
 };
 
 const groupValueCount = (group: MeasuredNoteGroup): number =>
@@ -1159,13 +944,9 @@ export const buildScoreFromMeasuredNoteStreams = (
 
   groups.forEach((group) => {
     const hasTickTime = Boolean(group.timeTick && group.durationTick);
-    const hasBeatTime = Boolean(group.time && group.duration);
-    const hasLegacyMeasureTime = Boolean(group.measure && group.onset && group.duration);
     const missing = [
-      ...(!hasTickTime && !hasBeatTime && !hasLegacyMeasureTime
-        ? ["score_onset + score_duration"]
-        : []),
-      ...(!group.pitch ? ["pitch"] : []),
+      ...(!hasTickTime ? ["onset_tick + duration_tick"] : []),
+      ...(!group.pitch ? ["pitch_midi"] : []),
     ];
     if (missing.length > 0) {
       diagnostics.push(
@@ -1182,10 +963,6 @@ export const buildScoreFromMeasuredNoteStreams = (
     for (let index = 0; index < groupValueCount(group); index += 1) {
       const timeTick = group.timeTick?.data[index];
       const durationTick = group.durationTick?.data[index];
-      const timeBeat = group.time?.data[index];
-      const measure = group.measure?.data[index];
-      const onset = group.onset?.data[index];
-      const duration = group.duration?.data[index];
       const pitch = group.pitch?.data[index];
       const key = eventKey(group.eventId?.data[index]);
       let noteTime: number | null = null;
@@ -1194,12 +971,6 @@ export const buildScoreFromMeasuredNoteStreams = (
       if (isFiniteNumber(timeTick) && isFiniteNumber(durationTick)) {
         noteTime = ticksToBeats(timeTick);
         noteDuration = ticksToBeats(durationTick);
-      } else if (isFiniteNumber(timeBeat) && isFiniteNumber(duration)) {
-        noteTime = timeBeat;
-        noteDuration = duration;
-      } else if (isFiniteNumber(measure) && isFiniteNumber(onset) && isFiniteNumber(duration)) {
-        noteTime = (Math.round(measure) - 1) * 4 + onset;
-        noteDuration = duration;
       }
 
       if (!isFiniteNumber(noteTime) || !isFiniteNumber(noteDuration) || !isFiniteNumber(pitch)) {
@@ -1255,6 +1026,11 @@ export const buildScoreFromMeasuredNoteStreams = (
           group.onset?.feature_path,
           group.duration?.feature_path,
           group.pitch?.feature_path,
+          group.velocity?.feature_path,
+          group.dynamicCode?.feature_path,
+          group.voice?.feature_path,
+          group.staff?.feature_path,
+          group.part?.feature_path,
         ].filter((path): path is string => Boolean(path)),
       });
     }

@@ -23,6 +23,11 @@
   let standaloneStatus = $state("");
 
   const musicXml = $derived(runtimeInput?.artifacts?.musicXml ?? "");
+  const renderedNotes = $derived(runtimeInput?.artifacts?.scoreRenderedNotes ?? []);
+  const selectedConnectorContextNames = $derived(runtimeInput?.selectedConnectorContextNames ?? []);
+  const selectedConnectorContextPathPrefixes = $derived(
+    runtimeInput?.selectedConnectorContextPathPrefixes ?? [],
+  );
   const label = $derived(runtimeInput?.label ?? "MusicXML Score World");
   const statsText = $derived(
     runtimeInput?.artifacts?.scoreStatsText ?? (standaloneStatus || "MusicXML Score World"),
@@ -133,6 +138,9 @@
       {musicXml}
       {label}
       {statsText}
+      {renderedNotes}
+      {selectedConnectorContextNames}
+      {selectedConnectorContextPathPrefixes}
       showToolbar={true}
       {showDownload}
       emptyMessage=""

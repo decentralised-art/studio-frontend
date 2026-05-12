@@ -13,6 +13,7 @@ import type {
   ScoreMeterEvent,
   ScoreNoteEvent,
   ScorePartEvent,
+  ScoreRenderedNote,
   ScoreSlurEvent,
   ScoreTempoEvent,
   ScoreXmlNode,
@@ -211,6 +212,10 @@ const makeSlurNode = (slur: ScoreSlurEvent): ScoreXmlNode => ({
     type: slur.type,
     ...(slur.placement ? { placement: slur.placement } : {}),
   },
+});
+
+const makeRenderedNoteMetadata = (note: ScoreNoteEvent): ScoreRenderedNote => ({
+  sourcePaths: [...(note.sourcePaths ?? [])],
 });
 
 const makePitchedNote = (
@@ -706,6 +711,7 @@ const makeMeasureNode = (
   dynamicCodesByVoice: Map<number, number | null>,
   divisions: number,
   tempo: ScoreTempoEvent | null,
+  renderedNotes: ScoreRenderedNote[],
 ): { node: ScoreXmlNode; diagnostics: ScoreBuildResult["diagnostics"] } => {
   const diagnostics: ScoreBuildResult["diagnostics"] = [];
   const children: ScoreXmlNode[] = [];
@@ -776,6 +782,7 @@ const makeMeasureNode = (
       }
 
       segment.notes.forEach((note, index) => {
+        renderedNotes.push(makeRenderedNoteMetadata(note));
         children.push(makePitchedNote(note, segment, index > 0, divisions));
       });
       cursor = segment.startBeat + segment.duration;
@@ -800,6 +807,7 @@ const buildPartNode = (
   measures: readonly MeasureDefinition[],
   options: Required<Pick<ScoreBuildOptions, "divisions">> &
     Pick<ScoreBuildOptions, "parts" | "clefs" | "tempos" | "keys">,
+  renderedNotes: ScoreRenderedNote[],
 ): { node: ScoreXmlNode; diagnostics: ScoreBuildResult["diagnostics"] } => {
   const diagnostics: ScoreBuildResult["diagnostics"] = [];
   const partLayer = (options.parts ?? []).find((part) => part.part === partNumber);
@@ -853,6 +861,7 @@ const buildPartNode = (
       dynamicCodesByVoice,
       options.divisions,
       includeTempo ? tempo : null,
+      renderedNotes,
     );
     diagnostics.push(...measureDiagnostics);
     return node;
@@ -886,6 +895,7 @@ export const buildScoreFromNoteEvents = (
         partCount: 0,
         streamCount: options.streamCount ?? 0,
       },
+      renderedNotes: [],
     };
   }
 
@@ -899,6 +909,7 @@ export const buildScoreFromNoteEvents = (
   const maxEndBeat = notes.reduce((max, note) => Math.max(max, note.time + note.duration), 0);
   const measures = buildMeasureMap(maxEndBeat, options.meters, diagnostics);
   const measureCount = measures.length;
+  const renderedNotes: ScoreRenderedNote[] = [];
 
   const partList: ScoreXmlNode = {
     name: "part-list",
@@ -924,6 +935,7 @@ export const buildScoreFromNoteEvents = (
         tempos: options.tempos,
         keys: options.keys,
       },
+      renderedNotes,
     );
     diagnostics.push(...partDiagnostics);
     return node;
@@ -938,6 +950,7 @@ export const buildScoreFromNoteEvents = (
       },
     },
     diagnostics,
+    renderedNotes,
     stats: {
       adapterId,
       noteCount: notes.length,
@@ -974,6 +987,7 @@ export const buildScoreFromMidiGroups = (
         partCount: 0,
         streamCount,
       },
+      renderedNotes: [],
     };
   }
 

@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/svelte";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { MUSICXML_SCORE_WORLD, MUSICXML_SCORE_WORLD_ID } from "../src/lib/worlds/registry";
@@ -11,7 +11,14 @@ import {
 
 const osmdMock = vi.hoisted(() => {
   const load = vi.fn(async (_musicXml: string) => ({}));
-  const renderScore = vi.fn(async () => undefined);
+  const renderScore = vi.fn(async function (this: { container: HTMLElement }) {
+    this.container.innerHTML = `
+      <svg>
+        <g class="vf-notehead" data-testid="mock-score-note-1"><path /></g>
+        <g class="vf-notehead" data-testid="mock-score-note-2"><path /></g>
+      </svg>
+    `;
+  });
   const clear = vi.fn();
 
   class OpenSheetMusicDisplay {
@@ -140,6 +147,40 @@ describe("MusicXML world runtime", () => {
     expect(screen.queryByRole("button", { name: "Download MusicXML" })).not.toBeInTheDocument();
   });
 
+  it("highlights MusicXML notes from the selected connector lineage", async () => {
+    const RuntimePage = await loadRuntimePage();
+    const { container } = render(RuntimePage);
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    postWorldState({
+      protocolVersion: WORLD_PROTOCOL_VERSION,
+      worldId: MUSICXML_SCORE_WORLD_ID,
+      surface: "world-page",
+      label: "Lineage MusicXML score",
+      selectedConnectorContextNames: ["note_group"],
+      selectedConnectorContextPathPrefixes: ["/score_root:1/note_group:*"],
+      artifacts: {
+        musicXml,
+        scoreStatsText: "2 notes | 1 measure | 1 part",
+        scoreRenderedNotes: [
+          { sourcePaths: ["/score_root:0/note_group:0/pitch:0"] },
+          { sourcePaths: ["/score_root:1/note_group:0/pitch:0"] },
+        ],
+      },
+    });
+
+    await waitFor(() => {
+      expect(container.querySelectorAll(".vf-notehead")).toHaveLength(2);
+    });
+
+    const notes = container.querySelectorAll(".vf-notehead");
+    expect(notes[0]).toHaveClass("hm-score-note-dimmed");
+    expect(notes[0]).not.toHaveClass("hm-score-note-highlighted");
+    expect(notes[1]).toHaveClass("hm-score-note-highlighted");
+    expect(notes[1]).not.toHaveClass("hm-score-note-dimmed");
+  });
+
   it("allows downloads from the sandboxed world iframe", async () => {
     const WorldFrame = await loadWorldFrame();
     render(WorldFrame, {
@@ -153,5 +194,40 @@ describe("MusicXML world runtime", () => {
       "sandbox",
       expect.stringContaining("allow-downloads"),
     );
+  });
+
+  it("posts updated world input into an already loaded iframe", async () => {
+    const WorldFrame = await loadWorldFrame();
+    const { rerender } = render(WorldFrame, {
+      props: {
+        world: MUSICXML_SCORE_WORLD,
+        input: null,
+      },
+    });
+    const iframe = screen.getByTitle(MUSICXML_SCORE_WORLD.name) as HTMLIFrameElement;
+    const postMessage = vi.spyOn(iframe.contentWindow!, "postMessage");
+
+    await fireEvent.load(iframe);
+    await rerender({
+      world: MUSICXML_SCORE_WORLD,
+      input: {
+        protocolVersion: WORLD_PROTOCOL_VERSION,
+        worldId: MUSICXML_SCORE_WORLD_ID,
+        surface: "world-page",
+        selectedConnectorContextNames: ["pitch"],
+      },
+    });
+
+    await waitFor(() => {
+      expect(postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: WORLD_STATE_MESSAGE_TYPE,
+          payload: expect.objectContaining({
+            selectedConnectorContextNames: ["pitch"],
+          }),
+        }),
+        "*",
+      );
+    });
   });
 });

@@ -4,6 +4,11 @@
 
   import Button from "$lib/components/ui/Button.svelte";
   import { downloadMusicXml } from "$lib/score/musicXmlSerializer";
+  import type { ScoreRenderedNote } from "$lib/score/types";
+  import {
+    pathContainsAnyConnectorName,
+    pathStartsWithAnyConnectorPrefix,
+  } from "$lib/studio/plugins/runtime";
 
   type OsmdInstance = {
     load: (musicXml: string) => Promise<unknown>;
@@ -21,9 +26,12 @@
     initialZoom?: number;
     emptyMessage?: string;
     frameLabel?: string;
+    renderedNotes?: ScoreRenderedNote[];
+    selectedConnectorContextNames?: string[];
+    selectedConnectorContextPathPrefixes?: string[];
   };
 
-  const {
+  let {
     musicXml,
     label = "MusicXML score",
     statsText = "",
@@ -32,6 +40,9 @@
     initialZoom = 0.82,
     emptyMessage = "No MusicXML payload has been received.",
     frameLabel = "Music score preview",
+    renderedNotes = [],
+    selectedConnectorContextNames = [],
+    selectedConnectorContextPathPrefixes = [],
   }: Props = $props();
 
   let scoreContainer: HTMLDivElement | null = $state(null);
@@ -41,6 +52,26 @@
   let osmd: OsmdInstance | null = null;
 
   const hasMusicXml = $derived(Boolean(musicXml));
+  const hasLineageSelection = $derived(
+    selectedConnectorContextPathPrefixes.length > 0 || selectedConnectorContextNames.length > 0,
+  );
+  const hasLineagePrefixMatch = $derived.by(() => {
+    if (selectedConnectorContextPathPrefixes.length === 0) return false;
+    return renderedNotes.some((note) =>
+      note.sourcePaths.some((path) =>
+        pathStartsWithAnyConnectorPrefix(path, selectedConnectorContextPathPrefixes),
+      ),
+    );
+  });
+  const renderedNoteLineageMatches = $derived.by(() =>
+    renderedNotes.map((note) =>
+      note.sourcePaths.some((path) =>
+        selectedConnectorContextPathPrefixes.length > 0 && hasLineagePrefixMatch
+          ? pathStartsWithAnyConnectorPrefix(path, selectedConnectorContextPathPrefixes)
+          : pathContainsAnyConnectorName(path, selectedConnectorContextNames),
+      ),
+    ),
+  );
 
   const formatRenderError = (error: unknown): string => {
     if (error instanceof Error && error.message) return error.message;
@@ -54,6 +85,72 @@
   const download = () => {
     if (!musicXml) return;
     downloadMusicXml(musicXml, label);
+  };
+
+  const uniqueElements = (elements: SVGElement[]): SVGElement[] => [...new Set(elements)];
+
+  const collectRenderedNoteElements = (): SVGElement[] => {
+    if (!scoreContainer) return [];
+
+    const noteheadGroups = Array.from(
+      scoreContainer.querySelectorAll<SVGElement>("g.vf-notehead, g[class*='vf-notehead']"),
+    );
+    if (noteheadGroups.length > 0) return uniqueElements(noteheadGroups);
+
+    const noteheadDescendants = Array.from(
+      scoreContainer.querySelectorAll<SVGElement>(".vf-notehead, [class*='vf-notehead']"),
+    )
+      .map((element) => element.closest("g") as SVGElement | null)
+      .filter((element): element is SVGElement => Boolean(element));
+    if (noteheadDescendants.length > 0) return uniqueElements(noteheadDescendants);
+
+    return Array.from(
+      scoreContainer.querySelectorAll<SVGElement>("g.vf-stavenote, g[class*='vf-stavenote']"),
+    );
+  };
+
+  const clearRenderedNoteLineageClasses = () => {
+    if (!scoreContainer) return;
+    scoreContainer
+      .querySelectorAll(".hm-score-note-highlighted, .hm-score-note-dimmed")
+      .forEach((element) => {
+        element.classList.remove("hm-score-note-highlighted", "hm-score-note-dimmed");
+      });
+  };
+
+  const applyRenderedNoteLineage = (
+    matches = renderedNoteLineageMatches,
+    shouldHighlight = hasLineageSelection,
+  ) => {
+    clearRenderedNoteLineageClasses();
+    if (!shouldHighlight || matches.length === 0) return;
+
+    const noteElements = collectRenderedNoteElements();
+    noteElements.forEach((element, index) => {
+      const isHighlighted = Boolean(matches[index]);
+      element.classList.toggle("hm-score-note-highlighted", isHighlighted);
+      element.classList.toggle("hm-score-note-dimmed", !isHighlighted);
+    });
+  };
+
+  const scheduleRenderedNoteLineage = (
+    matches = renderedNoteLineageMatches,
+    shouldHighlight = hasLineageSelection,
+  ) => {
+    const activeRunId = renderRunId;
+
+    void tick().then(() => {
+      if (activeRunId !== renderRunId) return;
+      applyRenderedNoteLineage(matches, shouldHighlight);
+      if (!browser) return;
+
+      window.requestAnimationFrame(() => {
+        if (activeRunId === renderRunId) applyRenderedNoteLineage(matches, shouldHighlight);
+      });
+      window.setTimeout(() => {
+        if (activeRunId === renderRunId) applyRenderedNoteLineage(matches, shouldHighlight);
+      }, 80);
+    });
   };
 
   $effect(() => {
@@ -95,6 +192,7 @@
         await osmd.render();
         renderStatus = "ready";
         renderMessage = "";
+        if (currentRunId === renderRunId) scheduleRenderedNoteLineage();
       } catch (error) {
         if (currentRunId !== renderRunId) return;
         renderStatus = "error";
@@ -106,6 +204,14 @@
         });
       }
     })();
+  });
+
+  $effect(() => {
+    const currentRenderStatus = renderStatus;
+    const currentMatches = renderedNoteLineageMatches;
+    const currentHasLineageSelection = hasLineageSelection;
+    if (currentRenderStatus !== "ready") return;
+    scheduleRenderedNoteLineage(currentMatches, currentHasLineageSelection);
   });
 
   onDestroy(() => {
@@ -176,6 +282,19 @@
 
   .score-osmd {
     @apply min-h-[190px] min-w-[480px] p-4;
+  }
+
+  .score-osmd :global(.hm-score-note-highlighted) {
+    opacity: 1;
+  }
+
+  .score-osmd :global(.hm-score-note-highlighted *) {
+    fill: #0f766e !important;
+    stroke: #0f766e !important;
+  }
+
+  .score-osmd :global(.hm-score-note-dimmed) {
+    opacity: 0.16;
   }
 
   .score-render-status {

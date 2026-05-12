@@ -8,21 +8,15 @@ import {
   type ChainExecuteRunningInstancePayload,
 } from "$lib/chain/registryApi";
 import type { PtOutputFeature } from "$lib/particles/ptMidiAdapter";
+import { SCORE_TICKS_PER_QUARTER } from "$lib/score/adapters/measuredNotes";
 import { MUSIC_SCORE_PLUGIN_ID } from "$lib/score/codebook";
-import {
-  resolveMusicScorePositionSchemaEntry,
-  type MusicScorePositionSchemaEntry,
-} from "$lib/score/positionSchema";
 import type { ScorePluginRuntimeData } from "$lib/score/types";
 import type { StudioConnectorDef } from "$lib/studio/domain/connectorModel";
 import { buildExecuteRiPlan, type ExecuteNodeOverrides } from "$lib/studio/executeRequestPlanner";
 import { groupMidiStreams, type StudioPluginRuntimeData } from "$lib/studio/plugins/runtime";
 import { buildScorePluginRuntimeData } from "$lib/studio/plugins/scoreRuntime";
 import { isInvalidChainTokenError } from "$lib/studio/studioChainSync";
-import {
-  buildMusicXmlWorldInput,
-  MUSICXML_SCORE_WORLD_DEFAULT_CONNECTOR,
-} from "$lib/worlds/registry";
+import { buildMusicXmlWorldInput } from "$lib/worlds/registry";
 import type { WorldRuntimeInput } from "$lib/worlds/types";
 
 export type DynamicRiInput = Record<string, ChainExecuteRunningInstancePayload>;
@@ -47,11 +41,9 @@ export type MusicXmlWorldRiField = {
   position: number;
   nodePosition: number;
   connectorName: string;
+  contextPathPrefix?: string;
   label: string;
   protocolLabel: string;
-  semanticLabel?: string;
-  semanticPath?: number[];
-  schemaEntry?: MusicScorePositionSchemaEntry;
   isStatic: boolean;
   startPoint: number;
   transformationShift: number;
@@ -70,7 +62,7 @@ const RANDOM_PARTICLE_COUNTS = [16, 24, 32, 48, 64] as const;
 const RANDOM_RI_VALUE_MAX = 7;
 const RANDOM_RENDERABLE_ATTEMPTS = 8;
 
-export const DEFAULT_MUSICXML_WORLD_CONNECTOR = MUSICXML_SCORE_WORLD_DEFAULT_CONNECTOR;
+export const DEFAULT_MUSICXML_WORLD_CONNECTOR = "";
 export const DEFAULT_MUSICXML_WORLD_PARTICLES_COUNT = 12;
 
 export const normalizeParticlesCount = (
@@ -262,72 +254,70 @@ const resolveNodeRiTargetPosition = (
     ? node.position
     : (firstDimensionPositionByNodeKey.get(node.key) ?? node.position);
 
+const connectorPathSegment = (name: string, index: number | "*") =>
+  index === "*" ? `${name}:*` : `${name}:${Math.max(0, index)}`;
+
+const appendPathSegment = (path: string, segment: string) => `${path}/${segment}`;
+
+const buildConnectorContextPathPrefixByNodeKey = (
+  nodes: ReturnType<typeof buildExecuteRiPlan>["positioning"]["nodes"],
+): Map<string, string> => {
+  const nodeByKey = new Map(nodes.map((node) => [node.key, node] as const));
+  const contextPathByNodeKey = new Map<string, string>();
+  const prefixByNodeKey = new Map<string, string>();
+
+  nodes.forEach((node) => {
+    if (node.relation === "root" || !node.parentKey) {
+      contextPathByNodeKey.set(node.key, "");
+      prefixByNodeKey.set(node.key, `/${connectorPathSegment(node.connectorName, "*")}`);
+      return;
+    }
+
+    const parentNode = nodeByKey.get(node.parentKey);
+    const parentContextPath = contextPathByNodeKey.get(node.parentKey) ?? "";
+    const parentDimensionIndex = node.parentDimensionIndex ?? 0;
+    const contextPath = parentNode
+      ? appendPathSegment(
+          parentContextPath,
+          connectorPathSegment(parentNode.connectorName, parentDimensionIndex),
+        )
+      : parentContextPath;
+
+    contextPathByNodeKey.set(node.key, contextPath);
+    prefixByNodeKey.set(
+      node.key,
+      appendPathSegment(contextPath, connectorPathSegment(node.connectorName, "*")),
+    );
+  });
+
+  return prefixByNodeKey;
+};
+
 export const buildMusicXmlWorldRiFields = (
   registry: Record<string, StudioConnectorDef>,
   connectorName: string,
 ): MusicXmlWorldRiField[] => {
   const riPlan = buildExecuteRiPlan(registry, connectorName, {});
   const firstDimensionPositionByNodeKey = buildFirstDimensionPositionByNodeKey(riPlan);
+  const contextPathPrefixByNodeKey = buildConnectorContextPathPrefixByNodeKey(
+    riPlan.positioning.nodes,
+  );
   const fieldsByPosition = new Map<number, MusicXmlWorldRiField>();
-  type SemanticContext = {
-    path: number[];
-    inheritedEntry: MusicScorePositionSchemaEntry | null;
-  };
-
-  const contextByNodeKey = new Map<string, SemanticContext>();
-
-  const resolveSchemaEntry = (
-    path: number[],
-    connectorNameAtPath?: string,
-  ): MusicScorePositionSchemaEntry | null =>
-    resolveMusicScorePositionSchemaEntry(path, {
-      connectors: registry,
-      ...(connectorNameAtPath ? { connectorNameAtPath } : {}),
-    });
-
-  const chooseInheritedEntry = (
-    entry: MusicScorePositionSchemaEntry | null,
-    fallback: MusicScorePositionSchemaEntry | null,
-  ) => (entry?.kind === "field" ? entry : fallback);
-
-  [...riPlan.positioning.nodes]
-    .sort((a, b) => a.depth - b.depth || a.position - b.position)
-    .forEach((node) => {
-      if (!node.parentKey || node.parentDimensionIndex === null) {
-        contextByNodeKey.set(node.key, { path: [], inheritedEntry: null });
-        return;
-      }
-
-      const parentContext = contextByNodeKey.get(node.parentKey) ?? {
-        path: [],
-        inheritedEntry: null,
-      };
-      const path = [...parentContext.path, node.parentDimensionIndex + 1];
-      const entry = resolveSchemaEntry(path, node.connectorName);
-      contextByNodeKey.set(node.key, {
-        path,
-        inheritedEntry: chooseInheritedEntry(entry, parentContext.inheritedEntry),
-      });
-    });
 
   const createField = (input: {
     position: number;
     nodePosition: number;
     connectorName: string;
+    contextPathPrefix?: string;
     protocolLabel: string;
-    semanticPath?: number[];
-    schemaEntry?: MusicScorePositionSchemaEntry | null;
   }): MusicXmlWorldRiField => {
-    const semanticLabel = input.schemaEntry?.label;
     return {
       position: input.position,
       nodePosition: input.nodePosition,
       connectorName: input.connectorName,
-      label: semanticLabel ? `${semanticLabel} · ${input.connectorName}` : input.protocolLabel,
+      contextPathPrefix: input.contextPathPrefix,
+      label: input.protocolLabel,
       protocolLabel: input.protocolLabel,
-      ...(semanticLabel ? { semanticLabel } : {}),
-      ...(input.semanticPath ? { semanticPath: input.semanticPath } : {}),
-      ...(input.schemaEntry ? { schemaEntry: input.schemaEntry } : {}),
       isStatic: false,
       startPoint: 0,
       transformationShift: 0,
@@ -335,9 +325,6 @@ export const buildMusicXmlWorldRiFields = (
   };
 
   riPlan.positioning.nodes.forEach((node) => {
-    const context = contextByNodeKey.get(node.key) ?? { path: [], inheritedEntry: null };
-    const ownEntry = resolveSchemaEntry(context.path, node.connectorName);
-    const schemaEntry = context.inheritedEntry ?? ownEntry;
     const position = resolveNodeRiTargetPosition(node, firstDimensionPositionByNodeKey);
     fieldsByPosition.set(
       position,
@@ -345,9 +332,8 @@ export const buildMusicXmlWorldRiFields = (
         position,
         nodePosition: node.position,
         connectorName: node.connectorName,
+        contextPathPrefix: contextPathPrefixByNodeKey.get(node.key),
         protocolLabel: `${node.connectorName} · connector`,
-        semanticPath: context.path,
-        schemaEntry,
       }),
     );
   });
@@ -428,10 +414,40 @@ type RandomRiRange = {
   startStep?: number;
 };
 
-const normalizeRiFieldLabel = (field: MusicXmlWorldRiField) =>
-  `${field.schemaEntry?.label ?? ""} ${field.semanticLabel ?? ""} ${field.label}`
-    .trim()
-    .toLowerCase();
+const normalizeRiFieldLabel = (field: MusicXmlWorldRiField) => field.label.trim().toLowerCase();
+
+const MUSICXML_SEMANTIC_RI_CONNECTOR_NAMES = new Set([
+  "onset_tick",
+  "duration_tick",
+  "pitch_midi",
+  "velocity_midi",
+  "dynamic_code",
+  "event_id",
+  "part",
+  "staff",
+  "voice",
+  "meter_time_tick",
+  "meter_beats",
+  "meter_beat_type",
+  "clef_time_tick",
+  "clef_part",
+  "clef_staff",
+  "clef_sign_code",
+  "clef_line",
+  "tempo_time_tick",
+  "tempo_bpm",
+  "key_time_tick",
+  "key_fifths",
+  "key_mode_code",
+  "key_part",
+]);
+
+const isSemanticRiField = (field: MusicXmlWorldRiField) => {
+  const connectorName = field.connectorName.trim().toLowerCase();
+  if (MUSICXML_SEMANTIC_RI_CONNECTOR_NAMES.has(connectorName)) return true;
+  const label = normalizeRiFieldLabel(field);
+  return [...MUSICXML_SEMANTIC_RI_CONNECTOR_NAMES].some((name) => label.includes(name));
+};
 
 const getRandomRiRangeForField = (field: MusicXmlWorldRiField): RandomRiRange => {
   const label = normalizeRiFieldLabel(field);
@@ -483,16 +499,79 @@ const createRandomRiValueForField = (
   };
 };
 
+const createDefaultRiValueForField = (
+  field: MusicXmlWorldRiField,
+): ExecuteNodeOverrides[string] => {
+  const label = normalizeRiFieldLabel(field);
+
+  if (label.includes("pitch")) {
+    return { startPoint: 60, transformationShift: 0 };
+  }
+  if (label.includes("duration_tick")) {
+    return { startPoint: SCORE_TICKS_PER_QUARTER, transformationShift: 0 };
+  }
+  if (label.includes("duration")) {
+    return { startPoint: 1, transformationShift: 0 };
+  }
+  if (label.includes("velocity")) {
+    return { startPoint: 80, transformationShift: 0 };
+  }
+  if (label.includes("bpm")) {
+    return { startPoint: 120, transformationShift: 0 };
+  }
+  if (label.includes("beat_type")) {
+    return { startPoint: 4, transformationShift: 0 };
+  }
+  if (label.includes("beats")) {
+    return { startPoint: 4, transformationShift: 0 };
+  }
+  if (label.includes("part") || label.includes("staff") || label.includes("voice")) {
+    return { startPoint: 1, transformationShift: 0 };
+  }
+
+  return { startPoint: 0, transformationShift: 0 };
+};
+
 const getRandomizableRiFields = (
   registry: Record<string, StudioConnectorDef>,
   connectorName: string,
 ) => {
   const fields = buildMusicXmlWorldRiFields(registry, connectorName);
   const openFields = fields.filter((field) => !field.isStatic);
-  const semanticFields = openFields.filter((field) => field.schemaEntry?.kind === "field");
-  return (semanticFields.length > 0 ? semanticFields : openFields).sort(
-    (a, b) => a.nodePosition - b.nodePosition || a.position - b.position,
+  return openFields.sort((a, b) => a.nodePosition - b.nodePosition || a.position - b.position);
+};
+
+const getRandomizableSemanticRiFields = (
+  registry: Record<string, StudioConnectorDef>,
+  connectorName: string,
+) => getRandomizableRiFields(registry, connectorName).filter(isSemanticRiField);
+
+const buildDefaultRiOverrides = (
+  registry: Record<string, StudioConnectorDef>,
+  connectorName: string,
+): ExecuteNodeOverrides => {
+  const fields = getRandomizableRiFields(registry, connectorName);
+  return Object.fromEntries(
+    fields.map((field) => [String(field.position), createDefaultRiValueForField(field)]),
   );
+};
+
+export const createDefaultMusicXmlRuntimeSelectionFromRegistry = (
+  connectorName: string,
+  registry: Record<string, StudioConnectorDef>,
+  particlesCount = DEFAULT_MUSICXML_WORLD_PARTICLES_COUNT,
+): MusicXmlRuntimeSelection => {
+  const normalizedParticlesCount = normalizeParticlesCount(particlesCount);
+  const defaultPlan = buildExecuteRiPlan(
+    registry,
+    connectorName,
+    buildDefaultRiOverrides(registry, connectorName),
+  );
+  return {
+    connectorName,
+    particlesCount: normalizedParticlesCount,
+    dynamicRiInput: defaultPlan.dynamicRi,
+  };
 };
 
 export const createRandomMusicXmlRuntimeSelectionFromRegistry = (
@@ -503,14 +582,14 @@ export const createRandomMusicXmlRuntimeSelectionFromRegistry = (
   const random = createSeededRandom(seed);
   const particlesCount =
     RANDOM_PARTICLE_COUNTS[randomInt(random, 0, RANDOM_PARTICLE_COUNTS.length - 1)];
-  const fields = getRandomizableRiFields(registry, connectorName);
+  const fields = getRandomizableSemanticRiFields(registry, connectorName);
 
-  const overrides: ExecuteNodeOverrides = {};
+  const overrides: ExecuteNodeOverrides = buildDefaultRiOverrides(registry, connectorName);
   const shuffledFields = [...fields].sort(() => random() - 0.5);
-  const overrideCount = Math.min(
-    shuffledFields.length,
-    Math.max(1, Math.ceil(shuffledFields.length * 0.35)),
-  );
+  const overrideCount =
+    shuffledFields.length === 0
+      ? 0
+      : Math.min(shuffledFields.length, Math.max(1, Math.ceil(shuffledFields.length * 0.35)));
 
   shuffledFields.slice(0, overrideCount).forEach((field) => {
     overrides[String(field.position)] = createRandomRiValueForField(random, field);
@@ -527,7 +606,8 @@ export const createRandomMusicXmlRuntimeSelectionFromRegistry = (
 export const createRandomMusicXmlRuntimeSelection = async (
   connectorName: string,
 ): Promise<MusicXmlRuntimeSelection> => {
-  const name = connectorName.trim() || DEFAULT_MUSICXML_WORLD_CONNECTOR;
+  const name = connectorName.trim();
+  if (!name) throw new Error("A connector must be selected before randomizing this world.");
   const registry = await fetchMusicXmlWorldConnectorRegistry(name);
   return createRandomMusicXmlRuntimeSelectionFromRegistry(name, registry);
 };
@@ -538,7 +618,8 @@ export const executeRandomRenderableMusicXmlWorldRun = async (input: {
   worldName: string;
   maxAttempts?: number;
 }): Promise<MusicXmlWorldRandomRunResult> => {
-  const name = input.connectorName.trim() || DEFAULT_MUSICXML_WORLD_CONNECTOR;
+  const name = input.connectorName.trim();
+  if (!name) throw new Error("A connector must be selected before randomizing this world.");
   const registry = await fetchMusicXmlWorldConnectorRegistry(name);
   const maxAttempts = Math.max(1, Math.trunc(input.maxAttempts ?? RANDOM_RENDERABLE_ATTEMPTS));
   let lastError: unknown = null;
@@ -546,11 +627,11 @@ export const executeRandomRenderableMusicXmlWorldRun = async (input: {
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     const selection =
       attempt === maxAttempts
-        ? {
-            connectorName: name,
-            particlesCount: RANDOM_PARTICLE_COUNTS[0],
-            dynamicRiInput: {},
-          }
+        ? createDefaultMusicXmlRuntimeSelectionFromRegistry(
+            name,
+            registry,
+            RANDOM_PARTICLE_COUNTS[0],
+          )
         : createRandomMusicXmlRuntimeSelectionFromRegistry(name, registry);
 
     try {

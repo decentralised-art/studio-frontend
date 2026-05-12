@@ -109,12 +109,6 @@ export type StudioRuntimeSnapshot = {
 
 const normalizeKey = (value: string) => value.toLowerCase().replace(/[\s-_]+/g, "");
 
-const slugify = (value: string) =>
-  value
-    .toLowerCase()
-    .replace(/[^a-z0-9_]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-
 const buildNameMap = (names: string[]) => {
   const map = new Map<string, string>();
   names.forEach((name) => {
@@ -225,7 +219,7 @@ const parseDimensionHandle = (handle?: string | null) => {
 const resolveNodeName = (node: StudioNode) => {
   if (node.data.networkId) return node.data.networkId;
   if (node.data.particleId) return node.data.particleId;
-  return slugify(node.data.label) || node.data.label;
+  return node.data.label.trim() || node.data.label;
 };
 
 const isConnectorKind = (kind: StudioNodeKind) => kind === "feature" || kind === "connector";
@@ -739,9 +733,10 @@ export const buildStudioRuntime = (
   });
 
   const rootFeature = findRootFeature(graph);
-  const sluggedRoot = slugify(options.rootLabel);
   const rootName =
-    options.rootConnectorId ?? options.rootParticleId ?? (sluggedRoot || options.rootLabel);
+    options.rootConnectorId ??
+    options.rootParticleId ??
+    (options.rootLabel.trim() || options.rootLabel);
   if (!rootFeature) {
     warnings.push("No connector node found; cannot build connector.");
     Object.values(registry.connectors).forEach((connector) => {

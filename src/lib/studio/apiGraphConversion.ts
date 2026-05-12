@@ -27,7 +27,6 @@ import {
   formatTransformationPreviewLabel,
   isConnectorKind,
   normalizeKey,
-  slugify,
 } from "$lib/studio/studioNaming";
 import { buildStudioRuntime, type StudioNodeKind } from "$lib/studio/studioRuntime";
 
@@ -155,8 +154,7 @@ const parseConditionArgsFromEdge = (edge: Edge): number[] => {
 export const resolveApiGraphNodeName = (node: ApiGraphInputNode): string => {
   if (node.data.networkId) return node.data.networkId;
   if (node.data.particleId) return node.data.particleId;
-  const slugged = slugify(node.data.label);
-  return slugged || node.data.label;
+  return node.data.label.trim() || node.data.label;
 };
 
 const serializeStaticRiForApi = (

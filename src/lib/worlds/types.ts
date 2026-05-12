@@ -1,5 +1,3 @@
-import type { MUSIC_SCORE_POSITION_SCHEMA } from "$lib/score/positionSchema";
-
 export const WORLD_PROTOCOL_VERSION = 1;
 
 export const WORLD_STATE_MESSAGE_TYPE = "hypermusic:world-state";
@@ -26,6 +24,8 @@ export type WorldRuntimeInput = {
   particlesCount?: number;
   riCoordinate?: number | number[] | Record<string, number>;
   dynamicRiInput?: Record<string, WorldRiCoordinate>;
+  selectedConnectorContextNames?: string[];
+  selectedConnectorContextPathPrefixes?: string[];
   connectorGraph?: unknown;
   executeOutput?: Array<{
     path: string;
@@ -33,8 +33,10 @@ export type WorldRuntimeInput = {
   }>;
   artifacts?: {
     musicXml?: string;
+    scoreRenderedNotes?: Array<{ sourcePaths: string[] }>;
     scoreStatsText?: string;
     scoreAdapterId?: string;
+    midiStatsText?: string;
   };
 };
 
@@ -71,14 +73,14 @@ export type WorldDescriptor = {
   entry: string;
   runtime: "iframe";
   acceptedPluginIds: string[];
-  acceptedFormatHashes: string[];
+  acceptedFormatHashes?: string[];
+  acceptedScalars?: string[];
+  requiredScalars?: string[];
   surfaces: WorldRuntimeSurface[];
   description: string;
   shortDescription?: string;
   heroLabel?: string;
   accentColor?: string;
-  compatibleConnectorNames?: string[];
-  positionSchema?: typeof MUSIC_SCORE_POSITION_SCHEMA;
   stats?: Array<{ label: string; value: string }>;
 };
 
