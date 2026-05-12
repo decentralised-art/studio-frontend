@@ -172,6 +172,17 @@ const scoreTemplateStream = (collector: string, field: string, data: number[]) =
   data,
 });
 
+const scoreRuntimeData: StudioPluginRuntimeData = {
+  pluginId: "music-score-v1",
+  connectorTargets: ["score_root"],
+  streams: [
+    scoreTemplateStream("notes", "onset_tick", [0]),
+    scoreTemplateStream("notes", "duration_tick", [2520]),
+    scoreTemplateStream("notes", "pitch_midi", [60]),
+  ],
+  midiGroups: [],
+};
+
 const renderPluginNode = async (
   selected = true,
   pluginData = runtimeData,
@@ -211,7 +222,9 @@ const renderPluginNode = async (
   });
 };
 
-const renderScorePluginNode = async (pluginData: StudioPluginRuntimeData | null = runtimeData) => {
+const renderScorePluginNode = async (
+  pluginData: StudioPluginRuntimeData | null = scoreRuntimeData,
+) => {
   const StudioPluginNode = await loadComponent();
 
   return render(StudioPluginNode, {
@@ -237,7 +250,7 @@ const renderScorePluginNode = async (pluginData: StudioPluginRuntimeData | null 
         label: "Music Score",
         sourceId: "music-score-v1",
         pluginData: pluginData ? { ...pluginData, pluginId: "music-score-v1" } : undefined,
-        pluginTargets: ["midi_root"],
+        pluginTargets: pluginData?.connectorTargets ?? ["score_root"],
       },
     },
   });
@@ -322,12 +335,12 @@ describe("StudioPluginNode", () => {
       pluginId: "music-score-v1",
       connectorTargets: ["score_root"],
       streams: [
-        scoreTemplateStream("score_notes_v1", "score_event_id", [42]),
-        scoreTemplateStream("score_notes_v1", "score_onset", [0]),
-        scoreTemplateStream("score_notes_v1", "score_duration", [2520]),
-        scoreTemplateStream("score_notes_v1", "score_pitch", [60]),
-        scoreTemplateStream("score_articulations_v1", "score_event_id", [42]),
-        scoreTemplateStream("score_articulations_v1", "score_articulation_code", [999]),
+        scoreTemplateStream("notes", "event_id", [42]),
+        scoreTemplateStream("notes", "onset_tick", [0]),
+        scoreTemplateStream("notes", "duration_tick", [2520]),
+        scoreTemplateStream("notes", "pitch_midi", [60]),
+        scoreTemplateStream("articulations", "event_id", [42]),
+        scoreTemplateStream("articulations", "articulation_code", [999]),
       ],
       midiGroups: [],
     };

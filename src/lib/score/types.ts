@@ -18,9 +18,14 @@ export type ScoreTree = {
   root: ScoreXmlNode;
 };
 
+export type ScoreRenderedNote = {
+  sourcePaths: string[];
+};
+
 export type ScoreBuildResult = {
   tree: ScoreTree | null;
   diagnostics: ScoreDiagnostic[];
+  renderedNotes?: ScoreRenderedNote[];
   stats: {
     adapterId: string;
     noteCount: number;
@@ -34,6 +39,7 @@ export type ScorePluginRuntimeData = {
   adapterId: string;
   musicXml: string;
   diagnostics: ScoreDiagnostic[];
+  renderedNotes: ScoreRenderedNote[];
   stats: ScoreBuildResult["stats"];
 };
 

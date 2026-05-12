@@ -685,10 +685,10 @@ const seedRestoredScorePluginSession = async (page: Page) => {
           pluginId: "music-score-v1",
           connectorTargets: ["score_root"],
           streams: [
-            { feature_path: "/score_root:0/pitch:0", data: [60, 64, 67] },
-            { feature_path: "/score_root:0/time:0", data: [0, 1, 2] },
-            { feature_path: "/score_root:0/duration:0", data: [1, 1, 2] },
-            { feature_path: "/score_root:0/velocity:0", data: [64, 80, 96] },
+            { feature_path: "/score_root:0/pitch_midi:0", data: [60, 64, 67] },
+            { feature_path: "/score_root:0/onset_tick:0", data: [0, 2520, 5040] },
+            { feature_path: "/score_root:0/duration_tick:0", data: [2520, 2520, 5040] },
+            { feature_path: "/score_root:0/velocity_midi:0", data: [64, 80, 96] },
           ],
           midiGroups: [
             {
@@ -1087,11 +1087,11 @@ test("attaches worlds to the draft root connector", async ({ page }) => {
   await musicScorePlugin.getByRole("button", { name: "+" }).click();
 
   await expect(page.locator(".plugins-feedback")).toContainText(
-    "Connected 'MusicXML Score World' to 'untitled-connector'.",
+    "Connected 'MusicXML Score World' to 'Untitled Connector'.",
   );
   await expect(
     page.locator(".plugin-node").filter({ hasText: "MusicXML Score World" }),
-  ).toContainText("connected to untitled-connector");
+  ).toContainText("connected to Untitled Connector");
   await expect(
     page
       .locator(".plugin-node")

@@ -24,7 +24,7 @@
     sandboxPermissions?: string;
   };
 
-  const {
+  let {
     world,
     input,
     srcOverride,
@@ -41,11 +41,14 @@
 
   const src = $derived(srcOverride ?? `${base}${world.entry}`);
 
+  const cloneWorldRuntimeInput = (value: WorldRuntimeInput): WorldRuntimeInput =>
+    JSON.parse(JSON.stringify(value)) as WorldRuntimeInput;
+
   const postInput = () => {
     if (!browser || !iframeElement?.contentWindow || !input) return;
     const message: WorldStateMessage = {
       type: WORLD_STATE_MESSAGE_TYPE,
-      payload: input,
+      payload: cloneWorldRuntimeInput(input),
     };
     iframeElement.contentWindow.postMessage(message, "*");
     statusText = worldReady ? "Sent world state" : "Waiting for world runtime";

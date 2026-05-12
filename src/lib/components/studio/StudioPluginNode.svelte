@@ -411,7 +411,12 @@
     <div class="plugin-id">{pluginId}</div>
   {/if}
   {#if isScorePlugin}
-    <ScorePluginNodeBody label={data.label} {runtimeData} />
+    <ScorePluginNodeBody
+      label={data.label}
+      {runtimeData}
+      {selectedConnectorContextNames}
+      {selectedConnectorContextPathPrefixes}
+    />
   {:else if !runtimeData}
     <div class="plugin-empty">No world runtime data yet.</div>
   {:else if !hasOutput}

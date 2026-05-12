@@ -12,9 +12,16 @@
   type Props = {
     label: string;
     runtimeData: StudioPluginRuntimeData | null;
+    selectedConnectorContextNames?: string[];
+    selectedConnectorContextPathPrefixes?: string[];
   };
 
-  const { label, runtimeData }: Props = $props();
+  let {
+    label,
+    runtimeData,
+    selectedConnectorContextNames = [],
+    selectedConnectorContextPathPrefixes = [],
+  }: Props = $props();
 
   let loggedDiagnosticSignature = "";
 
@@ -33,6 +40,8 @@
           label,
           surface: "studio-plugin",
           connectorTargets: runtimeData?.connectorTargets ?? [],
+          selectedConnectorContextNames,
+          selectedConnectorContextPathPrefixes,
         })
       : null,
   );

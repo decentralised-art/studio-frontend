@@ -15,6 +15,7 @@ import type { NetworkFeedEvent } from "../src/lib/feed/particlePostData";
 
 const OWNER = "0xb584a15f38c2014cff54fdb1b417428b51999276";
 const OWNER_UPPER = "0xB584A15F38C2014CFF54FDB1B417428B51999276";
+const OWNER_BARE = "b584a15f38c2014cff54fdb1b417428b51999276";
 const FORMAT_HASH = "0x4e5aa46feeb2db48b7df17d424f29bfdee2ccbdf2433a99da6be58d3c9e31010";
 
 const feedItem = (overrides: Partial<ChainFeedItem> = {}): ChainFeedItem => ({
@@ -56,6 +57,9 @@ describe("chainEventHydration", () => {
           },
           {
             composite: "time",
+            bindings: {
+              "0": "duration_tick",
+            },
             transformations: [
               { name: "add", args: [1] },
               { name: "scale", args: [4, 8, 16] },
@@ -83,7 +87,7 @@ describe("chainEventHydration", () => {
         type: "connector",
         name: "score-weave",
         owner: OWNER,
-        dependencies: ["pitch", "time"],
+        dependencies: ["pitch", "time", "duration_tick"],
         formatHash: FORMAT_HASH,
         transformationArgCounts: {
           add: 2,
@@ -102,7 +106,7 @@ describe("chainEventHydration", () => {
         authorId: OWNER,
         createdAt: 0,
         createdLabel: "",
-        dependencies: ["pitch", "time"],
+        dependencies: ["pitch", "time", "duration_tick"],
         formatHash: FORMAT_HASH,
       },
     });
@@ -142,6 +146,33 @@ describe("chainEventHydration", () => {
         runtimeSnippet: "return x + args[2];",
         argsCount: 3,
         address: "0x123",
+      }),
+    );
+  });
+
+  it("normalizes bare chain owner addresses from chain detail payloads", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        name: "score-weave",
+        owner: OWNER_BARE,
+        format_hash: FORMAT_HASH,
+        dimensions: [{ transformations: [{ name: "add", args: [1] }] }],
+        condition_name: "",
+        condition_args: [],
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const detail = await hydrateChainEventDetail({
+      type: "connector",
+      name: "score-weave",
+    });
+
+    expect(detail).toEqual(
+      expect.objectContaining({
+        type: "connector",
+        name: "score-weave",
+        owner: OWNER,
       }),
     );
   });

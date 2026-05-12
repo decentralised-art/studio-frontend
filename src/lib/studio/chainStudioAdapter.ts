@@ -182,6 +182,26 @@ const connectorToParticle = (connector: StudioConnectorDef): MockParticleDef => 
   conditionArgs: connector.conditionName ? [...(connector.conditionArgs ?? [])] : undefined,
 });
 
+const uniqueOrdered = (values: string[]): string[] => {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  values.forEach((value) => {
+    const trimmed = value.trim();
+    if (!trimmed || seen.has(trimmed)) return;
+    seen.add(trimmed);
+    out.push(trimmed);
+  });
+  return out;
+};
+
+const collectConnectorReferenceNames = (connector: StudioConnectorDef): string[] =>
+  uniqueOrdered(
+    connector.dimensions.flatMap((dimension) => [
+      dimension.composite ?? "",
+      ...Object.values(dimension.bindings ?? {}),
+    ]),
+  );
+
 const cloneStaticRi = (
   staticRi: StudioConnectorDef["staticRi"],
 ): StudioConnectorDef["staticRi"] => {
@@ -275,25 +295,29 @@ const mapExploreParticle = (
   authorId: string,
   createdAt: number,
   formatHash?: string,
-): ExploreParticle => ({
-  id: particle.name,
-  name: particle.name,
-  summary: "Synced from chain.",
-  authorId,
-  viewId: "midi",
-  createdAt,
-  createdLabel: "",
-  ingredients: [
-    particle.featureName,
-    ...particle.composites
-      .filter((name): name is string => typeof name === "string" && name.length > 0)
-      .map((name) => name),
-  ],
-  complexity: 1 + particle.composites.filter(Boolean).length,
-  transactionName: `${particle.name} PT`,
-  dependencies: particle.composites.filter(Boolean) as string[],
-  ...(formatHash ? { formatHash } : {}),
-});
+  dependenciesInput?: string[],
+): ExploreParticle => {
+  const dependencies = uniqueOrdered(
+    dependenciesInput ??
+      particle.composites.filter(
+        (name): name is string => typeof name === "string" && name.length > 0,
+      ),
+  );
+  return {
+    id: particle.name,
+    name: particle.name,
+    summary: "Synced from chain.",
+    authorId,
+    viewId: "midi",
+    createdAt,
+    createdLabel: "",
+    ingredients: [particle.featureName, ...dependencies],
+    complexity: 1 + dependencies.length,
+    transactionName: `${particle.name} PT`,
+    dependencies,
+    ...(formatHash ? { formatHash } : {}),
+  };
+};
 
 export const fetchChainOwnedStudioSnapshot = async (
   address: string,
@@ -474,6 +498,7 @@ export const fetchChainOwnedStudioSnapshot = async (
           options.authorId,
           extractConnectorCreatedAt(payload) ?? 0,
           connector.formatHash,
+          collectConnectorReferenceNames(connector),
         );
       })
       .filter((particle): particle is ExploreParticle => Boolean(particle)),
@@ -507,6 +532,7 @@ export const fetchChainParticleForStudio = async (
       authorId,
       extractConnectorCreatedAt(connectorPayload) ?? Date.now(),
       connector.formatHash,
+      collectConnectorReferenceNames(connector),
     ),
   };
 };

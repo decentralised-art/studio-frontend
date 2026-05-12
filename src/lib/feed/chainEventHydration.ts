@@ -56,6 +56,7 @@ export class ChainEventHydrationError extends Error {
 }
 
 const CHAIN_ADDRESS_RE = /^0x[a-f0-9]{40}$/i;
+const BARE_CHAIN_ADDRESS_RE = /^[a-f0-9]{40}$/i;
 
 const EVENT_KIND_BY_EVENT_TYPE: Record<string, ChainEventHydrationKind> = {
   connector_added: "connector",
@@ -77,7 +78,9 @@ const normalizeName = (value: unknown, field: string): string => {
 const normalizeOptionalOwner = (value: unknown): string | null => {
   if (typeof value !== "string") return null;
   const normalized = value.trim().toLowerCase();
-  return CHAIN_ADDRESS_RE.test(normalized) ? normalized : null;
+  if (CHAIN_ADDRESS_RE.test(normalized)) return normalized;
+  if (BARE_CHAIN_ADDRESS_RE.test(normalized)) return `0x${normalized}`;
+  return null;
 };
 
 const resolveOwner = (detailOwner: unknown, targetOwner: unknown): string => {
@@ -120,7 +123,10 @@ const uniqueOrdered = (values: string[]): string[] => {
 const extractConnectorDependencies = (connector: StudioConnectorDef): string[] =>
   uniqueOrdered(
     connector.dimensions
-      .map((dimension) => dimension.composite ?? "")
+      .flatMap((dimension) => [
+        dimension.composite ?? "",
+        ...Object.values(dimension.bindings ?? {}),
+      ])
       .filter((value) => value.trim().length > 0),
   );
 

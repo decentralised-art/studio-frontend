@@ -14,6 +14,7 @@ const toRuntimeData = (result: ScoreBuildResult): ScorePluginRuntimeData => ({
   adapterId: result.stats.adapterId,
   musicXml: result.tree ? serializeScoreTreeToMusicXml(result.tree) : emptyMusicXml,
   diagnostics: result.diagnostics,
+  renderedNotes: result.renderedNotes ?? [],
   stats: result.stats,
 });
 
@@ -33,7 +34,5 @@ export const buildScorePluginRuntimeData = (
     if (result) return toRuntimeData(result);
   }
 
-  return toRuntimeData(
-    buildScoreFromMidiGroups(runtimeData.midiGroups, runtimeData.streams.length),
-  );
+  return toRuntimeData(buildScoreFromMidiGroups([], runtimeData.streams.length));
 };

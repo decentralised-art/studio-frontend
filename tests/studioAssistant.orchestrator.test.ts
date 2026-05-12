@@ -20,11 +20,11 @@ describe("studio assistant orchestrator helpers", () => {
     expect(prompt).toContain("Salamander Grand Piano sample preview");
     expect(prompt).toContain("Worlds are in-app Studio visualizers/runtimes");
     expect(prompt).toContain("legacy code may still call them plugins internally");
-    expect(prompt).toContain("studio-music-score-position-schema.md");
-    expect(prompt).toContain("semantic meaning comes from slot position");
-    expect(prompt).toContain("NOTE_TABLE maps D1 onset_tick");
-    expect(prompt).toContain("root D1 -> note table or note set");
-    expect(prompt).toContain("Do not rely on removed template workflows");
+    expect(prompt).toContain("musicxml-world-format-contract.md");
+    expect(prompt).toContain("semantic terminal scalar names");
+    expect(prompt).toContain("onset_tick, duration_tick, and pitch_midi");
+    expect(prompt).toContain("same parent path plus the same array index");
+    expect(prompt).toContain("Do not suggest old positional-score roots");
     expect(prompt).not.toContain("Studio templates");
     expect(prompt).toContain("A binding is not an edit to the reused connector");
     expect(prompt).toContain("with usage-specific RI values in the authored root context");
