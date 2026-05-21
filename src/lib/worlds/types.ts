@@ -65,6 +65,16 @@ export type WorldErrorMessage = {
 
 export type WorldRuntimeMessage = WorldReadyMessage | WorldRenderedMessage | WorldErrorMessage;
 
+export type WorldNumericValueLimit = {
+  min: number;
+  max: number;
+};
+
+export type WorldValueLimits = {
+  particlesCount?: WorldNumericValueLimit;
+  scalarValues?: Record<string, WorldNumericValueLimit>;
+};
+
 export type WorldDescriptor = {
   id: string;
   slug: string;
@@ -81,6 +91,7 @@ export type WorldDescriptor = {
   shortDescription?: string;
   heroLabel?: string;
   accentColor?: string;
+  valueLimits?: WorldValueLimits;
   stats?: Array<{ label: string; value: string }>;
 };
 

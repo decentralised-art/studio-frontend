@@ -1,6 +1,7 @@
 import {
   buildScoreFromMeasuredNoteStreams,
   hasMeasuredNoteStreams,
+  type ScoreMeasuredNoteBuildOptions,
 } from "$lib/score/adapters/measuredNotes";
 import { buildScoreFromMidiGroups } from "$lib/score/adapters/noteEvents";
 import { buildScoreFromTreeStreams, hasScoreTreeStreams } from "$lib/score/adapters/scoreTree";
@@ -20,6 +21,7 @@ const toRuntimeData = (result: ScoreBuildResult): ScorePluginRuntimeData => ({
 
 export const buildScorePluginRuntimeData = (
   runtimeData: StudioPluginRuntimeData,
+  options: ScoreMeasuredNoteBuildOptions = {},
 ): ScorePluginRuntimeData => {
   if (hasScoreTreeStreams(runtimeData.streams)) {
     const result = buildScoreFromTreeStreams(runtimeData.streams);
@@ -30,6 +32,7 @@ export const buildScorePluginRuntimeData = (
     const result = buildScoreFromMeasuredNoteStreams(
       runtimeData.streams,
       runtimeData.connectorTargets,
+      options,
     );
     if (result) return toRuntimeData(result);
   }

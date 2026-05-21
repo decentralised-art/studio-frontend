@@ -56,6 +56,50 @@ export const MUSICXML_SCORE_WORLD_ACCEPTED_SCALARS = [
   "spanner_kind",
 ] as const;
 
+export const MUSICXML_SCORE_WORLD_VALUE_LIMITS = {
+  particlesCount: { min: 1, max: 64 },
+  scalarValues: {
+    onset_tick: { min: 0, max: 1_000_000 },
+    duration_tick: { min: 1, max: 1_000_000 },
+    pitch_midi: { min: 0, max: 127 },
+    event_id: { min: 0, max: 1_000_000 },
+    part: { min: 1, max: 16 },
+    staff: { min: 1, max: 8 },
+    voice: { min: 1, max: 16 },
+    velocity_midi: { min: 0, max: 127 },
+    dynamic_code: { min: 0, max: 7 },
+    note_kind: { min: 0, max: 8 },
+    accidental_code: { min: 0, max: 12 },
+    stem_code: { min: 0, max: 2 },
+    beam_group: { min: 0, max: 1024 },
+    meter_time_tick: { min: 0, max: 1_000_000 },
+    meter_beats: { min: 1, max: 32 },
+    meter_beat_type: { min: 1, max: 128 },
+    staff_count: { min: 1, max: 8 },
+    part_name_code: { min: 0, max: 1_000_000 },
+    instrument_code: { min: 0, max: 127 },
+    clef_time_tick: { min: 0, max: 1_000_000 },
+    clef_part: { min: 1, max: 16 },
+    clef_staff: { min: 1, max: 8 },
+    clef_sign_code: { min: 0, max: 3 },
+    clef_line: { min: 1, max: 5 },
+    tempo_time_tick: { min: 0, max: 1_000_000 },
+    tempo_bpm: { min: 10, max: 300 },
+    key_time_tick: { min: 0, max: 1_000_000 },
+    key_fifths: { min: -7, max: 7 },
+    key_mode_code: { min: 0, max: 9 },
+    key_part: { min: 1, max: 16 },
+    articulation_event_id: { min: 0, max: 1_000_000 },
+    articulation_code: { min: 0, max: 3 },
+    articulation_placement: { min: 0, max: 1 },
+    slur_event_id: { min: 0, max: 1_000_000 },
+    slur_number: { min: 1, max: 16 },
+    slur_type: { min: 0, max: 3 },
+    slur_placement: { min: 0, max: 1 },
+    spanner_kind: { min: 0, max: 16 },
+  },
+} as const;
+
 export const MUSICXML_SCORE_WORLD: WorldDescriptor = {
   id: MUSICXML_SCORE_WORLD_ID,
   slug: MUSICXML_SCORE_WORLD_SLUG,
@@ -73,6 +117,7 @@ export const MUSICXML_SCORE_WORLD: WorldDescriptor = {
     "A notation world for connector output that can be interpreted as MusicXML score material.",
   heroLabel: "MusicXML",
   accentColor: "#67d6ff",
+  valueLimits: MUSICXML_SCORE_WORLD_VALUE_LIMITS,
   stats: [
     { label: "Runtime", value: "OSMD" },
     { label: "Format", value: "MusicXML 4.0" },
@@ -82,6 +127,16 @@ export const MUSICXML_SCORE_WORLD: WorldDescriptor = {
 
 export const MIDI_CLIP_WORLD_REQUIRED_SCALARS = ["pitch", "time", "duration", "velocity"] as const;
 export const MIDI_CLIP_WORLD_ACCEPTED_SCALARS = [...MIDI_CLIP_WORLD_REQUIRED_SCALARS] as const;
+
+export const MIDI_CLIP_WORLD_VALUE_LIMITS = {
+  particlesCount: { min: 1, max: 64 },
+  scalarValues: {
+    pitch: { min: 0, max: 127 },
+    time: { min: 0, max: 1_000_000 },
+    duration: { min: 0.0001, max: 1_000_000 },
+    velocity: { min: 0, max: 127 },
+  },
+} as const;
 
 export const MIDI_CLIP_WORLD: WorldDescriptor = {
   id: MIDI_CLIP_WORLD_ID,
@@ -101,6 +156,7 @@ export const MIDI_CLIP_WORLD: WorldDescriptor = {
     "A MIDI world for connector output that can be interpreted as pitch, time, duration, and velocity streams.",
   heroLabel: "MIDI",
   accentColor: "#34d399",
+  valueLimits: MIDI_CLIP_WORLD_VALUE_LIMITS,
   stats: [
     { label: "Runtime", value: "Piano Roll" },
     { label: "Format", value: "MIDI" },

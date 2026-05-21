@@ -193,6 +193,33 @@ describe("score measured-note adapter", () => {
     expect(musicXml).toContain("<duration>2521</duration>");
   });
 
+  it("skips out-of-range world scalar values while keeping later in-range rows renderable", () => {
+    const result = buildScoreFromMeasuredNoteStreams(
+      [
+        stream("/melody:0/tick_grid:0/onset_tick:0", [0, quarter, 2 * quarter]),
+        stream("/melody:0/duration_logic:0/duration_tick:0", [quarter, quarter, quarter]),
+        stream("/melody:0/scale_logic:0/pitch_midi:0", [60, 140, 64]),
+      ],
+      [],
+      {
+        scalarValueLimits: {
+          onset_tick: { min: 0, max: 10 * quarter },
+          duration_tick: { min: 1, max: 10 * quarter },
+          pitch_midi: { min: 0, max: 127 },
+        },
+      },
+    );
+
+    expect(result?.tree).not.toBeNull();
+    expect(result?.stats.noteCount).toBe(2);
+    expect(result?.diagnostics.map((diagnostic) => diagnostic.code)).toContain(
+      "out-of-range-measured-note-value",
+    );
+    const musicXml = serializeScoreTreeToMusicXml(result!.tree!);
+    expect(musicXml).toContain("<step>C</step>");
+    expect(musicXml).toContain("<step>E</step>");
+  });
+
   it("renders meter changes from semantic meter streams", () => {
     const result = buildScoreFromMeasuredNoteStreams([
       groupStream("notes", "onset_tick", [0, 4 * quarter]),

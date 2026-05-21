@@ -60,9 +60,17 @@ export type MidiClip = {
   diagnostics: MidiGroupDiagnostic[];
 };
 
+export type MidiScalarValueLimit = {
+  min: number;
+  max: number;
+};
+
+export type MidiScalarValueLimits = Record<string, MidiScalarValueLimit>;
+
 export type MidiClipOptions = {
   tempo?: number;
   ppq?: number;
+  scalarValueLimits?: MidiScalarValueLimits;
 };
 
 const REQUIRED_SCALARS: MidiScalarKey[] = ["pitch", "time", "duration", "velocity"];
@@ -71,6 +79,27 @@ const isFiniteNumber = (value: unknown): value is number =>
   typeof value === "number" && Number.isFinite(value);
 
 const isValidMidiByte = (value: number) => value >= 0 && value <= 127;
+
+const normalizeScalarValueLimits = (
+  limits: MidiScalarValueLimits | undefined,
+): MidiScalarValueLimits =>
+  Object.fromEntries(
+    Object.entries(limits ?? {}).filter(
+      (entry): entry is [string, MidiScalarValueLimit] =>
+        isFiniteNumber(entry[1].min) &&
+        isFiniteNumber(entry[1].max) &&
+        entry[1].min <= entry[1].max,
+    ),
+  );
+
+const isWithinScalarValueLimit = (
+  key: MidiScalarKey,
+  value: number,
+  limits: MidiScalarValueLimits,
+) => {
+  const limit = limits[key];
+  return !limit || (value >= limit.min && value <= limit.max);
+};
 
 const normalizeTempo = (value: unknown): number =>
   isFiniteNumber(value) && value > 0 ? Math.max(10, value) : MIDI_DEFAULT_TEMPO;
@@ -125,6 +154,7 @@ export const buildMidiClipFromStreamGroups = (
 ): MidiClip => {
   const tempo = normalizeTempo(options.tempo);
   const ppq = normalizePpq(options.ppq);
+  const scalarValueLimits = normalizeScalarValueLimits(options.scalarValueLimits);
   const notes: MidiNote[] = [];
   const skipped: MidiSkippedNote[] = [];
   const diagnostics: MidiGroupDiagnostic[] = [];
@@ -155,23 +185,29 @@ export const buildMidiClipFromStreamGroups = (
       }
 
       const pitch = Math.round(pitchValue);
-      if (!isValidMidiByte(pitch)) {
+      if (!isValidMidiByte(pitch) || !isWithinScalarValueLimit("pitch", pitch, scalarValueLimits)) {
         skipNote(skipped, diagnostic, "invalid-pitch", index);
         continue;
       }
 
-      if (timeValue < 0) {
+      if (timeValue < 0 || !isWithinScalarValueLimit("time", timeValue, scalarValueLimits)) {
         skipNote(skipped, diagnostic, "invalid-time", index);
         continue;
       }
 
-      if (durationValue <= 0) {
+      if (
+        durationValue <= 0 ||
+        !isWithinScalarValueLimit("duration", durationValue, scalarValueLimits)
+      ) {
         skipNote(skipped, diagnostic, "invalid-duration", index);
         continue;
       }
 
       const velocity = Math.round(velocityValue);
-      if (!isValidMidiByte(velocity)) {
+      if (
+        !isValidMidiByte(velocity) ||
+        !isWithinScalarValueLimit("velocity", velocity, scalarValueLimits)
+      ) {
         skipNote(skipped, diagnostic, "invalid-velocity", index);
         continue;
       }

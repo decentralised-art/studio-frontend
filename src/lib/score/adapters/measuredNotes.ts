@@ -115,6 +115,19 @@ type ScoreCollectorKind =
 
 type ScoreField = MeasuredNoteField | ScoreDecorationField | ScoreLayerField;
 
+export type ScoreScalarValueLimit = {
+  min: number;
+  max: number;
+};
+
+export type ScoreScalarValueLimits = Record<string, ScoreScalarValueLimit>;
+
+export type ScoreMeasuredNoteBuildOptions = {
+  scalarValueLimits?: ScoreScalarValueLimits;
+};
+
+type NormalizedScoreScalarValueLimits = Map<string, ScoreScalarValueLimit>;
+
 const isFiniteNumber = (value: unknown): value is number =>
   typeof value === "number" && Number.isFinite(value);
 
@@ -147,6 +160,62 @@ const parsePathSegments = (path: string): string[] =>
     .split("/")
     .map((segment) => segment.trim())
     .filter(Boolean);
+
+const normalizeScalarValueLimits = (
+  limits: ScoreScalarValueLimits | undefined,
+): NormalizedScoreScalarValueLimits => {
+  const normalized = new Map<string, ScoreScalarValueLimit>();
+  Object.entries(limits ?? {}).forEach(([name, limit]) => {
+    if (!isFiniteNumber(limit.min) || !isFiniteNumber(limit.max) || limit.min > limit.max) return;
+    const normalizedName = normalizePluginPathSegmentName(name);
+    if (!normalizedName) return;
+    normalized.set(normalizedName, { min: limit.min, max: limit.max });
+  });
+  return normalized;
+};
+
+const resolveScalarLimitForStream = (
+  stream: PtOutputFeature | undefined,
+  scalarValueLimits: NormalizedScoreScalarValueLimits,
+): { scalarName: string; limit: ScoreScalarValueLimit } | null => {
+  if (!stream || scalarValueLimits.size === 0) return null;
+  const segments = parsePathSegments(stream.feature_path).map(normalizePluginPathSegmentName);
+  for (let index = segments.length - 1; index >= 0; index -= 1) {
+    const scalarName = segments[index] ?? "";
+    const limit = scalarValueLimits.get(scalarName);
+    if (limit) return { scalarName, limit };
+  }
+  return null;
+};
+
+const findOutOfRangeScalarValue = (
+  values: Array<{ stream: PtOutputFeature | undefined; value: unknown }>,
+  scalarValueLimits: NormalizedScoreScalarValueLimits,
+) => {
+  for (const item of values) {
+    if (!isFiniteNumber(item.value)) continue;
+    const match = resolveScalarLimitForStream(item.stream, scalarValueLimits);
+    if (!match) continue;
+    if (item.value < match.limit.min || item.value > match.limit.max) {
+      return {
+        scalarName: match.scalarName,
+        limit: match.limit,
+        path: item.stream?.feature_path,
+        value: item.value,
+      };
+    }
+  }
+  return null;
+};
+
+const isScalarValueRenderable = (
+  stream: PtOutputFeature | undefined,
+  value: unknown,
+  scalarValueLimits: NormalizedScoreScalarValueLimits,
+) => !findOutOfRangeScalarValue([{ stream, value }], scalarValueLimits);
+
+const outOfRangeMessage = (match: NonNullable<ReturnType<typeof findOutOfRangeScalarValue>>) =>
+  `${match.scalarName} value ${match.value} is outside this world's renderable range ${match.limit.min}-${match.limit.max}.`;
 
 const parseScoreField = (path: string): ScoreField | null => {
   const segments = parsePathSegments(path);
@@ -600,6 +669,7 @@ const collectArticulationsByEvent = (
   streams: readonly PtOutputFeature[],
   diagnostics: ScoreBuildResult["diagnostics"],
   connectorTargets: readonly string[] = [],
+  scalarValueLimits: NormalizedScoreScalarValueLimits = new Map(),
 ): Map<string, ScoreArticulationEvent[]> => {
   const byEvent = new Map<string, ScoreArticulationEvent[]>();
   collectArticulationGroups(streams, connectorTargets).forEach((group) => {
@@ -617,6 +687,25 @@ const collectArticulationsByEvent = (
             "warning",
             "invalid-score-articulation-row",
             `${group.groupPath}: skipped articulation row ${index} because event_id or articulation_code is missing.`,
+            group.groupPath,
+          ),
+        );
+        continue;
+      }
+      const outOfRange = findOutOfRangeScalarValue(
+        [
+          { stream: group.eventId, value: group.eventId?.data[index] },
+          { stream: group.articulationCode, value: articulationCode },
+          { stream: group.placement, value: group.placement?.data[index] },
+        ],
+        scalarValueLimits,
+      );
+      if (outOfRange) {
+        diagnostics.push(
+          scoreDiagnostic(
+            "warning",
+            "out-of-range-score-articulation-row",
+            `${group.groupPath}: skipped articulation row ${index} because ${outOfRangeMessage(outOfRange)}`,
             group.groupPath,
           ),
         );
@@ -652,6 +741,7 @@ const collectSlursByEvent = (
   streams: readonly PtOutputFeature[],
   diagnostics: ScoreBuildResult["diagnostics"],
   connectorTargets: readonly string[] = [],
+  scalarValueLimits: NormalizedScoreScalarValueLimits = new Map(),
 ): Map<string, ScoreSlurEvent[]> => {
   const byEvent = new Map<string, ScoreSlurEvent[]>();
   collectSlurGroups(streams, connectorTargets).forEach((group) => {
@@ -671,6 +761,26 @@ const collectSlursByEvent = (
             "warning",
             "invalid-score-slur-row",
             `${group.groupPath}: skipped slur row ${index} because event_id, slur_number, or slur_type is missing.`,
+            group.groupPath,
+          ),
+        );
+        continue;
+      }
+      const outOfRange = findOutOfRangeScalarValue(
+        [
+          { stream: group.eventId, value: group.eventId?.data[index] },
+          { stream: group.slurNumber, value: slurNumber },
+          { stream: group.slurType, value: slurType },
+          { stream: group.placement, value: group.placement?.data[index] },
+        ],
+        scalarValueLimits,
+      );
+      if (outOfRange) {
+        diagnostics.push(
+          scoreDiagnostic(
+            "warning",
+            "out-of-range-score-slur-row",
+            `${group.groupPath}: skipped slur row ${index} because ${outOfRangeMessage(outOfRange)}`,
             group.groupPath,
           ),
         );
@@ -712,6 +822,7 @@ const collectMeters = (
   streams: readonly PtOutputFeature[],
   diagnostics: ScoreBuildResult["diagnostics"],
   connectorTargets: readonly string[] = [],
+  scalarValueLimits: NormalizedScoreScalarValueLimits = new Map(),
 ): ScoreMeterEvent[] => {
   const meters: ScoreMeterEvent[] = [];
   collectMeterGroups(streams, connectorTargets).forEach((group) => {
@@ -739,6 +850,25 @@ const collectMeters = (
         );
         continue;
       }
+      const outOfRange = findOutOfRangeScalarValue(
+        [
+          { stream: group.meterTimeTick, value: timeTick },
+          { stream: group.beats, value: beats },
+          { stream: group.beatType, value: beatType },
+        ],
+        scalarValueLimits,
+      );
+      if (outOfRange) {
+        diagnostics.push(
+          scoreDiagnostic(
+            "warning",
+            "out-of-range-score-meter-row",
+            `${group.groupPath}: skipped meter row ${index} because ${outOfRangeMessage(outOfRange)}`,
+            group.groupPath,
+          ),
+        );
+        continue;
+      }
       meters.push({
         time: ticksToBeats(timeTick),
         beats: normalizedBeats,
@@ -754,6 +884,7 @@ const collectParts = (
   streams: readonly PtOutputFeature[],
   diagnostics: ScoreBuildResult["diagnostics"],
   connectorTargets: readonly string[] = [],
+  scalarValueLimits: NormalizedScoreScalarValueLimits = new Map(),
 ): ScorePartEvent[] => {
   const parts: ScorePartEvent[] = [];
   collectPartGroups(streams, connectorTargets).forEach((group) => {
@@ -772,6 +903,24 @@ const collectParts = (
         continue;
       }
       const staffCount = group.staffCount?.data[index];
+      const outOfRange = findOutOfRangeScalarValue(
+        [
+          { stream: group.part, value: part },
+          { stream: group.staffCount, value: staffCount },
+        ],
+        scalarValueLimits,
+      );
+      if (outOfRange) {
+        diagnostics.push(
+          scoreDiagnostic(
+            "warning",
+            "out-of-range-score-part-row",
+            `${group.groupPath}: skipped part row ${index} because ${outOfRangeMessage(outOfRange)}`,
+            group.groupPath,
+          ),
+        );
+        continue;
+      }
       parts.push({
         part: Math.max(1, Math.round(part)),
         ...(isFiniteNumber(staffCount) ? { staffCount: Math.max(1, Math.round(staffCount)) } : {}),
@@ -786,6 +935,7 @@ const collectClefs = (
   streams: readonly PtOutputFeature[],
   diagnostics: ScoreBuildResult["diagnostics"],
   connectorTargets: readonly string[] = [],
+  scalarValueLimits: NormalizedScoreScalarValueLimits = new Map(),
 ): ScoreClefEvent[] => {
   const clefs: ScoreClefEvent[] = [];
   collectClefGroups(streams, connectorTargets).forEach((group) => {
@@ -810,6 +960,27 @@ const collectClefs = (
             "warning",
             "invalid-score-clef-row",
             `${group.groupPath}: skipped clef row ${index} because time_tick, part, staff, clef_sign_code, or clef_line is missing or unsupported.`,
+            group.groupPath,
+          ),
+        );
+        continue;
+      }
+      const outOfRange = findOutOfRangeScalarValue(
+        [
+          { stream: group.clefTimeTick, value: timeTick },
+          { stream: group.part, value: part },
+          { stream: group.staff, value: staff },
+          { stream: group.clefSignCode, value: signCode },
+          { stream: group.clefLine, value: line },
+        ],
+        scalarValueLimits,
+      );
+      if (outOfRange) {
+        diagnostics.push(
+          scoreDiagnostic(
+            "warning",
+            "out-of-range-score-clef-row",
+            `${group.groupPath}: skipped clef row ${index} because ${outOfRangeMessage(outOfRange)}`,
             group.groupPath,
           ),
         );
@@ -842,6 +1013,7 @@ const collectTempos = (
   streams: readonly PtOutputFeature[],
   diagnostics: ScoreBuildResult["diagnostics"],
   connectorTargets: readonly string[] = [],
+  scalarValueLimits: NormalizedScoreScalarValueLimits = new Map(),
 ): ScoreTempoEvent[] => {
   const tempos: ScoreTempoEvent[] = [];
   collectTempoGroups(streams, connectorTargets).forEach((group) => {
@@ -860,6 +1032,24 @@ const collectTempos = (
         );
         continue;
       }
+      const outOfRange = findOutOfRangeScalarValue(
+        [
+          { stream: group.tempoTimeTick, value: timeTick },
+          { stream: group.tempoBpm, value: bpm },
+        ],
+        scalarValueLimits,
+      );
+      if (outOfRange) {
+        diagnostics.push(
+          scoreDiagnostic(
+            "warning",
+            "out-of-range-score-tempo-row",
+            `${group.groupPath}: skipped tempo row ${index} because ${outOfRangeMessage(outOfRange)}`,
+            group.groupPath,
+          ),
+        );
+        continue;
+      }
       tempos.push({ time: ticksToBeats(timeTick), bpm, sourcePath: group.tempoBpm?.feature_path });
     }
   });
@@ -870,6 +1060,7 @@ const collectKeys = (
   streams: readonly PtOutputFeature[],
   diagnostics: ScoreBuildResult["diagnostics"],
   connectorTargets: readonly string[] = [],
+  scalarValueLimits: NormalizedScoreScalarValueLimits = new Map(),
 ): ScoreKeyEvent[] => {
   const keys: ScoreKeyEvent[] = [];
   collectKeyGroups(streams, connectorTargets).forEach((group) => {
@@ -899,6 +1090,24 @@ const collectKeys = (
         );
         continue;
       }
+      const outOfRangeRequired = findOutOfRangeScalarValue(
+        [
+          { stream: group.keyTimeTick, value: timeTick },
+          { stream: group.keyFifths, value: fifths },
+        ],
+        scalarValueLimits,
+      );
+      if (outOfRangeRequired) {
+        diagnostics.push(
+          scoreDiagnostic(
+            "warning",
+            "out-of-range-score-key-row",
+            `${group.groupPath}: skipped key row ${index} because ${outOfRangeMessage(outOfRangeRequired)}`,
+            group.groupPath,
+          ),
+        );
+        continue;
+      }
       const modeCode = group.keyModeCode?.data[index];
       const resolvedMode = isFiniteNumber(modeCode) ? resolveKeyMode(modeCode) : null;
       const mode = normalizeRenderableKeyMode(resolvedMode);
@@ -913,11 +1122,13 @@ const collectKeys = (
         );
       }
       const part = group.part?.data[index];
+      const modeInRange = isScalarValueRenderable(group.keyModeCode, modeCode, scalarValueLimits);
+      const partInRange = isScalarValueRenderable(group.part, part, scalarValueLimits);
       keys.push({
         time: ticksToBeats(timeTick),
         fifths: normalizedFifths,
-        ...(mode ? { mode } : {}),
-        ...(isFiniteNumber(part) ? { part: Math.max(1, Math.round(part)) } : {}),
+        ...(mode && modeInRange ? { mode } : {}),
+        ...(isFiniteNumber(part) && partInRange ? { part: Math.max(1, Math.round(part)) } : {}),
         sourcePath: group.keyTimeTick?.feature_path,
       });
     }
@@ -928,19 +1139,31 @@ const collectKeys = (
 export const buildScoreFromMeasuredNoteStreams = (
   streams: readonly PtOutputFeature[],
   connectorTargets: readonly string[] = [],
+  options: ScoreMeasuredNoteBuildOptions = {},
 ): ScoreBuildResult | null => {
   if (!hasMeasuredNoteStreams(streams, connectorTargets)) return null;
 
   const diagnostics: ScoreBuildResult["diagnostics"] = [];
+  const scalarValueLimits = normalizeScalarValueLimits(options.scalarValueLimits);
   const events: ScoreNoteEvent[] = [];
   const groups = collectGroups(streams, connectorTargets);
-  const articulationsByEvent = collectArticulationsByEvent(streams, diagnostics, connectorTargets);
-  const slursByEvent = collectSlursByEvent(streams, diagnostics, connectorTargets);
-  const meters = collectMeters(streams, diagnostics, connectorTargets);
-  const parts = collectParts(streams, diagnostics, connectorTargets);
-  const clefs = collectClefs(streams, diagnostics, connectorTargets);
-  const tempos = collectTempos(streams, diagnostics, connectorTargets);
-  const keys = collectKeys(streams, diagnostics, connectorTargets);
+  const articulationsByEvent = collectArticulationsByEvent(
+    streams,
+    diagnostics,
+    connectorTargets,
+    scalarValueLimits,
+  );
+  const slursByEvent = collectSlursByEvent(
+    streams,
+    diagnostics,
+    connectorTargets,
+    scalarValueLimits,
+  );
+  const meters = collectMeters(streams, diagnostics, connectorTargets, scalarValueLimits);
+  const parts = collectParts(streams, diagnostics, connectorTargets, scalarValueLimits);
+  const clefs = collectClefs(streams, diagnostics, connectorTargets, scalarValueLimits);
+  const tempos = collectTempos(streams, diagnostics, connectorTargets, scalarValueLimits);
+  const keys = collectKeys(streams, diagnostics, connectorTargets, scalarValueLimits);
 
   groups.forEach((group) => {
     const hasTickTime = Boolean(group.timeTick && group.durationTick);
@@ -997,22 +1220,51 @@ export const buildScoreFromMeasuredNoteStreams = (
         continue;
       }
 
+      const outOfRangeRequired = findOutOfRangeScalarValue(
+        [
+          { stream: group.timeTick, value: timeTick },
+          { stream: group.durationTick, value: durationTick },
+          { stream: group.pitch, value: pitch },
+        ],
+        scalarValueLimits,
+      );
+      if (outOfRangeRequired) {
+        diagnostics.push(
+          scoreDiagnostic(
+            "warning",
+            "out-of-range-measured-note-value",
+            `${group.groupPath}: skipped row ${index} because ${outOfRangeMessage(outOfRangeRequired)}`,
+            group.groupPath,
+          ),
+        );
+        continue;
+      }
+
       const velocity = group.velocity?.data[index];
       const dynamicCode = group.dynamicCode?.data[index];
       const voice = group.voice?.data[index];
       const staff = group.staff?.data[index];
       const part = group.part?.data[index];
+      const velocityInRange = isScalarValueRenderable(group.velocity, velocity, scalarValueLimits);
+      const dynamicCodeInRange = isScalarValueRenderable(
+        group.dynamicCode,
+        dynamicCode,
+        scalarValueLimits,
+      );
+      const voiceInRange = isScalarValueRenderable(group.voice, voice, scalarValueLimits);
+      const staffInRange = isScalarValueRenderable(group.staff, staff, scalarValueLimits);
+      const partInRange = isScalarValueRenderable(group.part, part, scalarValueLimits);
 
       events.push({
         pitch,
         ...(key ? { eventId: Number(key) } : {}),
         time: noteTime,
         duration: noteDuration,
-        ...(isFiniteNumber(velocity) ? { velocity } : {}),
-        ...(isFiniteNumber(dynamicCode) ? { dynamicCode } : {}),
-        ...(isFiniteNumber(voice) ? { voice } : {}),
-        ...(isFiniteNumber(staff) ? { staff } : {}),
-        ...(isFiniteNumber(part) ? { part } : {}),
+        ...(isFiniteNumber(velocity) && velocityInRange ? { velocity } : {}),
+        ...(isFiniteNumber(dynamicCode) && dynamicCodeInRange ? { dynamicCode } : {}),
+        ...(isFiniteNumber(voice) && voiceInRange ? { voice } : {}),
+        ...(isFiniteNumber(staff) && staffInRange ? { staff } : {}),
+        ...(isFiniteNumber(part) && partInRange ? { part } : {}),
         ...(key && articulationsByEvent.has(key)
           ? { articulations: articulationsByEvent.get(key) }
           : {}),

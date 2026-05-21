@@ -5,6 +5,7 @@ import {
   createDefaultMusicXmlRuntimeSelectionFromRegistry,
   createRandomMusicXmlRuntimeSelectionFromRegistry,
 } from "../src/lib/worlds/musicXmlWorldRun";
+import { MUSICXML_SCORE_WORLD } from "../src/lib/worlds/registry";
 
 describe("musicXmlWorldRun", () => {
   const buildFixtureRegistry = () => {
@@ -149,7 +150,31 @@ describe("musicXmlWorldRun", () => {
     expect(sawTickField).toBe(true);
   });
 
-  it("creates MusicXML-safe default RI values for open semantic terminal fields", () => {
+  it("creates zero default RI values for open fields and leaves static fields locked", () => {
+    const registry = buildFixtureRegistry();
+
+    const selection = createDefaultMusicXmlRuntimeSelectionFromRegistry(
+      "test_score_root_0_version2_6052026",
+      registry,
+      12,
+    );
+    const fields = buildMusicXmlWorldRiFields(registry, "test_score_root_0_version2_6052026");
+    const openFields = fields.filter((field) => !field.isStatic);
+    const staticFields = fields.filter((field) => field.isStatic);
+
+    expect(staticFields.length).toBeGreaterThan(0);
+    openFields.forEach((field) => {
+      expect(selection.dynamicRiInput[String(field.position)]).toEqual({
+        start_point: 0,
+        transformation_shift: 0,
+      });
+    });
+    staticFields.forEach((field) => {
+      expect(selection.dynamicRiInput[String(field.position)]).toBeUndefined();
+    });
+  });
+
+  it("randomizes terminal scalar RI start values within the world manifest limits", () => {
     const registry = {
       musicxml_multilevel_test_13052026: fromProtocolConnectorPayload({
         name: "musicxml_multilevel_test_13052026",
@@ -195,21 +220,38 @@ describe("musicXmlWorldRun", () => {
       }),
     };
 
-    const selection = createDefaultMusicXmlRuntimeSelectionFromRegistry(
-      "musicxml_multilevel_test_13052026",
-      registry,
-      12,
-    );
     const fields = buildMusicXmlWorldRiFields(registry, "musicxml_multilevel_test_13052026");
-    const positionByName = new Map(fields.map((field) => [field.connectorName, field.position]));
+    const fieldByPosition = new Map(fields.map((field) => [String(field.position), field]));
 
-    expect(selection.dynamicRiInput[String(positionByName.get("duration_tick"))]).toEqual({
-      start_point: 2520,
-      transformation_shift: 0,
-    });
-    expect(selection.dynamicRiInput[String(positionByName.get("pitch_midi"))]).toEqual({
-      start_point: 60,
-      transformation_shift: 0,
-    });
+    for (let seed = 1; seed <= 20; seed += 1) {
+      const selection = createRandomMusicXmlRuntimeSelectionFromRegistry(
+        "musicxml_multilevel_test_13052026",
+        registry,
+        seed,
+        MUSICXML_SCORE_WORLD,
+      );
+
+      expect(selection.particlesCount).toBeGreaterThanOrEqual(
+        MUSICXML_SCORE_WORLD.valueLimits!.particlesCount!.min,
+      );
+      expect(selection.particlesCount).toBeLessThanOrEqual(
+        MUSICXML_SCORE_WORLD.valueLimits!.particlesCount!.max,
+      );
+
+      Object.entries(selection.dynamicRiInput).forEach(([position, value]) => {
+        const field = fieldByPosition.get(position);
+        expect(field).toBeDefined();
+        if (
+          !field ||
+          !["onset_tick", "duration_tick", "pitch_midi"].includes(field.connectorName)
+        ) {
+          return;
+        }
+        const limit = MUSICXML_SCORE_WORLD.valueLimits!.scalarValues![field.connectorName]!;
+        expect(value.start_point).toBeGreaterThanOrEqual(Math.max(0, limit.min));
+        expect(value.start_point).toBeLessThanOrEqual(limit.max);
+        expect(value.transformation_shift).toBe(0);
+      });
+    }
   });
 });

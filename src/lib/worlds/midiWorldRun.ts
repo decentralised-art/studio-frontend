@@ -16,8 +16,8 @@ import {
   type DynamicRiInput,
   type MusicXmlRuntimeSelection,
 } from "$lib/worlds/musicXmlWorldRun";
-import { buildMidiWorldInput } from "$lib/worlds/registry";
-import type { WorldRuntimeInput } from "$lib/worlds/types";
+import { buildMidiWorldInput, MIDI_CLIP_WORLD } from "$lib/worlds/registry";
+import type { WorldDescriptor, WorldNumericValueLimit, WorldRuntimeInput } from "$lib/worlds/types";
 
 export type MidiRuntimeSelection = MusicXmlRuntimeSelection;
 
@@ -40,7 +40,8 @@ export const DEFAULT_MIDI_WORLD_PARTICLES_COUNT = 12;
 export const normalizeMidiParticlesCount = (
   value: unknown,
   fallback = DEFAULT_MIDI_WORLD_PARTICLES_COUNT,
-) => normalizeParticlesCount(value, fallback);
+  limit: WorldNumericValueLimit | undefined = MIDI_CLIP_WORLD.valueLimits?.particlesCount,
+) => normalizeParticlesCount(value, fallback, limit);
 
 export const decodeMidiDynamicRiQueryParam = decodeDynamicRiQueryParam;
 
@@ -90,9 +91,15 @@ export const executeMidiWorldRun = async (input: {
   dynamicRiInput: DynamicRiInput;
   surface: WorldRuntimeInput["surface"];
   worldName: string;
+  world?: WorldDescriptor;
 }): Promise<MidiWorldRunResult> => {
   const connectorName = input.connectorName.trim();
-  const particlesCount = normalizeMidiParticlesCount(input.particlesCount);
+  const world = input.world ?? MIDI_CLIP_WORLD;
+  const particlesCount = normalizeMidiParticlesCount(
+    input.particlesCount,
+    DEFAULT_MIDI_WORLD_PARTICLES_COUNT,
+    world.valueLimits?.particlesCount,
+  );
   const requestBody: ChainExecutePayload = {
     connector_name: connectorName,
     particles_count: String(particlesCount),
@@ -102,7 +109,9 @@ export const executeMidiWorldRun = async (input: {
   const result = await executeWithAuthRetry(requestBody);
   const streams = normalizeExecuteOutput(result.body);
   const midiData = buildMidiRuntimeData(connectorName, streams);
-  const midiClip = pluginRuntimeToMidiClip(midiData);
+  const midiClip = pluginRuntimeToMidiClip(midiData, {
+    scalarValueLimits: world.valueLimits?.scalarValues,
+  });
   return {
     midiData,
     midiClip,
@@ -123,11 +132,21 @@ export const createRandomMidiRuntimeSelectionFromRegistry = (
   connectorName: string,
   registry: Record<string, StudioConnectorDef>,
   seed?: number,
+  world: WorldDescriptor = MIDI_CLIP_WORLD,
 ): MidiRuntimeSelection => {
-  const selection = createRandomMusicXmlRuntimeSelectionFromRegistry(connectorName, registry, seed);
+  const selection = createRandomMusicXmlRuntimeSelectionFromRegistry(
+    connectorName,
+    registry,
+    seed,
+    world,
+  );
   return {
     connectorName: selection.connectorName,
-    particlesCount: normalizeMidiParticlesCount(selection.particlesCount),
+    particlesCount: normalizeMidiParticlesCount(
+      selection.particlesCount,
+      DEFAULT_MIDI_WORLD_PARTICLES_COUNT,
+      world.valueLimits?.particlesCount,
+    ),
     dynamicRiInput: selection.dynamicRiInput,
   };
 };
@@ -137,9 +156,11 @@ export const executeRandomRenderableMidiWorldRun = async (input: {
   surface: WorldRuntimeInput["surface"];
   worldName: string;
   maxAttempts?: number;
+  world?: WorldDescriptor;
 }): Promise<MidiWorldRandomRunResult> => {
   const name = input.connectorName.trim();
   if (!name) throw new Error("A connector must be selected before randomizing this world.");
+  const world = input.world ?? MIDI_CLIP_WORLD;
   const registry = await fetchMusicXmlWorldConnectorRegistry(name);
   const maxAttempts = Math.max(1, Math.trunc(input.maxAttempts ?? RANDOM_RENDERABLE_ATTEMPTS));
   let lastError: unknown = null;
@@ -149,10 +170,14 @@ export const executeRandomRenderableMidiWorldRun = async (input: {
       attempt === maxAttempts
         ? {
             connectorName: name,
-            particlesCount: DEFAULT_MIDI_WORLD_PARTICLES_COUNT,
+            particlesCount: normalizeMidiParticlesCount(
+              DEFAULT_MIDI_WORLD_PARTICLES_COUNT,
+              DEFAULT_MIDI_WORLD_PARTICLES_COUNT,
+              world.valueLimits?.particlesCount,
+            ),
             dynamicRiInput: {},
           }
-        : createRandomMidiRuntimeSelectionFromRegistry(name, registry);
+        : createRandomMidiRuntimeSelectionFromRegistry(name, registry, undefined, world);
 
     try {
       const result = await executeMidiWorldRun({
@@ -161,6 +186,7 @@ export const executeRandomRenderableMidiWorldRun = async (input: {
         dynamicRiInput: selection.dynamicRiInput,
         surface: input.surface,
         worldName: input.worldName,
+        world,
       });
       if (isRenderableMidiResult(result)) {
         return {
