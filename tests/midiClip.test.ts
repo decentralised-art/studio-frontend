@@ -90,6 +90,31 @@ describe("midi clip model", () => {
     });
   });
 
+  it("applies world scalar value limits without dropping later in-range notes", () => {
+    const clip = buildMidiClipFromStreamGroups(
+      [
+        {
+          groupPath: "/root/limited-values",
+          pitch: { path: "/root/limited-values/pitch:0", data: [60, 90, 64] },
+          time: { path: "/root/limited-values/time:0", data: [0, 1, 2] },
+          duration: { path: "/root/limited-values/duration:0", data: [1, 1, 1] },
+          velocity: { path: "/root/limited-values/velocity:0", data: [90, 90, 90] },
+        },
+      ],
+      {
+        scalarValueLimits: {
+          pitch: { min: 0, max: 72 },
+          time: { min: 0, max: 16 },
+          duration: { min: 0.01, max: 16 },
+          velocity: { min: 0, max: 127 },
+        },
+      },
+    );
+
+    expect(clip.notes.map((note) => note.pitch)).toEqual([60, 64]);
+    expect(clip.skipped.map((item) => item.reason)).toEqual(["invalid-pitch"]);
+  });
+
   it("formats note names and diagnostics for UI display", () => {
     expect(midiNoteName(60)).toBe("C4");
     expect(formatMidiSkippedReason("invalid-duration")).toBe("zero or negative duration");

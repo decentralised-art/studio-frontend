@@ -127,7 +127,17 @@
   };
 
   const normalizeActiveParticlesCount = (value: unknown) =>
-    isMidiWorld ? normalizeMidiParticlesCount(value) : normalizeParticlesCount(value);
+    isMidiWorld
+      ? normalizeMidiParticlesCount(
+          value,
+          defaultParticlesCount,
+          activeWorld.valueLimits?.particlesCount,
+        )
+      : normalizeParticlesCount(
+          value,
+          defaultParticlesCount,
+          activeWorld.valueLimits?.particlesCount,
+        );
 
   const randomIndex = (length: number): number => {
     if (length <= 1) return 0;
@@ -389,6 +399,7 @@
           dynamicRiInput: selection.dynamicRiInput,
           surface: "world-page",
           worldName: activeWorld.name,
+          world: activeWorld,
         });
         worldInput = withSelectedConnectorContext(result.worldInput);
         refreshEmbeddedWorldFrame();
@@ -404,6 +415,7 @@
         dynamicRiInput: selection.dynamicRiInput,
         surface: "world-page",
         worldName: activeWorld.name,
+        world: activeWorld,
       });
       logScoreDiagnostics(result.scoreData, diagnosticContext);
       worldInput = withSelectedConnectorContext(result.worldInput);
@@ -437,8 +449,18 @@
       }
 
       const selection = isMidiWorld
-        ? createRandomMidiRuntimeSelectionFromRegistry(name, context.registry)
-        : createRandomMusicXmlRuntimeSelectionFromRegistry(name, context.registry);
+        ? createRandomMidiRuntimeSelectionFromRegistry(
+            name,
+            context.registry,
+            undefined,
+            activeWorld,
+          )
+        : createRandomMusicXmlRuntimeSelectionFromRegistry(
+            name,
+            context.registry,
+            undefined,
+            activeWorld,
+          );
       applySelection(selection);
       await waitForRuntimeSettingsPaint();
       await runSelection(selection, "Random runtime");

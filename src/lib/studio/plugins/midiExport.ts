@@ -5,6 +5,7 @@ import {
   type MidiClip,
   type MidiNote,
   type MidiScalarStream,
+  type MidiScalarValueLimits,
   type MidiStreamGroup,
 } from "$lib/midi/midiClip";
 import type { StudioPluginRuntimeData } from "$lib/studio/plugins/runtime";
@@ -35,7 +36,7 @@ const toMidiStreamGroup = (
 
 export const pluginRuntimeToMidiClip = (
   runtimeData: StudioPluginRuntimeData,
-  options?: { tempo?: number },
+  options?: { tempo?: number; scalarValueLimits?: MidiScalarValueLimits },
 ): StudioMidiClip => {
   const groups = runtimeData.midiGroups.map(toMidiStreamGroup);
   return buildMidiClipFromStreamGroups(groups, options);

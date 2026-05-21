@@ -8,7 +8,6 @@ import {
   type ChainExecuteRunningInstancePayload,
 } from "$lib/chain/registryApi";
 import type { PtOutputFeature } from "$lib/particles/ptMidiAdapter";
-import { SCORE_TICKS_PER_QUARTER } from "$lib/score/adapters/measuredNotes";
 import { MUSIC_SCORE_PLUGIN_ID } from "$lib/score/codebook";
 import type { ScorePluginRuntimeData } from "$lib/score/types";
 import type { StudioConnectorDef } from "$lib/studio/domain/connectorModel";
@@ -16,8 +15,8 @@ import { buildExecuteRiPlan, type ExecuteNodeOverrides } from "$lib/studio/execu
 import { groupMidiStreams, type StudioPluginRuntimeData } from "$lib/studio/plugins/runtime";
 import { buildScorePluginRuntimeData } from "$lib/studio/plugins/scoreRuntime";
 import { isInvalidChainTokenError } from "$lib/studio/studioChainSync";
-import { buildMusicXmlWorldInput } from "$lib/worlds/registry";
-import type { WorldRuntimeInput } from "$lib/worlds/types";
+import { buildMusicXmlWorldInput, MUSICXML_SCORE_WORLD } from "$lib/worlds/registry";
+import type { WorldDescriptor, WorldNumericValueLimit, WorldRuntimeInput } from "$lib/worlds/types";
 
 export type DynamicRiInput = Record<string, ChainExecuteRunningInstancePayload>;
 
@@ -58,8 +57,6 @@ export type MusicXmlWorldConnectorContext = {
 };
 
 const UINT32_MAX = 0xffff_ffff;
-const RANDOM_PARTICLE_COUNTS = [16, 24, 32, 48, 64] as const;
-const RANDOM_RI_VALUE_MAX = 7;
 const RANDOM_RENDERABLE_ATTEMPTS = 8;
 
 export const DEFAULT_MUSICXML_WORLD_CONNECTOR = "";
@@ -68,10 +65,13 @@ export const DEFAULT_MUSICXML_WORLD_PARTICLES_COUNT = 12;
 export const normalizeParticlesCount = (
   value: unknown,
   fallback = DEFAULT_MUSICXML_WORLD_PARTICLES_COUNT,
+  limit?: WorldNumericValueLimit,
 ) => {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return fallback;
-  return Math.max(1, Math.min(2048, Math.trunc(parsed)));
+  const min = limit ? Math.max(1, Math.trunc(limit.min)) : 1;
+  const max = limit ? Math.max(min, Math.trunc(limit.max)) : 2048;
+  return Math.max(min, Math.min(max, Math.trunc(parsed)));
 };
 
 const normalizeUint32 = (value: unknown, label: string) => {
@@ -161,6 +161,7 @@ const normalizeExecuteOutput = (
 const buildScoreData = (
   connectorName: string,
   streams: PtOutputFeature[],
+  world: WorldDescriptor = MUSICXML_SCORE_WORLD,
 ): ScorePluginRuntimeData => {
   const runtimeData: StudioPluginRuntimeData = {
     pluginId: MUSIC_SCORE_PLUGIN_ID,
@@ -168,7 +169,9 @@ const buildScoreData = (
     streams,
     midiGroups: groupMidiStreams(streams),
   };
-  return buildScorePluginRuntimeData(runtimeData);
+  return buildScorePluginRuntimeData(runtimeData, {
+    scalarValueLimits: world.valueLimits?.scalarValues,
+  });
 };
 
 export const executeMusicXmlWorldRun = async (input: {
@@ -177,9 +180,15 @@ export const executeMusicXmlWorldRun = async (input: {
   dynamicRiInput: DynamicRiInput;
   surface: WorldRuntimeInput["surface"];
   worldName: string;
+  world?: WorldDescriptor;
 }): Promise<MusicXmlWorldRunResult> => {
   const connectorName = input.connectorName.trim();
-  const particlesCount = normalizeParticlesCount(input.particlesCount);
+  const world = input.world ?? MUSICXML_SCORE_WORLD;
+  const particlesCount = normalizeParticlesCount(
+    input.particlesCount,
+    DEFAULT_MUSICXML_WORLD_PARTICLES_COUNT,
+    world.valueLimits?.particlesCount,
+  );
   const requestBody: ChainExecutePayload = {
     connector_name: connectorName,
     particles_count: String(particlesCount),
@@ -188,7 +197,7 @@ export const executeMusicXmlWorldRun = async (input: {
 
   const result = await executeWithAuthRetry(requestBody);
   const streams = normalizeExecuteOutput(result.body);
-  const scoreData = buildScoreData(connectorName, streams);
+  const scoreData = buildScoreData(connectorName, streams, world);
   return {
     scoreData,
     worldInput: buildMusicXmlWorldInput({
@@ -406,131 +415,59 @@ const randomInt = (random: () => number, min: number, max: number) =>
 const isRenderableMusicXmlResult = (result: MusicXmlWorldRunResult) =>
   Boolean(result.scoreData.musicXml) && result.scoreData.stats.noteCount > 0;
 
-type RandomRiRange = {
-  startMin: number;
-  startMax: number;
-  shiftMin: number;
-  shiftMax: number;
-  startStep?: number;
-};
-
 const normalizeRiFieldLabel = (field: MusicXmlWorldRiField) => field.label.trim().toLowerCase();
 
-const MUSICXML_SEMANTIC_RI_CONNECTOR_NAMES = new Set([
-  "onset_tick",
-  "duration_tick",
-  "pitch_midi",
-  "velocity_midi",
-  "dynamic_code",
-  "event_id",
-  "part",
-  "staff",
-  "voice",
-  "meter_time_tick",
-  "meter_beats",
-  "meter_beat_type",
-  "clef_time_tick",
-  "clef_part",
-  "clef_staff",
-  "clef_sign_code",
-  "clef_line",
-  "tempo_time_tick",
-  "tempo_bpm",
-  "key_time_tick",
-  "key_fifths",
-  "key_mode_code",
-  "key_part",
-]);
+const normalizeScalarName = (value: string) => value.trim().toLowerCase();
 
-const isSemanticRiField = (field: MusicXmlWorldRiField) => {
-  const connectorName = field.connectorName.trim().toLowerCase();
-  if (MUSICXML_SEMANTIC_RI_CONNECTOR_NAMES.has(connectorName)) return true;
+const getWorldScalarValueLimits = (world: WorldDescriptor) =>
+  new Map(
+    Object.entries(world.valueLimits?.scalarValues ?? {})
+      .map(([name, limit]) => [normalizeScalarName(name), limit] as const)
+      .filter(([, limit]) => Number.isFinite(limit.min) && Number.isFinite(limit.max)),
+  );
+
+const resolveWorldScalarNameForRiField = (
+  field: MusicXmlWorldRiField,
+  world: WorldDescriptor,
+): string | null => {
+  const scalarLimits = getWorldScalarValueLimits(world);
+  const connectorName = normalizeScalarName(field.connectorName);
+  if (scalarLimits.has(connectorName)) return connectorName;
+
   const label = normalizeRiFieldLabel(field);
-  return [...MUSICXML_SEMANTIC_RI_CONNECTOR_NAMES].some((name) => label.includes(name));
+  const matchedName = [...scalarLimits.keys()].find((name) => label.includes(name));
+  return matchedName ?? null;
 };
 
-const getRandomRiRangeForField = (field: MusicXmlWorldRiField): RandomRiRange => {
-  const label = normalizeRiFieldLabel(field);
+const isWorldScalarRiField = (field: MusicXmlWorldRiField, world: WorldDescriptor) =>
+  Boolean(resolveWorldScalarNameForRiField(field, world));
 
-  if (label.includes("pitch")) {
-    return { startMin: 48, startMax: 72, shiftMin: 0, shiftMax: 6 };
-  }
-  if (label.includes("duration") && label.includes("tick")) {
-    return { startMin: 630, startMax: 5040, shiftMin: 0, shiftMax: 0, startStep: 630 };
-  }
-  if (label.includes("tick")) {
-    return { startMin: 0, startMax: 10080, shiftMin: 0, shiftMax: 0, startStep: 2520 };
-  }
-  if (label.includes("bpm")) {
-    return { startMin: 60, startMax: 160, shiftMin: 0, shiftMax: 0 };
-  }
-  if (label.includes("dynamic")) {
-    return { startMin: 0, startMax: 7, shiftMin: 0, shiftMax: 0 };
-  }
-  if (label.includes("part") || label.includes("staff") || label.includes("voice")) {
-    return { startMin: 1, startMax: 4, shiftMin: 0, shiftMax: 0 };
-  }
-  if (label.includes("event id")) {
-    return { startMin: 0, startMax: 16, shiftMin: 0, shiftMax: 0 };
-  }
-
-  return {
-    startMin: 0,
-    startMax: RANDOM_RI_VALUE_MAX,
-    shiftMin: 0,
-    shiftMax: RANDOM_RI_VALUE_MAX,
-  };
-};
-
-const randomSteppedInt = (random: () => number, min: number, max: number, step = 1): number => {
-  const normalizedStep = Math.max(1, Math.trunc(step));
-  const steps = Math.max(0, Math.floor((max - min) / normalizedStep));
-  return min + randomInt(random, 0, steps) * normalizedStep;
+const randomParticleCount = (random: () => number, world: WorldDescriptor) => {
+  const limit = world.valueLimits?.particlesCount;
+  const min = limit ? Math.max(1, Math.ceil(limit.min)) : 1;
+  const max = limit ? Math.max(min, Math.floor(limit.max)) : 64;
+  return randomInt(random, min, max);
 };
 
 const createRandomRiValueForField = (
   random: () => number,
   field: MusicXmlWorldRiField,
+  world: WorldDescriptor,
 ): ExecuteNodeOverrides[string] => {
-  const range = getRandomRiRangeForField(field);
+  const scalarName = resolveWorldScalarNameForRiField(field, world);
+  const limit = scalarName ? world.valueLimits?.scalarValues?.[scalarName] : null;
+  const startMin = Math.max(0, Math.ceil(limit?.min ?? 0));
+  const startMax = Math.min(UINT32_MAX, Math.floor(limit?.max ?? startMin));
   return {
-    startPoint: randomSteppedInt(random, range.startMin, range.startMax, range.startStep),
-    transformationShift: randomInt(random, range.shiftMin, range.shiftMax),
+    startPoint: randomInt(random, startMin, Math.max(startMin, startMax)),
+    transformationShift: 0,
   };
 };
 
-const createDefaultRiValueForField = (
-  field: MusicXmlWorldRiField,
-): ExecuteNodeOverrides[string] => {
-  const label = normalizeRiFieldLabel(field);
-
-  if (label.includes("pitch")) {
-    return { startPoint: 60, transformationShift: 0 };
-  }
-  if (label.includes("duration_tick")) {
-    return { startPoint: SCORE_TICKS_PER_QUARTER, transformationShift: 0 };
-  }
-  if (label.includes("duration")) {
-    return { startPoint: 1, transformationShift: 0 };
-  }
-  if (label.includes("velocity")) {
-    return { startPoint: 80, transformationShift: 0 };
-  }
-  if (label.includes("bpm")) {
-    return { startPoint: 120, transformationShift: 0 };
-  }
-  if (label.includes("beat_type")) {
-    return { startPoint: 4, transformationShift: 0 };
-  }
-  if (label.includes("beats")) {
-    return { startPoint: 4, transformationShift: 0 };
-  }
-  if (label.includes("part") || label.includes("staff") || label.includes("voice")) {
-    return { startPoint: 1, transformationShift: 0 };
-  }
-
-  return { startPoint: 0, transformationShift: 0 };
-};
+const createDefaultRiValueForField = (): ExecuteNodeOverrides[string] => ({
+  startPoint: 0,
+  transformationShift: 0,
+});
 
 const getRandomizableRiFields = (
   registry: Record<string, StudioConnectorDef>,
@@ -544,7 +481,11 @@ const getRandomizableRiFields = (
 const getRandomizableSemanticRiFields = (
   registry: Record<string, StudioConnectorDef>,
   connectorName: string,
-) => getRandomizableRiFields(registry, connectorName).filter(isSemanticRiField);
+  world: WorldDescriptor,
+) =>
+  getRandomizableRiFields(registry, connectorName).filter((field) =>
+    isWorldScalarRiField(field, world),
+  );
 
 const buildDefaultRiOverrides = (
   registry: Record<string, StudioConnectorDef>,
@@ -552,7 +493,7 @@ const buildDefaultRiOverrides = (
 ): ExecuteNodeOverrides => {
   const fields = getRandomizableRiFields(registry, connectorName);
   return Object.fromEntries(
-    fields.map((field) => [String(field.position), createDefaultRiValueForField(field)]),
+    fields.map((field) => [String(field.position), createDefaultRiValueForField()]),
   );
 };
 
@@ -578,11 +519,11 @@ export const createRandomMusicXmlRuntimeSelectionFromRegistry = (
   connectorName: string,
   registry: Record<string, StudioConnectorDef>,
   seed = createSeed(),
+  world: WorldDescriptor = MUSICXML_SCORE_WORLD,
 ): MusicXmlRuntimeSelection => {
   const random = createSeededRandom(seed);
-  const particlesCount =
-    RANDOM_PARTICLE_COUNTS[randomInt(random, 0, RANDOM_PARTICLE_COUNTS.length - 1)];
-  const fields = getRandomizableSemanticRiFields(registry, connectorName);
+  const particlesCount = randomParticleCount(random, world);
+  const fields = getRandomizableSemanticRiFields(registry, connectorName, world);
 
   const overrides: ExecuteNodeOverrides = buildDefaultRiOverrides(registry, connectorName);
   const shuffledFields = [...fields].sort(() => random() - 0.5);
@@ -592,7 +533,7 @@ export const createRandomMusicXmlRuntimeSelectionFromRegistry = (
       : Math.min(shuffledFields.length, Math.max(1, Math.ceil(shuffledFields.length * 0.35)));
 
   shuffledFields.slice(0, overrideCount).forEach((field) => {
-    overrides[String(field.position)] = createRandomRiValueForField(random, field);
+    overrides[String(field.position)] = createRandomRiValueForField(random, field, world);
   });
 
   const randomizedPlan = buildExecuteRiPlan(registry, connectorName, overrides);
@@ -605,11 +546,12 @@ export const createRandomMusicXmlRuntimeSelectionFromRegistry = (
 
 export const createRandomMusicXmlRuntimeSelection = async (
   connectorName: string,
+  world: WorldDescriptor = MUSICXML_SCORE_WORLD,
 ): Promise<MusicXmlRuntimeSelection> => {
   const name = connectorName.trim();
   if (!name) throw new Error("A connector must be selected before randomizing this world.");
   const registry = await fetchMusicXmlWorldConnectorRegistry(name);
-  return createRandomMusicXmlRuntimeSelectionFromRegistry(name, registry);
+  return createRandomMusicXmlRuntimeSelectionFromRegistry(name, registry, createSeed(), world);
 };
 
 export const executeRandomRenderableMusicXmlWorldRun = async (input: {
@@ -617,9 +559,11 @@ export const executeRandomRenderableMusicXmlWorldRun = async (input: {
   surface: WorldRuntimeInput["surface"];
   worldName: string;
   maxAttempts?: number;
+  world?: WorldDescriptor;
 }): Promise<MusicXmlWorldRandomRunResult> => {
   const name = input.connectorName.trim();
   if (!name) throw new Error("A connector must be selected before randomizing this world.");
+  const world = input.world ?? MUSICXML_SCORE_WORLD;
   const registry = await fetchMusicXmlWorldConnectorRegistry(name);
   const maxAttempts = Math.max(1, Math.trunc(input.maxAttempts ?? RANDOM_RENDERABLE_ATTEMPTS));
   let lastError: unknown = null;
@@ -630,9 +574,13 @@ export const executeRandomRenderableMusicXmlWorldRun = async (input: {
         ? createDefaultMusicXmlRuntimeSelectionFromRegistry(
             name,
             registry,
-            RANDOM_PARTICLE_COUNTS[0],
+            normalizeParticlesCount(
+              DEFAULT_MUSICXML_WORLD_PARTICLES_COUNT,
+              DEFAULT_MUSICXML_WORLD_PARTICLES_COUNT,
+              world.valueLimits?.particlesCount,
+            ),
           )
-        : createRandomMusicXmlRuntimeSelectionFromRegistry(name, registry);
+        : createRandomMusicXmlRuntimeSelectionFromRegistry(name, registry, createSeed(), world);
 
     try {
       const result = await executeMusicXmlWorldRun({
@@ -641,6 +589,7 @@ export const executeRandomRenderableMusicXmlWorldRun = async (input: {
         dynamicRiInput: selection.dynamicRiInput,
         surface: input.surface,
         worldName: input.worldName,
+        world,
       });
       if (isRenderableMusicXmlResult(result)) {
         return {

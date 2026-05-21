@@ -69,6 +69,7 @@
         dynamicRiInput: decodeDynamicRiQueryParam(params.get("ri")),
         surface: "world-page",
         worldName: MUSICXML_SCORE_WORLD.name,
+        world: MUSICXML_SCORE_WORLD,
       });
       runtimeInput = result.worldInput;
       standaloneStatus = "Rendered from URL runtime values";

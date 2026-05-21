@@ -2,6 +2,12 @@
 
 This document defines the format-based contract that the MusicXML World should use for connector compatibility and score rendering.
 
+For connector ontology, circular transformation semantics, RI rules, and corpus design rules, read:
+
+```text
+musicxml-world-concept-network/00-start-here/system-principles.md
+```
+
 The current implementation should return to the backend-supported format model. A world is compatible with connectors whose `format_hash` is listed in the world's manifest/descriptor. The world then reads the executed connector output by semantic terminal scalar names and execution paths.
 
 This is the active implementation direction for the MusicXML World. The older Music Score Position Schema remains useful as a design experiment, but it should not be the first compatibility mechanism for world discovery.
@@ -173,6 +179,26 @@ clef = renderer default unless explicit clef streams are present
 key = no key signature unless explicit key streams are present
 tempo = no tempo marking unless explicit tempo streams are present
 ```
+
+## World Value Limits
+
+The world descriptor declares numeric limits for the scalar values it knows how to interpret.
+
+These limits are not connector step sizes and they do not constrain transformations. Transformations remain entirely connector-defined. The limits only describe the value range that the world can render for each terminal scalar.
+
+The world page uses these limits when the user clicks random iteration:
+
+```text
+open RI start_point for pitch_midi     -> random value inside pitch_midi min/max
+open RI start_point for duration_tick  -> random value inside duration_tick min/max
+open RI start_point for tempo_bpm      -> random value inside tempo_bpm min/max
+```
+
+`transformation_shift` is not derived from the world descriptor because shift semantics belong to the connector's own transformations.
+
+The descriptor also declares a `particlesCount` min/max range. This is the world-level limit for randomizing `N`, not a musical default.
+
+If a connector starts inside the declared range but later transformations produce out-of-range values, the run should not fail. The raw output still belongs to the composition. The renderer should skip only the rows whose required values are outside the world's declared range, while later rows that return into range should still be rendered.
 
 ## Optional Score Tables
 

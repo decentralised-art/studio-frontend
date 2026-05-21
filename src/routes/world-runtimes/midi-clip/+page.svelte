@@ -64,7 +64,10 @@
           ? { path: group.velocity.feature_path, data: group.velocity.data }
           : undefined,
       })),
-      { tempo: tempoSetting },
+      {
+        tempo: tempoSetting,
+        scalarValueLimits: MIDI_CLIP_WORLD.valueLimits?.scalarValues,
+      },
     ),
   );
   const hasOutput = $derived(midiClip.notes.length > 0);
@@ -245,6 +248,7 @@
         dynamicRiInput: decodeMidiDynamicRiQueryParam(params.get("ri")),
         surface: "world-page",
         worldName: MIDI_CLIP_WORLD.name,
+        world: MIDI_CLIP_WORLD,
       });
       runtimeInput = result.worldInput;
       standaloneStatus = "Rendered from URL runtime values";
