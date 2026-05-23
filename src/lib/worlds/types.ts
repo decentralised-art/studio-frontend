@@ -37,6 +37,7 @@ export type WorldRuntimeInput = {
     scoreStatsText?: string;
     scoreAdapterId?: string;
     midiStatsText?: string;
+    toneStatsText?: string;
   };
 };
 
@@ -75,6 +76,12 @@ export type WorldValueLimits = {
   scalarValues?: Record<string, WorldNumericValueLimit>;
 };
 
+export type WorldRequiredScalarSet = {
+  id: string;
+  label: string;
+  scalars: string[];
+};
+
 export type WorldDescriptor = {
   id: string;
   slug: string;
@@ -85,7 +92,9 @@ export type WorldDescriptor = {
   acceptedPluginIds: string[];
   acceptedFormatHashes?: string[];
   acceptedScalars?: string[];
+  excludedConnectorNames?: string[];
   requiredScalars?: string[];
+  requiredScalarSets?: WorldRequiredScalarSet[];
   surfaces: WorldRuntimeSurface[];
   description: string;
   shortDescription?: string;

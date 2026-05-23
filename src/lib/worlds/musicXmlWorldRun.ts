@@ -16,7 +16,12 @@ import { groupMidiStreams, type StudioPluginRuntimeData } from "$lib/studio/plug
 import { buildScorePluginRuntimeData } from "$lib/studio/plugins/scoreRuntime";
 import { isInvalidChainTokenError } from "$lib/studio/studioChainSync";
 import { buildMusicXmlWorldInput, MUSICXML_SCORE_WORLD } from "$lib/worlds/registry";
-import type { WorldDescriptor, WorldNumericValueLimit, WorldRuntimeInput } from "$lib/worlds/types";
+import type {
+  WorldDescriptor,
+  WorldNumericValueLimit,
+  WorldRequiredScalarSet,
+  WorldRuntimeInput,
+} from "$lib/worlds/types";
 
 export type DynamicRiInput = Record<string, ChainExecuteRunningInstancePayload>;
 
@@ -387,6 +392,137 @@ export const fetchMusicXmlWorldConnectorContext = async (
     registry,
     riFields: buildMusicXmlWorldRiFields(registry, connectorName),
   };
+};
+
+const collectTerminalConnectorNamesFromRegistry = (
+  registry: Record<string, StudioConnectorDef>,
+  rootConnectorName: string,
+): string[] => {
+  const terminalNames = new Set<string>();
+  const visiting = new Set<string>();
+
+  const visit = (connectorName: string) => {
+    const name = connectorName.trim();
+    if (!name || visiting.has(name)) return;
+    const connector = registry[name];
+    if (!connector) return;
+    visiting.add(name);
+
+    let hasTerminalDimension = connector.dimensions.length === 0;
+    connector.dimensions.forEach((dimension) => {
+      if (dimension.composite) {
+        visit(dimension.composite);
+      }
+      Object.values(dimension.bindings ?? {}).forEach((target) => {
+        if (!target) return;
+        visit(target);
+      });
+      if (
+        !dimension.composite &&
+        Object.values(dimension.bindings ?? {}).every((target) => !target)
+      ) {
+        hasTerminalDimension = true;
+      }
+    });
+
+    if (hasTerminalDimension) {
+      terminalNames.add(normalizeScalarName(connector.name));
+    }
+    visiting.delete(name);
+  };
+
+  visit(rootConnectorName);
+  return [...terminalNames].sort((a, b) => a.localeCompare(b));
+};
+
+export type WorldConnectorScalarCompatibility = {
+  terminalScalars: string[];
+  missingRequiredScalars: string[];
+  missingRequiredScalarSets: Array<{
+    id: string;
+    label: string;
+    missingScalars: string[];
+  }>;
+  matchedRequiredScalarSetId?: string;
+  matchedRequiredScalarSetLabel?: string;
+  unsupportedScalars: string[];
+  compatible: boolean;
+};
+
+const getWorldRequiredScalarSets = (world: WorldDescriptor): WorldRequiredScalarSet[] => {
+  const explicitSets = (world.requiredScalarSets ?? [])
+    .map((set) => ({
+      id: set.id.trim(),
+      label: set.label.trim() || set.id.trim(),
+      scalars: set.scalars.map(normalizeScalarName).filter(Boolean),
+    }))
+    .filter((set) => set.id && set.scalars.length > 0);
+  if (explicitSets.length > 0) return explicitSets;
+
+  const scalars = (world.requiredScalars ?? []).map(normalizeScalarName).filter(Boolean);
+  return scalars.length > 0 ? [{ id: "required", label: "Required", scalars }] : [];
+};
+
+export const getWorldConnectorScalarCompatibility = (
+  registry: Record<string, StudioConnectorDef>,
+  rootConnectorName: string,
+  world: WorldDescriptor,
+): WorldConnectorScalarCompatibility => {
+  const acceptedScalars = new Set((world.acceptedScalars ?? []).map(normalizeScalarName));
+  const requiredScalarSets = getWorldRequiredScalarSets(world);
+  const terminalScalars = collectTerminalConnectorNamesFromRegistry(registry, rootConnectorName);
+  const terminalSet = new Set(terminalScalars);
+  const missingRequiredScalarSets = requiredScalarSets.map((set) => ({
+    id: set.id,
+    label: set.label,
+    missingScalars: set.scalars.filter((scalar) => !terminalSet.has(scalar)),
+  }));
+  const matchedSet = missingRequiredScalarSets.find((set) => set.missingScalars.length === 0);
+  const bestMissingSet = [...missingRequiredScalarSets].sort(
+    (left, right) => left.missingScalars.length - right.missingScalars.length,
+  )[0];
+  const missingRequiredScalars = matchedSet ? [] : (bestMissingSet?.missingScalars ?? []);
+  const unsupportedScalars = terminalScalars.filter((scalar) => !acceptedScalars.has(scalar));
+
+  return {
+    terminalScalars,
+    missingRequiredScalars,
+    missingRequiredScalarSets,
+    matchedRequiredScalarSetId: matchedSet?.id,
+    matchedRequiredScalarSetLabel: matchedSet?.label,
+    unsupportedScalars,
+    compatible:
+      acceptedScalars.size > 0 &&
+      requiredScalarSets.length > 0 &&
+      Boolean(matchedSet) &&
+      unsupportedScalars.length === 0,
+  };
+};
+
+export const formatWorldConnectorScalarCompatibilityError = (
+  world: WorldDescriptor,
+  compatibility: WorldConnectorScalarCompatibility,
+) => {
+  const requiredScalarSets = getWorldRequiredScalarSets(world);
+  const required =
+    requiredScalarSets.length > 1
+      ? requiredScalarSets.map((set) => `${set.label} (${set.scalars.join(", ")})`).join("; ")
+      : requiredScalarSets[0]?.scalars.join(", ") || "none";
+  const messages = [`${world.name} requires one compatible terminal scalar set: ${required}.`];
+  if (
+    !compatibility.matchedRequiredScalarSetId &&
+    compatibility.missingRequiredScalars.length > 0
+  ) {
+    const closestSet = compatibility.missingRequiredScalarSets
+      .filter((set) => set.missingScalars.length > 0)
+      .sort((left, right) => left.missingScalars.length - right.missingScalars.length)[0];
+    const prefix = closestSet ? `Missing for ${closestSet.label}` : "Missing";
+    messages.push(`${prefix}: ${compatibility.missingRequiredScalars.join(", ")}.`);
+  }
+  if (compatibility.unsupportedScalars.length > 0) {
+    messages.push(`Unsupported: ${compatibility.unsupportedScalars.join(", ")}.`);
+  }
+  return messages.join(" ");
 };
 
 const createSeed = () => {

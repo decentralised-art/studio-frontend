@@ -4,8 +4,10 @@ import {
   buildMusicXmlWorldRiFields,
   createDefaultMusicXmlRuntimeSelectionFromRegistry,
   createRandomMusicXmlRuntimeSelectionFromRegistry,
+  formatWorldConnectorScalarCompatibilityError,
+  getWorldConnectorScalarCompatibility,
 } from "../src/lib/worlds/musicXmlWorldRun";
-import { MUSICXML_SCORE_WORLD } from "../src/lib/worlds/registry";
+import { MUSICXML_SCORE_WORLD, TONE_WORLD } from "../src/lib/worlds/registry";
 
 describe("musicXmlWorldRun", () => {
   const buildFixtureRegistry = () => {
@@ -115,6 +117,88 @@ describe("musicXmlWorldRun", () => {
       "/test_score_root_0_version2_6052026:0/test_note_table_version5_06052026:2/major_scale_steps:*",
     );
     expect(byConnectorName.get("major_scale_steps")?.isStatic).toBe(false);
+  });
+
+  it("checks direct world connector loads against the world's required scalar contract", () => {
+    const requiredToneScalars = TONE_WORLD.requiredScalars ?? [];
+    const audioScalars =
+      TONE_WORLD.requiredScalarSets?.find((set) => set.id === "tone-world-audio")?.scalars ?? [];
+    const visualScalars =
+      TONE_WORLD.requiredScalarSets?.find((set) => set.id === "tone-world-visual")?.scalars ?? [];
+    const compatibleRoot = fromProtocolConnectorPayload({
+      name: "semantic_score",
+      dimensions: requiredToneScalars.map((scalar) => ({
+        transformations: [{ name: "add", args: [1] }],
+        composite: scalar,
+        bindings: {},
+      })),
+    });
+    const audioRoot = fromProtocolConnectorPayload({
+      name: "audio_root",
+      dimensions: audioScalars.map((scalar) => ({
+        transformations: [{ name: "add", args: [1] }],
+        composite: scalar,
+        bindings: {},
+      })),
+    });
+    const visualRoot = fromProtocolConnectorPayload({
+      name: "visual_root",
+      dimensions: visualScalars.map((scalar) => ({
+        transformations: [{ name: "add", args: [1] }],
+        composite: scalar,
+        bindings: {},
+      })),
+    });
+    const sampleOnlyRoot = fromProtocolConnectorPayload({
+      name: "sample_only",
+      dimensions: [
+        {
+          transformations: [{ name: "add", args: [1] }],
+          composite: "tone_sample_set",
+          bindings: {},
+        },
+      ],
+    });
+    const registry = {
+      semantic_score: compatibleRoot,
+      audio_root: audioRoot,
+      visual_root: visualRoot,
+      sample_only: sampleOnlyRoot,
+      ...Object.fromEntries(
+        requiredToneScalars.map((scalar) => [
+          scalar,
+          fromProtocolConnectorPayload({ name: scalar, dimensions: [{}] }),
+        ]),
+      ),
+    };
+
+    const compatible = getWorldConnectorScalarCompatibility(registry, "semantic_score", TONE_WORLD);
+    const audioCompatible = getWorldConnectorScalarCompatibility(
+      registry,
+      "audio_root",
+      TONE_WORLD,
+    );
+    const visualCompatible = getWorldConnectorScalarCompatibility(
+      registry,
+      "visual_root",
+      TONE_WORLD,
+    );
+    const sampleOnly = getWorldConnectorScalarCompatibility(registry, "sample_only", TONE_WORLD);
+
+    expect(compatible.compatible).toBe(true);
+    expect(compatible.matchedRequiredScalarSetId).toBe("tone-world-full");
+    expect(compatible.missingRequiredScalars).toEqual([]);
+    expect(audioCompatible.compatible).toBe(true);
+    expect(audioCompatible.matchedRequiredScalarSetId).toBe("tone-world-audio");
+    expect(visualCompatible.compatible).toBe(true);
+    expect(visualCompatible.matchedRequiredScalarSetId).toBe("tone-world-visual");
+    expect(sampleOnly.compatible).toBe(false);
+    expect(sampleOnly.missingRequiredScalars).toEqual(
+      audioScalars.filter((scalar) => scalar !== "tone_sample_set"),
+    );
+    expect(formatWorldConnectorScalarCompatibilityError(TONE_WORLD, sampleOnly)).toContain(
+      "Missing for Audio layer: onset_tick, duration_tick, pitch_midi, velocity_midi",
+    );
   });
 
   it("randomizes open connector RI fields without positional-schema filtering", () => {
