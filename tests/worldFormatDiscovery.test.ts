@@ -8,6 +8,7 @@ import {
   fetchWorldFormatConnectorEvents,
   isFormatCompatibleWithScalarContract,
 } from "../src/lib/worlds/formatDiscovery";
+import { TONE_WORLD } from "../src/lib/worlds/registry";
 
 const formatHash = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
@@ -140,6 +141,37 @@ describe("world format connector discovery", () => {
     expect(result.events.map((event) => event.particleId)).toEqual(["alpha_root"]);
   });
 
+  it("excludes known invalid connector names from format discovery", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input));
+      if (url.pathname === `/format/${formatHash}`) {
+        return Response.json({
+          format_hash: formatHash,
+          connectors: ["bad_root", "good_root"],
+          cursor: { has_more: false, next_after: null },
+        });
+      }
+      if (url.pathname === "/connector/good_root") {
+        return Response.json({
+          name: "good_root",
+          owner: "0xb530bf08d76015080c67d6b5f00cdee53b45bdda",
+          format_hash: formatHash,
+          dimensions: [{ transformations: [{ name: "add", args: [1] }], bindings: {} }],
+        });
+      }
+      throw new Error(`Unexpected request: ${url.pathname}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await fetchWorldFormatConnectorEvents({
+      acceptedFormatHashes: [formatHash],
+      excludedConnectorNames: ["bad_root"],
+    });
+
+    expect(result.errors).toEqual([]);
+    expect(result.events.map((event) => event.particleId)).toEqual(["good_root"]);
+  });
+
   it("reports more connector candidates when a format cursor has more pages", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = new URL(String(input));
@@ -204,5 +236,57 @@ describe("world format connector discovery", () => {
         options,
       ),
     ).toBe(false);
+  });
+
+  it("does not treat MusicXML-only note formats as compatible Tone World material", () => {
+    expect(
+      isFormatCompatibleWithScalarContract(
+        { scalars: ["onset_tick:0", "duration_tick:0", "pitch_midi:0", "velocity_midi:0"] },
+        {
+          acceptedScalars: TONE_WORLD.acceptedScalars ?? [],
+          requiredScalars: TONE_WORLD.requiredScalars ?? [],
+        },
+      ),
+    ).toBe(false);
+  });
+
+  it("treats complete Tone World audio-layer and visual-layer formats as compatible", () => {
+    const audioScalars =
+      TONE_WORLD.requiredScalarSets?.find((set) => set.id === "tone-world-audio")?.scalars ?? [];
+    const visualScalars =
+      TONE_WORLD.requiredScalarSets?.find((set) => set.id === "tone-world-visual")?.scalars ?? [];
+
+    expect(
+      isFormatCompatibleWithScalarContract(
+        { scalars: audioScalars.map((scalar) => `${scalar}:0`) },
+        {
+          acceptedScalars: TONE_WORLD.acceptedScalars ?? [],
+          requiredScalarSets: TONE_WORLD.requiredScalarSets,
+        },
+      ),
+    ).toBe(true);
+    expect(
+      isFormatCompatibleWithScalarContract(
+        { scalars: visualScalars.map((scalar) => `${scalar}:0`) },
+        {
+          acceptedScalars: TONE_WORLD.acceptedScalars ?? [],
+          requiredScalarSets: TONE_WORLD.requiredScalarSets,
+        },
+      ),
+    ).toBe(true);
+  });
+
+  it("treats full artwork-control scalar formats as compatible Tone World material", () => {
+    expect(
+      isFormatCompatibleWithScalarContract(
+        {
+          scalars: (TONE_WORLD.requiredScalars ?? []).map((scalar) => `${scalar}:0`),
+        },
+        {
+          acceptedScalars: TONE_WORLD.acceptedScalars ?? [],
+          requiredScalarSets: TONE_WORLD.requiredScalarSets,
+        },
+      ),
+    ).toBe(true);
   });
 });

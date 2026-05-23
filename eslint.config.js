@@ -15,6 +15,9 @@ export default defineConfig(
   // Ignore files from .gitignore
   // ---------------------------------------------
   includeIgnoreFile(gitignorePath),
+  {
+    ignores: ["static/worlds/tone-world/hydra-synth.js"],
+  },
 
   // ---------------------------------------------
   // Base JS + TS recommended

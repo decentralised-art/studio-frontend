@@ -33,6 +33,8 @@
     createRandomMusicXmlRuntimeSelectionFromRegistry,
     executeMusicXmlWorldRun,
     fetchMusicXmlWorldConnectorContext,
+    formatWorldConnectorScalarCompatibilityError,
+    getWorldConnectorScalarCompatibility,
     normalizeParticlesCount,
     type DynamicRiInput,
     type MusicXmlWorldConnectorContext,
@@ -43,7 +45,15 @@
     findFirstPartyWorldBySlug,
     MIDI_CLIP_WORLD_ID,
     MUSICXML_SCORE_WORLD,
+    TONE_WORLD_ID,
   } from "$lib/worlds/registry";
+  import {
+    DEFAULT_TONE_WORLD_PARTICLES_COUNT,
+    buildToneRuntimeSearchParams,
+    createRandomToneRuntimeSelectionFromRegistry,
+    executeToneWorldRun,
+    normalizeToneParticlesCount,
+  } from "$lib/worlds/toneWorldRun";
   import { fetchWorldFormatConnectorEvents } from "$lib/worlds/formatDiscovery";
   import type { WorldRuntimeInput } from "$lib/worlds/types";
 
@@ -79,8 +89,24 @@
   const selectedWorld = $derived(findFirstPartyWorldBySlug(page.params.slug));
   const activeWorld = $derived(selectedWorld ?? MUSICXML_SCORE_WORLD);
   const isMidiWorld = $derived(activeWorld.id === MIDI_CLIP_WORLD_ID);
+  const isToneWorld = $derived(activeWorld.id === TONE_WORLD_ID);
+  const activeWorldCompatibilityKey = $derived(
+    [
+      activeWorld.id,
+      activeWorld.acceptedFormatHashes?.join(",") ?? "",
+      activeWorld.requiredScalars?.join(",") ?? "",
+      activeWorld.requiredScalarSets
+        ?.map((set) => `${set.id}:${set.scalars.join(",")}`)
+        .join("|") ?? "",
+      activeWorld.acceptedScalars?.join(",") ?? "",
+    ].join("|"),
+  );
   const defaultParticlesCount = $derived(
-    isMidiWorld ? DEFAULT_MIDI_WORLD_PARTICLES_COUNT : DEFAULT_MUSICXML_WORLD_PARTICLES_COUNT,
+    isToneWorld
+      ? DEFAULT_TONE_WORLD_PARTICLES_COUNT
+      : isMidiWorld
+        ? DEFAULT_MIDI_WORLD_PARTICLES_COUNT
+        : DEFAULT_MUSICXML_WORLD_PARTICLES_COUNT,
   );
   const routeConnectorName = $derived.by(() => {
     const routeValue = page.params.connector;
@@ -91,7 +117,7 @@
       return routeValue.trim();
     }
   });
-  const hasLoadedConnector = $derived(Boolean(connectorName.trim()));
+  const hasLoadedConnector = $derived(Boolean(connectorName.trim() && connectorContext));
   const canOpenStandalone = $derived(Boolean(worldInput && !runBusy));
   const canLoadRandomConnector = $derived(
     !connectorFeedLoading &&
@@ -117,27 +143,39 @@
   const riFields = $derived(connectorContext?.riFields ?? []);
 
   const resolveActiveWorldEntry = () =>
-    isMidiWorld ? resolve("/world-runtimes/midi-clip") : resolve("/world-runtimes/musicxml-score");
+    isToneWorld
+      ? resolve("/world-runtimes/tone-world")
+      : isMidiWorld
+        ? resolve("/world-runtimes/midi-clip")
+        : resolve("/world-runtimes/musicxml-score");
 
   const buildStandaloneRuntimeUrl = (selection: MusicXmlRuntimeSelection) => {
-    const params = isMidiWorld
-      ? buildMidiRuntimeSearchParams(selection)
-      : buildMusicXmlRuntimeSearchParams(selection);
+    const params = isToneWorld
+      ? buildToneRuntimeSearchParams(selection)
+      : isMidiWorld
+        ? buildMidiRuntimeSearchParams(selection)
+        : buildMusicXmlRuntimeSearchParams(selection);
     return `${resolveActiveWorldEntry()}?${params.toString()}`;
   };
 
   const normalizeActiveParticlesCount = (value: unknown) =>
-    isMidiWorld
-      ? normalizeMidiParticlesCount(
+    isToneWorld
+      ? normalizeToneParticlesCount(
           value,
           defaultParticlesCount,
           activeWorld.valueLimits?.particlesCount,
         )
-      : normalizeParticlesCount(
-          value,
-          defaultParticlesCount,
-          activeWorld.valueLimits?.particlesCount,
-        );
+      : isMidiWorld
+        ? normalizeMidiParticlesCount(
+            value,
+            defaultParticlesCount,
+            activeWorld.valueLimits?.particlesCount,
+          )
+        : normalizeParticlesCount(
+            value,
+            defaultParticlesCount,
+            activeWorld.valueLimits?.particlesCount,
+          );
 
   const randomIndex = (length: number): number => {
     if (length <= 1) return 0;
@@ -249,7 +287,9 @@
       const result = await fetchWorldFormatConnectorEvents({
         acceptedFormatHashes: activeWorld.acceptedFormatHashes,
         acceptedScalars: activeWorld.acceptedScalars,
+        excludedConnectorNames: activeWorld.excludedConnectorNames,
         requiredScalars: activeWorld.requiredScalars,
+        requiredScalarSets: activeWorld.requiredScalarSets,
         connectorLimit: connectorFeedLimit,
       });
       connectorFeedEvents = result.events;
@@ -285,6 +325,19 @@
     connectorContextLoading = true;
     try {
       const context = await fetchMusicXmlWorldConnectorContext(normalizedName);
+      const compatibility = getWorldConnectorScalarCompatibility(
+        context.registry,
+        normalizedName,
+        activeWorld,
+      );
+      if (!compatibility.compatible) {
+        runError = formatWorldConnectorScalarCompatibilityError(activeWorld, compatibility);
+        connectorContext = null;
+        worldInput = null;
+        dynamicRiInput = {};
+        selectedRuntimeConnectorContext = null;
+        return;
+      }
       connectorContext = context;
       const defaultSelection = createDefaultMusicXmlRuntimeSelectionFromRegistry(
         normalizedName,
@@ -392,6 +445,23 @@
     runError = "";
 
     try {
+      if (isToneWorld) {
+        const result = await executeToneWorldRun({
+          connectorName: selection.connectorName,
+          particlesCount: selection.particlesCount,
+          dynamicRiInput: selection.dynamicRiInput,
+          surface: "world-page",
+          worldName: activeWorld.name,
+          world: activeWorld,
+        });
+        worldInput = withSelectedConnectorContext(result.worldInput);
+        refreshEmbeddedWorldFrame();
+        if (result.streams.length === 0) {
+          runError = "The connector ran, but this world did not receive Tone material output.";
+        }
+        return;
+      }
+
       if (isMidiWorld) {
         const result = await executeMidiWorldRun({
           connectorName: selection.connectorName,
@@ -455,12 +525,19 @@
             undefined,
             activeWorld,
           )
-        : createRandomMusicXmlRuntimeSelectionFromRegistry(
-            name,
-            context.registry,
-            undefined,
-            activeWorld,
-          );
+        : isToneWorld
+          ? createRandomToneRuntimeSelectionFromRegistry(
+              name,
+              context.registry,
+              undefined,
+              activeWorld,
+            )
+          : createRandomMusicXmlRuntimeSelectionFromRegistry(
+              name,
+              context.registry,
+              undefined,
+              activeWorld,
+            );
       applySelection(selection);
       await waitForRuntimeSettingsPaint();
       await runSelection(selection, "Random runtime");
@@ -477,6 +554,10 @@
     const name = connectorName.trim();
     if (!name) {
       runError = "Load a connector from the compatible connector posts first.";
+      return;
+    }
+    if (!connectorContext) {
+      runError = "Load a compatible connector from the compatible connector posts first.";
       return;
     }
 
@@ -516,9 +597,9 @@
 
   $effect(() => {
     if (!browser) return;
-    const worldId = activeWorld.id;
-    if (connectorFeedWorldId === worldId) return;
-    connectorFeedWorldId = worldId;
+    const worldKey = activeWorldCompatibilityKey;
+    if (connectorFeedWorldId === worldKey) return;
+    connectorFeedWorldId = worldKey;
     connectorFeedEvents = [];
     connectorFeedLimit = CONNECTOR_FEED_PAGE_SIZE;
     connectorFeedHasMore = false;

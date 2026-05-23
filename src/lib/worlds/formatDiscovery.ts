@@ -6,6 +6,7 @@ import {
 } from "$lib/chain/registryApi";
 import { hydrateChainEventDetail } from "$lib/feed/chainEventHydration";
 import type { ConnectorPostEvent } from "$lib/feed/particlePostData";
+import type { WorldRequiredScalarSet } from "$lib/worlds/types";
 
 const FORMAT_DISCOVERY_PAGE_LIMIT = 48;
 const FORMAT_HASH_PAGE_LIMIT = 256;
@@ -83,25 +84,45 @@ const errorMessage = (error: unknown): string =>
 const parseFormatScalarName = (scalarLabel: string): string =>
   scalarLabel.trim().split(":")[0]?.trim() ?? "";
 
+const normalizeRequiredScalarSets = (options: {
+  requiredScalars?: readonly string[];
+  requiredScalarSets?: readonly WorldRequiredScalarSet[];
+}): WorldRequiredScalarSet[] => {
+  const explicitSets = (options.requiredScalarSets ?? [])
+    .map((set) => ({
+      id: set.id.trim(),
+      label: set.label.trim() || set.id.trim(),
+      scalars: set.scalars.map((scalar) => scalar.trim()).filter(Boolean),
+    }))
+    .filter((set) => set.id && set.scalars.length > 0);
+  if (explicitSets.length > 0) return explicitSets;
+
+  const scalars = (options.requiredScalars ?? []).map((scalar) => scalar.trim()).filter(Boolean);
+  return scalars.length > 0 ? [{ id: "required", label: "Required", scalars }] : [];
+};
+
 export const isFormatCompatibleWithScalarContract = (
   format: RawChainFormatResponse,
   options: {
     acceptedScalars: readonly string[];
-    requiredScalars: readonly string[];
+    requiredScalars?: readonly string[];
+    requiredScalarSets?: readonly WorldRequiredScalarSet[];
   },
 ): boolean => {
   const accepted = new Set(options.acceptedScalars.map((scalar) => scalar.trim()).filter(Boolean));
-  const required = new Set(options.requiredScalars.map((scalar) => scalar.trim()).filter(Boolean));
-  if (accepted.size === 0 || required.size === 0) return false;
+  const requiredScalarSets = normalizeRequiredScalarSets(options);
+  if (accepted.size === 0 || requiredScalarSets.length === 0) return false;
 
   const scalarNames = new Set(
     (format.scalars ?? []).map(parseFormatScalarName).filter((scalar) => scalar.length > 0),
   );
   if (scalarNames.size === 0) return false;
 
-  for (const requiredScalar of required) {
-    if (!scalarNames.has(requiredScalar)) return false;
-  }
+  const matchesRequiredSet = requiredScalarSets.some((set) =>
+    set.scalars.every((scalar) => scalarNames.has(scalar)),
+  );
+  if (!matchesRequiredSet) return false;
+
   for (const scalarName of scalarNames) {
     if (!accepted.has(scalarName)) return false;
   }
@@ -110,7 +131,8 @@ export const isFormatCompatibleWithScalarContract = (
 
 const discoverFormatHashesByScalarContract = async (options: {
   acceptedScalars: readonly string[];
-  requiredScalars: readonly string[];
+  requiredScalars?: readonly string[];
+  requiredScalarSets?: readonly WorldRequiredScalarSet[];
 }): Promise<{ formatHashes: string[]; errors: string[] }> => {
   const errors: string[] = [];
   const formatHashes: string[] = [];
@@ -163,7 +185,9 @@ const discoverFormatHashesByScalarContract = async (options: {
 export const fetchWorldFormatConnectorEvents = async (options: {
   acceptedFormatHashes?: readonly string[];
   acceptedScalars?: readonly string[];
+  excludedConnectorNames?: readonly string[];
   requiredScalars?: readonly string[];
+  requiredScalarSets?: readonly WorldRequiredScalarSet[];
   connectorLimit?: number;
 }): Promise<WorldFormatConnectorDiscoveryResult> => {
   const connectorLimit = Math.max(
@@ -187,14 +211,18 @@ export const fetchWorldFormatConnectorEvents = async (options: {
     });
 
   const errors: string[] = [];
+  const excludedConnectorNames = new Set(
+    (options.excludedConnectorNames ?? []).map((name) => name.trim()).filter(Boolean),
+  );
   if (
     normalizedHashes.length === 0 &&
     options.acceptedScalars?.length &&
-    options.requiredScalars?.length
+    (options.requiredScalarSets?.length || options.requiredScalars?.length)
   ) {
     const discovery = await discoverFormatHashesByScalarContract({
       acceptedScalars: options.acceptedScalars,
       requiredScalars: options.requiredScalars,
+      requiredScalarSets: options.requiredScalarSets,
     });
     errors.push(...discovery.errors);
     normalizedHashes = discovery.formatHashes;
@@ -220,6 +248,7 @@ export const fetchWorldFormatConnectorEvents = async (options: {
       return;
     }
     normalizeConnectorNamesFromFormat(result.value.response).forEach((connectorName) => {
+      if (excludedConnectorNames.has(connectorName)) return;
       if (!connectorFormatByName.has(connectorName)) {
         connectorFormatByName.set(connectorName, result.value.formatHash);
       }
