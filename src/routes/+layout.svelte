@@ -7,10 +7,14 @@
   import { hasAuthSession } from "$lib/auth/session";
   import WalletAuthButton from "$lib/components/auth/WalletAuthButton.svelte";
   import ThemeToggle from "$lib/components/theme/ThemeToggle.svelte";
+  import SiteFooter from "$lib/site/SiteFooter.svelte";
+  import SiteNav from "$lib/site/SiteNav.svelte";
 
   let { children, data } = $props();
   let authRevision = $state(0);
   let hasMounted = $state(false);
+  let landingThemeToggleVisible = $state(false);
+  let landingThemeToggleFrame: number | null = null;
   const hasCurrentAuthSession = $derived.by(() => {
     const revision = authRevision;
     return revision >= 0 && hasAuthSession();
@@ -19,6 +23,22 @@
     hasMounted ? hasCurrentAuthSession : Boolean(data.isAuthenticated) || hasCurrentAuthSession,
   );
   const isWorldRuntimeRoute = $derived(isWorldRuntimeRouteId(page.route.id));
+  const isLandingRoute = $derived(page.route.id === "/");
+  const isDocumentRoute = $derived.by(() => {
+    const routeId = page.route.id ?? "";
+    return (
+      routeId === "/" ||
+      routeId === "/api-status" ||
+      routeId === "/api-tutorial" ||
+      routeId === "/documentation" ||
+      routeId === "/onboarding" ||
+      routeId === "/onboarding-agent" ||
+      routeId === "/onboarding-human" ||
+      routeId === "/roadmap" ||
+      routeId === "/tutorial" ||
+      routeId.startsWith("/tutorial/")
+    );
+  });
   const canRenderRoute = $derived(!isProtectedRouteId(page.route.id) || isAuthenticated);
   const shouldShowFooter = $derived.by(() => {
     const path = page.url.pathname;
@@ -30,6 +50,32 @@
       !path.startsWith(`${worldsPath}/`)
     );
   });
+  const shouldShowThemeToggle = $derived(
+    !isWorldRuntimeRoute && (!isLandingRoute || landingThemeToggleVisible),
+  );
+
+  const updateLandingThemeToggleVisibility = () => {
+    if (page.route.id !== "/") {
+      landingThemeToggleVisible = false;
+      return;
+    }
+
+    const nextSection = document.getElementById("when-do-i-want-dcn");
+    if (!nextSection) {
+      landingThemeToggleVisible = window.scrollY > window.innerHeight * 0.8;
+      return;
+    }
+
+    landingThemeToggleVisible = nextSection.getBoundingClientRect().top <= 140;
+  };
+
+  const queueLandingThemeToggleVisibilityUpdate = () => {
+    if (landingThemeToggleFrame !== null) return;
+    landingThemeToggleFrame = window.requestAnimationFrame(() => {
+      landingThemeToggleFrame = null;
+      updateLandingThemeToggleVisibility();
+    });
+  };
 
   onMount(() => {
     const syncAuth = () => {
@@ -38,42 +84,57 @@
     };
 
     syncAuth();
+    queueLandingThemeToggleVisibilityUpdate();
     window.addEventListener("auth:change", syncAuth);
     window.addEventListener("storage", syncAuth);
+    window.addEventListener("scroll", queueLandingThemeToggleVisibilityUpdate, { passive: true });
+    window.addEventListener("resize", queueLandingThemeToggleVisibilityUpdate);
     return () => {
       window.removeEventListener("auth:change", syncAuth);
       window.removeEventListener("storage", syncAuth);
+      window.removeEventListener("scroll", queueLandingThemeToggleVisibilityUpdate);
+      window.removeEventListener("resize", queueLandingThemeToggleVisibilityUpdate);
+      if (landingThemeToggleFrame !== null) {
+        window.cancelAnimationFrame(landingThemeToggleFrame);
+        landingThemeToggleFrame = null;
+      }
+    };
+  });
+
+  $effect(() => {
+    const routeId = page.route.id;
+    if (!hasMounted) return;
+    if (routeId !== "/") {
+      landingThemeToggleVisible = false;
+      return;
+    }
+    queueLandingThemeToggleVisibilityUpdate();
+  });
+
+  $effect(() => {
+    document.body.classList.toggle("landing-immersive", isLandingRoute);
+
+    return () => {
+      document.body.classList.remove("landing-immersive");
     };
   });
 </script>
 
+{#if shouldShowThemeToggle}
+  <ThemeToggle className="app-theme-toggle" />
+{/if}
+
 {#if isWorldRuntimeRoute}
   {@render children()}
 {:else}
-  <ThemeToggle />
+  <div class="app-shell min-h-screen flex flex-col" class:landing-shell={isLandingRoute}>
+    <SiteNav {isAuthenticated} />
 
-  <div class="app-shell min-h-screen flex flex-col">
-    <header class="app-header sticky top-0 z-40 border-b backdrop-blur-[10px]">
-      <nav class="max-w-6xl mx-auto h-14 px-4 flex items-center justify-between gap-4">
-        <a href="https://decentralised.art/" class="flex items-center gap-2">
-          <!-- logo here -->
-          <span class="app-logo-text text-sm font-semibold tracking-[0.08em] uppercase">
-            Decentralised Creative Network
-          </span>
-        </a>
-
-        <div class="app-nav-links flex items-center gap-4 text-sm">
-          <a href={resolve("/worlds")}>Worlds</a>
-          {#if isAuthenticated}
-            <a href={resolve("/")}>Network</a>
-            <a href={resolve("/studio")}>Studio</a>
-          {/if}
-          <WalletAuthButton className="app-wallet-auth" />
-        </div>
-      </nav>
-    </header>
-
-    <main class="flex-1 min-h-0 overflow-hidden flex flex-col">
+    <main
+      class="app-main flex-1 min-h-0 flex flex-col"
+      class:landing-main={isLandingRoute}
+      class:document-main={isDocumentRoute}
+    >
       {#if canRenderRoute}
         {@render children()}
       {:else}
@@ -87,21 +148,7 @@
     </main>
 
     {#if shouldShowFooter}
-      <footer class="app-footer border-t">
-        <div
-          class="max-w-6xl mx-auto px-4 py-[1.9rem] grid gap-6 md:flex md:items-start md:justify-between"
-        >
-          <div class="flex flex-col gap-[0.45rem]">
-            <p
-              class="app-footer-title m-0"
-              style="font-family: Syne, 'Space Grotesk', system-ui, sans-serif; font-size: 1.1rem; letter-spacing: 0.01em;"
-            >
-              Decentralised Creative Network
-            </p>
-            <p class="app-footer-meta m-0 text-[0.82rem]">© 2026 decentralised.art</p>
-          </div>
-        </div>
-      </footer>
+      <SiteFooter />
     {/if}
   </div>
 {/if}
@@ -112,6 +159,33 @@
   .app-shell {
     background: var(--surface-page);
     color: var(--text-primary);
+  }
+
+  .app-shell.landing-shell {
+    background: var(--surface-page);
+    color: var(--text-primary);
+  }
+
+  :global(body.landing-immersive) {
+    background: var(--surface-page);
+    color: var(--text-primary);
+    font-family: "Space Grotesk", system-ui, sans-serif;
+  }
+
+  :global(body.landing-immersive)::before {
+    content: none;
+  }
+
+  .app-main {
+    overflow: hidden;
+  }
+
+  .app-main.landing-main,
+  .app-main.document-main {
+    display: block;
+    flex: 1 0 auto;
+    min-height: auto;
+    overflow: visible;
   }
 
   .auth-gate-page {
@@ -129,40 +203,5 @@
   .auth-gate-title {
     @apply text-sm font-medium;
     color: var(--text-primary);
-  }
-
-  .app-header {
-    background: var(--surface-header);
-    border-bottom-color: var(--border-subtle);
-  }
-
-  .app-logo-text,
-  .app-footer-title {
-    color: var(--text-primary);
-  }
-
-  .app-nav-links {
-    color: var(--text-muted);
-  }
-
-  .app-nav-links a {
-    transition: color 150ms ease;
-  }
-
-  .app-nav-links a:hover {
-    color: var(--text-primary);
-  }
-
-  :global(.app-wallet-auth) {
-    margin-left: 0.25rem;
-  }
-
-  .app-footer {
-    color: var(--text-faint);
-    border-top-color: var(--border-subtle);
-  }
-
-  .app-footer-meta {
-    color: var(--text-muted);
   }
 </style>

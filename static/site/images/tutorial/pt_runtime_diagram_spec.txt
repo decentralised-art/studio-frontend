@@ -1,0 +1,94 @@
+PT tutorial diagram spec (revised): one core exchange, step-by-step
+
+Primary objective
+- Explain one thing clearly: how a dimension in Connector A selects values from Connector B.
+- Keep all other concepts visible but secondary and minimal.
+- Use progressive reading (Step 1 -> Step 2 -> Step 3), not "everything at once".
+
+What this image should teach in 20 seconds
+1) Particles are outside-network values.
+2) Connectors are inside-network operators.
+3) A dimension is where transformation-based selection happens.
+4) The selected stream is passed forward as output.
+
+Canvas layout
+- Single landscape image.
+- Center area = main schema (80% visual attention).
+- Thin left rail = "Particles" context.
+- Thin right rail = "Condition + Runtime controls" context.
+- Bottom = tiny legend.
+
+Main schema (center) — ONLY one exchange
+- Two connector cards:
+  - Left card: "Source Connector B"
+  - Right card: "Target Connector A"
+- One explicit connection:
+  - From Source Connector B output stream -> into one dimension slot on Target Connector A.
+- One dimension slot on Target Connector A, labeled:
+  - "Dimension D1"
+- Inside D1, show a short transformation chain:
+  - [Add(+2)] -> [Mirror]
+- Show one simple before/after stream directly near D1:
+  - incoming: 0, 1, 2, 3, 4
+  - selected/transformed: 2, 3, 4, 5, 6
+- One outgoing arrow from Target Connector A:
+  - "Output path"
+
+Progressive steps (must be visible in diagram)
+- Add 3 numbered chips near center flow:
+  - Step 1: "Receive stream from connected connector"
+  - Step 2: "Apply transformations on this dimension"
+  - Step 3: "Emit selected stream"
+- Steps should be short labels, not paragraph text.
+
+Left rail (minimal context)
+- Title: "Particles (outside network)"
+- Tiny note: "Musical, visual, behavioral, or other value spaces"
+- Small icon/stream dots feeding into Source Connector B.
+- No extra subgraphs.
+
+Right rail (minimal context)
+- Small condition badge near Target Connector A:
+  - "Condition gate"
+  - sublabel: "Runs only if true"
+- Compact runtime controls mini-box (no code names in main labels):
+  - "Count (N): output length"
+  - "Start: where selection begins"
+  - "Phase: transformation offset"
+- Optional very small technical line under mini-box:
+  - "(startPoint / transformShift)"
+
+Strict simplification rules
+- Do NOT draw multiple dimensions, multiple child branches, or full tree recursion.
+- Do NOT include full architecture columns.
+- Do NOT include dense text blocks.
+- Keep to one central relation: Dimension D1 in A selecting from B.
+
+Text to include verbatim
+- "Particles (outside network)"
+- "Connectors (inside DCN)"
+- "Dimension D1 selects values from Source Connector B"
+- "Condition gate: runs only if true"
+- "Same structure, different output via runtime controls"
+
+Visual style
+- Dark background matching tutorial aesthetic.
+- Concept colors:
+  - Connector: cyan
+  - Dimension: amber
+  - Transformations: lime
+  - Condition: coral
+  - Streams/particles: white
+- Large readable labels; avoid technical symbols except tiny optional footnote.
+
+Legend (tiny, bottom)
+- Connector | Dimension | Transformation | Condition | Stream
+
+Acceptance criteria
+- A first-time user can answer:
+  1) What is being exchanged between connectors?
+  2) Where selection happens?
+  3) What transformations do there?
+  4) What condition does?
+  5) What N/start/phase change?
+- If any viewer says "too much at once", simplify further.

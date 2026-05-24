@@ -11,6 +11,8 @@ Keep runtime behavior strict and predictable across local dev, preview, and prod
 1. Dev is proxy-first by default.
 2. Production is network-only by default.
 3. Overrides are explicit and environment-driven.
+4. The public app is served at the decentralised.art root; `/app/*` is a compatibility redirect.
+5. The former Astro website is migrated into this SvelteKit app and is no longer a production dependency.
 
 ## API Base Resolution
 
@@ -56,6 +58,7 @@ Expected defaults:
 
 - services: `https://api.decentralised.art/services`
 - chain: `https://api.decentralised.art/chain`
+- base path: `/`
 
 Implication:
 

@@ -49,9 +49,6 @@ npm run build
 Optional build/runtime env vars:
 
 ```sh
-# Mount app under reverse-proxy prefix (e.g. /app)
-PUBLIC_BASE_PATH=/app
-
 # Services API base URL (defaults to https://api.decentralised.art/services)
 VITE_SERVICES_API_BASE_URL=https://api.decentralised.art/services
 
@@ -62,10 +59,12 @@ VITE_CHAIN_API_BASE_URL=https://api.decentralised.art/chain
 Runtime behavior notes:
 
 1. Dev is proxy-first by default (`/services`, `/chain`) via `vite.config.ts`.
-2. Production defaults are strict network-only:
+2. Production serves the SvelteKit app at the decentralised.art root, with `/app/*` kept as a compatibility redirect.
+3. The former Astro website is migrated into this SvelteKit app and is no longer a production dependency.
+4. Production defaults are strict network-only:
    - `https://api.decentralised.art/services`
    - `https://api.decentralised.art/chain`
-3. Set `VITE_*_API_BASE_URL` only when intentionally overriding targets.
+5. Set `VITE_*_API_BASE_URL` only when intentionally overriding targets.
 
 Detailed matrix:
 

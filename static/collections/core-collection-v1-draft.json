@@ -1,0 +1,594 @@
+{
+  "$schema": "https://decentralised.art/collections/manifest.schema.json",
+  "schema_version": "dcn-collection-manifest.v1",
+  "collection": {
+    "id": "core-collection.v1.draft",
+    "name": "DCN Core Collection v1 (Draft)",
+    "kind": "core",
+    "status": "draft",
+    "maintainer": "hypermusic-ai",
+    "generated_at_utc": "2026-04-16T00:00:00Z"
+  },
+  "network": {
+    "chain_name": "DCN Chain (prototype)",
+    "chain_api_base_url": "https://api.decentralised.art/chain"
+  },
+  "publication_policy": {
+    "solidity_version": ">=0.8.2 <0.9.0",
+    "requires_source_publication": true,
+    "requires_hash_verification": true,
+    "naming_policy": "deployable names must use domain_operation_vN (Solidity-safe); canonical_id keeps domain.operation.vN",
+    "snippet_contract_policy": "sol_src is exact Solidity function body injected by dcn-server wrapper; do not include pragma/import/contract/entrypoint declarations in sol_src",
+    "test_name_policy": "experiments must use unique test_* names; core canonical ids are reserved for curated publication"
+  },
+  "items": {
+    "transformations": [
+      {
+        "canonical_id": "util.identity.v1",
+        "name": "util_identity_v1",
+        "version": 1,
+        "category": "utility",
+        "args_count": 0,
+        "sol_src": "return x;",
+        "notes": "Pass-through primitive.",
+        "deterministic": true,
+        "deployment": {
+          "deployed": false,
+          "owner": null,
+          "address": null,
+          "published_name": null,
+          "deployment_block": null
+        },
+        "hashes": {
+          "sol_src_sha256": "e60029d4b20bd40867b918f40e470635464455a841c81596ab84ef66abdb064d"
+        },
+        "snippet_contract": {
+          "kind": "function_body",
+          "language": "solidity",
+          "entrypoint": "run",
+          "x_parameter_type": "uint32",
+          "args_type": "uint32[] calldata",
+          "return_type": "uint32",
+          "arg_index_inference": "highest args[i] + 1",
+          "forbidden_constructs": ["pragma ", "import ", "contract ", "function run("]
+        },
+        "backend_reference": {
+          "repository": "dcn-server",
+          "path": "src/pt/src/transformation.cpp",
+          "symbol": "constructTransformationSolidityCode"
+        }
+      },
+      {
+        "canonical_id": "math.add.v1",
+        "name": "math_add_v1",
+        "version": 1,
+        "category": "math",
+        "args_count": 1,
+        "sol_src": "return x + args[0];",
+        "notes": "Addition primitive.",
+        "deterministic": true,
+        "deployment": {
+          "deployed": false,
+          "owner": null,
+          "address": null,
+          "published_name": null,
+          "deployment_block": null
+        },
+        "hashes": {
+          "sol_src_sha256": "1aaaffb88cd2d09c3f99e2b0536d83c978d0165be430149c5b9777fe7bd39e29"
+        },
+        "snippet_contract": {
+          "kind": "function_body",
+          "language": "solidity",
+          "entrypoint": "run",
+          "x_parameter_type": "uint32",
+          "args_type": "uint32[] calldata",
+          "return_type": "uint32",
+          "arg_index_inference": "highest args[i] + 1",
+          "forbidden_constructs": ["pragma ", "import ", "contract ", "function run("]
+        },
+        "backend_reference": {
+          "repository": "dcn-server",
+          "path": "src/pt/src/transformation.cpp",
+          "symbol": "constructTransformationSolidityCode"
+        }
+      },
+      {
+        "canonical_id": "math.subtract.v1",
+        "name": "math_subtract_v1",
+        "version": 1,
+        "category": "math",
+        "args_count": 1,
+        "sol_src": "return x - args[0];",
+        "notes": "Subtraction primitive (reverts on uint32 underflow).",
+        "deterministic": true,
+        "deployment": {
+          "deployed": false,
+          "owner": null,
+          "address": null,
+          "published_name": null,
+          "deployment_block": null
+        },
+        "hashes": {
+          "sol_src_sha256": "52d540d91d0b882c3b18b2a1e35dfd32f39906ea26f509356a41f22ce5f922db"
+        },
+        "snippet_contract": {
+          "kind": "function_body",
+          "language": "solidity",
+          "entrypoint": "run",
+          "x_parameter_type": "uint32",
+          "args_type": "uint32[] calldata",
+          "return_type": "uint32",
+          "arg_index_inference": "highest args[i] + 1",
+          "forbidden_constructs": ["pragma ", "import ", "contract ", "function run("]
+        },
+        "backend_reference": {
+          "repository": "dcn-server",
+          "path": "src/pt/src/transformation.cpp",
+          "symbol": "constructTransformationSolidityCode"
+        }
+      },
+      {
+        "canonical_id": "math.multiply.v1",
+        "name": "math_multiply_v1",
+        "version": 1,
+        "category": "math",
+        "args_count": 1,
+        "sol_src": "return x * args[0];",
+        "notes": "Multiplication primitive.",
+        "deterministic": true,
+        "deployment": {
+          "deployed": false,
+          "owner": null,
+          "address": null,
+          "published_name": null,
+          "deployment_block": null
+        },
+        "hashes": {
+          "sol_src_sha256": "f64b431f76f4c8f5a051a7552df544af922fe42d1ab8ea5c71af56a5ea6d368a"
+        },
+        "snippet_contract": {
+          "kind": "function_body",
+          "language": "solidity",
+          "entrypoint": "run",
+          "x_parameter_type": "uint32",
+          "args_type": "uint32[] calldata",
+          "return_type": "uint32",
+          "arg_index_inference": "highest args[i] + 1",
+          "forbidden_constructs": ["pragma ", "import ", "contract ", "function run("]
+        },
+        "backend_reference": {
+          "repository": "dcn-server",
+          "path": "src/pt/src/transformation.cpp",
+          "symbol": "constructTransformationSolidityCode"
+        }
+      },
+      {
+        "canonical_id": "math.divide.v1",
+        "name": "math_divide_v1",
+        "version": 1,
+        "category": "math",
+        "args_count": 1,
+        "sol_src": "require(args[0] != 0, \"division by zero\");\nreturn x / args[0];",
+        "notes": "Integer division.",
+        "deterministic": true,
+        "deployment": {
+          "deployed": false,
+          "owner": null,
+          "address": null,
+          "published_name": null,
+          "deployment_block": null
+        },
+        "hashes": {
+          "sol_src_sha256": "3eb5dd69e38af27bd03cc616c52329d409a98c868a7a8040682da42e383b4fcf"
+        },
+        "snippet_contract": {
+          "kind": "function_body",
+          "language": "solidity",
+          "entrypoint": "run",
+          "x_parameter_type": "uint32",
+          "args_type": "uint32[] calldata",
+          "return_type": "uint32",
+          "arg_index_inference": "highest args[i] + 1",
+          "forbidden_constructs": ["pragma ", "import ", "contract ", "function run("]
+        },
+        "backend_reference": {
+          "repository": "dcn-server",
+          "path": "src/pt/src/transformation.cpp",
+          "symbol": "constructTransformationSolidityCode"
+        }
+      },
+      {
+        "canonical_id": "math.modulo.v1",
+        "name": "math_modulo_v1",
+        "version": 1,
+        "category": "math",
+        "args_count": 1,
+        "sol_src": "require(args[0] != 0, \"modulo by zero\");\nreturn x % args[0];",
+        "notes": "Modulo primitive.",
+        "deterministic": true,
+        "deployment": {
+          "deployed": false,
+          "owner": null,
+          "address": null,
+          "published_name": null,
+          "deployment_block": null
+        },
+        "hashes": {
+          "sol_src_sha256": "4cc4e402342910b07d20700f9ec4d32818c3e956fb1317208defc0b0d9670ff7"
+        },
+        "snippet_contract": {
+          "kind": "function_body",
+          "language": "solidity",
+          "entrypoint": "run",
+          "x_parameter_type": "uint32",
+          "args_type": "uint32[] calldata",
+          "return_type": "uint32",
+          "arg_index_inference": "highest args[i] + 1",
+          "forbidden_constructs": ["pragma ", "import ", "contract ", "function run("]
+        },
+        "backend_reference": {
+          "repository": "dcn-server",
+          "path": "src/pt/src/transformation.cpp",
+          "symbol": "constructTransformationSolidityCode"
+        }
+      },
+      {
+        "canonical_id": "math.power.v1",
+        "name": "math_power_v1",
+        "version": 1,
+        "category": "math",
+        "args_count": 1,
+        "sol_src": "uint32 result = 1;\nfor (uint32 i = 0; i < args[0]; i++) {\n    result = result * x;\n}\nreturn result;",
+        "notes": "Exponentiation by repeated multiplication.",
+        "deterministic": true,
+        "deployment": {
+          "deployed": false,
+          "owner": null,
+          "address": null,
+          "published_name": null,
+          "deployment_block": null
+        },
+        "hashes": {
+          "sol_src_sha256": "bf2e0121f971bf82fc2c22e5d22f7aed7238c0f418686926fa8d07c0ebb6add8"
+        },
+        "snippet_contract": {
+          "kind": "function_body",
+          "language": "solidity",
+          "entrypoint": "run",
+          "x_parameter_type": "uint32",
+          "args_type": "uint32[] calldata",
+          "return_type": "uint32",
+          "arg_index_inference": "highest args[i] + 1",
+          "forbidden_constructs": ["pragma ", "import ", "contract ", "function run("]
+        },
+        "backend_reference": {
+          "repository": "dcn-server",
+          "path": "src/pt/src/transformation.cpp",
+          "symbol": "constructTransformationSolidityCode"
+        }
+      },
+      {
+        "canonical_id": "math.min.v1",
+        "name": "math_min_v1",
+        "version": 1,
+        "category": "math",
+        "args_count": 1,
+        "sol_src": "return x < args[0] ? x : args[0];",
+        "notes": "Minimum of x and arg0.",
+        "deterministic": true,
+        "deployment": {
+          "deployed": false,
+          "owner": null,
+          "address": null,
+          "published_name": null,
+          "deployment_block": null
+        },
+        "hashes": {
+          "sol_src_sha256": "7868eaa606f4bb73afca01f71252d4482480ffbc2a0bf34f9f494842a93fe159"
+        },
+        "snippet_contract": {
+          "kind": "function_body",
+          "language": "solidity",
+          "entrypoint": "run",
+          "x_parameter_type": "uint32",
+          "args_type": "uint32[] calldata",
+          "return_type": "uint32",
+          "arg_index_inference": "highest args[i] + 1",
+          "forbidden_constructs": ["pragma ", "import ", "contract ", "function run("]
+        },
+        "backend_reference": {
+          "repository": "dcn-server",
+          "path": "src/pt/src/transformation.cpp",
+          "symbol": "constructTransformationSolidityCode"
+        }
+      },
+      {
+        "canonical_id": "math.max.v1",
+        "name": "math_max_v1",
+        "version": 1,
+        "category": "math",
+        "args_count": 1,
+        "sol_src": "return x > args[0] ? x : args[0];",
+        "notes": "Maximum of x and arg0.",
+        "deterministic": true,
+        "deployment": {
+          "deployed": false,
+          "owner": null,
+          "address": null,
+          "published_name": null,
+          "deployment_block": null
+        },
+        "hashes": {
+          "sol_src_sha256": "896618a39f6b5af5358a8517a5ef9380e77616d147208a0bbe8e8314bc817067"
+        },
+        "snippet_contract": {
+          "kind": "function_body",
+          "language": "solidity",
+          "entrypoint": "run",
+          "x_parameter_type": "uint32",
+          "args_type": "uint32[] calldata",
+          "return_type": "uint32",
+          "arg_index_inference": "highest args[i] + 1",
+          "forbidden_constructs": ["pragma ", "import ", "contract ", "function run("]
+        },
+        "backend_reference": {
+          "repository": "dcn-server",
+          "path": "src/pt/src/transformation.cpp",
+          "symbol": "constructTransformationSolidityCode"
+        }
+      },
+      {
+        "canonical_id": "math.clamp.v1",
+        "name": "math_clamp_v1",
+        "version": 1,
+        "category": "math",
+        "args_count": 2,
+        "sol_src": "require(args[0] <= args[1], \"invalid clamp bounds\");\nif (x < args[0]) return args[0];\nif (x > args[1]) return args[1];\nreturn x;",
+        "notes": "Clamp x to [min,max].",
+        "deterministic": true,
+        "deployment": {
+          "deployed": false,
+          "owner": null,
+          "address": null,
+          "published_name": null,
+          "deployment_block": null
+        },
+        "hashes": {
+          "sol_src_sha256": "d28a71773988cf2d2108016f3448db7475c6e7e9af13b2c17ab9fa42fe03a096"
+        },
+        "snippet_contract": {
+          "kind": "function_body",
+          "language": "solidity",
+          "entrypoint": "run",
+          "x_parameter_type": "uint32",
+          "args_type": "uint32[] calldata",
+          "return_type": "uint32",
+          "arg_index_inference": "highest args[i] + 1",
+          "forbidden_constructs": ["pragma ", "import ", "contract ", "function run("]
+        },
+        "backend_reference": {
+          "repository": "dcn-server",
+          "path": "src/pt/src/transformation.cpp",
+          "symbol": "constructTransformationSolidityCode"
+        }
+      },
+      {
+        "canonical_id": "math.quantize_step.v1",
+        "name": "math_quantize_step_v1",
+        "version": 1,
+        "category": "math",
+        "args_count": 1,
+        "sol_src": "require(args[0] != 0, \"step is zero\");\nreturn (x / args[0]) * args[0];",
+        "notes": "Floor quantization to nearest lower step.",
+        "deterministic": true,
+        "deployment": {
+          "deployed": false,
+          "owner": null,
+          "address": null,
+          "published_name": null,
+          "deployment_block": null
+        },
+        "hashes": {
+          "sol_src_sha256": "1dd872f8fd1fc38c51ce96c4f3c19c65321f39f8010e57070c8c71e812369369"
+        },
+        "snippet_contract": {
+          "kind": "function_body",
+          "language": "solidity",
+          "entrypoint": "run",
+          "x_parameter_type": "uint32",
+          "args_type": "uint32[] calldata",
+          "return_type": "uint32",
+          "arg_index_inference": "highest args[i] + 1",
+          "forbidden_constructs": ["pragma ", "import ", "contract ", "function run("]
+        },
+        "backend_reference": {
+          "repository": "dcn-server",
+          "path": "src/pt/src/transformation.cpp",
+          "symbol": "constructTransformationSolidityCode"
+        }
+      }
+    ],
+    "conditions": [
+      {
+        "canonical_id": "logic.always_true.v1",
+        "name": "logic_always_true_v1",
+        "version": 1,
+        "category": "logic",
+        "args_count": 0,
+        "sol_src": "return true;",
+        "notes": "Unconditional allow.",
+        "deterministic": true,
+        "deployment": {
+          "deployed": false,
+          "owner": null,
+          "address": null,
+          "published_name": null,
+          "deployment_block": null
+        },
+        "hashes": {
+          "sol_src_sha256": "10e0fa08a73f0cd151617165a96e7df8c8d14ecfc63d6f1f343559f16198939f"
+        },
+        "snippet_contract": {
+          "kind": "function_body",
+          "language": "solidity",
+          "entrypoint": "check",
+          "args_type": "int32[] calldata",
+          "return_type": "bool",
+          "arg_index_inference": "highest args[i] + 1",
+          "forbidden_constructs": ["pragma ", "import ", "contract ", "function check("]
+        },
+        "backend_reference": {
+          "repository": "dcn-server",
+          "path": "src/pt/src/condition.cpp",
+          "symbol": "constructConditionSolidityCode"
+        }
+      },
+      {
+        "canonical_id": "logic.equals.v1",
+        "name": "logic_equals_v1",
+        "version": 1,
+        "category": "logic",
+        "args_count": 2,
+        "sol_src": "return args[0] == args[1];",
+        "notes": "Equality check.",
+        "deterministic": true,
+        "deployment": {
+          "deployed": false,
+          "owner": null,
+          "address": null,
+          "published_name": null,
+          "deployment_block": null
+        },
+        "hashes": {
+          "sol_src_sha256": "cfe880681d96495cc230124919ac29983b4ca68aa6b19693b5f56e391e0d253f"
+        },
+        "snippet_contract": {
+          "kind": "function_body",
+          "language": "solidity",
+          "entrypoint": "check",
+          "args_type": "int32[] calldata",
+          "return_type": "bool",
+          "arg_index_inference": "highest args[i] + 1",
+          "forbidden_constructs": ["pragma ", "import ", "contract ", "function check("]
+        },
+        "backend_reference": {
+          "repository": "dcn-server",
+          "path": "src/pt/src/condition.cpp",
+          "symbol": "constructConditionSolidityCode"
+        }
+      },
+      {
+        "canonical_id": "logic.greater_than.v1",
+        "name": "logic_greater_than_v1",
+        "version": 1,
+        "category": "logic",
+        "args_count": 2,
+        "sol_src": "return args[0] > args[1];",
+        "notes": "Strict greater-than check.",
+        "deterministic": true,
+        "deployment": {
+          "deployed": false,
+          "owner": null,
+          "address": null,
+          "published_name": null,
+          "deployment_block": null
+        },
+        "hashes": {
+          "sol_src_sha256": "7a41bf2113a48f9b035cbf23f5c1dd73a32c68afe9627a67f82240def76dbec7"
+        },
+        "snippet_contract": {
+          "kind": "function_body",
+          "language": "solidity",
+          "entrypoint": "check",
+          "args_type": "int32[] calldata",
+          "return_type": "bool",
+          "arg_index_inference": "highest args[i] + 1",
+          "forbidden_constructs": ["pragma ", "import ", "contract ", "function check("]
+        },
+        "backend_reference": {
+          "repository": "dcn-server",
+          "path": "src/pt/src/condition.cpp",
+          "symbol": "constructConditionSolidityCode"
+        }
+      },
+      {
+        "canonical_id": "logic.less_than.v1",
+        "name": "logic_less_than_v1",
+        "version": 1,
+        "category": "logic",
+        "args_count": 2,
+        "sol_src": "return args[0] < args[1];",
+        "notes": "Strict less-than check.",
+        "deterministic": true,
+        "deployment": {
+          "deployed": false,
+          "owner": null,
+          "address": null,
+          "published_name": null,
+          "deployment_block": null
+        },
+        "hashes": {
+          "sol_src_sha256": "22867a465de5ae337e2d3c4a1bb68673142492631e55546ecde76060570cc455"
+        },
+        "snippet_contract": {
+          "kind": "function_body",
+          "language": "solidity",
+          "entrypoint": "check",
+          "args_type": "int32[] calldata",
+          "return_type": "bool",
+          "arg_index_inference": "highest args[i] + 1",
+          "forbidden_constructs": ["pragma ", "import ", "contract ", "function check("]
+        },
+        "backend_reference": {
+          "repository": "dcn-server",
+          "path": "src/pt/src/condition.cpp",
+          "symbol": "constructConditionSolidityCode"
+        }
+      },
+      {
+        "canonical_id": "logic.between_inclusive.v1",
+        "name": "logic_between_inclusive_v1",
+        "version": 1,
+        "category": "logic",
+        "args_count": 3,
+        "sol_src": "return args[0] >= args[1] && args[0] <= args[2];",
+        "notes": "Inclusive interval check.",
+        "deterministic": true,
+        "deployment": {
+          "deployed": false,
+          "owner": null,
+          "address": null,
+          "published_name": null,
+          "deployment_block": null
+        },
+        "hashes": {
+          "sol_src_sha256": "d7d8d7068fba03a7511dbc6de87716fb66415e70d51047d24e3eeae980d19db9"
+        },
+        "snippet_contract": {
+          "kind": "function_body",
+          "language": "solidity",
+          "entrypoint": "check",
+          "args_type": "int32[] calldata",
+          "return_type": "bool",
+          "arg_index_inference": "highest args[i] + 1",
+          "forbidden_constructs": ["pragma ", "import ", "contract ", "function check("]
+        },
+        "backend_reference": {
+          "repository": "dcn-server",
+          "path": "src/pt/src/condition.cpp",
+          "symbol": "constructConditionSolidityCode"
+        }
+      }
+    ],
+    "connectors": [
+      {
+        "canonical_id": "template.midi.scalar_endpoints.v1",
+        "name": "midi_scalar_endpoints_template",
+        "version": 1,
+        "format_hash": null,
+        "notes": "Placeholder template targeting scalars pitch,time,duration|durationv2,velocity. Connector publication phase is tracked separately from transformation/condition source curation."
+      }
+    ]
+  }
+}

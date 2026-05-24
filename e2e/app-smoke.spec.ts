@@ -948,13 +948,15 @@ const seedMovableConnectorTreeSession = async (page: Page) => {
   });
 };
 
-test("redirects anonymous root visitors to Worlds", async ({ page }) => {
+test("renders the public landing page for anonymous root visitors", async ({ page }) => {
   const assertNoPageErrors = collectPageErrors(page);
 
   await page.goto("/");
 
-  await expect(page).toHaveURL(/\/worlds$/);
-  await expect(page.locator('section[aria-label="Available worlds"]')).toBeVisible();
+  await expect(page).toHaveURL(/\/$/);
+  await expect(page.getByRole("heading", { name: /A decentralised API for/ })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Worlds" }).first()).toBeVisible();
+  await expect(page.getByRole("button", { name: "Login with MetaMask" }).first()).toBeVisible();
   assertNoPageErrors();
 });
 
@@ -984,14 +986,24 @@ protectedRouteCases.forEach((path) => {
   });
 });
 
-test("redirects anonymous login visitors to Worlds", async ({ page }) => {
+test("redirects anonymous login visitors to the landing page", async ({ page }) => {
   const assertNoPageErrors = collectPageErrors(page);
 
   await page.goto("/login");
 
+  await expect(page).toHaveURL(/\/$/);
+  await expect(page.getByRole("heading", { name: /A decentralised API for/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Login with MetaMask" }).first()).toBeVisible();
+  assertNoPageErrors();
+});
+
+test("keeps old /app world links working through redirects", async ({ page }) => {
+  const assertNoPageErrors = collectPageErrors(page);
+
+  await page.goto("/app/worlds");
+
   await expect(page).toHaveURL(/\/worlds$/);
   await expect(page.locator('section[aria-label="Available worlds"]')).toBeVisible();
-  await expect(page.getByRole("button", { name: "Login with MetaMask" })).toBeVisible();
   assertNoPageErrors();
 });
 

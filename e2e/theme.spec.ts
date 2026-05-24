@@ -276,7 +276,7 @@ const elementColors = async (locator: Locator) =>
   });
 
 test("theme toggle switches and persists light mode", async ({ page }) => {
-  await page.goto("/login");
+  await page.goto("/worlds");
 
   const html = page.locator("html");
   const toggle = page.getByRole("button", { name: "Switch to light theme" });

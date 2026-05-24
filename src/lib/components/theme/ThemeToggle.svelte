@@ -10,9 +10,19 @@
     type ThemeMode,
   } from "$lib/theme/theme";
 
+  type Props = {
+    className?: string;
+    variant?: "fixed" | "inline";
+  };
+
+  const { className = "", variant = "fixed" }: Props = $props();
+
   let theme = $state<ThemeMode>(DEFAULT_THEME);
   const isLight = $derived(theme === "light");
   const label = $derived(isLight ? "Switch to dark theme" : "Switch to light theme");
+  const buttonClass = $derived(
+    ["theme-toggle", `theme-toggle--${variant}`, className].filter(Boolean).join(" "),
+  );
 
   const syncTheme = () => {
     theme = initTheme();
@@ -35,7 +45,7 @@
 </script>
 
 <button
-  class="theme-toggle"
+  class={buttonClass}
   type="button"
   aria-label={label}
   aria-pressed={isLight}
@@ -49,10 +59,6 @@
   @reference "$lib/styles/style.css";
 
   .theme-toggle {
-    position: fixed;
-    top: 0.625rem;
-    right: 0.625rem;
-    z-index: 70;
     display: inline-grid;
     width: 2.25rem;
     height: 2.25rem;
@@ -68,6 +74,22 @@
       border-color 160ms ease,
       color 160ms ease,
       transform 160ms ease;
+  }
+
+  .theme-toggle--fixed {
+    position: fixed;
+    top: 0.625rem;
+    right: 0.625rem;
+    z-index: 70;
+  }
+
+  .theme-toggle--inline {
+    position: static;
+    z-index: auto;
+    width: 2rem;
+    height: 2rem;
+    flex: 0 0 auto;
+    box-shadow: none;
   }
 
   .theme-toggle:hover {

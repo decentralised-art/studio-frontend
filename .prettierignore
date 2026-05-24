@@ -5,3 +5,5 @@ dist
 .svelte-kit
 coverage
 generated
+src/lib/site/astro-html
+static/_astro

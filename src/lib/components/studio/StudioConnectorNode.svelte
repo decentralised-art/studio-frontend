@@ -71,11 +71,8 @@
   const canOpenConnectorTree = $derived(!tabRoot && connectorNameForTree.length > 0);
   const showBottomOutlets = $derived(!data.hideOutlets);
   const showRiControls = $derived(data.showRiControls !== false);
-  const staticRiCount = $derived(
-    data.staticRi && typeof data.staticRi === "object" ? Object.keys(data.staticRi).length : 0,
-  );
-  const staticRiClass = $derived(staticRiCount > 0 ? "has-static-ri" : "");
   const riLocked = $derived(Boolean(data.riLocked));
+  const staticRiClass = $derived(riLocked ? "has-static-ri" : "");
   const riLockToggleDisabled = $derived(Boolean(data.riLockToggleDisabled));
   const riStart = $derived(Number(data.riStart ?? 0));
   const riShift = $derived(Number(data.riShift ?? 0));
@@ -138,8 +135,8 @@
       {#if readOnly}
         <span class="connector-readonly-chip">On-chain (read-only)</span>
       {/if}
-      {#if staticRiCount > 0}
-        <span class="connector-static-ri-chip">Static RI: {staticRiCount}</span>
+      {#if riLocked}
+        <span class="connector-static-ri-chip">Static RI</span>
       {/if}
     </div>
     <div class="connector-actions">

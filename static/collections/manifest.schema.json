@@ -1,0 +1,253 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://decentralised.art/collections/manifest.schema.json",
+  "title": "DCN Collection Manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "collection", "network", "publication_policy", "items"],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "dcn-collection-manifest.v1"
+    },
+    "collection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "kind", "status", "maintainer", "generated_at_utc"],
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "kind": {
+          "type": "string",
+          "enum": ["core", "community"]
+        },
+        "status": {
+          "type": "string",
+          "enum": ["draft", "published", "deprecated"]
+        },
+        "maintainer": { "type": "string" },
+        "generated_at_utc": { "type": "string", "format": "date-time" }
+      }
+    },
+    "network": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["chain_name", "chain_api_base_url"],
+      "properties": {
+        "chain_name": { "type": "string" },
+        "chain_api_base_url": { "type": "string", "format": "uri" }
+      }
+    },
+    "publication_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "solidity_version",
+        "requires_source_publication",
+        "requires_hash_verification",
+        "naming_policy",
+        "snippet_contract_policy",
+        "test_name_policy"
+      ],
+      "properties": {
+        "solidity_version": { "type": "string" },
+        "requires_source_publication": { "type": "boolean" },
+        "requires_hash_verification": { "type": "boolean" },
+        "naming_policy": { "type": "string" },
+        "snippet_contract_policy": {
+          "type": "string"
+        },
+        "test_name_policy": {
+          "type": "string"
+        }
+      }
+    },
+    "items": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["transformations", "conditions", "connectors"],
+      "properties": {
+        "transformations": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/transformationItem" }
+        },
+        "conditions": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/conditionItem" }
+        },
+        "connectors": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/connectorItem" }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "deploymentState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["deployed", "owner", "address"],
+      "properties": {
+        "deployed": { "type": "boolean" },
+        "owner": { "type": ["string", "null"] },
+        "address": { "type": ["string", "null"] },
+        "deployment_block": { "type": ["integer", "null"], "minimum": 0 },
+        "published_name": { "type": ["string", "null"] }
+      }
+    },
+    "hashState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sol_src_sha256"],
+      "properties": {
+        "sol_src_sha256": { "type": ["string", "null"] }
+      }
+    },
+    "backendReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "path", "symbol"],
+      "properties": {
+        "repository": { "type": "string" },
+        "path": { "type": "string" },
+        "symbol": { "type": "string" }
+      }
+    },
+    "transformationSnippetContract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "language",
+        "entrypoint",
+        "x_parameter_type",
+        "args_type",
+        "return_type",
+        "arg_index_inference",
+        "forbidden_constructs"
+      ],
+      "properties": {
+        "kind": { "type": "string", "const": "function_body" },
+        "language": { "type": "string", "const": "solidity" },
+        "entrypoint": { "type": "string", "const": "run" },
+        "x_parameter_type": { "type": "string", "const": "uint32" },
+        "args_type": { "type": "string", "const": "uint32[] calldata" },
+        "return_type": { "type": "string", "const": "uint32" },
+        "arg_index_inference": {
+          "type": "string",
+          "const": "highest args[i] + 1"
+        },
+        "forbidden_constructs": {
+          "type": "array",
+          "items": { "type": "string" },
+          "minItems": 1
+        }
+      }
+    },
+    "conditionSnippetContract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "language",
+        "entrypoint",
+        "args_type",
+        "return_type",
+        "arg_index_inference",
+        "forbidden_constructs"
+      ],
+      "properties": {
+        "kind": { "type": "string", "const": "function_body" },
+        "language": { "type": "string", "const": "solidity" },
+        "entrypoint": { "type": "string", "const": "check" },
+        "args_type": { "type": "string", "const": "int32[] calldata" },
+        "return_type": { "type": "string", "const": "bool" },
+        "arg_index_inference": {
+          "type": "string",
+          "const": "highest args[i] + 1"
+        },
+        "forbidden_constructs": {
+          "type": "array",
+          "items": { "type": "string" },
+          "minItems": 1
+        }
+      }
+    },
+    "transformationItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "canonical_id",
+        "name",
+        "version",
+        "category",
+        "args_count",
+        "sol_src",
+        "snippet_contract",
+        "backend_reference",
+        "deterministic",
+        "deployment",
+        "hashes"
+      ],
+      "properties": {
+        "canonical_id": { "type": "string" },
+        "name": { "type": "string" },
+        "version": { "type": "integer", "minimum": 1 },
+        "category": { "type": "string" },
+        "args_count": { "type": "integer", "minimum": 0 },
+        "sol_src": { "type": "string" },
+        "snippet_contract": {
+          "$ref": "#/$defs/transformationSnippetContract"
+        },
+        "backend_reference": { "$ref": "#/$defs/backendReference" },
+        "notes": { "type": "string" },
+        "deterministic": { "type": "boolean" },
+        "deployment": { "$ref": "#/$defs/deploymentState" },
+        "hashes": { "$ref": "#/$defs/hashState" }
+      }
+    },
+    "conditionItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "canonical_id",
+        "name",
+        "version",
+        "category",
+        "args_count",
+        "sol_src",
+        "snippet_contract",
+        "backend_reference",
+        "deterministic",
+        "deployment",
+        "hashes"
+      ],
+      "properties": {
+        "canonical_id": { "type": "string" },
+        "name": { "type": "string" },
+        "version": { "type": "integer", "minimum": 1 },
+        "category": { "type": "string" },
+        "args_count": { "type": "integer", "minimum": 0 },
+        "sol_src": { "type": "string" },
+        "snippet_contract": { "$ref": "#/$defs/conditionSnippetContract" },
+        "backend_reference": { "$ref": "#/$defs/backendReference" },
+        "notes": { "type": "string" },
+        "deterministic": { "type": "boolean" },
+        "deployment": { "$ref": "#/$defs/deploymentState" },
+        "hashes": { "$ref": "#/$defs/hashState" }
+      }
+    },
+    "connectorItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["canonical_id", "name", "version", "format_hash", "notes"],
+      "properties": {
+        "canonical_id": { "type": "string" },
+        "name": { "type": "string" },
+        "version": { "type": "integer", "minimum": 1 },
+        "format_hash": { "type": ["string", "null"] },
+        "notes": { "type": "string" }
+      }
+    }
+  }
+}
