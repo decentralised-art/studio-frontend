@@ -6,7 +6,8 @@
   import WalletAuthButton from "$lib/components/auth/WalletAuthButton.svelte";
 
   type HeroSlide = {
-    focus: string;
+    focusMain: string;
+    focusContinuation: string;
     subtitle: string;
     accent: string;
     image: string;
@@ -14,30 +15,34 @@
 
   const slides: HeroSlide[] = [
     {
-      focus: "collective performative intelligence.",
+      focusMain: "worlds as artworks",
+      focusContinuation: "and reusable intelligence across them.",
       subtitle:
-        "Build scalable expert systems where many participants contribute interoperable operations and gain from the intelligence of the network.",
+        "Create blockchain-based procedures through the Studio or API. Let humans, AI agents, and Worlds contribute, interpret, execute, and recombine them.",
       accent: "#67d6ff",
       image: asset("/site/images/collective_performative_intelligence.jpeg"),
     },
     {
-      focus: "autonomous worlds and artworks.",
+      focusMain: "reusable onchain procedures",
+      focusContinuation: "for any World.",
       subtitle:
-        "Build blockchain-based behaviours, operations, and conditions for autonomous objects, decentralised games, and NPC-player interactions.",
+        "Build operations once and make them available across applications. Worlds on decentralised.art — or external Worlds — can call, interpret, and compose them.",
       accent: "#f7c86a",
       image: asset("/site/images/autonomous_worlds.jpeg"),
     },
     {
-      focus: "autonomous economic systems.",
+      focusMain: "human and AI agent contribution",
+      focusContinuation: "through Studio and API.",
       subtitle:
-        "Compose smart contract-based behaviours, incentives, and programmable conditions into self-governing economic networks. Enable AI marketplaces, hybrid organisations, and resilient agent swarms.",
+        "Humans can create procedures visually through the Studio or programmatically through the API. AI agents can contribute directly through the API, turning intelligence into shared procedural infrastructure.",
       accent: "#ff9b7a",
       image: asset("/site/images/economic_systems.jpeg"),
     },
     {
-      focus: "intelligent delegation.",
+      focusMain: "a browser of Worlds",
+      focusContinuation: "as living artworks.",
       subtitle:
-        "Execution and provenance layer for programmable delegation across humans and AI agents. Define roles, constraints, conditions, and verifiable histories of execution.",
+        "Publish Worlds to decentralised.art and explore the content made for them. Each World becomes an environment where procedures, contributions, and outputs can be discovered, reused, and extended.",
       accent: "#8de58f",
       image: asset("/site/images/intelligent_delegation.jpeg"),
     },
@@ -68,12 +73,23 @@
     const titleElement = root.querySelector<HTMLElement>(".hero-title");
     const prefixElement = root.querySelector<HTMLElement>(".hero-title-prefix");
     const focusElement = root.querySelector<HTMLElement>("[data-hero-focus]");
+    const focusMainElement = root.querySelector<HTMLElement>("[data-hero-focus-main]");
+    const focusContinuationElement = root.querySelector<HTMLElement>(
+      "[data-hero-focus-continuation]",
+    );
     const subtitleElement = root.querySelector<HTMLElement>("[data-hero-subtitle]");
     const toggleButton = root.querySelector<HTMLButtonElement>("[data-hero-toggle]");
     const toggleIconElement = root.querySelector<HTMLElement>("[data-hero-toggle-icon]");
     const progressElement = root.querySelector<SVGCircleElement>("[data-hero-progress]");
     const dotElements = Array.from(root.querySelectorAll<HTMLButtonElement>("[data-hero-dot]"));
-    if (!slideElements.length || !focusElement || !subtitleElement) return;
+    if (
+      !slideElements.length ||
+      !focusElement ||
+      !focusMainElement ||
+      !focusContinuationElement ||
+      !subtitleElement
+    )
+      return;
 
     let current = 0;
     let timer: number | null = null;
@@ -82,7 +98,7 @@
     let isPaused = false;
     let textAnimationToken = 0;
     const subtitleFadeMs = 1000;
-    const slideDurationMs = 8500;
+    const slideDurationMs = 12500;
     const mobileHeroBreakpoint = 900;
     let remainingMs = slideDurationMs;
     let cycleStart = 0;
@@ -152,7 +168,12 @@
       });
     };
 
-    const animateHeroText = async (nextText: string, nextSubtitle: string, accentColor: string) => {
+    const animateHeroText = async (
+      nextMainText: string,
+      nextContinuationText: string,
+      nextSubtitle: string,
+      accentColor: string,
+    ) => {
       const token = ++textAnimationToken;
 
       subtitleElement.classList.remove("is-visible");
@@ -162,14 +183,22 @@
       if (token !== textAnimationToken) return;
 
       focusElement.classList.remove("is-fading");
-      focusElement.textContent = "";
+      focusMainElement.textContent = "";
+      focusContinuationElement.textContent = "";
       focusElement.style.color = accentColor;
       focusElement.classList.add("is-typing");
       queueHeroTitleFit();
 
-      for (let i = 1; i <= nextText.length; i += 1) {
+      for (let i = 1; i <= nextMainText.length; i += 1) {
         if (token !== textAnimationToken) return;
-        focusElement.textContent = nextText.slice(0, i);
+        focusMainElement.textContent = nextMainText.slice(0, i);
+        queueHeroTitleFit();
+        await sleep(30);
+      }
+
+      for (let i = 1; i <= nextContinuationText.length; i += 1) {
+        if (token !== textAnimationToken) return;
+        focusContinuationElement.textContent = nextContinuationText.slice(0, i);
         queueHeroTitleFit();
         await sleep(30);
       }
@@ -199,7 +228,8 @@
       });
 
       const activeSlide = slideElements[current];
-      const nextFocus = activeSlide.dataset.focus ?? "";
+      const nextFocusMain = activeSlide.dataset.focusMain ?? "";
+      const nextFocusContinuation = activeSlide.dataset.focusContinuation ?? "";
       const nextAccent = activeSlide.dataset.accent ?? "";
       const nextSubtitle = activeSlide.dataset.subtitle ?? "";
 
@@ -207,13 +237,14 @@
         textAnimationToken += 1;
         focusElement.classList.remove("is-fading");
         focusElement.classList.remove("is-typing");
-        focusElement.textContent = nextFocus;
+        focusMainElement.textContent = nextFocusMain;
+        focusContinuationElement.textContent = nextFocusContinuation;
         focusElement.style.color = nextAccent;
         subtitleElement.textContent = nextSubtitle;
         subtitleElement.classList.add("is-visible");
         queueHeroTitleFit();
       } else {
-        void animateHeroText(nextFocus, nextSubtitle, nextAccent);
+        void animateHeroText(nextFocusMain, nextFocusContinuation, nextSubtitle, nextAccent);
       }
 
       dotElements.forEach((dotElement, dotIndex) => {
@@ -288,12 +319,13 @@
 
 <section class="immersive-hero" id="landing-hero-carousel">
   <div class="hero-slides" aria-hidden="true">
-    {#each slides as slide, index (slide.focus)}
+    {#each slides as slide, index (slide.focusMain)}
       <figure
         class:is-active={index === 0}
         class="hero-slide"
         data-hero-slide
-        data-focus={slide.focus}
+        data-focus-main={slide.focusMain}
+        data-focus-continuation={slide.focusContinuation}
         data-subtitle={slide.subtitle}
         data-accent={slide.accent}
       >
@@ -306,8 +338,13 @@
 
   <div class="hero-content">
     <h1 class="minimal-title hero-title">
-      <span class="hero-title-prefix">A decentralised API for</span>
-      <span class="hero-title-focus is-visible" data-hero-focus>{slides[0].focus}</span>
+      <span class="hero-title-prefix">A decentralised platform for</span>
+      <span class="hero-title-focus is-visible" data-hero-focus>
+        <span class="hero-title-focus-main" data-hero-focus-main>{slides[0].focusMain}</span>
+        <span class="hero-title-focus-continuation" data-hero-focus-continuation>
+          {slides[0].focusContinuation}
+        </span>
+      </span>
     </h1>
     <p class="minimal-subtitle hero-subtitle is-visible" data-hero-subtitle>
       {slides[0].subtitle}
@@ -324,7 +361,7 @@
 
   <div class="hero-carousel-controls" aria-label="Carousel controls">
     <div class="hero-dot-row" role="tablist" aria-label="Select slide">
-      {#each slides as slide, index (slide.focus)}
+      {#each slides as slide, index (slide.focusMain)}
         <button
           type="button"
           class:is-active={index === 0}
@@ -452,14 +489,24 @@
 
   .hero-title-focus {
     display: block;
-    min-height: 1.08em;
+    min-height: 2.16em;
     color: #67d6ff;
     margin-top: 0.06em;
-    white-space: nowrap;
+    white-space: normal;
+    text-wrap: balance;
     line-height: 1.08;
-    font-size: inherit;
+    font-size: 0.62em;
     position: relative;
     opacity: 1;
+  }
+
+  .hero-title-focus-main,
+  .hero-title-focus-continuation {
+    display: inline;
+  }
+
+  .hero-title-focus-continuation {
+    color: inherit;
   }
 
   .hero-title-focus:global(.is-fading) {

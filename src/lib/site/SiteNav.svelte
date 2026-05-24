@@ -388,29 +388,37 @@
     margin-left: 0.25rem;
   }
 
-  :global(.site-wallet-auth > button),
+  :global(.site-wallet-auth .wallet-login-trigger),
   :global(.site-wallet-auth .wallet-menu-trigger) {
-    min-height: auto;
+    box-sizing: border-box;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 2rem;
+    min-height: 2rem;
+    max-height: 2rem;
     border-radius: 0.25rem;
     border: 1px solid rgba(17, 17, 17, 0.16);
-    padding: 0.375rem 0.75rem;
+    padding: 0 0.75rem !important;
     background: #8de58f !important;
     color: #06130c !important;
     box-shadow: none;
+    font-family: inherit;
     font-size: 0.75rem;
     font-weight: 600;
     line-height: 1.25;
+    letter-spacing: 0;
     text-shadow: none;
   }
 
-  :global(.site-wallet-auth > button:hover),
+  :global(.site-wallet-auth .wallet-login-trigger:hover),
   :global(.site-wallet-auth .wallet-menu-trigger:hover),
   :global(.site-wallet-auth .wallet-menu-trigger[aria-expanded="true"]) {
     background: color-mix(in srgb, #8de58f 88%, #ffffff 12%) !important;
     color: #06130c !important;
   }
 
-  .site-nav.is-landing :global(.site-wallet-auth > button),
+  .site-nav.is-landing :global(.site-wallet-auth .wallet-login-trigger),
   .site-nav.is-landing :global(.site-wallet-auth .wallet-menu-trigger) {
     border-color: rgba(17, 17, 17, 0.2);
   }
@@ -596,7 +604,7 @@
       justify-content: stretch;
     }
 
-    :global(.site-wallet-auth > button),
+    :global(.site-wallet-auth .wallet-login-trigger),
     :global(.site-wallet-auth .wallet-menu),
     :global(.site-wallet-auth .wallet-menu-trigger) {
       width: 100%;

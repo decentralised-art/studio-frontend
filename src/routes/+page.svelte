@@ -76,7 +76,7 @@
   <title>Decentralised Creative Network</title>
   <meta
     name="description"
-    content="A decentralised API for autonomous operations that are persistent, composable, and accountable."
+    content="A decentralised platform for worlds as artworks and reusable intelligence across them."
   />
   <link rel="canonical" href="https://decentralised.art/" />
   <meta property="og:type" content="website" />
@@ -84,7 +84,7 @@
   <meta property="og:title" content="Decentralised Creative Network" />
   <meta
     property="og:description"
-    content="A decentralised API for autonomous operations that are persistent, composable, and accountable."
+    content="A decentralised platform for worlds as artworks and reusable intelligence across them."
   />
   <meta property="og:url" content="https://decentralised.art/" />
   <meta property="og:image" content="https://decentralised.art/og-image.png" />
@@ -96,7 +96,7 @@
   <meta name="twitter:title" content="Decentralised Creative Network" />
   <meta
     name="twitter:description"
-    content="A decentralised API for autonomous operations that are persistent, composable, and accountable."
+    content="A decentralised platform for worlds as artworks and reusable intelligence across them."
   />
   <meta name="twitter:image" content="https://decentralised.art/og-image.png" />
 </svelte:head>
