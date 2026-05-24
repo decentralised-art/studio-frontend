@@ -32,6 +32,20 @@
         </div>
       </a>
     {/each}
+
+    <article
+      class="world-card world-card-placeholder"
+      aria-label="Add a new world feature in development"
+    >
+      <div class="world-graphic world-placeholder-graphic" style="--world-accent: #8de58f">
+        <span class="world-plus" aria-hidden="true">+</span>
+      </div>
+      <div class="world-card-body">
+        <div>
+          <h2>Add a new world (feature in development)</h2>
+        </div>
+      </div>
+    </article>
   </section>
 </main>
 
@@ -69,6 +83,15 @@
     transform: translateY(-1px);
   }
 
+  .world-card-placeholder {
+    border-style: dashed;
+    opacity: 0.82;
+  }
+
+  .world-card-placeholder:hover {
+    transform: none;
+  }
+
   .world-graphic {
     @apply relative flex aspect-[4/3] items-center justify-center overflow-hidden border-b;
     border-color: var(--border-subtle);
@@ -94,6 +117,23 @@
     @apply relative rounded-md border px-4 py-3 text-sm uppercase tracking-[0.18em];
     border-color: color-mix(in srgb, var(--world-accent) 45%, var(--border-subtle));
     background: color-mix(in srgb, var(--surface-card) 78%, transparent);
+  }
+
+  .world-placeholder-graphic {
+    background:
+      radial-gradient(
+        circle at center,
+        color-mix(in srgb, var(--world-accent) 18%, transparent),
+        transparent 44%
+      ),
+      var(--surface-panel-soft);
+  }
+
+  .world-plus {
+    @apply relative flex h-16 w-16 items-center justify-center rounded-full border text-5xl font-light;
+    border-color: color-mix(in srgb, var(--world-accent) 42%, var(--border-subtle));
+    color: color-mix(in srgb, var(--world-accent) 76%, var(--text-primary));
+    background: color-mix(in srgb, var(--surface-card) 72%, transparent);
   }
 
   .world-card-body {
