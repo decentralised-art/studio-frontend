@@ -16,7 +16,7 @@ describe("auth session boundaries", () => {
     window.localStorage.clear();
   });
 
-  it("requires a services token for app authentication", () => {
+  it("requires a services SIWE token for app authentication", () => {
     setChainToken("chain-token", "user-lyra");
 
     expect(hasChainSession()).toBe(true);
@@ -25,7 +25,7 @@ describe("auth session boundaries", () => {
     expect(hasAuthSession()).toBe(false);
   });
 
-  it("keeps services and chain authentication as separate sessions", () => {
+  it("keeps services SIWE and chain authentication as separate sessions", () => {
     setToken("services-token");
 
     expect(hasServicesSession()).toBe(true);

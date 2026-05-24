@@ -1,9 +1,9 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { SvelteSet } from "svelte/reactivity";
-  import { goto } from "$app/navigation";
   import { resolve } from "$app/paths";
 
+  import WalletAuthButton from "$lib/components/auth/WalletAuthButton.svelte";
   import ConnectorPostFeed from "$lib/components/feed/ConnectorPostFeed.svelte";
   import {
     listProfileActivityEvents,
@@ -19,7 +19,6 @@
     addConnectorToCurrentUserToolbox,
     getCachedMe,
     getCurrentUserProfileState,
-    loginWithBrowserWalletChainAccount,
     logout,
     resolveCurrentUserChainSourceAddresses,
     updateUserById,
@@ -30,10 +29,9 @@
 
   let currentUser = $state<ProfileViewUser | null>(null);
   let isLoading = $state(true);
+  let isAuthenticated = $state(false);
   let error = $state("");
-  let isRedirecting = $state(false);
   let isSaving = $state(false);
-  let isLinkingWallet = $state(false);
   let saveError = $state("");
   let saveSuccess = $state("");
   let localToolboxConnectors = $state<string[]>([]);
@@ -93,6 +91,22 @@
   const isAccountFeedRequestActive = (requestVersion: number): boolean =>
     requestVersion === accountFeedRequestVersion;
 
+  const resetAccountState = () => {
+    accountLoadRequestVersion += 1;
+    accountFeedRequestVersion += 1;
+    currentUser = null;
+    error = "";
+    saveError = "";
+    saveSuccess = "";
+    isSaving = false;
+    isLoading = false;
+    localToolboxConnectors = [];
+    accountFeedEvents = [];
+    accountFeedSourceAddresses = [];
+    accountFeedLoading = false;
+    accountFeedError = "";
+  };
+
   const refreshAccountFeedFromEventFeed = async (
     activeUserId: string,
     sourceAddresses: string[],
@@ -147,20 +161,15 @@
 
   const loadProfile = async () => {
     const requestVersion = beginAccountLoadRequest();
-    if (!hasAuthSession()) {
-      isRedirecting = true;
-      await goto(resolve("/login"));
-      return;
-    }
+    isAuthenticated = hasAuthSession();
 
     isLoading = true;
     error = "";
     saveError = "";
     saveSuccess = "";
 
-    if (!getToken()) {
-      isRedirecting = true;
-      await goto(resolve("/login"));
+    if (!isAuthenticated || !getToken()) {
+      resetAccountState();
       return;
     }
 
@@ -207,13 +216,12 @@
   };
 
   const handleLogout = () => {
-    if (isRedirecting) return;
-    isRedirecting = true;
     error = "";
     saveError = "";
     saveSuccess = "";
     void logout();
-    void goto(resolve("/login"), { replaceState: true });
+    isAuthenticated = false;
+    resetAccountState();
   };
 
   const toolboxConnectorIds = $derived.by(() => new SvelteSet(localToolboxConnectors));
@@ -284,6 +292,7 @@
       });
 
       currentUser = normalizeProfileUser(payload);
+      window.dispatchEvent(new CustomEvent("profile:change"));
       saveSuccess = "Profile saved.";
     } catch (err) {
       saveError = err instanceof Error ? err.message : "Failed to save profile.";
@@ -292,36 +301,43 @@
     }
   };
 
-  const handleLinkMetamask = async () => {
-    if (!currentUser) return;
-
-    isLinkingWallet = true;
-    saveError = "";
-    saveSuccess = "";
-
-    try {
-      const result = await loginWithBrowserWalletChainAccount({ patchServicesProfile: false });
-      const payload = await updateUserById(currentUser.id, { ethereum_address: result.address });
-      currentUser = normalizeProfileUser(payload);
-      saveSuccess = "MetaMask linked and chain session authenticated.";
-    } catch (err) {
-      saveError = err instanceof Error ? err.message : "Failed to link MetaMask.";
-    } finally {
-      isLinkingWallet = false;
-    }
-  };
-
   onMount(() => {
-    void loadProfile();
+    const handleAuthChange = () => {
+      isAuthenticated = hasAuthSession();
+      if (isAuthenticated) {
+        void loadProfile();
+      } else {
+        resetAccountState();
+      }
+    };
+
+    handleAuthChange();
+    window.addEventListener("auth:change", handleAuthChange);
+    window.addEventListener("storage", handleAuthChange);
     return () => {
       accountLoadRequestVersion += 1;
       accountFeedRequestVersion += 1;
+      window.removeEventListener("auth:change", handleAuthChange);
+      window.removeEventListener("storage", handleAuthChange);
     };
   });
 </script>
 
 <div class="account-page">
-  {#if isLoading}
+  {#if !isAuthenticated}
+    <SectionShell>
+      <div class="status">
+        <p class="status-title">Login with MetaMask to open your account.</p>
+        <p class="status-subtitle">
+          Your profile, toolbox, follows, and account activity are loaded after wallet login.
+        </p>
+      </div>
+
+      <div class="actions">
+        <WalletAuthButton showLogout={false} />
+      </div>
+    </SectionShell>
+  {:else if isLoading}
     <div class="account-content loading-offset">
       <div class="profile-card-shell">
         <SectionShell>
@@ -370,10 +386,10 @@
 
       <div class="actions">
         <Button variant="primary" type="button" onclick={loadProfile}>Retry</Button>
-        <Button variant="ghost" type="button" onclick={handleLogout}>Go to login</Button>
+        <Button variant="ghost" type="button" onclick={handleLogout}>Sign out</Button>
       </div>
     </SectionShell>
-  {:else if currentUser && !isRedirecting}
+  {:else if currentUser}
     <div class="account-content">
       <div class="profile-card-shell">
         <UserProfilePage
@@ -381,9 +397,7 @@
           mode="self"
           onLogout={handleLogout}
           onSave={handleSaveProfile}
-          onLinkWallet={handleLinkMetamask}
           {isSaving}
-          {isLinkingWallet}
           {saveError}
           {saveSuccess}
         />

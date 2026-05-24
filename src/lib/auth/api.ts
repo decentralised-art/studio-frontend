@@ -1,6 +1,4 @@
 import { browser } from "$app/environment";
-import { goto } from "$app/navigation";
-import { resolve } from "$app/paths";
 import {
   createEmptyToolboxLibrary,
   normalizeConnectorToolboxId,
@@ -27,8 +25,15 @@ export type BrowserWalletChainAuthResult = {
   message: string;
   signature: string;
   token: string;
-  patchedUserId: string | null;
-  ethereumAddressPatched: boolean;
+};
+
+export type BrowserWalletServicesAuthResult = {
+  address: string;
+  chainId: number;
+  message: string;
+  signature: string;
+  token: string;
+  me: unknown;
 };
 
 type BrowserEthereumProvider = {
@@ -45,16 +50,14 @@ type ChainAuthPayload = {
   message: string;
 };
 
+type SiweChallengeResponse = {
+  message: string;
+  expires_at?: string;
+};
+
 const SERVICES_ME_CACHE_KEY = "dcn_services_me_cache_v1";
 const ETHEREUM_ADDRESS_RE = /^0x[0-9a-f]{40}$/i;
 let cachedMePayloadMemory: unknown | null = null;
-
-const redirectToLogin = () => {
-  if (!browser) return;
-  void goto(resolve("/login")).catch(() => {
-    // Route guards also enforce login; ignore navigation failures outside a mounted app.
-  });
-};
 
 const parseTokenFromPayload = (payload: unknown): string => {
   if (typeof payload === "string") {
@@ -224,6 +227,13 @@ const normalizeEthereumAddress = (value: string): string => {
 
 const stripHexPrefix = (value: string): string => value.trim().replace(/^0x/i, "");
 
+const utf8Hex = (value: string): string => {
+  const bytes = new TextEncoder().encode(value);
+  return `0x${Array.from(bytes)
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("")}`;
+};
+
 export const chainTokenIdentityForWalletAddress = (address: string): string => {
   const normalized = normalizeEthereumAddress(address);
   return normalized ? `wallet:${normalized}` : "";
@@ -309,6 +319,19 @@ const requestBrowserWalletAddress = async (provider?: BrowserEthereumProvider): 
   return normalized;
 };
 
+const requestBrowserWalletChainId = async (provider?: BrowserEthereumProvider): Promise<number> => {
+  const activeProvider = getBrowserEthereumProvider(provider);
+  const chainHex = await activeProvider.request<unknown>({ method: "eth_chainId" });
+  if (typeof chainHex !== "string") {
+    throw new Error("MetaMask did not return a chain id.");
+  }
+  const chainId = Number.parseInt(chainHex, 16);
+  if (!Number.isFinite(chainId) || chainId <= 0) {
+    throw new Error("MetaMask returned an invalid chain id.");
+  }
+  return chainId;
+};
+
 const signChainAuthMessage = async ({
   provider,
   address,
@@ -331,7 +354,6 @@ const signChainAuthMessage = async ({
 
 export const authenticateBrowserWalletInChain = async (options?: {
   provider?: BrowserEthereumProvider;
-  patchServicesProfile?: boolean;
 }): Promise<BrowserWalletChainAuthResult> => {
   const address = await requestBrowserWalletAddress(options?.provider);
   const nonce = await requestChainNonce(address);
@@ -347,53 +369,114 @@ export const authenticateBrowserWalletInChain = async (options?: {
     message,
   });
 
-  let patchedUserId: string | null = null;
-  let ethereumAddressPatched = false;
-  if (options?.patchServicesProfile !== false && getToken()) {
-    const me = await getMe();
-    const userId = extractUserIdFromUserPayload(me);
-    if (!userId) {
-      throw new Error("Services auth succeeded, but /auth/me did not return a user id.");
-    }
-    await updateUserById(userId, { ethereum_address: address });
-    patchedUserId = userId;
-    ethereumAddressPatched = true;
-  }
-
   return {
     address,
     nonce,
     message,
     signature,
     token,
-    patchedUserId,
-    ethereumAddressPatched,
   };
-};
-
-const extractUserIdFromUserPayload = (payload: unknown): string | null => {
-  if (!payload || typeof payload !== "object") return null;
-  const record = payload as Record<string, unknown>;
-  if (typeof record.id === "string") return record.id;
-  const user = record.user;
-  if (user && typeof user === "object") {
-    const nested = user as Record<string, unknown>;
-    if (typeof nested.id === "string") return nested.id;
-  }
-  return null;
 };
 
 export const loginWithBrowserWalletChainAccount = async (options?: {
   provider?: BrowserEthereumProvider;
-  patchServicesProfile?: boolean;
 }): Promise<BrowserWalletChainAuthResult> => {
   const result = await authenticateBrowserWalletInChain({
     provider: options?.provider,
-    patchServicesProfile: options?.patchServicesProfile,
   });
   const tokenIdentity = chainTokenIdentityForWalletAddress(result.address);
   setChainToken(result.token, tokenIdentity);
   return result;
+};
+
+const requestServicesSiweChallenge = async (
+  address: string,
+  chainId: number,
+): Promise<SiweChallengeResponse> => {
+  const appOrigin = browser ? window.location.origin : "";
+  const response = await fetch(buildServicesApiUrl("/auth/siwe/challenge"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      address,
+      chain_id: chainId,
+      ...(appOrigin ? { app_origin: appOrigin } : {}),
+    }),
+  });
+  const payload = await parseResponseBody(response);
+  if (!response.ok) {
+    throw createStatusError(extractErrorMessage(payload), response.status);
+  }
+  if (!payload || typeof payload !== "object") {
+    throw new Error("SIWE challenge response was malformed.");
+  }
+  const challenge = payload as Record<string, unknown>;
+  if (typeof challenge.message !== "string" || !challenge.message.trim()) {
+    throw new Error("SIWE challenge response did not include a message.");
+  }
+  return {
+    message: challenge.message,
+    expires_at: typeof challenge.expires_at === "string" ? challenge.expires_at : undefined,
+  };
+};
+
+const requestServicesSiweToken = async (payload: {
+  message: string;
+  signature: string;
+}): Promise<string> => {
+  const response = await fetch(buildServicesApiUrl("/auth/siwe/verify"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const responsePayload = await parseResponseBody(response);
+  if (!response.ok) {
+    throw createStatusError(extractErrorMessage(responsePayload), response.status);
+  }
+  const token = parseTokenFromPayload(responsePayload);
+  if (!token) {
+    throw new Error("No token returned from SIWE verify.");
+  }
+  return token;
+};
+
+export const loginWithBrowserWalletServicesAccount = async (options?: {
+  provider?: BrowserEthereumProvider;
+}): Promise<BrowserWalletServicesAuthResult> => {
+  const provider = options?.provider;
+  const address = await requestBrowserWalletAddress(provider);
+  const chainId = await requestBrowserWalletChainId(provider);
+  const challenge = await requestServicesSiweChallenge(address, chainId);
+  const activeProvider = getBrowserEthereumProvider(provider);
+  const signature = await activeProvider.request<unknown>({
+    method: "personal_sign",
+    params: [utf8Hex(challenge.message), address],
+  });
+  if (typeof signature !== "string" || !signature.trim()) {
+    throw new Error("MetaMask did not return a SIWE signature.");
+  }
+  const token = await requestServicesSiweToken({
+    message: challenge.message,
+    signature: signature.trim(),
+  });
+
+  clearCachedMePayload();
+  setToken(token);
+
+  try {
+    const me = await getMe();
+    return {
+      address,
+      chainId,
+      message: challenge.message,
+      signature: signature.trim(),
+      token,
+      me,
+    };
+  } catch (error) {
+    clearToken();
+    throw error;
+  }
 };
 
 export const chainAuthFetch = async (path: string, init: RequestInit = {}) => {
@@ -429,50 +512,9 @@ export const authFetch = async (path: string, init: RequestInit = {}) => {
   if (!response.ok && isInvalidServicesSessionResponse(path, response.status)) {
     clearCachedMePayload();
     clearToken();
-    redirectToLogin();
   }
 
   return response;
-};
-
-export const login = async (email: string, password: string): Promise<string> => {
-  const response = await fetch(buildServicesApiUrl("/auth/login"), {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email, password }),
-  });
-
-  const payload = await response.text();
-  if (!response.ok) {
-    throw createStatusError(payload || "Login failed", response.status);
-  }
-
-  const token = parseTokenFromResponse(payload);
-  if (!token) {
-    throw new Error("No token returned from login.");
-  }
-
-  setToken(token);
-  return token;
-};
-
-export const registerUser = async (email: string, displayName: string, password: string) => {
-  const response = await fetch(buildServicesApiUrl("/users"), {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      email,
-      display_name: displayName,
-      password,
-    }),
-  });
-
-  const payload = await parseResponseBody(response);
-  if (!response.ok) {
-    throw createStatusError(extractErrorMessage(payload), response.status);
-  }
-
-  return payload;
 };
 
 export const logout = async (): Promise<void> => {
@@ -480,7 +522,6 @@ export const logout = async (): Promise<void> => {
   clearToken();
   clearChainToken();
   clearCachedMePayload();
-  redirectToLogin();
   if (!token) return;
 
   // Optimistic logout UX: user is redirected immediately; backend session invalidation runs in background.
@@ -623,16 +664,28 @@ const mergeUserRecords = (
 };
 
 const hasEthereumAddress = (user: ServicesUserRecord): boolean => {
+  if (normalizeFollowAddress(user.id)) return true;
   const direct = user.ethereum_address;
   if (typeof direct === "string" && direct.trim().length > 0) return true;
   const alt = user.ethereumAddress;
   return typeof alt === "string" && alt.trim().length > 0;
 };
 
+const hasHydratableServicesUserDetails = (user: ServicesUserRecord): boolean =>
+  Boolean(
+    user.display_name ??
+    user.displayName ??
+    user.profile_json ??
+    user.profileJson ??
+    user.status ??
+    user.roles,
+  );
+
 const hydrateServicesUsersById = async (
   users: ServicesUserRecord[],
 ): Promise<ServicesUserRecord[]> => {
   const toHydrate = users.filter((user) => {
+    if (!hasHydratableServicesUserDetails(user)) return true;
     if (hasEthereumAddress(user)) return false;
     const id = typeof user.id === "string" ? user.id.trim() : "";
     if (/^0x[0-9a-f]{40}$/i.test(id)) return false;
@@ -665,7 +718,7 @@ export const listServicesUsers = async (): Promise<ServicesUserRecord[]> => {
   const pageLimit = 200;
 
   for (let page = 0; page < 25; page += 1) {
-    const response = await authFetch(`/users?limit=${pageLimit}&page=${page}`);
+    const response = await fetch(buildServicesApiUrl(`/users?limit=${pageLimit}&page=${page}`));
     const payload = await parseResponseBody(response);
     if (!response.ok) {
       if (page === 0) break;
@@ -691,7 +744,7 @@ export const listServicesUsers = async (): Promise<ServicesUserRecord[]> => {
     return hydrateServicesUsersById(pagedUsers);
   }
 
-  const fallbackResponse = await authFetch("/users");
+  const fallbackResponse = await fetch(buildServicesApiUrl("/users"));
   const fallbackPayload = await parseResponseBody(fallbackResponse);
   if (!fallbackResponse.ok) {
     throw new Error(extractErrorMessage(fallbackPayload));
@@ -804,6 +857,11 @@ export const resolveCurrentUserChainSourceAddresses = (mePayload: unknown): stri
 
   const envelope = extractUserEnvelope(mePayload);
   if (!envelope) return Array.from(sourceSet);
+
+  const userIdAddress = normalizeFollowAddress(envelope.userId);
+  if (userIdAddress) {
+    sourceSet.add(userIdAddress);
+  }
 
   const profileAddress = normalizeFollowAddress(
     typeof envelope.rootUser.ethereum_address === "string"
@@ -1240,11 +1298,12 @@ export const computeUserSocialConnections = (
   const graph = users.map((entry) => {
     const rawId = typeof entry.id === "string" ? entry.id.trim() : "";
     const ethereumAddress = normalizeFollowAddress(
-      typeof entry.ethereum_address === "string"
-        ? entry.ethereum_address
-        : typeof entry.ethereumAddress === "string"
-          ? entry.ethereumAddress
-          : "",
+      normalizeFollowAddress(rawId) ||
+        (typeof entry.ethereum_address === "string"
+          ? entry.ethereum_address
+          : typeof entry.ethereumAddress === "string"
+            ? entry.ethereumAddress
+            : ""),
     );
     const profileJson = entry.profile_json;
     const preferences = parseSocialPreferencesFromProfileJson(profileJson);

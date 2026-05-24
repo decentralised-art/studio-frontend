@@ -3,9 +3,9 @@ import type { User, UserKind } from "$lib/data/users";
 
 export type ServicesUserPublic = {
   id: string;
-  email: string;
+  email?: string;
   display_name: string | null;
-  ethereum_address: string | null;
+  ethereum_address?: string | null;
   status: "active" | "suspended" | "deleted" | string;
   roles: string[];
   profile_json: unknown;
@@ -52,6 +52,7 @@ const coerceStringArray = (value: unknown) =>
   Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
 
 const pickFirst = (...values: string[]) => values.find((value) => value.trim().length > 0) ?? "";
+const ETH_ADDRESS_RE = /^0x[0-9a-f]{40}$/i;
 
 const asRecord = (value: unknown): Record<string, unknown> =>
   value && typeof value === "object" && !Array.isArray(value)
@@ -117,6 +118,7 @@ export const normalizeProfileUser = (payload: unknown): ProfileViewUser => {
   );
 
   const kind = parseKind(profilePublic.kind ?? nested.kind ?? nested.type);
+  const idAddress = ETH_ADDRESS_RE.test(coerceString(nested.id)) ? coerceString(nested.id) : "";
   const authored = parseAuthored(profilePublic.authored ?? nested.authored);
   const toolbox = Array.isArray(profilePublic.toolbox)
     ? profilePublic.toolbox.filter((item): item is string => typeof item === "string")
@@ -141,6 +143,7 @@ export const normalizeProfileUser = (payload: unknown): ProfileViewUser => {
       coerceString(nested.address),
       coerceString(profilePublic.ethereum_address),
       coerceString(profilePublic.address),
+      idAddress,
     ),
     authored,
     toolbox,

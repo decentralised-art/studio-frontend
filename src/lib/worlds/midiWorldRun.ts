@@ -48,7 +48,7 @@ export const decodeMidiDynamicRiQueryParam = decodeDynamicRiQueryParam;
 const ensureChainAuthForWorldRun = async (forceRefresh = false) => {
   if (forceRefresh) clearChainToken();
   if (getChainToken() && !forceRefresh) return;
-  await loginWithBrowserWalletChainAccount({ patchServicesProfile: true });
+  await loginWithBrowserWalletChainAccount();
 };
 
 const executeWithAuthRetry = async (payload: ChainExecutePayload) => {

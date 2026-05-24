@@ -4,7 +4,10 @@
   import { resolve } from "$app/paths";
 
   import SectionShell from "$lib/components/ui/SectionShell.svelte";
-  import { DEFAULT_AUTHENTICATED_ROUTE, LOGIN_ROUTE } from "$lib/auth/routeAccess";
+  import {
+    DEFAULT_AUTHENTICATED_ROUTE,
+    DEFAULT_UNAUTHENTICATED_ROUTE,
+  } from "$lib/auth/routeAccess";
   import { hasAuthSession } from "$lib/auth/session";
 
   let message = $state("Opening app...");
@@ -16,15 +19,15 @@
       return;
     }
 
-    message = "Opening login...";
-    await goto(resolve(LOGIN_ROUTE), { replaceState: true });
+    message = "Opening worlds...";
+    await goto(resolve(DEFAULT_UNAUTHENTICATED_ROUTE), { replaceState: true });
   });
 </script>
 
 <div class="root-redirect-page">
   <SectionShell>
     <div class="root-redirect-card">
-      <p class="root-redirect-label">Hypermusic.ai</p>
+      <p class="root-redirect-label">decentralised.art</p>
       <p class="root-redirect-message">{message}</p>
     </div>
   </SectionShell>

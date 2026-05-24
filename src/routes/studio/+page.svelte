@@ -3863,12 +3863,15 @@
         : typeof user?.displayName === "string"
           ? user.displayName.trim()
           : "";
+    const servicesUserAddress = /^0x[0-9a-f]{40}$/i.test(servicesUserId)
+      ? servicesUserId.toLowerCase()
+      : "";
     const ethereumAddress =
       typeof user?.ethereum_address === "string"
         ? user.ethereum_address.trim().toLowerCase()
         : typeof user?.ethereumAddress === "string"
           ? user.ethereumAddress.trim().toLowerCase()
-          : "";
+          : servicesUserAddress;
 
     return {
       servicesUserId,
@@ -3899,7 +3902,7 @@
       return;
     }
 
-    chainAuthPromise = loginWithBrowserWalletChainAccount({ patchServicesProfile: true })
+    chainAuthPromise = loginWithBrowserWalletChainAccount()
       .then((result) => {
         chainTokenUserId = chainTokenIdentityForWalletAddress(result.address);
         currentStudioAuthorId = result.address.trim().toLowerCase() || getCurrentStudioAuthorId();

@@ -29,6 +29,9 @@ const uniqueStrings = (values: string[]): string[] =>
   Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
 
 export const getServicesUserEthereumAddress = (user: ServicesUserRecord): string => {
+  const idAddress = normalizeAuthorAddress(user.id);
+  if (idAddress) return idAddress;
+
   const direct =
     typeof user.ethereum_address === "string"
       ? user.ethereum_address
