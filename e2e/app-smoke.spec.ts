@@ -948,39 +948,32 @@ const seedMovableConnectorTreeSession = async (page: Page) => {
   });
 };
 
-test("redirects anonymous root visitors to login", async ({ page }) => {
+test("redirects anonymous root visitors to Worlds", async ({ page }) => {
   const assertNoPageErrors = collectPageErrors(page);
 
   await page.goto("/");
 
-  await expect(page).toHaveURL(/\/login$/);
-  await expect(page.getByRole("heading", { name: "Log in" })).toBeVisible();
+  await expect(page).toHaveURL(/\/worlds$/);
+  await expect(page.locator('section[aria-label="Available worlds"]')).toBeVisible();
   assertNoPageErrors();
 });
 
-const protectedRouteCases = [
-  "/studio",
-  "/network",
-  "/account",
-  "/map",
-  "/create",
-  "/explore",
-  "/social",
-  "/c/pitch",
-  "/f/pitch",
-  "/u/playwright-user",
-  "/p/pitch",
-];
+const protectedRouteCases = ["/studio", "/network", "/account", "/create"];
 
 protectedRouteCases.forEach((path) => {
-  test(`redirects anonymous ${path} visitors to login`, async ({ page }) => {
+  test(`gates anonymous ${path} visitors behind MetaMask login`, async ({ page }) => {
     const assertNoPageErrors = collectPageErrors(page);
     await stubRemoteApis(page);
 
     await page.goto(path);
 
-    await expect(page).toHaveURL(/\/login$/);
-    await expect(page.getByRole("heading", { name: "Log in" })).toBeVisible();
+    if (path === "/create") {
+      await expect(page).toHaveURL(/\/studio$/);
+    } else {
+      await expect(page).toHaveURL(new RegExp(`${path.replace("/", "\\/")}$`));
+    }
+    await expect(page.getByText("Login with MetaMask to continue.")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Login with MetaMask" }).first()).toBeVisible();
     if (path === "/studio") {
       await expect(page.getByRole("application", { name: "Flow canvas" })).toHaveCount(0);
     }
@@ -991,19 +984,14 @@ protectedRouteCases.forEach((path) => {
   });
 });
 
-test("renders the login and registration entry point", async ({ page }) => {
+test("redirects anonymous login visitors to Worlds", async ({ page }) => {
   const assertNoPageErrors = collectPageErrors(page);
 
   await page.goto("/login");
 
-  await expect(page.getByRole("heading", { name: "Log in" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Sign in" })).toBeVisible();
-  await expect(page.getByText("Mock system warning")).toBeVisible();
-  await expect(page.getByPlaceholder("you@hypermusic.ai")).toBeVisible();
-  await page.getByRole("button", { name: "Need an account? Register" }).click();
-  await expect(page.getByRole("heading", { name: "Create account" })).toBeVisible();
-  await expect(page.getByPlaceholder("Your public name")).toBeVisible();
-  await expect(page.getByRole("button", { name: "Create account" })).toBeVisible();
+  await expect(page).toHaveURL(/\/worlds$/);
+  await expect(page.locator('section[aria-label="Available worlds"]')).toBeVisible();
+  await expect(page.getByRole("button", { name: "Login with MetaMask" })).toBeVisible();
   assertNoPageErrors();
 });
 
