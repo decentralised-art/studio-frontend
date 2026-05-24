@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { resolve } from "$app/paths";
+  import type { Action } from "svelte/action";
 
   import {
     getCurrentUserProfileState,
@@ -25,8 +26,19 @@
   let isBusy = $state(false);
   let error = $state("");
   let menuOpen = $state(false);
+  let preLoginOpen = $state(false);
   let rootElement: HTMLDivElement | null = null;
   let refreshRequestId = 0;
+
+  const portalToBody: Action<HTMLElement> = (node) => {
+    document.body.appendChild(node);
+
+    return {
+      destroy() {
+        node.remove();
+      },
+    };
+  };
 
   const fallbackWalletLabel = (value: string): string =>
     shortAuthorAddress(value) || (value ? "Wallet" : "Account");
@@ -63,6 +75,7 @@
       address = profileAddress || normalizeAuthorAddress(profileState.userId ?? "");
       displayLabel = resolveProfileLabel(profileState.me, address || profileState.userId || "");
       isAuthenticated = hasAuthSession();
+      preLoginOpen = false;
     } catch {
       if (requestId !== refreshRequestId) return;
       address = "";
@@ -71,8 +84,20 @@
     }
   };
 
-  const handleLogin = async () => {
+  const openPreLoginWarning = () => {
     if (isBusy) return;
+    error = "";
+    preLoginOpen = true;
+  };
+
+  const closePreLoginWarning = () => {
+    if (isBusy) return;
+    preLoginOpen = false;
+  };
+
+  const proceedToLogin = async () => {
+    if (isBusy) return;
+    preLoginOpen = false;
     isBusy = true;
     error = "";
     try {
@@ -99,6 +124,7 @@
       displayLabel = "";
       isAuthenticated = false;
       menuOpen = false;
+      preLoginOpen = false;
     } finally {
       isBusy = false;
     }
@@ -123,7 +149,9 @@
       menuOpen = false;
     };
     const handleDocumentKeydown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") menuOpen = false;
+      if (event.key !== "Escape") return;
+      menuOpen = false;
+      if (!isBusy) preLoginOpen = false;
     };
 
     void refresh();
@@ -188,7 +216,7 @@
       variant="primary"
       type="button"
       className="wallet-login-trigger"
-      onclick={handleLogin}
+      onclick={openPreLoginWarning}
       disabled={isBusy}
     >
       {isBusy ? "Signing in..." : "Login with MetaMask"}
@@ -199,6 +227,40 @@
     <span class="wallet-error" title={error}>{error}</span>
   {/if}
 </div>
+
+{#if preLoginOpen && !isAuthenticated}
+  <div class="wallet-login-overlay" use:portalToBody>
+    <div
+      class="wallet-login-dialog"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="wallet-login-warning-title"
+      aria-describedby="wallet-login-warning-description"
+    >
+      <div class="wallet-login-dialog-copy">
+        <p class="wallet-login-kicker">Pre-MVP notice</p>
+        <h2 id="wallet-login-warning-title">Experimental system</h2>
+        <p id="wallet-login-warning-description">
+          This system is still experimental and you use it at your own risk.
+        </p>
+        <a class="wallet-login-roadmap" href={resolve("/roadmap")}>Roadmap</a>
+      </div>
+      <div class="wallet-login-actions">
+        <Button variant="ghost" type="button" onclick={closePreLoginWarning} disabled={isBusy}>
+          Cancel
+        </Button>
+        <Button
+          variant="primary"
+          type="button"
+          onclick={() => void proceedToLogin()}
+          disabled={isBusy}
+        >
+          Proceed to login
+        </Button>
+      </div>
+    </div>
+  </div>
+{/if}
 
 <style lang="postcss">
   @reference "$lib/styles/style.css";
@@ -264,5 +326,53 @@
   .wallet-error {
     @apply max-w-[18rem] truncate text-xs;
     color: var(--color-danger, #f87171);
+  }
+
+  .wallet-login-overlay {
+    @apply fixed inset-0 z-[1000] grid place-items-center px-4 py-8;
+    width: 100vw;
+    min-height: 100vh;
+    min-height: 100dvh;
+    background: color-mix(in srgb, var(--surface-page) 72%, transparent);
+    backdrop-filter: blur(18px);
+  }
+
+  .wallet-login-dialog {
+    @apply grid w-full max-w-md gap-5 rounded-lg border p-5;
+    background: var(--surface-card);
+    border-color: var(--border-subtle);
+    box-shadow: var(--shadow-strong, var(--shadow-soft));
+    color: var(--text-primary);
+  }
+
+  .wallet-login-dialog-copy {
+    @apply grid gap-3;
+  }
+
+  .wallet-login-kicker {
+    @apply text-xs font-semibold uppercase tracking-[0.18em];
+    color: var(--text-muted);
+  }
+
+  .wallet-login-dialog h2 {
+    @apply text-xl font-semibold;
+  }
+
+  .wallet-login-dialog p {
+    color: var(--text-secondary);
+  }
+
+  .wallet-login-roadmap {
+    @apply text-sm font-semibold underline underline-offset-4 transition;
+    color: var(--color-accent-strong);
+  }
+
+  .wallet-login-roadmap:hover,
+  .wallet-login-roadmap:focus-visible {
+    color: var(--color-accent);
+  }
+
+  .wallet-login-actions {
+    @apply flex flex-wrap justify-end gap-3;
   }
 </style>

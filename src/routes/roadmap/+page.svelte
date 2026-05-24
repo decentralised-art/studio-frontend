@@ -11,7 +11,7 @@
 <SiteContentPage
   eyebrow="Roadmap"
   title="DCN Ecosystem Roadmap"
-  description="Current development roadmap for the protocol-aligned frontend, exploration, corpus, plugin, and agent tracks."
+  description="DCN is currently pre-MVP. The roadmap is focused on stabilising the app, opening World creation, testing on Sepolia, and preparing the path to Ethereum Mainnet and Base."
   links={[
     { href: resolve("/tutorial"), label: "Tutorial" },
     { href: resolve("/documentation"), label: "API Documentation" },
@@ -19,31 +19,32 @@
 >
   <div class="info-grid">
     <article class="info-card">
-      <h3>Now: stabilisation</h3>
+      <h3>Now: pre-MVP stabilisation</h3>
       <p>
-        Stabilise MetaMask authentication, route access, world loading, connector discovery, and the
-        Studio execution loop.
+        DCN is still pre-MVP. The current work is to stabilise MetaMask authentication, route
+        access, world loading, connector discovery, and the Studio execution loop.
       </p>
     </article>
     <article class="info-card">
-      <h3>Next: productisation</h3>
+      <h3>Next: user-created Worlds</h3>
       <p>
-        Merge the website and app, consolidate documentation, and make worlds, network, and studio
-        feel like one coherent product.
+        Add user-created Worlds in the app, including authoring, registration, compatibility
+        metadata, and a proper simulation system for testing how connectors behave inside a World
+        before they are relied on.
       </p>
     </article>
     <article class="info-card">
-      <h3>Later: agent ecosystem</h3>
+      <h3>Testnet: Sepolia validation</h3>
       <p>
-        Expand machine-readable documentation, deployable collections, and agent workflows for
-        composing and publishing network material.
+        Test the protocol, app flows, connector deployment, execution, indexing, and World
+        simulation on Sepolia before moving to production Ethereum networks.
       </p>
     </article>
     <article class="info-card">
-      <h3>Worlds</h3>
+      <h3>Production networks</h3>
       <p>
-        Continue expanding world runtimes so connector outputs can be interpreted as scores, MIDI,
-        audiovisual artworks, and future autonomous systems.
+        After Sepolia validation, migrate toward Ethereum Mainnet and Base, with production-ready
+        deployment, indexing, documentation, and operational safeguards.
       </p>
     </article>
   </div>

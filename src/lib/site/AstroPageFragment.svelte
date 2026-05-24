@@ -155,6 +155,18 @@
     color: var(--text-primary) !important;
   }
 
+  :global(.dcn-astro-fragment .docs-tutorial section + section) {
+    margin-top: clamp(4rem, 7vw, 6.5rem) !important;
+  }
+
+  :global(.dcn-astro-fragment .docs-tutorial h3[id]) {
+    scroll-margin-top: calc(var(--nav-offset, 3.5rem) + 1.5rem);
+  }
+
+  :global(.dcn-astro-fragment .docs-tutorial section > h2:first-child) {
+    margin-bottom: 1.25rem;
+  }
+
   :global(.dcn-astro-fragment .docs-surface :where(p, li, dd, summary, figcaption)) {
     color: var(--text-secondary) !important;
   }
