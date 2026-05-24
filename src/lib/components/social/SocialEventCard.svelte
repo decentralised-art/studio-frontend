@@ -119,21 +119,23 @@
         </button>
       {/if}
 
-      <button
-        type="button"
-        class={`toolbox-add-button ${inToolbox ? "is-saved" : ""}`}
-        title={toolboxButtonTitle}
-        aria-label={toolboxButtonLabel}
-        aria-pressed={inToolbox}
-        onclick={handleToolboxClick}
-        disabled={toolboxButtonDisabled}
-      >
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path
-            d="M12 20.4c-.3 0-.7-.1-.9-.3C7.6 17.2 4 14.2 4 9.9 4 7.1 6.1 5 8.9 5c1.4 0 2.7.6 3.6 1.6C13.4 5.6 14.7 5 16.1 5 18.9 5 21 7.1 21 9.9c0 4.3-3.6 7.3-7.1 10.2-.2.2-.6.3-.9.3Z"
-          ></path>
-        </svg>
-      </button>
+      {#if onAddToToolbox}
+        <button
+          type="button"
+          class={`toolbox-add-button ${inToolbox ? "is-saved" : ""}`}
+          title={toolboxButtonTitle}
+          aria-label={toolboxButtonLabel}
+          aria-pressed={inToolbox}
+          onclick={handleToolboxClick}
+          disabled={toolboxButtonDisabled}
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path
+              d="M12 20.4c-.3 0-.7-.1-.9-.3C7.6 17.2 4 14.2 4 9.9 4 7.1 6.1 5 8.9 5c1.4 0 2.7.6 3.6 1.6C13.4 5.6 14.7 5 16.1 5 18.9 5 21 7.1 21 9.9c0 4.3-3.6 7.3-7.1 10.2-.2.2-.6.3-.9.3Z"
+            ></path>
+          </svg>
+        </button>
+      {/if}
     </div>
 
     <header class="event-header">

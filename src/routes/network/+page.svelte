@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { SvelteMap, SvelteSet } from "svelte/reactivity";
   import { resolve } from "$app/paths";
+  import { getToken, hasAuthSession } from "$lib/auth/session";
   import ConnectorPostFeed from "$lib/components/feed/ConnectorPostFeed.svelte";
   import {
     followFormatInProfile,
@@ -88,6 +89,7 @@
   let currentUserSourceAliases = $state<string[]>([]);
   let currentUserLabel = $state("");
   let currentUserAvatarUrl = $state("");
+  let isAuthenticated = $state(false);
   let socialPreferencesHydrated = $state(false);
   let pageMounted = false;
   let feedSyncRequestVersion = 0;
@@ -143,7 +145,7 @@
     return set;
   });
   const feedUiLoading = $derived.by(
-    () => feedLoading || !feedSyncSettled || !socialPreferencesHydrated,
+    () => feedLoading || !feedSyncSettled || (isAuthenticated && !socialPreferencesHydrated),
   );
   const searchQuery = $derived.by(() => followSearch.trim().toLowerCase());
   const discoveredUserLabelByAddress = $derived.by(
@@ -235,6 +237,9 @@
   const hasMoreVisibleEvents = $derived.by(() => networkFeedEvents.length > visibleEventCount);
   const canLoadMoreEvents = $derived.by(() => hasMoreVisibleEvents || feedHasMoreHistory);
   const feedEmptyMessage = $derived.by(() => {
+    if (!isAuthenticated) {
+      return "Login with MetaMask to load your network feed, toolbox, and follows.";
+    }
     const hasFollowTargets = localFollowing.length > 0 || localFollowedFormats.length > 0;
     const hasOwnEvents = feedEvents.some((event) =>
       currentUserSourceAddressSet.has(normalizeAddressForKey(event.authorId)),
@@ -248,6 +253,30 @@
   });
 
   const readConnectorFeedEventsFromCache = (): ConnectorPostEvent[] => listConnectorPosts();
+
+  const resetAuthenticatedNetworkState = () => {
+    closeFeedStream();
+    beginFeedSyncRequest();
+    beginRuntimeHydrationRequest();
+    localToolboxLibrary = createEmptyToolboxLibrary();
+    currentUserAddress = "";
+    currentUserSourceAliases = [];
+    currentUserLabel = "";
+    currentUserAvatarUrl = "";
+    localFollowing = [];
+    localFollowedFormats = [];
+    userFollowPendingByAddress = {};
+    feedEvents = [];
+    chainElements = listConnectorSearchEntities();
+    feedHasMoreHistory = false;
+    feedLoadError = "";
+    feedLoading = false;
+    feedSyncSettled = true;
+    socialPreferencesHydrated = true;
+    runtimeSearchHydrated = false;
+    runtimeSearchHydrationBusy = false;
+    visibleEventCount = FEED_PAGE_SIZE;
+  };
 
   const deriveCurrentSourceAddresses = async (
     profileState: Awaited<ReturnType<typeof getCurrentUserProfileState>>,
@@ -475,6 +504,10 @@
     const requestVersion = beginFeedSyncRequest();
     closeFeedStream();
     feedLoadError = "";
+    if (!isAuthenticated || !getToken()) {
+      resetAuthenticatedNetworkState();
+      return;
+    }
     if (options?.refreshProfile !== false) {
       try {
         await hydrateProfileStateForNetwork({ preferCached: false });
@@ -637,6 +670,7 @@
   };
 
   const toggleUserFollow = async (address: string) => {
+    if (!isAuthenticated || !getToken()) return;
     const normalizedAddress = normalizeAddressForKey(address);
     if (!normalizedAddress) return;
     if (isUserFollowPending(normalizedAddress)) return;
@@ -668,6 +702,7 @@
   };
 
   const toggleFormatFollow = async (formatHash: string) => {
+    if (!isAuthenticated || !getToken()) return;
     const normalizedHash = normalizeFormatHashForKey(formatHash);
     if (!normalizedHash) return;
     const previous = [...localFollowedFormats];
@@ -690,6 +725,7 @@
   };
 
   const toggleConnectorToolbox = (connectorId: string) => {
+    if (!isAuthenticated || !getToken()) return;
     const previous = localToolboxLibrary;
     const { library: next, changed } = toggleToolboxLibraryItem(
       localToolboxLibrary,
@@ -842,38 +878,46 @@
 
   onMount(() => {
     pageMounted = true;
-    socialPreferencesHydrated = false;
-    void hydrateProfileStateForNetwork({ preferCached: false })
-      .then(async (resolvedSourceAddresses) => {
-        if (!pageMounted) return;
-        socialPreferencesHydrated = true;
-        if (
-          resolvedSourceAddresses.length === 0 &&
-          localFollowing.length === 0 &&
-          localFollowedFormats.length === 0
-        ) {
+    const loadAuthenticatedNetwork = () => {
+      socialPreferencesHydrated = false;
+      feedLoading = true;
+      feedSyncSettled = false;
+      void hydrateProfileStateForNetwork({ preferCached: false })
+        .then(async (resolvedSourceAddresses) => {
+          if (!pageMounted || !isAuthenticated) return;
+          socialPreferencesHydrated = true;
+          if (
+            resolvedSourceAddresses.length === 0 &&
+            localFollowing.length === 0 &&
+            localFollowedFormats.length === 0
+          ) {
+            feedLoadError = PROFILE_SOURCES_UNAVAILABLE_MESSAGE;
+            feedLoading = false;
+            feedSyncSettled = true;
+            return;
+          }
+          void loadChainFeed({ refreshProfile: false });
+        })
+        .catch((error) => {
+          if (!pageMounted || !isAuthenticated) return;
+          console.warn("[Network feed] Failed to load profile state.", error);
+          resetAuthenticatedNetworkState();
           feedLoadError = PROFILE_SOURCES_UNAVAILABLE_MESSAGE;
-          feedLoading = false;
-          feedSyncSettled = true;
-          return;
-        }
-        void loadChainFeed({ refreshProfile: false });
-      })
-      .catch((error) => {
-        if (!pageMounted) return;
-        console.warn("[Network feed] Failed to load profile state.", error);
-        localToolboxLibrary = createEmptyToolboxLibrary();
-        currentUserAddress = "";
-        currentUserSourceAliases = [];
-        currentUserLabel = "";
-        currentUserAvatarUrl = "";
-        localFollowing = [];
-        localFollowedFormats = [];
-        socialPreferencesHydrated = true;
-        feedLoadError = PROFILE_SOURCES_UNAVAILABLE_MESSAGE;
-        feedLoading = false;
-        feedSyncSettled = true;
-      });
+        });
+    };
+
+    const handleAuthChange = () => {
+      isAuthenticated = hasAuthSession() && Boolean(getToken());
+      if (isAuthenticated) {
+        loadAuthenticatedNetwork();
+      } else {
+        resetAuthenticatedNetworkState();
+      }
+    };
+
+    handleAuthChange();
+    window.addEventListener("auth:change", handleAuthChange);
+    window.addEventListener("storage", handleAuthChange);
 
     return () => {
       pageMounted = false;
@@ -881,6 +925,8 @@
       feedSyncRequestVersion += 1;
       runtimeHydrationRequestVersion += 1;
       closeFeedStream();
+      window.removeEventListener("auth:change", handleAuthChange);
+      window.removeEventListener("storage", handleAuthChange);
     };
   });
 </script>
@@ -920,20 +966,22 @@
                       <p class="candidate-kind">{user.address}</p>
                     </div>
                   </div>
-                  <Button
-                    variant={followedAuthorIds.has(user.address) ? "ghost" : "primary"}
-                    disabled={isUserFollowPending(user.address)}
-                    onclick={() => {
-                      void toggleUserFollow(user.address);
-                    }}
-                    className="follow-btn"
-                  >
-                    {#if isUserFollowPending(user.address)}
-                      {followedAuthorIds.has(user.address) ? "Unfollowing..." : "Following..."}
-                    {:else}
-                      {followedAuthorIds.has(user.address) ? "Following" : "Follow"}
-                    {/if}
-                  </Button>
+                  {#if isAuthenticated}
+                    <Button
+                      variant={followedAuthorIds.has(user.address) ? "ghost" : "primary"}
+                      disabled={isUserFollowPending(user.address)}
+                      onclick={() => {
+                        void toggleUserFollow(user.address);
+                      }}
+                      className="follow-btn"
+                    >
+                      {#if isUserFollowPending(user.address)}
+                        {followedAuthorIds.has(user.address) ? "Unfollowing..." : "Following..."}
+                      {:else}
+                        {followedAuthorIds.has(user.address) ? "Following" : "Follow"}
+                      {/if}
+                    </Button>
+                  {/if}
                 </div>
               {/each}
             </div>
@@ -965,15 +1013,17 @@
                     >
                       Open
                     </Button>
-                    <Button
-                      variant={followedFormatKeys.has(formatHash) ? "ghost" : "primary"}
-                      onclick={() => {
-                        void toggleFormatFollow(formatHash);
-                      }}
-                      className="follow-btn"
-                    >
-                      {followedFormatKeys.has(formatHash) ? "Following" : "Follow"}
-                    </Button>
+                    {#if isAuthenticated}
+                      <Button
+                        variant={followedFormatKeys.has(formatHash) ? "ghost" : "primary"}
+                        onclick={() => {
+                          void toggleFormatFollow(formatHash);
+                        }}
+                        className="follow-btn"
+                      >
+                        {followedFormatKeys.has(formatHash) ? "Following" : "Follow"}
+                      </Button>
+                    {/if}
                   </div>
                 </div>
               {/each}
@@ -1040,7 +1090,7 @@
     emptyMessage={feedEmptyMessage}
     onLoadMore={loadMoreFeedEvents}
     onConnectorOpen={openConnectorInStudio}
-    onAddToToolbox={toggleConnectorToolbox}
+    onAddToToolbox={isAuthenticated ? toggleConnectorToolbox : undefined}
     toolboxMode="toggle"
     {toolboxConnectorIds}
     authorLabelById={feedAuthorLabels}

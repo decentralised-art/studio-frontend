@@ -7,7 +7,6 @@
 
   import ConnectorPostFeed from "$lib/components/feed/ConnectorPostFeed.svelte";
   import { listServicesUsers } from "$lib/auth/api";
-  import { hasAuthSession } from "$lib/auth/session";
   import Button from "$lib/components/ui/Button.svelte";
   import WorldFrame from "$lib/components/worlds/WorldFrame.svelte";
   import { ChainApiRequestError } from "$lib/chain/registryApi";
@@ -307,7 +306,6 @@
   };
 
   const refreshAuthorIdentityMaps = async () => {
-    if (!hasAuthSession()) return;
     try {
       const users = await listServicesUsers();
       authorLabelById = buildAuthorLabelMapFromServicesUsers(users);

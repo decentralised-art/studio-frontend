@@ -1,30 +1,25 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { goto } from "$app/navigation";
   import { resolve } from "$app/paths";
-  import { dev } from "$app/environment";
   import { page } from "$app/state";
   import "$lib/styles/style.css";
-  import { isPublicRouteId, isWorldRuntimeRouteId, LOGIN_ROUTE } from "$lib/auth/routeAccess";
+  import { isProtectedRouteId, isWorldRuntimeRouteId } from "$lib/auth/routeAccess";
   import { hasAuthSession } from "$lib/auth/session";
+  import WalletAuthButton from "$lib/components/auth/WalletAuthButton.svelte";
   import ThemeToggle from "$lib/components/theme/ThemeToggle.svelte";
 
   let { children, data } = $props();
   let authRevision = $state(0);
   let hasMounted = $state(false);
-  const devBypass = dev && import.meta.env.VITE_DEV_BYPASS_AUTH === "true";
   const hasCurrentAuthSession = $derived.by(() => {
     const revision = authRevision;
     return revision >= 0 && hasAuthSession();
   });
-  const isAuthenticated = $derived.by(() => {
-    if (devBypass) return true;
-    return hasMounted
-      ? hasCurrentAuthSession
-      : Boolean(data.isAuthenticated) || hasCurrentAuthSession;
-  });
-  const canRenderRoute = $derived(isAuthenticated || devBypass || isPublicRouteId(page.route.id));
+  const isAuthenticated = $derived.by(() =>
+    hasMounted ? hasCurrentAuthSession : Boolean(data.isAuthenticated) || hasCurrentAuthSession,
+  );
   const isWorldRuntimeRoute = $derived(isWorldRuntimeRouteId(page.route.id));
+  const canRenderRoute = $derived(!isProtectedRouteId(page.route.id) || isAuthenticated);
   const shouldShowFooter = $derived.by(() => {
     const path = page.url.pathname;
     const worldsPath = resolve("/worlds");
@@ -35,18 +30,11 @@
       !path.startsWith(`${worldsPath}/`)
     );
   });
-  const guardRoute = (routeId: string | null) => {
-    if (devBypass) return;
-    if (isAuthenticated) return;
-    if (isPublicRouteId(routeId)) return;
-    goto(resolve(LOGIN_ROUTE), { replaceState: true });
-  };
 
   onMount(() => {
     const syncAuth = () => {
       hasMounted = true;
       authRevision += 1;
-      guardRoute(page.route.id);
     };
 
     syncAuth();
@@ -56,10 +44,6 @@
       window.removeEventListener("auth:change", syncAuth);
       window.removeEventListener("storage", syncAuth);
     };
-  });
-
-  $effect(() => {
-    if (!isAuthenticated) guardRoute(page.route.id);
   });
 </script>
 
@@ -83,10 +67,8 @@
           {#if isAuthenticated}
             <a href={resolve("/")}>Network</a>
             <a href={resolve("/studio")}>Studio</a>
-            <a href={resolve("/account")}>Account</a>
-          {:else}
-            <a href={resolve("/login")}>Login</a>
           {/if}
+          <WalletAuthButton className="app-wallet-auth" />
         </div>
       </nav>
     </header>
@@ -95,7 +77,12 @@
       {#if canRenderRoute}
         {@render children()}
       {:else}
-        <div class="auth-redirect-page" aria-live="polite">Opening login...</div>
+        <div class="auth-gate-page" aria-live="polite">
+          <div class="auth-gate">
+            <p class="auth-gate-title">Login with MetaMask to continue.</p>
+            <WalletAuthButton showLogout={false} />
+          </div>
+        </div>
       {/if}
     </main>
 
@@ -122,13 +109,25 @@
 <style lang="postcss">
   @reference "$lib/styles/style.css";
 
-  .auth-redirect-page {
+  .app-shell {
+    background: var(--surface-page);
+    color: var(--text-primary);
+  }
+
+  .auth-gate-page {
     @apply flex-1 min-h-0 flex items-center justify-center px-4 py-10 text-sm;
     color: var(--text-muted);
   }
 
-  .app-shell {
-    background: var(--surface-page);
+  .auth-gate {
+    @apply flex flex-col items-center gap-4 rounded-lg border px-6 py-5 text-center;
+    background: var(--surface-card);
+    border-color: var(--border-subtle);
+    box-shadow: var(--shadow-soft);
+  }
+
+  .auth-gate-title {
+    @apply text-sm font-medium;
     color: var(--text-primary);
   }
 
@@ -152,6 +151,10 @@
 
   .app-nav-links a:hover {
     color: var(--text-primary);
+  }
+
+  :global(.app-wallet-auth) {
+    margin-left: 0.25rem;
   }
 
   .app-footer {
