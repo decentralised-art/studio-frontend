@@ -1,9 +1,21 @@
 export const LOGIN_ROUTE = "/login";
 export const DEFAULT_AUTHENTICATED_ROUTE = "/network";
-export const DEFAULT_UNAUTHENTICATED_ROUTE = "/worlds";
+export const DEFAULT_UNAUTHENTICATED_ROUTE = "/";
 
-const PUBLIC_ROUTE_IDS = new Set(["/", LOGIN_ROUTE]);
-const PUBLIC_ROUTE_PREFIXES = ["/gallery", "/world-runtimes", "/worlds"];
+const PUBLIC_ROUTE_IDS = new Set([
+  "/",
+  LOGIN_ROUTE,
+  "/api-status",
+  "/api-tutorial",
+  "/documentation",
+  "/gallery",
+  "/onboarding",
+  "/onboarding-agent",
+  "/onboarding-human",
+  "/roadmap",
+  "/tutorial",
+]);
+const PUBLIC_ROUTE_PREFIXES = ["/gallery", "/tutorial", "/world-runtimes", "/worlds"];
 const PROTECTED_ROUTE_IDS = new Set(["/account", "/network", "/studio"]);
 
 export const isPublicRouteId = (routeId: string | null | undefined): boolean =>

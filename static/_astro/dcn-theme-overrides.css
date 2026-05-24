@@ -1,0 +1,65 @@
+@layer components {
+  .dcn-astro-fragment .docs-surface h3#outputs {
+    margin-top: 2.2rem !important;
+    padding-top: 0.9rem !important;
+  }
+
+  :root[data-theme="dark"] .dcn-astro-fragment .docs-surface .tutorial-when-block,
+  :root[data-theme="dark"] .dcn-astro-fragment .docs-surface .tutorial-highlight-paragraph,
+  :root[data-theme="dark"] .dcn-astro-fragment .docs-surface .tutorial-definition-box,
+  :root[data-theme="dark"] .dcn-astro-fragment .docs-surface .tutorial-condition-card {
+    background:
+      radial-gradient(circle at 10% -10%, rgba(103, 214, 255, 0.08), transparent 40%),
+      linear-gradient(180deg, var(--surface-panel-strong) 0%, var(--surface-panel) 100%) !important;
+    border-color: var(--border-subtle) !important;
+    color: var(--text-primary) !important;
+    box-shadow: none !important;
+  }
+
+  :root[data-theme="dark"] .dcn-astro-fragment .docs-surface .tutorial-criteria-card,
+  :root[data-theme="dark"] .dcn-astro-fragment .docs-surface .metamodelling-example-card {
+    background:
+      radial-gradient(
+        circle at 100% 0%,
+        color-mix(in srgb, var(--meta-accent, var(--criteria-accent, #67d6ff)) 14%, transparent),
+        transparent 42%
+      ),
+      linear-gradient(180deg, var(--surface-panel-strong) 0%, var(--surface-panel) 100%) !important;
+    border-color: var(--border-subtle) !important;
+    color: var(--text-primary) !important;
+    box-shadow: none !important;
+  }
+
+  :root[data-theme="dark"] .dcn-astro-fragment .docs-surface .tutorial-when-block h3,
+  :root[data-theme="dark"] .dcn-astro-fragment .docs-surface .tutorial-when-intro h3,
+  :root[data-theme="dark"] .dcn-astro-fragment .docs-surface .tutorial-criteria-card h3,
+  :root[data-theme="dark"] .dcn-astro-fragment .docs-surface .metamodelling-example-card h4,
+  :root[data-theme="dark"] .dcn-astro-fragment .docs-surface .tutorial-definition-box strong,
+  :root[data-theme="dark"] .dcn-astro-fragment .docs-surface .tutorial-condition-card p,
+  :root[data-theme="dark"] .dcn-astro-fragment .docs-surface .tutorial-condition-card strong,
+  :root[data-theme="dark"] .dcn-astro-fragment .docs-surface .tutorial-highlight-paragraph strong {
+    color: var(--text-primary) !important;
+  }
+
+  :root[data-theme="dark"] .dcn-astro-fragment .docs-surface .tutorial-when-block p,
+  :root[data-theme="dark"] .dcn-astro-fragment .docs-surface .tutorial-criteria-card p,
+  :root[data-theme="dark"] .dcn-astro-fragment .docs-surface .tutorial-highlight-paragraph,
+  :root[data-theme="dark"] .dcn-astro-fragment .docs-surface .tutorial-highlight-paragraph p,
+  :root[data-theme="dark"] .dcn-astro-fragment .docs-surface .tutorial-definition-box p,
+  :root[data-theme="dark"] .dcn-astro-fragment .docs-surface .tutorial-definition-list,
+  :root[data-theme="dark"] .dcn-astro-fragment .docs-surface .tutorial-definition-list li,
+  :root[data-theme="dark"] .dcn-astro-fragment .docs-surface .metamodelling-example-card p {
+    color: var(--text-secondary) !important;
+  }
+
+  :root[data-theme="dark"] .dcn-astro-fragment .docs-surface .metamodelling-example-kicker {
+    color: var(--meta-accent, var(--color-accent-strong)) !important;
+  }
+
+  :root[data-theme="dark"] .dcn-astro-fragment .docs-surface .tutorial-criteria-icon,
+  :root[data-theme="dark"] .dcn-astro-fragment .docs-surface .tutorial-condition-icon {
+    background: var(--surface-card-hover) !important;
+    border-color: var(--border-subtle) !important;
+    color: var(--color-accent-strong) !important;
+  }
+}

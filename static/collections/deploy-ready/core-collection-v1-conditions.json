@@ -1,0 +1,56 @@
+{
+  "generated_at_utc": "2026-04-16T14:22:24.714Z",
+  "source_manifest": "/collections/core-collection-v1-draft.json",
+  "items": [
+    {
+      "order": 1,
+      "name": "logic_always_true_v1",
+      "payload": {
+        "name": "logic_always_true_v1",
+        "sol_src": "return true;"
+      },
+      "canonical_id": "logic.always_true.v1",
+      "sol_src_sha256": "10e0fa08a73f0cd151617165a96e7df8c8d14ecfc63d6f1f343559f16198939f"
+    },
+    {
+      "order": 2,
+      "name": "logic_equals_v1",
+      "payload": {
+        "name": "logic_equals_v1",
+        "sol_src": "return args[0] == args[1];"
+      },
+      "canonical_id": "logic.equals.v1",
+      "sol_src_sha256": "cfe880681d96495cc230124919ac29983b4ca68aa6b19693b5f56e391e0d253f"
+    },
+    {
+      "order": 3,
+      "name": "logic_greater_than_v1",
+      "payload": {
+        "name": "logic_greater_than_v1",
+        "sol_src": "return args[0] > args[1];"
+      },
+      "canonical_id": "logic.greater_than.v1",
+      "sol_src_sha256": "7a41bf2113a48f9b035cbf23f5c1dd73a32c68afe9627a67f82240def76dbec7"
+    },
+    {
+      "order": 4,
+      "name": "logic_less_than_v1",
+      "payload": {
+        "name": "logic_less_than_v1",
+        "sol_src": "return args[0] < args[1];"
+      },
+      "canonical_id": "logic.less_than.v1",
+      "sol_src_sha256": "22867a465de5ae337e2d3c4a1bb68673142492631e55546ecde76060570cc455"
+    },
+    {
+      "order": 5,
+      "name": "logic_between_inclusive_v1",
+      "payload": {
+        "name": "logic_between_inclusive_v1",
+        "sol_src": "return args[0] >= args[1] && args[0] <= args[2];"
+      },
+      "canonical_id": "logic.between_inclusive.v1",
+      "sol_src_sha256": "d7d8d7068fba03a7511dbc6de87716fb66415e70d51047d24e3eeae980d19db9"
+    }
+  ]
+}

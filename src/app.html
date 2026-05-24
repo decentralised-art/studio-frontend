@@ -3,9 +3,23 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" type="image/svg+xml" href="%sveltekit.assets%/favicon.svg" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Syne:wght@500;600;700&display=swap"
+      rel="stylesheet"
+    />
     <script>
       (() => {
         try {
+          if (window.location.pathname.includes("/world-runtimes")) {
+            document.documentElement.dataset.theme = "dark";
+            document.documentElement.dataset.themeScope = "world-runtime";
+            document.documentElement.style.colorScheme = "dark";
+            return;
+          }
+
           const storedTheme = localStorage.getItem("hypermusic-theme");
           const theme = storedTheme === "light" ? "light" : "dark";
           document.documentElement.dataset.theme = theme;

@@ -80,7 +80,7 @@ export default defineConfig(({ isSsrBuild }) => ({
         changeOrigin: true,
         secure: false,
       },
-      "/api": {
+      "^/api(?:/|$)": {
         target: "https://api.decentralised.art",
         changeOrigin: true,
         secure: true,
