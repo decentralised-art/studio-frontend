@@ -184,7 +184,13 @@
       {/if}
     </div>
   {:else}
-    <Button variant="primary" type="button" onclick={handleLogin} disabled={isBusy}>
+    <Button
+      variant="primary"
+      type="button"
+      className="wallet-login-trigger"
+      onclick={handleLogin}
+      disabled={isBusy}
+    >
       {isBusy ? "Signing in..." : "Login with MetaMask"}
     </Button>
   {/if}

@@ -954,7 +954,7 @@ test("renders the public landing page for anonymous root visitors", async ({ pag
   await page.goto("/");
 
   await expect(page).toHaveURL(/\/$/);
-  await expect(page.getByRole("heading", { name: /A decentralised API for/ })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /A decentralised platform for/ })).toBeVisible();
   await expect(page.getByRole("link", { name: "Worlds" }).first()).toBeVisible();
   await expect(page.getByRole("button", { name: "Login with MetaMask" }).first()).toBeVisible();
   assertNoPageErrors();
@@ -992,7 +992,7 @@ test("redirects anonymous login visitors to the landing page", async ({ page }) 
   await page.goto("/login");
 
   await expect(page).toHaveURL(/\/$/);
-  await expect(page.getByRole("heading", { name: /A decentralised API for/ })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /A decentralised platform for/ })).toBeVisible();
   await expect(page.getByRole("button", { name: "Login with MetaMask" }).first()).toBeVisible();
   assertNoPageErrors();
 });
