@@ -64,7 +64,7 @@ const CONDITION_SYSTEM_PROMPT = [
   "Return JSON only following the provided schema.",
   "The code field must contain ONLY the Solidity snippet body used inside check(args).",
   "Do NOT return full contracts, imports, markdown fences, comments outside code, or explanations in code.",
-  "Condition snippet must compile as body of: function check(uint32[] memory args) internal pure returns (bool).",
+  "Condition snippet must compile as body of: function check(int32[] memory args) internal pure returns (bool).",
   "Use args safely; always include a return statement.",
   "If user asks for guidance-only, keep code as close as possible to provided draft and explain in assistant_response.",
 ].join("\n");

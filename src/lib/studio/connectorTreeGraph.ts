@@ -33,6 +33,7 @@ export type ConnectorTreeNodeData = {
   transformations?: ConnectorTreeTransformationInstance[];
   connectorRows?: ConnectorTreeRowPreview[];
   conditionLabel?: string | null;
+  conditionArgs?: number[];
   boundKind?: "static" | "forwarded" | null;
   boundSlotLabel?: string | null;
   boundOwnerName?: string | null;
@@ -353,6 +354,7 @@ export const buildConnectorTreeGraph = ({
       kind?: "composite" | "binding" | "open";
       bindingOwnerName?: string | null;
       bindingSlot?: number | null;
+      conditionArgs?: number[];
     },
   ) => {
     const key = `${sourceId}|${sourceHandle}|${targetId}|${targetHandle}|${edgeOptions?.kind ?? "plain"}|${edgeOptions?.label ?? ""}|${edgeOptions?.bindingOwnerName ?? ""}|${edgeOptions?.bindingSlot ?? ""}`;
@@ -367,16 +369,21 @@ export const buildConnectorTreeGraph = ({
       target: targetId,
       targetHandle,
       ...(edgeOptions?.label ? { label: edgeOptions.label } : {}),
-      ...(edgeOptions?.kind === "composite" || edgeOptions?.kind === "binding"
+      ...(edgeOptions?.kind === "composite" ||
+      edgeOptions?.kind === "binding" ||
+      edgeOptions?.conditionArgs
         ? {
             data: {
-              relation: edgeOptions.kind,
+              ...(edgeOptions.kind === "composite" || edgeOptions.kind === "binding"
+                ? { relation: edgeOptions.kind }
+                : {}),
               ...(isBinding && edgeOptions?.bindingOwnerName
                 ? { bindingOwnerName: edgeOptions.bindingOwnerName }
                 : {}),
               ...(isBinding && typeof edgeOptions?.bindingSlot === "number"
                 ? { bindingSlot: edgeOptions.bindingSlot }
                 : {}),
+              ...(edgeOptions.conditionArgs ? { conditionArgs: edgeOptions.conditionArgs } : {}),
             },
           }
         : {}),
@@ -481,6 +488,7 @@ export const buildConnectorTreeGraph = ({
           ),
         })),
         conditionLabel: def.conditionName ? def.conditionName : null,
+        conditionArgs: def.conditionName ? [...(def.conditionArgs ?? [])] : [],
         boundKind: input.boundDescriptor?.kind ?? null,
         boundSlotLabel: input.boundDescriptor?.slotLabel ?? null,
         boundOwnerName: input.boundDescriptor?.ownerConnectorName ?? null,
@@ -506,6 +514,7 @@ export const buildConnectorTreeGraph = ({
         id: conditionNodeId,
         type: "condition",
         draggable: true,
+        hidden: true,
         position: { x: origin.x, y: origin.y + input.depth * fallbackVerticalSpacing - 120 },
         data: {
           label: def.conditionName,
@@ -515,7 +524,9 @@ export const buildConnectorTreeGraph = ({
         },
       });
       conditionParentById.set(conditionNodeId, connectorId);
-      pushEdge(conditionNodeId, "out", connectorId, "in");
+      pushEdge(conditionNodeId, "out", connectorId, "condition", {
+        conditionArgs: [...(def.conditionArgs ?? [])],
+      });
     }
 
     const nextVisiting = new Set(visiting);

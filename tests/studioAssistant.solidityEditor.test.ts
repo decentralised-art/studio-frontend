@@ -27,6 +27,7 @@ describe("studio solidity editor assistant", () => {
 
     expect(prompt).toContain("conditions wrap connectors");
     expect(prompt).toContain("whether a connector outputs values");
+    expect(prompt).toContain("function check(int32[] memory args)");
   });
 
   it("parses assistant response and strips fenced code", async () => {

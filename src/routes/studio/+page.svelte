@@ -385,6 +385,7 @@
     connectorRows?: ConnectorRowPreview[];
     selectedDimensionIndex?: number;
     conditionLabel?: string | null;
+    conditionArgs?: number[];
     boundKind?: "static" | "forwarded" | null;
     boundSlotLabel?: string | null;
     boundOwnerName?: string | null;
@@ -4016,7 +4017,7 @@
     name: string,
   ) => {
     const trimmedName = name.trim();
-    if (!trimmedName) return;
+    if (!trimmedName) return false;
     try {
       const payload =
         kind === "transformation"
@@ -4034,11 +4035,43 @@
         kind,
         kind === "transformation" ? `transform-${trimmedName}` : `condition-${trimmedName}`,
       );
+      return true;
     } catch (error) {
       if (import.meta.env.DEV) {
         console.warn("[Studio] Failed to hydrate deployed runtime item from chain.", error);
       }
+      return false;
     }
+  };
+
+  const collectAttachedNetworkConditionNames = (
+    graphNodes: StudioNode[],
+    graphEdges: Edge[],
+  ): string[] => {
+    const byId = new Map(graphNodes.map((node) => [node.id, node]));
+    const names = new SvelteSet<string>();
+    graphEdges.forEach((edge) => {
+      const source = edge.source ? byId.get(edge.source) : null;
+      const target = edge.target ? byId.get(edge.target) : null;
+      if (source?.data.kind !== "condition" || !source.data.fromNetwork) return;
+      if (!target || !isConnectorKind(target.data.kind)) return;
+      const targetHandle = edge.targetHandle ?? "in";
+      if (targetHandle !== "in" && targetHandle !== "condition") return;
+      const name = resolveNodeName(source).trim();
+      if (name) names.add(name);
+    });
+    return Array.from(names);
+  };
+
+  const hydrateMissingAttachedNetworkConditions = async (
+    graphNodes: StudioNode[],
+    graphEdges: Edge[],
+  ) => {
+    const missing = collectAttachedNetworkConditionNames(graphNodes, graphEdges).filter(
+      (name) => !deployedRegistry.conditions[name],
+    );
+    if (!missing.length) return;
+    await Promise.all(missing.map((name) => hydrateDeployedRuntimeFromChain("condition", name)));
   };
 
   const hydrateToolboxConnectorsIntoLibrary = async (connectorIds: string[]) => {
@@ -4085,6 +4118,7 @@
     const registry: Record<string, RuntimeConditionDef> = {};
     graphNodes.forEach((node) => {
       if (node.data.kind !== "condition") return;
+      if (node.data.fromNetwork) return;
       const name = resolveNodeName(node);
       const code = getConditionCode(node.id);
       const compiled = compileConditionCode(code);
@@ -5337,6 +5371,7 @@
     nodes = materializeLockedReferencedRiAsRootStatic(positionedNodes);
     chainDeployError = null;
     chainDeployStatus = null;
+    await hydrateMissingAttachedNetworkConditions(nodes, edges);
     const warnings = compileActiveGraph();
     if (warnings && warnings.length) {
       chainDeployError = warnings.join(" ");
@@ -5432,16 +5467,12 @@
     }
 
     if (localConditionNodes.length) {
+      const localConditionRuntime = collectLocalConditionRuntime(localConditionNodes);
       deployedRegistry = {
         ...deployedRegistry,
         conditions: {
           ...deployedRegistry.conditions,
-          ...Object.fromEntries(
-            localConditionNodes.map((node) => [
-              resolveNodeName(node),
-              { argc: 0, check: alwaysTrueConditionCheck } satisfies RuntimeConditionDef,
-            ]),
-          ),
+          ...localConditionRuntime,
         },
       };
       deployedLibrary = {
@@ -5998,6 +6029,7 @@
           ),
         })),
         conditionLabel: particle.conditionName ? particle.conditionName : null,
+        conditionArgs: particle.conditionName ? [...(particle.conditionArgs ?? [])] : [],
         sourceId: feature.name,
         networkId: feature.name,
         fromNetwork: true,
@@ -6380,6 +6412,120 @@
     return node;
   };
 
+  const parseConditionArgsFromStudioEdge = (edge: Edge | null | undefined): number[] => {
+    if (!edge?.data || typeof edge.data !== "object" || Array.isArray(edge.data)) return [];
+    const data = edge.data as { conditionArgs?: unknown; condition_args?: unknown };
+    const raw = data.conditionArgs ?? data.condition_args;
+    if (!Array.isArray(raw)) return [];
+    return raw
+      .map((item) => Number(item))
+      .filter((item) => Number.isFinite(item))
+      .map((item) => Math.trunc(item));
+  };
+
+  const formatConditionArgsInput = (edge: Edge | null | undefined) =>
+    parseConditionArgsFromStudioEdge(edge).join(", ");
+
+  const getConditionExpectedArgCount = (conditionNode: StudioNode | null): number | null => {
+    if (!conditionNode || conditionNode.data.kind !== "condition") return null;
+    const conditionName = resolveNodeName(conditionNode);
+    const deployed = deployedRegistry.conditions[conditionName];
+    if (deployed) return Math.max(0, deployed.argc);
+    if (conditionNode.data.fromNetwork && !conditionCodeById.has(conditionNode.id)) return null;
+    const source = getConditionCode(conditionNode.id);
+    const parsed = parseSoliditySnippet(source);
+    if (!parsed.ok) return null;
+    return Math.max(0, inferArgsCountFromSnippet(parsed.value).minArgsCount);
+  };
+
+  const updateConditionArgsOnConnector = (connectorId: string, rawArgs: string) => {
+    const connector = getFeatureNode(connectorId);
+    if (!connector || !isConnectorKind(connector.data.kind) || connector.data.fromNetwork) return;
+    const conditionEdge = getConditionEdgeForConnector(connectorId);
+    if (!conditionEdge) return;
+    const conditionArgs = parseArgsInput(rawArgs);
+    edges = edges.map((edge) => {
+      if (edge.id !== conditionEdge.id) return edge;
+      const previousData =
+        edge.data && typeof edge.data === "object" && !Array.isArray(edge.data)
+          ? (edge.data as Record<string, unknown>)
+          : {};
+      return {
+        ...edge,
+        data: {
+          ...previousData,
+          conditionArgs,
+        },
+      };
+    });
+    nodes = nodes.map((node) =>
+      node.id === connectorId && isConnectorKind(node.data.kind)
+        ? {
+            ...node,
+            data: {
+              ...node.data,
+              conditionArgs,
+            },
+          }
+        : node,
+    );
+  };
+
+  const detachConditionFromConnector = (
+    connectorId: string,
+    options: { schedule?: boolean } = {},
+  ) => {
+    const conditionEdge = getConditionEdgeForConnector(connectorId);
+    const sourceId = conditionEdge?.source ?? null;
+    if (conditionEdge) {
+      const nextEdges = edges.filter((edge) => edge.id !== conditionEdge.id);
+      const sourceStillUsed = sourceId
+        ? nextEdges.some((edge) => edge.source === sourceId || edge.target === sourceId)
+        : false;
+      const sourceNode = sourceId ? (nodesById[sourceId] ?? null) : null;
+      const removeHiddenConditionNode =
+        Boolean(sourceNode?.hidden) && sourceNode?.data.kind === "condition" && !sourceStillUsed;
+
+      edges = nextEdges;
+      nodes = nodes
+        .filter((node) => !(removeHiddenConditionNode && node.id === sourceId))
+        .map((node) =>
+          node.id === connectorId && isConnectorKind(node.data.kind)
+            ? {
+                ...node,
+                data: {
+                  ...node.data,
+                  conditionLabel: null,
+                  conditionArgs: [],
+                },
+              }
+            : node,
+        );
+
+      if (removeHiddenConditionNode && sourceId) {
+        conditionCodeById.delete(sourceId);
+      }
+    } else {
+      nodes = nodes.map((node) =>
+        node.id === connectorId && isConnectorKind(node.data.kind)
+          ? {
+              ...node,
+              data: {
+                ...node.data,
+                conditionLabel: null,
+                conditionArgs: [],
+              },
+            }
+          : node,
+      );
+    }
+
+    if (options.schedule ?? true) {
+      syncConnectorRowPreview(connectorId, { schedule: false });
+      scheduleLayout();
+    }
+  };
+
   const getFeatureNode = (featureId: string) => nodes.find((node) => node.id === featureId) ?? null;
 
   const createPlaceholderConnectorRows = (count: number): ConnectorRowPreview[] =>
@@ -6428,7 +6574,17 @@
     // it with local placeholders.
     if (connector.data.fromNetwork && dimensionNodes.length === 0) {
       const currentConditionLabel = connector.data.conditionLabel ?? null;
-      if (currentConditionLabel === nextConditionLabel) return;
+      const currentConditionArgs = connector.data.conditionArgs ?? [];
+      const nextConditionArgs = parseConditionArgsFromStudioEdge(
+        getConditionEdgeForConnector(connectorId),
+      );
+      if (
+        currentConditionLabel === nextConditionLabel &&
+        currentConditionArgs.length === nextConditionArgs.length &&
+        currentConditionArgs.every((arg, index) => arg === nextConditionArgs[index])
+      ) {
+        return;
+      }
       nodes = nodes.map((node) =>
         node.id === connectorId
           ? {
@@ -6436,6 +6592,7 @@
               data: {
                 ...node.data,
                 conditionLabel: nextConditionLabel,
+                conditionArgs: nextConditionArgs,
               },
             }
           : node,
@@ -6449,16 +6606,22 @@
     const fallbackCount = Math.max(1, Math.round(connector.data.dimensions ?? 1));
     const nextRows = buildConnectorRows(connectorId, fallbackCount);
     const nextDimensions = Math.max(fallbackCount, nextRows.length, 1);
+    const nextConditionArgs = parseConditionArgsFromStudioEdge(
+      getConditionEdgeForConnector(connectorId),
+    );
     let changed = false;
     const nextNodes = nodes.map((node) => {
       if (node.id !== connectorId) return node;
       const currentRows = node.data.connectorRows ?? [];
       const currentDimensions = Math.max(1, Math.round(node.data.dimensions ?? 1));
       const currentConditionLabel = node.data.conditionLabel ?? null;
+      const currentConditionArgs = node.data.conditionArgs ?? [];
       if (
         connectorRowsEqual(currentRows, nextRows) &&
         currentDimensions === nextDimensions &&
-        currentConditionLabel === nextConditionLabel
+        currentConditionLabel === nextConditionLabel &&
+        currentConditionArgs.length === nextConditionArgs.length &&
+        currentConditionArgs.every((arg, index) => arg === nextConditionArgs[index])
       ) {
         return node;
       }
@@ -6470,6 +6633,7 @@
           dimensions: nextDimensions,
           connectorRows: nextRows,
           conditionLabel: nextConditionLabel,
+          conditionArgs: nextConditionArgs,
         },
       };
     });
@@ -6962,11 +7126,11 @@
     if (!connector || !isConnectorKind(connector.data.kind) || connector.data.fromNetwork) {
       return false;
     }
-
-    const existingEdge = getConditionEdgeForConnector(connectorId);
-    if (existingEdge) {
-      edges = edges.filter((edge) => edge.id !== existingEdge.id);
+    if (input.status === "network") {
+      void hydrateDeployedRuntimeFromChain("condition", input.networkId ?? input.label);
     }
+
+    detachConditionFromConnector(connectorId, { schedule: false });
 
     const existingConditionNode =
       input.status === "network" && input.networkId
@@ -6985,6 +7149,8 @@
         id: `condition-link-${crypto.randomUUID()}`,
         type: "condition",
         draggable: false,
+        hidden: true,
+        selected: false,
         position: {
           x: connector.position.x,
           y: connector.position.y - 140,
@@ -7000,7 +7166,13 @@
 
     if (!existingConditionNode) {
       nodes = [...nodes, conditionNode];
-      conditionCodeById.set(conditionNode.id, defaultConditionDraftCode);
+      if (input.status === "draft") {
+        conditionCodeById.set(conditionNode.id, defaultConditionDraftCode);
+      }
+    } else if (!existingConditionNode.hidden || existingConditionNode.selected) {
+      nodes = nodes.map((node) =>
+        node.id === existingConditionNode.id ? { ...node, hidden: true, selected: false } : node,
+      );
     }
 
     const edgeExists = edges.some(
@@ -7019,10 +7191,23 @@
           sourceHandle: "out",
           target: connectorId,
           targetHandle: "condition",
+          data: { conditionArgs: [] },
         },
       ];
     }
 
+    nodes = nodes.map((node) =>
+      node.id === connectorId && isConnectorKind(node.data.kind)
+        ? {
+            ...node,
+            data: {
+              ...node.data,
+              conditionLabel: input.label,
+              conditionArgs: [],
+            },
+          }
+        : node,
+    );
     setConnectorDropTarget({ type: "condition", connectorId });
     syncConnectorRowPreview(connectorId, { schedule: false });
     scheduleLayout();
@@ -7088,6 +7273,20 @@
       });
       if (attached) return;
     }
+    if (item.kind === "condition") {
+      const connectorId = resolvePreferredEditableConnectorId();
+      if (connectorId) {
+        const attached = attachConditionToConnector(connectorId, {
+          label: getLibraryRegistryName(item),
+          status: "network",
+          networkId: getLibraryRegistryName(item),
+          sourceId: item.id,
+        });
+        if (attached) return;
+      }
+      libraryCreateActionError = "Select a connector before adding a condition.";
+      return;
+    }
     const registryName = getLibraryRegistryName(item);
     const nodePosition = position ?? {
       x: 160 + Math.round(Math.random() * 200),
@@ -7112,7 +7311,7 @@
     const node: StudioNode = {
       id: `${item.kind}-${item.id}-${crypto.randomUUID()}`,
       position: nodePosition,
-      type: item.kind === "condition" ? "condition" : undefined,
+      type: undefined,
       data: {
         label: item.name,
         kind: item.kind,
@@ -7123,9 +7322,6 @@
       },
     };
     nodes = [...nodes, node];
-    if (item.kind === "condition") {
-      conditionCodeById.set(node.id, defaultConditionDraftCode);
-    }
   };
 
   const addLibraryNode = async (
@@ -7164,6 +7360,18 @@
       });
       if (attached) return;
     }
+    if (kind === "condition") {
+      const connectorId = resolvePreferredEditableConnectorId();
+      if (connectorId) {
+        const attached = attachConditionToConnector(connectorId, {
+          label,
+          status: "draft",
+        });
+        if (attached) return;
+      }
+      libraryCreateActionError = "Select a connector before adding a condition.";
+      return;
+    }
     const nodePosition = position ?? getCanvasCenter();
     const node: StudioNode = {
       id: `${kind}-quick-${crypto.randomUUID()}`,
@@ -7187,9 +7395,6 @@
     };
     nodes = nodes.map((existing) => ({ ...existing, selected: false }));
     nodes = [...nodes, node];
-    if (kind === "condition") {
-      conditionCodeById.set(node.id, defaultConditionDraftCode);
-    }
     if (kind === "feature" || kind === "connector") {
       applyDimensionChange(node.id, 1);
     }
@@ -9232,6 +9437,80 @@
                       {connectorRiMutability.lockToggleDisabled ? " disabled" : " enabled"}.
                     </div>
                   </div>
+                  {@const attachedConditionEdge = getConditionEdgeForConnector(selectedNode.id)}
+                  {@const attachedConditionNode = getAttachedConditionNodeForConnector(
+                    selectedNode.id,
+                  )}
+                  {@const conditionExpectedArgCount =
+                    getConditionExpectedArgCount(attachedConditionNode)}
+                  {@const conditionArgsValue = formatConditionArgsInput(attachedConditionEdge)}
+                  {@const conditionArgsCount =
+                    parseConditionArgsFromStudioEdge(attachedConditionEdge).length}
+                  <div class="inspector-section">
+                    <div class="inspector-section-title">Condition arguments</div>
+                    {#if attachedConditionNode && attachedConditionEdge}
+                      <div class="inspector-row">
+                        <span>Condition</span>
+                        <span>{resolveNodeName(attachedConditionNode)}</span>
+                      </div>
+                      <label class="inspector-label" for={`condition-args-${selectedNode.id}`}>
+                        Args
+                      </label>
+                      {#if !isReadOnly}
+                        <input
+                          id={`condition-args-${selectedNode.id}`}
+                          class="inspector-input inspector-input--compact"
+                          value={conditionArgsValue}
+                          placeholder={conditionExpectedArgCount === null
+                            ? "0, 1"
+                            : conditionExpectedArgCount === 0
+                              ? "no args"
+                              : Array.from(
+                                  { length: conditionExpectedArgCount },
+                                  (_, index) => index,
+                                ).join(", ")}
+                          oninput={(event) => {
+                            const target = event.target as HTMLInputElement | null;
+                            updateConditionArgsOnConnector(selectedNode.id, target?.value ?? "");
+                          }}
+                        />
+                      {:else}
+                        <div class="inspector-row">
+                          <span>Args</span>
+                          <span>{conditionArgsValue || "none"}</span>
+                        </div>
+                      {/if}
+                      {#if conditionExpectedArgCount !== null}
+                        <div
+                          class={`inspector-hint ${
+                            conditionArgsCount === conditionExpectedArgCount ? "" : "is-warning"
+                          }`}
+                        >
+                          Expects {conditionExpectedArgCount} int32 arg{conditionExpectedArgCount ===
+                          1
+                            ? ""
+                            : "s"}; currently {conditionArgsCount}.
+                        </div>
+                      {:else}
+                        <div class="inspector-hint">
+                          Enter comma-separated int32 values passed to the condition at runtime.
+                        </div>
+                      {/if}
+                      {#if !isReadOnly}
+                        <button
+                          type="button"
+                          class="inspector-remove"
+                          onclick={() => detachConditionFromConnector(selectedNode.id)}
+                        >
+                          Remove condition
+                        </button>
+                      {/if}
+                    {:else}
+                      <div class="inspector-hint">
+                        Drop or create a condition for this connector before setting condition args.
+                      </div>
+                    {/if}
+                  </div>
                   <div class="inspector-section">
                     <div class="inspector-section-title">Connector dimensions</div>
                     {#if getSortedConnectorDimensions(selectedNode.id).length === 0}
@@ -10609,6 +10888,10 @@
 
   .inspector-hint {
     @apply text-[0.6rem] text-white/45;
+  }
+
+  .inspector-hint.is-warning {
+    @apply text-amber-200/80;
   }
 
   .inspector-transform-list {

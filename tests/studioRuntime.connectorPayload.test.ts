@@ -78,6 +78,45 @@ describe("studioRuntime connector payload preparation", () => {
     expect(runtime.warnings).toEqual([]);
   });
 
+  it("does not block connector payloads when condition metadata is not locally cached", () => {
+    const runtime = buildStudioRuntime(
+      {
+        nodes: [
+          {
+            id: "root",
+            data: { kind: "connector", label: "root", dimensions: 1 },
+          },
+          {
+            id: "condition",
+            data: {
+              kind: "condition",
+              label: "test_condition_draft_studio_20260525214406_04aa",
+              networkId: "test_condition_draft_studio_20260525214406_04aa",
+              fromNetwork: true,
+            },
+          },
+        ],
+        edges: [
+          {
+            source: "condition",
+            sourceHandle: "out",
+            target: "root",
+            targetHandle: "condition",
+            data: { conditionArgs: [1779748133] },
+          },
+        ],
+      },
+      { rootLabel: "root", rootParticleId: "root" },
+    );
+
+    const payload = toProtocolConnectorPayload(runtime.registry.connectors.root!);
+    expect(payload.condition_name).toBe("test_condition_draft_studio_20260525214406_04aa");
+    expect(payload.condition_args).toEqual([1779748133]);
+    expect(runtime.warnings).not.toContain(
+      "Missing condition: test_condition_draft_studio_20260525214406_04aa (connector root).",
+    );
+  });
+
   it("preserves deployed condition args for network connector overrides", () => {
     const runtime = buildStudioRuntime(
       {

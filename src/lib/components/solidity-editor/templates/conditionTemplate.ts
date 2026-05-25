@@ -26,7 +26,7 @@ contract ${input.name} is ConditionBase
 {
     constructor(address registryAddr) ConditionBase(registryAddr, "${input.name}", ${argsCount}) {}
 
-    function check(uint32 [] calldata args) view external returns (bool)
+    function check(int32 [] calldata args) view external returns (bool)
     {
         require(args.length == this.getArgsCount(), "wrong number of arguments");
 ${codeIndented.length > 0 ? codeIndented : "        return true;"}
