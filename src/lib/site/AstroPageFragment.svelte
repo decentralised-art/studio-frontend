@@ -159,6 +159,10 @@
     margin-top: clamp(4rem, 7vw, 6.5rem) !important;
   }
 
+  :global(.dcn-astro-fragment .docs-tutorial #vocabulary) {
+    margin-top: clamp(5.5rem, 9vw, 8rem) !important;
+  }
+
   :global(.dcn-astro-fragment .docs-tutorial h3[id]) {
     scroll-margin-top: calc(var(--nav-offset, 3.5rem) + 1.5rem);
   }
