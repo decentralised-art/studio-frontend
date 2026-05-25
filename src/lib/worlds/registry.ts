@@ -1,6 +1,10 @@
 import { MUSIC_SCORE_PLUGIN_ID } from "$lib/score/codebook";
 import type { ScorePluginRuntimeData } from "$lib/score/types";
-import { MIDI_CLIP_PLUGIN_ID, MIDI_QUAD_FORMAT_HASH } from "$lib/studio/plugins/registry";
+import {
+  MIDI_CLIP_PLUGIN_ID,
+  MIDI_QUAD_FORMAT_HASH,
+  TONE_WORLD_PLUGIN_ID,
+} from "$lib/studio/plugins/registry";
 import type { StudioPluginRuntimeData } from "$lib/studio/plugins/runtime";
 import {
   TONE_WORLD_ACCEPTED_SCALARS,
@@ -207,7 +211,7 @@ export const TONE_WORLD: WorldDescriptor = {
   version: "0.1.0",
   entry: TONE_WORLD_ENTRY,
   runtime: "iframe",
-  acceptedPluginIds: [],
+  acceptedPluginIds: [TONE_WORLD_PLUGIN_ID],
   acceptedScalars: [...TONE_WORLD_ACCEPTED_SCALARS],
   excludedConnectorNames: [...TONE_WORLD_EXCLUDED_CONNECTORS],
   requiredScalars: [...TONE_WORLD_REQUIRED_SCALARS],

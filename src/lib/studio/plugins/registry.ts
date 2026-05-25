@@ -10,6 +10,7 @@ export type StudioPluginDescriptor = {
 };
 
 export const MIDI_CLIP_PLUGIN_ID = "midi-clip-export-v1";
+export const TONE_WORLD_PLUGIN_ID = "tone-world-v1";
 export const MIDI_QUAD_FORMAT_HASH = normalizeFormatHash(
   "0xfb01a34414c7cfd27fe4658f53b5b39361da407b46848efac553fd2d8ad9b411",
 );
@@ -31,6 +32,13 @@ const BUILTIN_STUDIO_PLUGINS: StudioPluginDescriptor[] = [
     summary:
       "Renders compatible connector/RIs output as MusicXML 4.0 notation in a sandboxed world.",
     supportedFormatHashes: MUSIC_SCORE_PLUGIN_FORMAT_HASHES,
+    status: "alpha",
+  },
+  {
+    id: TONE_WORLD_PLUGIN_ID,
+    name: "Tone World",
+    summary: "Runs compatible connector/RIs output inside the Tone World audiovisual runtime.",
+    supportedFormatHashes: [],
     status: "alpha",
   },
 ];

@@ -3,6 +3,7 @@
   import { browser } from "$app/environment";
   import { Handle, NodeResizer, Position, type Node, type NodeProps } from "@xyflow/svelte";
   import ScorePluginNodeBody from "$lib/components/studio/ScorePluginNodeBody.svelte";
+  import ToneWorldPluginNodeBody from "$lib/components/studio/ToneWorldPluginNodeBody.svelte";
   import Button from "$lib/components/ui/Button.svelte";
   import {
     formatMidiSkippedReason,
@@ -21,6 +22,7 @@
     pathStartsWithAnyConnectorPrefix,
     type StudioPluginRuntimeData,
   } from "$lib/studio/plugins/runtime";
+  import { TONE_WORLD_PLUGIN_ID } from "$lib/studio/plugins/registry";
 
   type PluginNodeData = {
     label: string;
@@ -48,6 +50,10 @@
   const groupsCount = $derived(runtimeData?.midiGroups.length ?? 0);
   const pluginId = $derived(data.sourceId ?? runtimeData?.pluginId ?? "");
   const isScorePlugin = $derived(pluginId === MUSIC_SCORE_PLUGIN_ID);
+  const isToneWorldPlugin = $derived(pluginId === TONE_WORLD_PLUGIN_ID);
+  const resizeColor = $derived(
+    isScorePlugin ? "#67d6ff" : isToneWorldPlugin ? "#f59e0b" : "#34d399",
+  );
   const tempo = $derived(midiClip?.tempo ?? 120);
   const channelCount = $derived(midiClip?.channels ?? 1);
   const selectedConnectorContextNames = $derived(data.selectedConnectorContextNames ?? []);
@@ -399,7 +405,7 @@
     isVisible={selected}
     minWidth={360}
     minHeight={260}
-    color="#34d399"
+    color={resizeColor}
     handleClass="plugin-resize-handle"
     lineClass="plugin-resize-line"
   />
@@ -412,6 +418,13 @@
   {/if}
   {#if isScorePlugin}
     <ScorePluginNodeBody
+      label={data.label}
+      {runtimeData}
+      {selectedConnectorContextNames}
+      {selectedConnectorContextPathPrefixes}
+    />
+  {:else if isToneWorldPlugin}
+    <ToneWorldPluginNodeBody
       label={data.label}
       {runtimeData}
       {selectedConnectorContextNames}
