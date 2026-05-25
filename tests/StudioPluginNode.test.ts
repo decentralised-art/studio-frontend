@@ -4,6 +4,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { TONE_WORLD_PLUGIN_ID } from "../src/lib/studio/plugins/registry";
 import type { StudioPluginRuntimeData } from "../src/lib/studio/plugins/runtime";
 import {
   SALAMANDER_GRAND_PIANO_ATTRIBUTION,
@@ -256,6 +257,65 @@ const renderScorePluginNode = async (
   });
 };
 
+const toneStream = (group: string, field: string, data: number[]) => ({
+  feature_path: `/tone_root:0/${group}:0/${field}:0`,
+  data,
+});
+
+const toneRuntimeData: StudioPluginRuntimeData = {
+  pluginId: TONE_WORLD_PLUGIN_ID,
+  connectorTargets: ["tone_root"],
+  streams: [
+    toneStream("notes", "onset_tick", [0, 2520]),
+    toneStream("notes", "duration_tick", [2520, 2520]),
+    toneStream("notes", "pitch_midi", [58, 61]),
+    toneStream("notes", "velocity_midi", [96, 88]),
+    toneStream("timbre", "tone_sample_set", [2]),
+    toneStream("timbre", "tone_sample_index", [1, 2]),
+    toneStream("visual", "tone_visual_variant", [3]),
+    toneStream("visual", "tone_color_r", [1.1]),
+    toneStream("visual", "tone_color_g", [0.6]),
+    toneStream("visual", "tone_color_b", [0.35]),
+    toneStream("visual", "tone_shape_sides", [5]),
+    toneStream("visual", "tone_reactivity", [2]),
+  ],
+  midiGroups: [],
+};
+
+const renderToneWorldPluginNode = async (
+  pluginData: StudioPluginRuntimeData | null = toneRuntimeData,
+) => {
+  const StudioPluginNode = await loadComponent();
+
+  return render(StudioPluginNode, {
+    props: {
+      id: "plugin-node-tone",
+      type: "plugin",
+      selected: true,
+      dragging: false,
+      zIndex: 0,
+      selectable: true,
+      deletable: true,
+      draggable: true,
+      isConnectable: true,
+      positionAbsoluteX: 0,
+      positionAbsoluteY: 0,
+      width: undefined,
+      height: undefined,
+      sourcePosition: undefined,
+      targetPosition: undefined,
+      dragHandle: undefined,
+      parentId: undefined,
+      data: {
+        label: "Tone World",
+        sourceId: TONE_WORLD_PLUGIN_ID,
+        pluginData: pluginData ? { ...pluginData, pluginId: TONE_WORLD_PLUGIN_ID } : undefined,
+        pluginTargets: pluginData?.connectorTargets ?? ["tone_root"],
+      },
+    },
+  });
+};
+
 describe("StudioPluginNode", () => {
   it("exposes unbounded corner and edge resize controls when selected", async () => {
     await renderPluginNode(true);
@@ -318,6 +378,24 @@ describe("StudioPluginNode", () => {
     expect(screen.getByTitle("Music Score MusicXML world preview")).toBeInTheDocument();
     expect(osmdMock.load).not.toHaveBeenCalled();
     expect(osmdMock.render).not.toHaveBeenCalled();
+  });
+
+  it("renders Tone World plugin data through the Tone World iframe runtime", async () => {
+    await renderToneWorldPluginNode();
+
+    expect(screen.queryByRole("button", { name: "Play" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Download MIDI" })).not.toBeInTheDocument();
+    expect(screen.getByTitle("Tone World preview")).toBeInTheDocument();
+    expect(
+      screen.getByText(/12 streams .* 17 values .* audio \+ visual layer/),
+    ).toBeInTheDocument();
+  });
+
+  it("shows a Tone World run prompt before plugin runtime data is available", async () => {
+    await renderToneWorldPluginNode(null);
+
+    expect(screen.getByText("Run the flow to generate Tone World data.")).toBeInTheDocument();
+    expect(screen.queryByTitle("Tone World preview")).not.toBeInTheDocument();
   });
 
   it("renders an empty score staff before plugin runtime data is available", async () => {
