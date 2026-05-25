@@ -43,6 +43,8 @@ export type StudioNodeData = {
         status?: "draft" | "network";
       }
   >;
+  conditionLabel?: string | null;
+  conditionArgs?: number[];
   networkId?: string;
   fromNetwork?: boolean;
   riStart?: number;
@@ -457,12 +459,28 @@ const resolveConditionForFeature = (featureId: string, graph: StudioGraph) => {
     const source = graph.nodes.find((node) => node.id === item.source);
     return source?.data.kind === "condition";
   });
-  if (!edge?.source) return null;
-  const source = graph.nodes.find((node) => node.id === edge.source);
-  if (!source || source.data.kind !== "condition") return null;
+  if (edge?.source) {
+    const source = graph.nodes.find((node) => node.id === edge.source);
+    if (source?.data.kind === "condition") {
+      return {
+        name: resolveNodeName(source),
+        args: parseConditionArgsFromEdge(edge),
+      };
+    }
+  }
+
+  const feature = graph.nodes.find((node) => node.id === featureId);
+  if (!feature || !isConnectorKind(feature.data.kind)) return null;
+  const conditionName = `${feature.data.conditionLabel ?? ""}`.trim();
+  if (!conditionName) return null;
   return {
-    name: resolveNodeName(source),
-    args: parseConditionArgsFromEdge(edge),
+    name: conditionName,
+    args: Array.isArray(feature.data.conditionArgs)
+      ? feature.data.conditionArgs
+          .map((arg) => Number(arg))
+          .filter((arg) => Number.isFinite(arg))
+          .map((arg) => Math.trunc(arg))
+      : undefined,
   };
 };
 
@@ -677,11 +695,7 @@ const validateConnectorRegistry = (registry: RuntimeRegistry, warnings: string[]
 
     if (connector.conditionName) {
       const condition = registry.conditions[connector.conditionName];
-      if (!condition) {
-        warnings.push(
-          `Missing condition: ${connector.conditionName} (connector ${connector.name}).`,
-        );
-      } else if ((connector.conditionArgs ?? []).length !== condition.argc) {
+      if (condition && (connector.conditionArgs ?? []).length !== condition.argc) {
         warnings.push(
           `ConditionArgumentsMismatch: ${connector.conditionName} (connector ${connector.name}).`,
         );

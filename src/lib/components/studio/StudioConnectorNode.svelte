@@ -17,6 +17,7 @@
     dimensions?: number;
     connectorRows?: ConnectorRowPreview[];
     conditionLabel?: string | null;
+    conditionArgs?: number[];
     boundKind?: "static" | "forwarded" | null;
     boundSlotLabel?: string | null;
     boundOwnerName?: string | null;
@@ -51,6 +52,9 @@
     typeof data.selectedDimensionIndex === "number" ? data.selectedDimensionIndex : null,
   );
   const conditionLabel = $derived((data.conditionLabel ?? "").trim());
+  const conditionArgsDisplay = $derived(
+    (data.conditionArgs ?? []).length ? `(${(data.conditionArgs ?? []).join(", ")})` : "",
+  );
   const boundKind = $derived(data.boundKind ?? null);
   const boundSlotLabel = $derived((data.boundSlotLabel ?? "").trim());
   const boundOwnerName = $derived((data.boundOwnerName ?? "").trim());
@@ -174,7 +178,7 @@
   >
     <span class="condition-label">Condition</span>
     {#if conditionLabel}
-      <span class="condition-value">{conditionLabel}</span>
+      <span class="condition-value">{conditionLabel} {conditionArgsDisplay}</span>
     {:else}
       <span class="condition-empty">drop condition</span>
     {/if}

@@ -54,6 +54,7 @@ export type ApiGraphInputNodeData = {
   transformations?: ApiGraphTransformationInstance[];
   connectorRows?: ApiGraphConnectorRowPreview[];
   conditionLabel?: string | null;
+  conditionArgs?: number[];
   networkId?: string;
   fromNetwork?: boolean;
   definitionRole?: "root" | "member" | null;
@@ -391,7 +392,10 @@ export const buildApiResolvedConnectorTreePreview = ({
       connector_rows: node.data.connectorRows ?? [],
       condition: node.data.conditionLabel ?? "",
       ...(node.data.conditionLabel
-        ? { condition_args: conditionArgsByConnectorId.get(node.id) ?? [] }
+        ? {
+            condition_args:
+              conditionArgsByConnectorId.get(node.id) ?? node.data.conditionArgs ?? [],
+          }
         : {}),
       from_network: Boolean(node.data.fromNetwork),
       definition_role: node.data.definitionRole ?? null,
@@ -940,6 +944,7 @@ export const buildApiGraphFromPreviewJson = ({
     const selfStaticRiFromApi = resolveConnectorSelfStaticRi(staticRiFromApi);
     const conditionNameFromApi =
       typeof connectorBody.condition_name === "string" ? connectorBody.condition_name.trim() : "";
+    const conditionArgsFromApi = parseIntegerArray(connectorBody.condition_args);
 
     const connectorNode: ApiGraphNode = {
       id: `feature-${idFactory()}`,
@@ -959,6 +964,7 @@ export const buildApiGraphFromPreviewJson = ({
         fromNetwork: connectorIsReadOnly,
         tabRoot: connectorName === rootConnectorName,
         conditionLabel: conditionNameFromApi || null,
+        conditionArgs: conditionArgsFromApi,
         hideOutlets: connectorIsReadOnly && (adjacency.get(connectorName)?.length ?? 0) === 0,
         riStart: selfStaticRiFromApi?.startPoint ?? 0,
         riShift: selfStaticRiFromApi?.transformationShift ?? 0,
@@ -1007,6 +1013,7 @@ export const buildApiGraphFromPreviewJson = ({
           id: `condition-${idFactory()}`,
           type: "condition",
           draggable: false,
+          hidden: true,
           position: {
             x: connectorNode.position.x,
             y: connectorNode.position.y - 120,
@@ -1032,7 +1039,7 @@ export const buildApiGraphFromPreviewJson = ({
         sourceHandle: "out",
         target: connectorNode.id,
         targetHandle: "condition",
-        ...(conditionArgs.length ? { data: { conditionArgs } } : {}),
+        data: { conditionArgs },
       });
     }
 
