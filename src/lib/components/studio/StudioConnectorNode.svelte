@@ -1,11 +1,6 @@
 <script lang="ts">
-  import {
-    Handle,
-    Position,
-    type Node,
-    type NodeProps,
-    useUpdateNodeInternals,
-  } from "@xyflow/svelte";
+  import { Handle, Position, type Node, type NodeProps, useStore } from "@xyflow/svelte";
+  import { onMount } from "svelte";
 
   type ConnectorRowPreview = {
     dimension: number;
@@ -44,7 +39,9 @@
   type ConnectorNode = Node<ConnectorNodeData, "connector">;
 
   const { id, data, selected }: NodeProps<ConnectorNode> = $props();
-  const updateNodeInternals = useUpdateNodeInternals();
+  const flowStore = useStore();
+  let mounted = false;
+  let updateNodeInternalsFrame: number | null = null;
 
   const dimensionCount = $derived(Math.max(1, Math.round(data.dimensions ?? 1)));
   const selectedClass = $derived(selected ? "is-selected" : "");
@@ -109,6 +106,36 @@
       }),
     );
   };
+  const cancelPendingNodeInternalsUpdate = () => {
+    if (updateNodeInternalsFrame === null || typeof cancelAnimationFrame !== "function") return;
+    cancelAnimationFrame(updateNodeInternalsFrame);
+    updateNodeInternalsFrame = null;
+  };
+  const scheduleNodeInternalsUpdate = () => {
+    if (!mounted || typeof requestAnimationFrame !== "function") return;
+    cancelPendingNodeInternalsUpdate();
+    const nodeId = id;
+    updateNodeInternalsFrame = requestAnimationFrame(() => {
+      updateNodeInternalsFrame = null;
+      if (!mounted) return;
+      const nodeElement = flowStore.domNode?.querySelector<HTMLDivElement>(
+        `.svelte-flow__node[data-id="${nodeId}"]`,
+      );
+      if (!nodeElement) return;
+      flowStore.updateNodeInternals(
+        new Map([
+          [
+            nodeId,
+            {
+              id: nodeId,
+              nodeElement,
+              force: true,
+            },
+          ],
+        ]),
+      );
+    });
+  };
 
   $effect(() => {
     touchDeps(
@@ -119,8 +146,17 @@
       isRootConnector,
     );
     if (dimensionCount >= 0) {
-      updateNodeInternals(id);
+      scheduleNodeInternalsUpdate();
     }
+  });
+
+  onMount(() => {
+    mounted = true;
+    scheduleNodeInternalsUpdate();
+    return () => {
+      mounted = false;
+      cancelPendingNodeInternalsUpdate();
+    };
   });
 </script>
 
