@@ -1,6 +1,5 @@
 import { createDcnClient, isDcnApiError } from "$lib/chain/dcnClient";
 import { ChainApiRequestError } from "$lib/chain/registryApi";
-import { buildChainApiUrl } from "$lib/url/url";
 
 export const CHAIN_FEED_EVENT_TYPES = [
   "connector_added",
@@ -123,20 +122,12 @@ export type GetChainFeedPageOptions = {
   includeUnfinalized?: boolean;
 };
 
-type ChainFeedEventSourceLike = {
-  addEventListener: (type: string, listener: (event: MessageEvent<string>) => void) => void;
-  removeEventListener?: (type: string, listener: (event: MessageEvent<string>) => void) => void;
-  close: () => void;
-  onerror: ((event: Event) => void) | null;
-};
-
 export type CreateChainFeedStreamOptions = {
   sinceSeq: number;
   limit: number;
   onDelta: (delta: ChainFeedStreamDelta, event: MessageEvent<string>) => void;
   onMeta?: (meta: ChainFeedStreamMeta, event: MessageEvent<string>) => void;
   onError?: (error: Error, event?: Event | MessageEvent<string>) => void;
-  eventSourceFactory?: (url: string) => ChainFeedEventSourceLike;
 };
 
 export type ChainFeedStreamSubscription = {
@@ -413,72 +404,145 @@ export const getChainFeedPage = async (
   }
 };
 
-const getEventSourceFactory = (
-  factory: CreateChainFeedStreamOptions["eventSourceFactory"],
-): ((url: string) => ChainFeedEventSourceLike) => {
-  if (factory) return factory;
-  if (typeof EventSource === "undefined") {
-    throw new ChainFeedValidationError("EventSource is not available in this environment.");
+const dispatchSseEvent = (
+  eventType: string,
+  data: string,
+  options: CreateChainFeedStreamOptions,
+) => {
+  const event = { type: eventType, data } as MessageEvent<string>;
+  try {
+    if (eventType === "stream_meta") {
+      options.onMeta?.(parseChainFeedStreamMetaData(data), event);
+      return;
+    }
+    options.onDelta(parseChainFeedStreamDeltaData(data), event);
+  } catch (error) {
+    options.onError?.(
+      error instanceof Error ? error : new Error("Invalid chain feed stream frame."),
+      event,
+    );
   }
-  return (url: string) => new EventSource(url);
+};
+
+const dispatchSseFrame = (frame: string, options: CreateChainFeedStreamOptions) => {
+  let eventType = "message";
+  const dataLines: string[] = [];
+
+  for (const rawLine of frame.split("\n")) {
+    if (!rawLine || rawLine.startsWith(":")) continue;
+    const separatorIndex = rawLine.indexOf(":");
+    const field = separatorIndex === -1 ? rawLine : rawLine.slice(0, separatorIndex);
+    let value = separatorIndex === -1 ? "" : rawLine.slice(separatorIndex + 1);
+    if (value.startsWith(" ")) value = value.slice(1);
+
+    if (field === "event") {
+      eventType = value || "message";
+    } else if (field === "data") {
+      dataLines.push(value);
+    }
+  }
+
+  if (dataLines.length === 0) return;
+  dispatchSseEvent(eventType, dataLines.join("\n"), options);
+};
+
+const normalizeSseLineEndings = (value: string): string =>
+  value.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+
+const findSseFrameBoundary = (buffer: string): { index: number; length: number } | null => {
+  const match = /\r\n\r\n|\n\n|\r\r/.exec(buffer);
+  return match ? { index: match.index, length: match[0].length } : null;
+};
+
+const consumeSseResponse = async (
+  response: Response,
+  options: CreateChainFeedStreamOptions,
+  isClosed: () => boolean,
+) => {
+  if (!response.body) {
+    throw new ChainFeedValidationError("Chain feed stream response did not include a body.");
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  try {
+    while (!isClosed()) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let boundary = findSseFrameBoundary(buffer);
+      while (boundary) {
+        if (isClosed()) return;
+        dispatchSseFrame(normalizeSseLineEndings(buffer.slice(0, boundary.index)), options);
+        buffer = buffer.slice(boundary.index + boundary.length);
+        boundary = findSseFrameBoundary(buffer);
+      }
+    }
+
+    buffer += decoder.decode();
+    if (!isClosed() && buffer.trim()) {
+      dispatchSseFrame(normalizeSseLineEndings(buffer), options);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+};
+
+const isAbortError = (error: unknown): boolean =>
+  typeof DOMException !== "undefined" && error instanceof DOMException
+    ? error.name === "AbortError"
+    : error instanceof Error && error.name === "AbortError";
+
+const toStreamError = (error: unknown): Error => {
+  if (isDcnApiError(error)) {
+    return new ChainApiRequestError(
+      errorMessage(error.body, error.status),
+      error.status,
+      error.body,
+    );
+  }
+  return error instanceof Error ? error : new Error("Chain feed stream failed.");
 };
 
 export const createChainFeedStream = (
   options: CreateChainFeedStreamOptions,
 ): ChainFeedStreamSubscription => {
-  const query = new URLSearchParams({
-    since_seq: String(normalizeRequestSeq(options.sinceSeq, "sinceSeq")),
-    limit: String(normalizeRequestLimit(options.limit, "limit")),
-  });
-  const url = buildChainApiUrl(`/feed/stream?${query.toString()}`);
-  const eventSource = getEventSourceFactory(options.eventSourceFactory)(url);
-  const listeners: Array<[string, (event: MessageEvent<string>) => void]> = [];
+  const sinceSeq = normalizeRequestSeq(options.sinceSeq, "sinceSeq");
+  const limit = normalizeRequestLimit(options.limit, "limit");
+  const controller = new AbortController();
+  let closed = false;
+  let url = "";
 
-  const addListener = (type: string, listener: (event: MessageEvent<string>) => void) => {
-    eventSource.addEventListener(type, listener);
-    listeners.push([type, listener]);
+  const fetchWithAbort: typeof fetch = (input, init = {}) => {
+    url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    return fetch(input, {
+      ...init,
+      signal: init.signal ?? controller.signal,
+    });
   };
 
-  const handleDelta = (event: MessageEvent<string>) => {
-    try {
-      options.onDelta(parseChainFeedStreamDeltaData(event.data), event);
-    } catch (error) {
-      options.onError?.(
-        error instanceof Error ? error : new Error("Invalid chain feed stream delta."),
-        event,
-      );
-    }
-  };
-
-  const handleMeta = (event: MessageEvent<string>) => {
-    try {
-      options.onMeta?.(parseChainFeedStreamMetaData(event.data), event);
-    } catch (error) {
-      options.onError?.(
-        error instanceof Error ? error : new Error("Invalid chain feed stream metadata."),
-        event,
-      );
-    }
-  };
-
-  for (const eventType of CHAIN_FEED_EVENT_TYPES) {
-    addListener(eventType, handleDelta);
-  }
-  addListener("message", handleDelta);
-  addListener("stream_meta", handleMeta);
-
-  eventSource.onerror = (event) => {
-    options.onError?.(new Error("Chain feed stream connection error."), event);
-  };
+  void createDcnClient({ fetch: fetchWithAbort })
+    .feedStream({ sinceSeq, limit })
+    .then(async (response) => {
+      if (response.url) url = response.url;
+      if (closed) return;
+      await consumeSseResponse(response, options, () => closed);
+    })
+    .catch((error) => {
+      if (closed && isAbortError(error)) return;
+      if (closed) return;
+      options.onError?.(toStreamError(error));
+    });
 
   return {
-    url,
+    get url() {
+      return url;
+    },
     close: () => {
-      for (const [type, listener] of listeners) {
-        eventSource.removeEventListener?.(type, listener);
-      }
-      eventSource.onerror = null;
-      eventSource.close();
+      closed = true;
+      controller.abort();
     },
   };
 };

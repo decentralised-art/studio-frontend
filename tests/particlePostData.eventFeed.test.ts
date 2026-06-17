@@ -416,24 +416,45 @@ describe("particlePostData event feed sync", () => {
   });
 
   it("applies feed stream deltas and stale cursor metadata", async () => {
-    const listeners = new Map<string, Array<(event: MessageEvent<string>) => void>>();
-    class FakeEventSource {
-      onerror: ((event: Event) => void) | null = null;
-      constructor(readonly url: string) {}
-      addEventListener(type: string, listener: (event: MessageEvent<string>) => void) {
-        listeners.set(type, [...(listeners.get(type) ?? []), listener]);
-      }
-      removeEventListener(type: string, listener: (event: MessageEvent<string>) => void) {
-        listeners.set(
-          type,
-          (listeners.get(type) ?? []).filter((entry) => entry !== listener),
-        );
-      }
-      close() {}
-    }
-    vi.stubGlobal("EventSource", FakeEventSource);
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = new URL(String(input));
+      if (url.pathname === "/feed/stream") {
+        expect(url.searchParams.get("since_seq")).toBe("0");
+        expect(url.searchParams.get("limit")).toBe("128");
+        return new Response(
+          [
+            "event: connector_added",
+            `data: ${JSON.stringify({
+              stream_seq: 12,
+              event_type: "connector_added",
+              status: "safe",
+              feed_id: "feed-streamed",
+              history_cursor: "0000000000000012:0000:0000",
+              created_at_ms: 600,
+              payload: {
+                type: "connector",
+                name: "streamed",
+                owner: OWNER,
+              },
+            })}`,
+            "",
+            "event: stream_meta",
+            `data: ${JSON.stringify({
+              has_more: false,
+              last_seq: 20,
+              requested_since_seq: 0,
+              min_available_seq: 10,
+              replay_floor_seq: 10,
+              stale_since_seq: true,
+            })}`,
+            "",
+            "",
+          ].join("\n"),
+          {
+            headers: { "Content-Type": "text/event-stream" },
+          },
+        );
+      }
       if (url.pathname === "/connector/streamed") {
         return connectorResponse("streamed", OWNER, FORMAT_HASH);
       }
@@ -451,23 +472,6 @@ describe("particlePostData event feed sync", () => {
     });
 
     expect(subscription.url).toContain("/feed/stream?since_seq=0&limit=128");
-    listeners.get("connector_added")?.forEach((listener) =>
-      listener({
-        data: JSON.stringify({
-          stream_seq: 12,
-          event_type: "connector_added",
-          status: "safe",
-          feed_id: "feed-streamed",
-          history_cursor: "0000000000000012:0000:0000",
-          created_at_ms: 600,
-          payload: {
-            type: "connector",
-            name: "streamed",
-            owner: OWNER,
-          },
-        }),
-      } as MessageEvent<string>),
-    );
 
     await vi.waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1));
     expect(mod.listNetworkFeedEvents()).toEqual([
@@ -477,20 +481,7 @@ describe("particlePostData event feed sync", () => {
       }),
     ]);
 
-    listeners.get("stream_meta")?.forEach((listener) =>
-      listener({
-        data: JSON.stringify({
-          has_more: false,
-          last_seq: 20,
-          requested_since_seq: 0,
-          min_available_seq: 10,
-          replay_floor_seq: 10,
-          stale_since_seq: true,
-        }),
-      } as MessageEvent<string>),
-    );
-
-    expect(onStale).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(onStale).toHaveBeenCalledTimes(1));
     expect(mod.getParticlePostFeedState().stream).toEqual({
       lastSeq: 20,
       requestedSinceSeq: 0,

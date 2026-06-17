@@ -1,21 +1,19 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { feedMock } = vi.hoisted(() => ({
+const { feedMock, feedStreamMock } = vi.hoisted(() => ({
   feedMock: vi.fn(),
+  feedStreamMock: vi.fn(),
 }));
 
 vi.mock("$lib/chain/dcnClient", () => ({
   createDcnClient: () => ({
     feed: feedMock,
+    feedStream: feedStreamMock,
   }),
   isDcnApiError: (error: unknown) =>
     Boolean(
       error && typeof error === "object" && (error as { name?: string }).name === "DcnApiError",
     ),
-}));
-
-vi.mock("$lib/url/url", () => ({
-  buildChainApiUrl: (path: string) => `https://api.example.invalid${path}`,
 }));
 
 import {
@@ -56,6 +54,7 @@ const makeRawFeedItem = (overrides: Record<string, unknown> = {}) => ({
 describe("eventFeedApi", () => {
   beforeEach(() => {
     feedMock.mockReset();
+    feedStreamMock.mockReset();
     vi.restoreAllMocks();
   });
 
@@ -274,95 +273,145 @@ describe("eventFeedApi", () => {
     expect(() => parseChainFeedStreamDeltaData("{not-json")).toThrow(ChainFeedValidationError);
   });
 
-  it("wires EventSource stream frames and closes listeners", () => {
-    const source = new FakeEventSource();
+  it("wires SDK feed stream frames", async () => {
     const deltas: ChainFeedStreamDelta[] = [];
     const metas: ChainFeedStreamMeta[] = [];
     const errors: Error[] = [];
+    feedStreamMock.mockResolvedValue(
+      new Response(
+        [
+          "event: connector_added",
+          'data: {"stream_seq":6,"event_type":"connector_added","status":"observed","feed_id":"connector:pitch:0x01","history_cursor":"0000000000000006:0000:0000","created_at_ms":4000,"payload":{"name":"pitch","owner":"0xb584a15f38c2014cff54fdb1b417428b51999276"}}',
+          "",
+          "event: stream_meta",
+          'data: {"has_more":false,"last_seq":6,"requested_since_seq":5,"min_available_seq":1,"replay_floor_seq":5,"stale_since_seq":false}',
+          "",
+          "",
+        ].join("\n"),
+        {
+          headers: { "Content-Type": "text/event-stream" },
+        },
+      ),
+    );
+
     const subscription = createChainFeedStream({
       sinceSeq: 5,
       limit: 50,
       onDelta: (delta) => deltas.push(delta),
       onMeta: (meta) => metas.push(meta),
       onError: (error) => errors.push(error),
-      eventSourceFactory: (url) => {
-        source.url = url;
-        return source;
-      },
     });
 
-    expect(subscription.url).toBe("https://api.example.invalid/feed/stream?since_seq=5&limit=50");
-    expect(source.url).toBe(subscription.url);
+    expect(feedStreamMock).toHaveBeenCalledWith({ sinceSeq: 5, limit: 50 });
 
-    source.emit(
-      "connector_added",
-      JSON.stringify({
-        stream_seq: 6,
-        event_type: "connector_added",
-        status: "observed",
-        feed_id: "connector:pitch:0x01",
-        history_cursor: "0000000000000006:0000:0000",
-        created_at_ms: 4_000,
-        payload: {
-          name: "pitch",
-          owner: OWNER,
-        },
-      }),
-    );
-    source.emit(
-      "stream_meta",
-      JSON.stringify({
-        has_more: false,
-        last_seq: 6,
-        requested_since_seq: 5,
-        min_available_seq: 1,
-        replay_floor_seq: 5,
-        stale_since_seq: false,
-      }),
-    );
-    source.onerror?.({ type: "error" } as Event);
+    await vi.waitFor(() => {
+      expect(deltas).toHaveLength(1);
+      expect(metas).toHaveLength(1);
+    });
 
-    expect(deltas).toHaveLength(1);
     expect(deltas[0]?.payload.name).toBe("pitch");
-    expect(metas).toHaveLength(1);
     expect(metas[0]?.lastSeq).toBe(6);
-    expect(errors).toHaveLength(1);
+    expect(errors).toHaveLength(0);
 
     subscription.close();
-    expect(source.closed).toBe(true);
-    expect(source.listenerCount()).toBe(0);
+  });
+
+  it("surfaces SDK feed stream startup errors", async () => {
+    const errors: Error[] = [];
+    feedStreamMock.mockRejectedValue({
+      name: "DcnApiError",
+      status: 504,
+      body: "<html><body>504 Gateway Timeout</body></html>",
+    });
+
+    createChainFeedStream({
+      sinceSeq: 0,
+      limit: 20,
+      onDelta: () => undefined,
+      onError: (error) => errors.push(error),
+    });
+
+    await vi.waitFor(() => {
+      expect(errors).toHaveLength(1);
+    });
+
+    expect(errors[0]).toBeInstanceOf(ChainApiRequestError);
+    expect(errors[0]?.message).toBe("Chain API timed out (504 Gateway Timeout).");
+  });
+
+  it("parses SSE frames split across chunks", async () => {
+    const deltas: ChainFeedStreamDelta[] = [];
+    const encoder = new TextEncoder();
+    feedStreamMock.mockResolvedValue(
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(
+              encoder.encode(
+                'event: connector_added\r\ndata: {"stream_seq":7,"event_type":"connector_added","status":"observed","feed_id":"connector:pitch:0x02","history_cursor":"0000000000000007:0000:0000","created_at_ms":5000,',
+              ),
+            );
+            controller.enqueue(
+              encoder.encode(
+                '"payload":{"name":"pitch","owner":"0xb584a15f38c2014cff54fdb1b417428b51999276"}}\r',
+              ),
+            );
+            controller.enqueue(encoder.encode("\n\r\n"));
+            controller.close();
+          },
+        }),
+        {
+          headers: { "Content-Type": "text/event-stream" },
+        },
+      ),
+    );
+
+    createChainFeedStream({
+      sinceSeq: 6,
+      limit: 10,
+      onDelta: (delta) => deltas.push(delta),
+    });
+
+    await vi.waitFor(() => {
+      expect(deltas).toHaveLength(1);
+    });
+
+    expect(deltas[0]?.streamSeq).toBe(7);
+  });
+
+  it("ignores stream callbacks after close", async () => {
+    const deltas: ChainFeedStreamDelta[] = [];
+    let resolveStream: (response: Response) => void = () => undefined;
+    feedStreamMock.mockReturnValue(
+      new Promise<Response>((resolve) => {
+        resolveStream = resolve;
+      }),
+    );
+
+    const subscription = createChainFeedStream({
+      sinceSeq: 1,
+      limit: 10,
+      onDelta: (delta) => deltas.push(delta),
+    });
+
+    subscription.close();
+    resolveStream(
+      new Response(
+        [
+          "event: connector_added",
+          'data: {"stream_seq":2,"event_type":"connector_added","status":"observed","feed_id":"connector:pitch:0x01","history_cursor":"0000000000000002:0000:0000","created_at_ms":4000,"payload":{"name":"pitch","owner":"0xb584a15f38c2014cff54fdb1b417428b51999276"}}',
+          "",
+          "",
+        ].join("\n"),
+        {
+          headers: { "Content-Type": "text/event-stream" },
+        },
+      ),
+    );
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(deltas).toHaveLength(0);
   });
 });
-
-class FakeEventSource {
-  url = "";
-  closed = false;
-  onerror: ((event: Event) => void) | null = null;
-  private listeners = new Map<string, Set<(event: MessageEvent<string>) => void>>();
-
-  addEventListener(type: string, listener: (event: MessageEvent<string>) => void) {
-    const listeners = this.listeners.get(type) ?? new Set();
-    listeners.add(listener);
-    this.listeners.set(type, listeners);
-  }
-
-  removeEventListener(type: string, listener: (event: MessageEvent<string>) => void) {
-    const listeners = this.listeners.get(type);
-    listeners?.delete(listener);
-    if (listeners?.size === 0) this.listeners.delete(type);
-  }
-
-  close() {
-    this.closed = true;
-  }
-
-  emit(type: string, data: string) {
-    for (const listener of this.listeners.get(type) ?? []) {
-      listener({ data } as MessageEvent<string>);
-    }
-  }
-
-  listenerCount() {
-    return [...this.listeners.values()].reduce((sum, listeners) => sum + listeners.size, 0);
-  }
-}
