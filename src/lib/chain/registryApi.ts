@@ -1,6 +1,11 @@
-import { chainAuthFetch } from "$lib/auth/api";
+import {
+  createDcnClient,
+  createDcnStatusTrackingClient,
+  isDcnApiError,
+} from "$lib/chain/dcnClient";
 import { normalizeChainExecutePayload } from "$lib/chain/executePayloadContract";
-import { buildChainApiUrl } from "$lib/url/url";
+
+type DcnClientInstance = ReturnType<typeof createDcnClient>;
 
 export type ChainApiPostResult<T> = {
   status: number;
@@ -229,12 +234,6 @@ export const normalizeFormatHash = (value: string): string => {
   return `0x${withoutPrefix}`;
 };
 
-const parseBody = async (response: Response) => {
-  const contentType = response.headers.get("content-type") ?? "";
-  if (contentType.includes("application/json")) return response.json();
-  return response.text();
-};
-
 const normalizeCursorToken = (value: unknown): string | null => {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
@@ -409,38 +408,43 @@ const errorMessage = (payload: unknown, status?: number) => {
   return status ? `Request failed (HTTP ${status}).` : "Request failed.";
 };
 
-const fetchJson = async <T>(path: string): Promise<T> => {
-  const response = await fetch(buildChainApiUrl(path), { method: "GET", cache: "no-store" });
-  const payload = await parseBody(response);
-  if (!response.ok) {
-    throw new Error(errorMessage(payload, response.status));
-  }
-  return payload as T;
+const trimOptional = (value: string | null | undefined): string | undefined => {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
 };
 
-const postJsonWithChainAuth = async <T>(path: string, body: unknown): Promise<T> => {
-  const result = await postJsonWithChainAuthDetailed<T>(path, body);
-  return result.body;
-};
-
-const postJsonWithChainAuthDetailed = async <T>(
-  path: string,
-  body: unknown,
-): Promise<ChainApiPostResult<T>> => {
-  const response = await chainAuthFetch(path, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  const payload = await parseBody(response);
-  if (!response.ok) {
+const rethrowDcnError = (error: unknown): never => {
+  if (isDcnApiError(error)) {
     throw new ChainApiRequestError(
-      errorMessage(payload, response.status),
-      response.status,
-      payload,
+      errorMessage(error.body, error.status),
+      error.status,
+      error.body,
     );
   }
-  return { status: response.status, body: payload as T };
+  throw error;
+};
+
+const dcnRequest = async <T>(request: (client: DcnClientInstance) => Promise<T>): Promise<T> => {
+  try {
+    return await request(createDcnClient());
+  } catch (error) {
+    return rethrowDcnError(error);
+  }
+};
+
+const dcnDetailedRequest = async <T>(
+  request: (client: DcnClientInstance) => Promise<T>,
+): Promise<ChainApiPostResult<T>> => {
+  const { client, getLastResponseStatus } = createDcnStatusTrackingClient();
+  try {
+    const body = await request(client);
+    return {
+      status: getLastResponseStatus() ?? 200,
+      body,
+    };
+  } catch (error) {
+    return rethrowDcnError(error);
+  }
 };
 
 export const getChainAccount = async (
@@ -453,18 +457,14 @@ export const getChainAccount = async (
   } = {},
 ) => {
   const limit = normalizeCursorLimit(options.limit);
-  const query = new URLSearchParams({
-    limit: String(limit),
-  });
-  const afterConnectors = options.after_connectors?.trim();
-  if (afterConnectors) query.set("after_connectors", afterConnectors);
-  const afterTransformations = options.after_transformations?.trim();
-  if (afterTransformations) query.set("after_transformations", afterTransformations);
-  const afterConditions = options.after_conditions?.trim();
-  if (afterConditions) query.set("after_conditions", afterConditions);
-
-  return fetchJson<RawChainAccountResponse>(
-    `/account/${encodeURIComponent(address)}?${query.toString()}`,
+  return dcnRequest<RawChainAccountResponse>(
+    async (client) =>
+      (await client.accountInfo(address, {
+        limit,
+        afterConnectors: trimOptional(options.after_connectors),
+        afterTransformations: trimOptional(options.after_transformations),
+        afterConditions: trimOptional(options.after_conditions),
+      })) as RawChainAccountResponse,
   );
 };
 
@@ -475,22 +475,29 @@ export const getChainAccounts = async (
   } = {},
 ) => {
   const limit = normalizeCursorLimit(options.limit);
-  const query = new URLSearchParams({
-    limit: String(limit),
-  });
-  const after = options.after?.trim();
-  if (after) query.set("after", after);
-  return fetchJson<RawChainAccountsResponse>(`/accounts?${query.toString()}`);
+  return dcnRequest<RawChainAccountsResponse>(
+    async (client) =>
+      (await client.listAccounts({
+        limit,
+        after: trimOptional(options.after),
+      })) as RawChainAccountsResponse,
+  );
 };
 
 export const getChainConnector = async (name: string) =>
-  fetchJson<RawChainConnectorResponse>(`/connector/${encodeURIComponent(name)}`);
+  dcnRequest<RawChainConnectorResponse>(
+    async (client) => (await client.connectorGet(name)) as RawChainConnectorResponse,
+  );
 
 export const getChainTransformation = async (name: string) =>
-  fetchJson<RawChainTransformationResponse>(`/transformation/${encodeURIComponent(name)}`);
+  dcnRequest<RawChainTransformationResponse>(
+    async (client) => (await client.transformationGet(name)) as RawChainTransformationResponse,
+  );
 
 export const getChainCondition = async (name: string) =>
-  fetchJson<RawChainConditionResponse>(`/condition/${encodeURIComponent(name)}`);
+  dcnRequest<RawChainConditionResponse>(
+    async (client) => (await client.conditionGet(name)) as RawChainConditionResponse,
+  );
 
 export const getChainFormat = async (
   formatHash: string,
@@ -498,52 +505,63 @@ export const getChainFormat = async (
 ) => {
   const limit = normalizeCursorLimit(options.limit);
   const normalizedHash = normalizeFormatHash(formatHash);
-  const query = new URLSearchParams({
-    limit: String(limit),
-  });
-  const after = options.after?.trim();
-  if (after) query.set("after", after);
-  return fetchJson<RawChainFormatResponse>(
-    `/format/${encodeURIComponent(normalizedHash)}?${query.toString()}`,
+  return dcnRequest<RawChainFormatResponse>(
+    async (client) =>
+      (await client.formatInfo(normalizedHash, {
+        limit,
+        after: trimOptional(options.after),
+      })) as RawChainFormatResponse,
   );
 };
 
 export const getChainFormats = async (options: { limit?: number; after?: string | null } = {}) => {
   const limit = normalizeCursorLimit(options.limit);
-  const query = new URLSearchParams({
-    limit: String(limit),
-  });
-  const after = options.after?.trim();
-  if (after) query.set("after", after);
-  return fetchJson<RawChainFormatsResponse>(`/formats?${query.toString()}`);
+  return dcnRequest<RawChainFormatsResponse>(
+    async (client) =>
+      (await client.listFormats({
+        limit,
+        after: trimOptional(options.after),
+      })) as RawChainFormatsResponse,
+  );
 };
 
 export const postChainConnector = async (payload: ChainConnectorPayload) =>
-  postJsonWithChainAuth<RawChainConnectorResponse>("/connector", payload);
+  postChainConnectorDetailed(payload).then((result) => result.body);
 
 export const postChainConnectorDetailed = async (payload: ChainConnectorPayload) =>
-  postJsonWithChainAuthDetailed<RawChainConnectorResponse>("/connector", payload);
+  dcnDetailedRequest<RawChainConnectorResponse>(
+    async (client) => (await client.connectorPost(payload)) as RawChainConnectorResponse,
+  );
 
 export const postChainTransformation = async (payload: { name: string; sol_src: string }) =>
-  postJsonWithChainAuth<RawChainTransformationResponse>("/transformation", payload);
+  postChainTransformationDetailed(payload).then((result) => result.body);
 
 export const postChainTransformationDetailed = async (payload: { name: string; sol_src: string }) =>
-  postJsonWithChainAuthDetailed<RawChainTransformationResponse>("/transformation", payload);
+  dcnDetailedRequest<RawChainTransformationResponse>(
+    async (client) => (await client.transformationPost(payload)) as RawChainTransformationResponse,
+  );
 
 export const postChainCondition = async (payload: { name: string; sol_src: string }) =>
-  postJsonWithChainAuth<RawChainConditionResponse>("/condition", payload);
+  postChainConditionDetailed(payload).then((result) => result.body);
 
 export const postChainConditionDetailed = async (payload: { name: string; sol_src: string }) =>
-  postJsonWithChainAuthDetailed<RawChainConditionResponse>("/condition", payload);
+  dcnDetailedRequest<RawChainConditionResponse>(
+    async (client) => (await client.conditionPost(payload)) as RawChainConditionResponse,
+  );
 
 export const postChainExecute = async (payload: ChainExecutePayload) => {
   const result = await postChainExecuteDetailed(payload);
   return result.body;
 };
-export const postChainExecuteDetailed = async (payload: ChainExecutePayload) =>
-  postJsonWithChainAuthDetailed<RawChainExecuteResponse>(
-    "/execute",
-    normalizeChainExecutePayload(payload),
+export const postChainExecuteDetailed = async (payload: ChainExecutePayload) => {
+  const requestBody = normalizeChainExecutePayload(payload);
+  return dcnDetailedRequest<RawChainExecuteResponse>(
+    async (client) =>
+      (await client.execute(
+        requestBody.connector_name,
+        requestBody.particles_count,
+        requestBody.dynamic_ri,
+      )) as RawChainExecuteResponse,
   ).then((result) => {
     try {
       return {
@@ -558,3 +576,4 @@ export const postChainExecuteDetailed = async (payload: ChainExecutePayload) =>
       );
     }
   });
+};

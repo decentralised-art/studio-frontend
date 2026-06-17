@@ -1,3 +1,4 @@
+import { createDcnClient, isDcnApiError } from "$lib/chain/dcnClient";
 import { ChainApiRequestError } from "$lib/chain/registryApi";
 import { buildChainApiUrl } from "$lib/url/url";
 
@@ -157,12 +158,6 @@ const ENTITY_TYPE_BY_EVENT_TYPE: Record<ChainFeedEventType, ChainFeedEntityType>
 };
 
 const CHAIN_ADDRESS_RE = /^0x[a-f0-9]{40}$/i;
-
-const parseBody = async (response: Response) => {
-  const contentType = response.headers.get("content-type") ?? "";
-  if (contentType.includes("application/json")) return response.json();
-  return response.text();
-};
 
 const looksLikeHtmlPayload = (value: string) =>
   /<\s*html[\s>]/i.test(value) || /<!doctype html>/i.test(value);
@@ -394,30 +389,28 @@ export const parseChainFeedStreamMetaData = (data: string): ChainFeedStreamMeta 
 export const getChainFeedPage = async (
   options: GetChainFeedPageOptions,
 ): Promise<ChainFeedPage> => {
-  const query = new URLSearchParams({
-    limit: String(normalizeRequestLimit(options.limit, "limit")),
-  });
+  const limit = normalizeRequestLimit(options.limit, "limit");
   const before = normalizeOptionalToken(options.before);
-  if (before) query.set("before", before);
   const type = normalizeOptionalToken(options.type);
-  if (type) query.set("type", type.toLowerCase());
-  if (options.includeUnfinalized !== undefined) {
-    query.set("include_unfinalized", options.includeUnfinalized ? "1" : "0");
-  }
 
-  const response = await fetch(buildChainApiUrl(`/feed?${query.toString()}`), {
-    method: "GET",
-    cache: "no-store",
-  });
-  const payload = await parseBody(response);
-  if (!response.ok) {
-    throw new ChainApiRequestError(
-      errorMessage(payload, response.status),
-      response.status,
-      payload,
-    );
+  try {
+    const payload = await createDcnClient().feed({
+      limit,
+      before: before ?? undefined,
+      type: type ? (type.toLowerCase() as ChainFeedEventType) : undefined,
+      includeUnfinalized: options.includeUnfinalized,
+    });
+    return normalizeChainFeedPage(payload);
+  } catch (error) {
+    if (isDcnApiError(error)) {
+      throw new ChainApiRequestError(
+        errorMessage(error.body, error.status),
+        error.status,
+        error.body,
+      );
+    }
+    throw error;
   }
-  return normalizeChainFeedPage(payload);
 };
 
 const getEventSourceFactory = (

@@ -95,18 +95,18 @@ describe("studioEventFeedLibrary", () => {
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
       "https://api.example.invalid/feed?limit=2&include_unfinalized=1",
-      {
+      expect.objectContaining({
         method: "GET",
         cache: "no-store",
-      },
+      }),
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
       2,
       "https://api.example.invalid/feed?limit=2&before=page-2&include_unfinalized=1",
-      {
+      expect.objectContaining({
         method: "GET",
         cache: "no-store",
-      },
+      }),
     );
     expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/connector/"))).toBe(false);
     expect(discovery).toMatchObject({

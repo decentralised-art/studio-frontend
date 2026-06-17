@@ -1,5 +1,19 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+const { feedMock } = vi.hoisted(() => ({
+  feedMock: vi.fn(),
+}));
+
+vi.mock("$lib/chain/dcnClient", () => ({
+  createDcnClient: () => ({
+    feed: feedMock,
+  }),
+  isDcnApiError: (error: unknown) =>
+    Boolean(
+      error && typeof error === "object" && (error as { name?: string }).name === "DcnApiError",
+    ),
+}));
+
 vi.mock("$lib/url/url", () => ({
   buildChainApiUrl: (path: string) => `https://api.example.invalid${path}`,
 }));
@@ -41,27 +55,19 @@ const makeRawFeedItem = (overrides: Record<string, unknown> = {}) => ({
 
 describe("eventFeedApi", () => {
   beforeEach(() => {
+    feedMock.mockReset();
     vi.restoreAllMocks();
   });
 
   it("fetches and normalizes chain feed pages", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          limit: 2,
-          cursor: {
-            has_more: true,
-            next_before: "  cursor-1  ",
-          },
-          items: [makeRawFeedItem()],
-        }),
-        {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        },
-      ),
-    );
-    vi.stubGlobal("fetch", fetchMock);
+    feedMock.mockResolvedValue({
+      limit: 2,
+      cursor: {
+        has_more: true,
+        next_before: "  cursor-1  ",
+      },
+      items: [makeRawFeedItem()],
+    });
 
     const page = await getChainFeedPage({
       limit: 2,
@@ -70,14 +76,12 @@ describe("eventFeedApi", () => {
       includeUnfinalized: true,
     });
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(fetchMock).toHaveBeenCalledWith(
-      "https://api.example.invalid/feed?limit=2&before=cursor-2&type=connector_added&include_unfinalized=1",
-      {
-        method: "GET",
-        cache: "no-store",
-      },
-    );
+    expect(feedMock).toHaveBeenCalledWith({
+      limit: 2,
+      before: "cursor-2",
+      type: "connector_added",
+      includeUnfinalized: true,
+    });
     expect(page).toEqual({
       limit: 2,
       hasMore: true,
@@ -198,13 +202,11 @@ describe("eventFeedApi", () => {
   });
 
   it("surfaces non-json chain feed errors with the shared request error shape", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response("<html><body>502 Bad Gateway</body></html>", {
-        status: 502,
-        headers: { "Content-Type": "text/html" },
-      }),
-    );
-    vi.stubGlobal("fetch", fetchMock);
+    feedMock.mockRejectedValue({
+      name: "DcnApiError",
+      status: 502,
+      body: "<html><body>502 Bad Gateway</body></html>",
+    });
 
     const error = await getChainFeedPage({ limit: 5 }).catch((error: unknown) => error);
     expect(error).toBeInstanceOf(ChainApiRequestError);

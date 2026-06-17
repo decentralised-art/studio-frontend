@@ -1,15 +1,27 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { chainAuthFetchMock } = vi.hoisted(() => ({
-  chainAuthFetchMock: vi.fn(),
-}));
+const { conditionPostMock, connectorPostMock, transformationPostMock, statusRef } = vi.hoisted(
+  () => ({
+    conditionPostMock: vi.fn(),
+    connectorPostMock: vi.fn(),
+    transformationPostMock: vi.fn(),
+    statusRef: { value: 200 },
+  }),
+);
 
-vi.mock("$lib/auth/api", () => ({
-  chainAuthFetch: chainAuthFetchMock,
-}));
-
-vi.mock("$lib/url/url", () => ({
-  buildChainApiUrl: (path: string) => `https://api.example.invalid${path}`,
+vi.mock("$lib/chain/dcnClient", () => ({
+  createDcnStatusTrackingClient: () => ({
+    client: {
+      conditionPost: conditionPostMock,
+      connectorPost: connectorPostMock,
+      transformationPost: transformationPostMock,
+    },
+    getLastResponseStatus: () => statusRef.value,
+  }),
+  isDcnApiError: (error: unknown) =>
+    Boolean(
+      error && typeof error === "object" && (error as { name?: string }).name === "DcnApiError",
+    ),
 }));
 
 import {
@@ -21,29 +33,25 @@ import {
 
 describe("registryApi publish pipeline contract", () => {
   beforeEach(() => {
-    chainAuthFetchMock.mockReset();
+    conditionPostMock.mockReset();
+    connectorPostMock.mockReset();
+    transformationPostMock.mockReset();
+    statusRef.value = 200;
   });
 
-  it("posts transformation, condition and connector payloads unchanged", async () => {
-    chainAuthFetchMock
-      .mockResolvedValueOnce(
-        new Response(JSON.stringify({ name: "add2", owner: "0xabc" }), {
-          status: 201,
-          headers: { "Content-Type": "application/json" },
-        }),
-      )
-      .mockResolvedValueOnce(
-        new Response(JSON.stringify({ name: "always_true", owner: "0xabc" }), {
-          status: 201,
-          headers: { "Content-Type": "application/json" },
-        }),
-      )
-      .mockResolvedValueOnce(
-        new Response(JSON.stringify({ name: "corpus_seed_1", owner: "0xabc" }), {
-          status: 201,
-          headers: { "Content-Type": "application/json" },
-        }),
-      );
+  it("publishes transformation, condition and connector payloads unchanged", async () => {
+    transformationPostMock.mockImplementation(async () => {
+      statusRef.value = 201;
+      return { name: "add2", owner: "0xabc" };
+    });
+    conditionPostMock.mockImplementation(async () => {
+      statusRef.value = 201;
+      return { name: "always_true", owner: "0xabc" };
+    });
+    connectorPostMock.mockImplementation(async () => {
+      statusRef.value = 201;
+      return { name: "corpus_seed_1", owner: "0xabc" };
+    });
 
     const transformationPayload = {
       name: "add2",
@@ -74,31 +82,17 @@ describe("registryApi publish pipeline contract", () => {
     expect(conditionResult.status).toBe(201);
     expect(connectorResult.status).toBe(201);
 
-    expect(chainAuthFetchMock).toHaveBeenCalledTimes(3);
-
-    const [txPath, txInit] = chainAuthFetchMock.mock.calls[0] ?? [];
-    expect(txPath).toBe("/transformation");
-    expect(txInit?.method).toBe("POST");
-    expect(JSON.parse(String(txInit?.body))).toEqual(transformationPayload);
-
-    const [conditionPath, conditionInit] = chainAuthFetchMock.mock.calls[1] ?? [];
-    expect(conditionPath).toBe("/condition");
-    expect(conditionInit?.method).toBe("POST");
-    expect(JSON.parse(String(conditionInit?.body))).toEqual(conditionPayload);
-
-    const [connectorPath, connectorInit] = chainAuthFetchMock.mock.calls[2] ?? [];
-    expect(connectorPath).toBe("/connector");
-    expect(connectorInit?.method).toBe("POST");
-    expect(JSON.parse(String(connectorInit?.body))).toEqual(connectorPayload);
+    expect(transformationPostMock).toHaveBeenCalledWith(transformationPayload);
+    expect(conditionPostMock).toHaveBeenCalledWith(conditionPayload);
+    expect(connectorPostMock).toHaveBeenCalledWith(connectorPayload);
   });
 
   it("surfaces connector publish errors as ChainApiRequestError", async () => {
-    chainAuthFetchMock.mockResolvedValue(
-      new Response(JSON.stringify({ message: "Connector name already exists." }), {
-        status: 400,
-        headers: { "Content-Type": "application/json" },
-      }),
-    );
+    connectorPostMock.mockRejectedValue({
+      name: "DcnApiError",
+      status: 400,
+      body: { message: "Connector name already exists." },
+    });
 
     await expect(
       postChainConnectorDetailed({
@@ -109,6 +103,6 @@ describe("registryApi publish pipeline contract", () => {
       }),
     ).rejects.toBeInstanceOf(ChainApiRequestError);
 
-    expect(chainAuthFetchMock).toHaveBeenCalledTimes(1);
+    expect(connectorPostMock).toHaveBeenCalledTimes(1);
   });
 });

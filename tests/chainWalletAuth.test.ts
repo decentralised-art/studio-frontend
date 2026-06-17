@@ -1,5 +1,19 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+const { createDcnClientMock, getNonceMock, loginWithSignatureMock } = vi.hoisted(() => ({
+  createDcnClientMock: vi.fn(),
+  getNonceMock: vi.fn(),
+  loginWithSignatureMock: vi.fn(),
+}));
+
+vi.mock("$lib/chain/dcnClient", () => ({
+  createDcnClient: createDcnClientMock,
+  isDcnApiError: (error: unknown) =>
+    Boolean(
+      error && typeof error === "object" && (error as { name?: string }).name === "DcnApiError",
+    ),
+}));
+
 const jsonResponse = (payload: unknown, status = 200) =>
   new Response(JSON.stringify(payload), {
     status,
@@ -17,6 +31,13 @@ describe("browser wallet chain auth", () => {
   beforeEach(() => {
     vi.resetModules();
     vi.restoreAllMocks();
+    createDcnClientMock.mockReset();
+    getNonceMock.mockReset();
+    loginWithSignatureMock.mockReset();
+    createDcnClientMock.mockReturnValue({
+      getNonce: getNonceMock,
+      loginWithSignature: loginWithSignatureMock,
+    });
     window.localStorage.clear();
   });
 
@@ -30,17 +51,8 @@ describe("browser wallet chain auth", () => {
         throw new Error(`Unexpected provider method ${method}`);
       }),
     };
-
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
-      const url = String(input);
-      if (url.includes("/chain/nonce/")) return jsonResponse({ nonce: "nonce-1" });
-      if (url.includes("/chain/auth")) {
-        const body = JSON.parse(String(init?.body ?? "{}")) as { signature?: string };
-        expect(body.signature).toBe("abc123");
-        return jsonResponse("chain-token");
-      }
-      return jsonResponse({ message: `Unexpected request ${url}` }, 500);
-    });
+    getNonceMock.mockResolvedValue({ nonce: "nonce-1" });
+    loginWithSignatureMock.mockResolvedValue({ access_token: "chain-token" });
 
     const { loginWithBrowserWalletChainAccount } = await import("../src/lib/auth/api");
     type LoginOptions = NonNullable<Parameters<typeof loginWithBrowserWalletChainAccount>[0]>;
@@ -54,11 +66,16 @@ describe("browser wallet chain auth", () => {
       method: "personal_sign",
       params: ["Login nonce: nonce-1", normalizedAddress],
     });
+    expect(getNonceMock).toHaveBeenCalledWith(normalizedAddress);
+    expect(loginWithSignatureMock).toHaveBeenCalledWith(
+      normalizedAddress,
+      "Login nonce: nonce-1",
+      "abc123",
+    );
     expect(window.localStorage.getItem("hypermusic_chain_token")).toBe("chain-token");
     expect(window.localStorage.getItem("hypermusic_chain_token_user_id")).toBe(
       `wallet:${normalizedAddress}`,
     );
-    expect(fetchMock).toHaveBeenCalled();
   });
 });
 

@@ -1,4 +1,5 @@
 import { browser } from "$app/environment";
+import { createDcnClient, isDcnApiError } from "$lib/chain/dcnClient";
 import {
   createEmptyToolboxLibrary,
   normalizeConnectorToolboxId,
@@ -130,35 +131,6 @@ const parseTokenFromResponse = (raw: string): string => {
   return trimmed;
 };
 
-const parseNonceFromPayload = (payload: unknown): string => {
-  if (typeof payload === "string") {
-    return payload.trim();
-  }
-
-  if (payload && typeof payload === "object") {
-    const record = payload as Record<string, unknown>;
-    const nested =
-      record.data && typeof record.data === "object"
-        ? (record.data as Record<string, unknown>)
-        : null;
-    const nonceCandidate =
-      record.nonce ??
-      record.login_nonce ??
-      record.loginNonce ??
-      record.challenge ??
-      record.message ??
-      nested?.nonce ??
-      nested?.login_nonce ??
-      nested?.loginNonce ??
-      nested?.challenge;
-    if (typeof nonceCandidate === "string") {
-      return nonceCandidate.trim();
-    }
-  }
-
-  return "";
-};
-
 const parseResponseBody = async (response: Response) => {
   const contentType = response.headers.get("content-type") ?? "";
   if (contentType.includes("application/json")) {
@@ -200,13 +172,6 @@ const clearCachedMePayload = () => {
   }
 };
 
-const shouldRetryWithAlternatePayload = (statusCode: number): boolean =>
-  statusCode === 400 ||
-  statusCode === 404 ||
-  statusCode === 405 ||
-  statusCode === 415 ||
-  statusCode === 422;
-
 const extractErrorMessage = (payload: unknown): string => {
   if (typeof payload === "string") return payload;
   if (payload && typeof payload === "object") {
@@ -240,56 +205,39 @@ export const chainTokenIdentityForWalletAddress = (address: string): string => {
 };
 
 const requestChainNonce = async (address: string): Promise<string> => {
-  const nonceUrl = buildChainApiUrl(`/nonce/${encodeURIComponent(address)}`);
-  const response = await fetch(nonceUrl, { method: "GET" });
-  const payload = await parseResponseBody(response);
-  if (!response.ok) {
-    throw new Error(extractErrorMessage(payload));
+  try {
+    const response = await createDcnClient({ accessToken: null }).getNonce(address);
+    const nonce = typeof response.nonce === "string" ? response.nonce.trim() : "";
+    if (!nonce) {
+      throw new Error("Chain nonce response did not include a nonce.");
+    }
+    return nonce;
+  } catch (error) {
+    if (isDcnApiError(error)) {
+      throw new Error(extractErrorMessage(error.body));
+    }
+    throw error;
   }
-
-  const nonce = parseNonceFromPayload(payload);
-  if (!nonce) {
-    throw new Error("Chain nonce response did not include a nonce.");
-  }
-  return nonce;
 };
 
 const requestChainAuthToken = async (authRequest: ChainAuthPayload): Promise<string> => {
-  const authUrl = buildChainApiUrl("/auth");
-
-  const primaryResponse = await fetch(authUrl, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(authRequest),
-  });
-  const primaryPayload = await parseResponseBody(primaryResponse);
-  if (primaryResponse.ok) {
-    const token = parseTokenFromPayload(primaryPayload);
+  try {
+    const response = await createDcnClient({ accessToken: null }).loginWithSignature(
+      authRequest.address,
+      authRequest.message,
+      authRequest.signature,
+    );
+    const token = parseTokenFromPayload(response);
     if (!token) {
       throw new Error("No token returned from chain auth.");
     }
     return token;
+  } catch (error) {
+    if (isDcnApiError(error)) {
+      throw new Error(extractErrorMessage(error.body));
+    }
+    throw error;
   }
-
-  if (!shouldRetryWithAlternatePayload(primaryResponse.status)) {
-    throw new Error(extractErrorMessage(primaryPayload));
-  }
-
-  const fallbackResponse = await fetch(authUrl, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ auth_request: authRequest }),
-  });
-  const fallbackPayload = await parseResponseBody(fallbackResponse);
-  if (!fallbackResponse.ok) {
-    throw new Error(extractErrorMessage(fallbackPayload));
-  }
-
-  const token = parseTokenFromPayload(fallbackPayload);
-  if (!token) {
-    throw new Error("No token returned from chain auth.");
-  }
-  return token;
 };
 
 const getBrowserEthereumProvider = (
