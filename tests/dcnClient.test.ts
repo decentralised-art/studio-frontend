@@ -1,8 +1,13 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { clearChainToken, setChainToken } from "../src/lib/auth/session";
 import { createDcnClient, resolveDcnClientBaseUrl } from "../src/lib/chain/dcnClient";
 
 describe("dcnClient", () => {
+  beforeEach(() => {
+    clearChainToken();
+  });
+
   it("preserves absolute chain API base URLs", () => {
     expect(resolveDcnClientBaseUrl("https://api.example.invalid/chain/")).toBe(
       "https://api.example.invalid/chain",
@@ -44,5 +49,39 @@ describe("dcnClient", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock.mock.calls[0]?.[0]).toBe(`${window.location.origin}/chain/feed?limit=1`);
+  });
+
+  it("uses the cached chain token when accessToken is omitted", async () => {
+    setChainToken("cached-chain-token");
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        new Response(JSON.stringify({ name: "published", owner: "0xabc" }), {
+          status: 201,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+
+    const client = createDcnClient({ fetch: fetchMock });
+    await client.connectorPost({ name: "published", dimensions: [] });
+
+    const headers = new Headers(fetchMock.mock.calls[0]?.[1]?.headers);
+    expect(headers.get("Authorization")).toBe("Bearer cached-chain-token");
+  });
+
+  it("does not fall back to the cached chain token when accessToken is null", async () => {
+    setChainToken("cached-chain-token");
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        new Response(JSON.stringify({ name: "published", owner: "0xabc" }), {
+          status: 201,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+
+    const client = createDcnClient({ accessToken: null, fetch: fetchMock });
+    await client.connectorPost({ name: "published", dimensions: [] });
+
+    const headers = new Headers(fetchMock.mock.calls[0]?.[1]?.headers);
+    expect(headers.get("Authorization")).toBeNull();
   });
 });

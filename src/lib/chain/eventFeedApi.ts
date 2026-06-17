@@ -142,6 +142,9 @@ export class ChainFeedValidationError extends Error {
   }
 }
 
+const STREAM_RECONNECT_BASE_DELAY_MS = 1_000;
+const STREAM_RECONNECT_MAX_DELAY_MS = 15_000;
+
 const ENTITY_TYPE_BY_EVENT_TYPE: Record<ChainFeedEventType, ChainFeedEntityType> = {
   connector_added: "connector",
   transformation_added: "transformation",
@@ -509,32 +512,82 @@ const toStreamError = (error: unknown): Error => {
 export const createChainFeedStream = (
   options: CreateChainFeedStreamOptions,
 ): ChainFeedStreamSubscription => {
-  const sinceSeq = normalizeRequestSeq(options.sinceSeq, "sinceSeq");
+  let nextSinceSeq = normalizeRequestSeq(options.sinceSeq, "sinceSeq");
   const limit = normalizeRequestLimit(options.limit, "limit");
-  const controller = new AbortController();
   let closed = false;
   let url = "";
+  let currentController: AbortController | null = null;
+  let reconnectAttempts = 0;
+  let reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
 
-  const fetchWithAbort: typeof fetch = (input, init = {}) => {
-    url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-    return fetch(input, {
-      ...init,
-      signal: init.signal ?? controller.signal,
-    });
+  const clearReconnectTimeout = () => {
+    if (reconnectTimeout === null || typeof clearTimeout !== "function") return;
+    clearTimeout(reconnectTimeout);
+    reconnectTimeout = null;
   };
 
-  void createDcnClient({ fetch: fetchWithAbort })
-    .feedStream({ sinceSeq, limit })
-    .then(async (response) => {
-      if (response.url) url = response.url;
-      if (closed) return;
-      await consumeSseResponse(response, options, () => closed);
-    })
-    .catch((error) => {
-      if (closed && isAbortError(error)) return;
-      if (closed) return;
-      options.onError?.(toStreamError(error));
-    });
+  const scheduleReconnect = () => {
+    if (closed || typeof setTimeout !== "function" || reconnectTimeout !== null) return;
+    const delay = Math.min(
+      STREAM_RECONNECT_BASE_DELAY_MS * 2 ** reconnectAttempts,
+      STREAM_RECONNECT_MAX_DELAY_MS,
+    );
+    reconnectAttempts += 1;
+    reconnectTimeout = setTimeout(() => {
+      reconnectTimeout = null;
+      connect();
+    }, delay);
+  };
+
+  const streamOptions: CreateChainFeedStreamOptions = {
+    ...options,
+    onDelta: (delta, event) => {
+      nextSinceSeq = Math.max(nextSinceSeq, delta.streamSeq);
+      options.onDelta(delta, event);
+    },
+    onMeta: (meta, event) => {
+      if (meta.lastSeq !== null) {
+        nextSinceSeq = Math.max(nextSinceSeq, meta.lastSeq);
+      }
+      options.onMeta?.(meta, event);
+    },
+  };
+
+  function connect() {
+    if (closed) return;
+    currentController = new AbortController();
+    const controller = currentController;
+    const fetchWithAbort: typeof fetch = (input, init = {}) => {
+      url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      return fetch(input, {
+        ...init,
+        signal: init.signal ?? controller.signal,
+      });
+    };
+
+    void createDcnClient({ fetch: fetchWithAbort })
+      .feedStream({ sinceSeq: nextSinceSeq, limit })
+      .then(async (response) => {
+        if (response.url) url = response.url;
+        if (closed) return;
+        reconnectAttempts = 0;
+        await consumeSseResponse(response, streamOptions, () => closed);
+        if (!closed) scheduleReconnect();
+      })
+      .catch((error) => {
+        if (closed && isAbortError(error)) return;
+        if (closed) return;
+        options.onError?.(toStreamError(error));
+        scheduleReconnect();
+      })
+      .finally(() => {
+        if (currentController === controller) {
+          currentController = null;
+        }
+      });
+  }
+
+  connect();
 
   return {
     get url() {
@@ -542,7 +595,9 @@ export const createChainFeedStream = (
     },
     close: () => {
       closed = true;
-      controller.abort();
+      clearReconnectTimeout();
+      currentController?.abort();
+      currentController = null;
     },
   };
 };

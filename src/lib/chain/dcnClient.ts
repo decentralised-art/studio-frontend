@@ -45,10 +45,15 @@ const withChainFetchDefaults =
     });
   };
 
+const resolveAccessToken = (options: DcnClientFactoryOptions): string | null =>
+  Object.prototype.hasOwnProperty.call(options, "accessToken")
+    ? (options.accessToken ?? null)
+    : getChainToken();
+
 export const createDcnClient = (options: DcnClientFactoryOptions = {}): DcnClient =>
   new DcnClient({
     baseUrl: getChainApiBaseUrl(),
-    accessToken: options.accessToken ?? getChainToken(),
+    accessToken: resolveAccessToken(options),
     fetch: withChainFetchDefaults(options.fetch ?? globalThis.fetch.bind(globalThis)),
   });
 

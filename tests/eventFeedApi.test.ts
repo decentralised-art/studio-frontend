@@ -324,7 +324,7 @@ describe("eventFeedApi", () => {
       body: "<html><body>504 Gateway Timeout</body></html>",
     });
 
-    createChainFeedStream({
+    const subscription = createChainFeedStream({
       sinceSeq: 0,
       limit: 20,
       onDelta: () => undefined,
@@ -337,6 +337,62 @@ describe("eventFeedApi", () => {
 
     expect(errors[0]).toBeInstanceOf(ChainApiRequestError);
     expect(errors[0]?.message).toBe("Chain API timed out (504 Gateway Timeout).");
+    subscription.close();
+  });
+
+  it("reconnects SDK feed streams after unexpected close", async () => {
+    vi.useFakeTimers();
+    try {
+      const deltas: ChainFeedStreamDelta[] = [];
+      const streamResponse = (streamSeq: number) =>
+        new Response(
+          [
+            "event: connector_added",
+            `data: ${JSON.stringify({
+              stream_seq: streamSeq,
+              event_type: "connector_added",
+              status: "observed",
+              feed_id: `connector:pitch:0x0${streamSeq}`,
+              history_cursor: `000000000000000${streamSeq}:0000:0000`,
+              created_at_ms: 4_000 + streamSeq,
+              payload: {
+                name: "pitch",
+                owner: OWNER,
+              },
+            })}`,
+            "",
+            "",
+          ].join("\n"),
+          {
+            headers: { "Content-Type": "text/event-stream" },
+          },
+        );
+
+      feedStreamMock
+        .mockResolvedValueOnce(streamResponse(6))
+        .mockResolvedValueOnce(streamResponse(7));
+
+      const subscription = createChainFeedStream({
+        sinceSeq: 5,
+        limit: 50,
+        onDelta: (delta) => deltas.push(delta),
+      });
+
+      await vi.waitFor(() => {
+        expect(deltas).toHaveLength(1);
+      });
+      expect(feedStreamMock).toHaveBeenNthCalledWith(1, { sinceSeq: 5, limit: 50 });
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.waitFor(() => {
+        expect(deltas).toHaveLength(2);
+      });
+      expect(feedStreamMock).toHaveBeenNthCalledWith(2, { sinceSeq: 6, limit: 50 });
+
+      subscription.close();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("parses SSE frames split across chunks", async () => {
@@ -366,7 +422,7 @@ describe("eventFeedApi", () => {
       ),
     );
 
-    createChainFeedStream({
+    const subscription = createChainFeedStream({
       sinceSeq: 6,
       limit: 10,
       onDelta: (delta) => deltas.push(delta),
@@ -377,6 +433,7 @@ describe("eventFeedApi", () => {
     });
 
     expect(deltas[0]?.streamSeq).toBe(7);
+    subscription.close();
   });
 
   it("ignores stream callbacks after close", async () => {
