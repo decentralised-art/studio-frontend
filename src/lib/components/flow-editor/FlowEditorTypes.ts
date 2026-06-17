@@ -3,7 +3,7 @@ import type { Edge, EdgeProps, getBezierPath, Node, NodeProps } from "@xyflow/sv
 // ---- Nodes ----
 export type FeatureData = {
   name: string;
-  exists_on_server: boolean;
+  exists_on_server: boolean | null;
 };
 
 // ---- Node types ----

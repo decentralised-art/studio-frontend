@@ -26,7 +26,7 @@
   import { addingConnectionCreatesCycle } from "./graphUtils";
   import type { ApiFeature } from "$lib/dcn/dcnApi";
   import { SvelteSet } from "svelte/reactivity";
-  import { buildChainApiUrl } from "$lib/url/url";
+  import { getChainConnectorFeature } from "$lib/chain/flowFeatureApi";
 
   // map to components
   const nodeTypes = {
@@ -208,17 +208,11 @@
 
       visited.add(featureName);
 
-      const res = await fetch(buildChainApiUrl(`/feature/${encodeURIComponent(featureName)}`), {
-        method: "GET",
-        cache: "no-store",
-      });
-
-      if (!res.ok) {
-        console.warn("Failed to GET feature", featureName, res.status);
+      const apiFeature = await getChainConnectorFeature(featureName);
+      if (!apiFeature) {
+        console.warn("Failed to GET connector feature", featureName);
         return null;
       }
-
-      const apiFeature: ApiFeature = await res.json();
 
       // determine if this is the root node
       const isRoot = parentNodeId === null;

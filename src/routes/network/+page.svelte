@@ -286,13 +286,6 @@
       .filter(Boolean);
     const merged = Array.from(new Set(resolvedProfileSources));
 
-    if (import.meta.env.DEV) {
-      console.info("[Network feed] Source derivation", {
-        profileSources: resolvedProfileSources,
-        mergedSources: merged,
-      });
-    }
-
     return merged;
   };
 
@@ -522,12 +515,6 @@
     const syncOptions = getFeedSyncOptions();
     const sourceAddresses = syncOptions.sourceAddresses;
     const followedFormatHashes = syncOptions.followedFormatHashes;
-    if (import.meta.env.DEV) {
-      console.info("[Network feed] Sync scope", {
-        sourceAddresses,
-        followedFormatHashes,
-      });
-    }
     try {
       if (sourceAddresses.length === 0 && followedFormatHashes.length === 0) {
         feedEvents = [];

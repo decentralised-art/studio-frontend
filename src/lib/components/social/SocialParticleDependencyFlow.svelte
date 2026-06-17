@@ -60,8 +60,8 @@
     fitView: (options?: { padding?: number; duration?: number }) => void;
   } | null>(null);
   let flowShellEl = $state<HTMLDivElement | null>(null);
-  let flowNodes = $state<StudioDependencyNode[]>([]);
-  let flowEdges = $state<Edge[]>([]);
+  let flowNodes = $state.raw<StudioDependencyNode[]>([]);
+  let flowEdges = $state.raw<Edge[]>([]);
   let fitSeq = 0;
   let flowReady = $state(false);
   let layoutFrame: number | null = null;
@@ -435,38 +435,36 @@
       <path d="M9 20H4v-5"></path>
     </svg>
   </button>
-  {#key `${particleId}:${builtNodes.length}:${builtEdges.length}`}
-    <SvelteFlow
-      id={flowId}
-      bind:nodes={flowNodes}
-      bind:edges={flowEdges}
-      {nodeTypes}
-      defaultEdgeOptions={{
-        style: "stroke: var(--studio-flow-pattern); stroke-width: 1.4px;",
+  <SvelteFlow
+    id={flowId}
+    bind:nodes={flowNodes}
+    bind:edges={flowEdges}
+    {nodeTypes}
+    defaultEdgeOptions={{
+      style: "stroke: var(--studio-flow-pattern); stroke-width: 1.4px;",
+    }}
+    nodesDraggable={false}
+    nodesConnectable={false}
+    elementsSelectable={false}
+    panOnDrag
+    zoomOnScroll
+    zoomOnDoubleClick={false}
+    zoomOnPinch
+    minZoom={0.12}
+    maxZoom={1.8}
+    onnodeclick={handleNodeClick}
+    proOptions={{ hideAttribution: true }}
+  >
+    <FlowInstanceBridge
+      onReady={(api) => {
+        flowApi = { fitView: api.fitView, getZoom: api.getZoom };
+        flowReady = true;
+        scheduleLayout();
+        void fitFlow();
       }}
-      nodesDraggable={false}
-      nodesConnectable={false}
-      elementsSelectable={false}
-      panOnDrag
-      zoomOnScroll
-      zoomOnDoubleClick={false}
-      zoomOnPinch
-      minZoom={0.12}
-      maxZoom={1.8}
-      onnodeclick={handleNodeClick}
-      proOptions={{ hideAttribution: true }}
-    >
-      <FlowInstanceBridge
-        onReady={(api) => {
-          flowApi = { fitView: api.fitView, getZoom: api.getZoom };
-          flowReady = true;
-          scheduleLayout();
-          void fitFlow();
-        }}
-      />
-      <Background bgColor="var(--studio-flow-bg)" patternColor="var(--studio-flow-pattern)" />
-    </SvelteFlow>
-  {/key}
+    />
+    <Background bgColor="var(--studio-flow-bg)" patternColor="var(--studio-flow-pattern)" />
+  </SvelteFlow>
 </div>
 
 <style lang="postcss">

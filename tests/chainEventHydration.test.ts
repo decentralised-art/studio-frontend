@@ -78,10 +78,13 @@ describe("chainEventHydration", () => {
 
     const detail = await hydrateChainFeedItemDetail(feedItem());
 
-    expect(fetchMock).toHaveBeenCalledWith("https://api.example.invalid/connector/score-weave", {
-      method: "GET",
-      cache: "no-store",
-    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.example.invalid/connector/score-weave",
+      expect.objectContaining({
+        method: "GET",
+        cache: "no-store",
+      }),
+    );
     expect(detail).toEqual(
       expect.objectContaining({
         type: "connector",
@@ -134,10 +137,13 @@ describe("chainEventHydration", () => {
       owner: OWNER,
     });
 
-    expect(fetchMock).toHaveBeenCalledWith("https://api.example.invalid/transformation/add", {
-      method: "GET",
-      cache: "no-store",
-    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.example.invalid/transformation/add",
+      expect.objectContaining({
+        method: "GET",
+        cache: "no-store",
+      }),
+    );
     expect(detail).toEqual(
       expect.objectContaining({
         type: "transformation",
@@ -198,10 +204,13 @@ describe("chainEventHydration", () => {
       }),
     );
 
-    expect(fetchMock).toHaveBeenCalledWith("https://api.example.invalid/condition/is_open", {
-      method: "GET",
-      cache: "no-store",
-    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.example.invalid/condition/is_open",
+      expect.objectContaining({
+        method: "GET",
+        cache: "no-store",
+      }),
+    );
     expect(detail).toEqual(
       expect.objectContaining({
         type: "condition",
@@ -274,10 +283,13 @@ describe("chainEventHydration", () => {
 
     const detail = await hydrateNetworkFeedEventDetail(event);
 
-    expect(fetchMock).toHaveBeenCalledWith("https://api.example.invalid/connector/velocity", {
-      method: "GET",
-      cache: "no-store",
-    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.example.invalid/connector/velocity",
+      expect.objectContaining({
+        method: "GET",
+        cache: "no-store",
+      }),
+    );
     expect(detail).toMatchObject({
       type: "connector",
       name: "velocity",

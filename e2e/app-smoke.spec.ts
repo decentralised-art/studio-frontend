@@ -8,6 +8,27 @@ const collectPageErrors = (page: Page) => {
   return () => expect(errors).toEqual([]);
 };
 
+const collectAppConsoleErrors = (page: Page) => {
+  const errors: string[] = [];
+  page.on("console", (message) => {
+    if (message.type() !== "error") return;
+    const location = message.location();
+    const sourceUrl = location.url;
+    const text = message.text();
+
+    if (text.startsWith("Failed to load resource")) return;
+    if (sourceUrl.startsWith("chrome-extension://") || sourceUrl.includes("contentscript.js")) {
+      return;
+    }
+    if (sourceUrl && !sourceUrl.includes("127.0.0.1") && !sourceUrl.includes("localhost")) {
+      return;
+    }
+
+    errors.push(`${text}${sourceUrl ? ` (${sourceUrl}:${location.lineNumber})` : ""}`);
+  });
+  return () => expect(errors).toEqual([]);
+};
+
 const fixtureConnectorToolbox = [
   "pitch",
   "time",
@@ -1152,6 +1173,39 @@ test("renders the Network shell", async ({ page }) => {
   expect(remoteApis.chainFeedRequests.some((url) => url.includes("/chain/feed"))).toBe(true);
   expect(remoteApis.chainAccountRequests).toEqual([]);
   assertNoPageErrors();
+});
+
+test("smoke: renders authenticated Network feed through the chain stream without app console errors", async ({
+  page,
+}) => {
+  const assertNoPageErrors = collectPageErrors(page);
+  const assertNoConsoleErrors = collectAppConsoleErrors(page);
+  const remoteApis = await stubRemoteApis(page);
+  await authenticateFixtureSession(page);
+
+  await page.goto("/network");
+
+  await expect(page.getByRole("region", { name: "Activity feed" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "profile_connector" })).toBeVisible({
+    timeout: 15_000,
+  });
+  await expect(page.locator(".social-dependency-flow").first()).toBeVisible();
+  await expect
+    .poll(
+      () => remoteApis.chainFeedRequests.some((url) => new URL(url).pathname === "/chain/feed"),
+      { timeout: 15_000 },
+    )
+    .toBe(true);
+  await expect
+    .poll(
+      () =>
+        remoteApis.chainFeedRequests.some((url) => new URL(url).pathname === "/chain/feed/stream"),
+      { timeout: 15_000 },
+    )
+    .toBe(true);
+  expect(remoteApis.chainAccountRequests).toEqual([]);
+  assertNoPageErrors();
+  assertNoConsoleErrors();
 });
 
 test("opens and adds a Studio Network connector discovered from the feed", async ({ page }) => {

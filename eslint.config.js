@@ -16,7 +16,7 @@ export default defineConfig(
   // ---------------------------------------------
   includeIgnoreFile(gitignorePath),
   {
-    ignores: ["static/worlds/tone-world/hydra-synth.js"],
+    ignores: ["static/worlds/tone-world/hydra-synth.js", "submodules/**"],
   },
 
   // ---------------------------------------------

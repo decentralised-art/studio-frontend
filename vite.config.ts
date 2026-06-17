@@ -48,7 +48,7 @@ export default defineConfig(({ isSsrBuild }) => ({
 
   // --- Dev / deps ---
   optimizeDeps: {
-    include: ["monaco-editor"],
+    include: ["monaco-editor", "tone"],
   },
 
   server: {

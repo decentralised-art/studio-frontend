@@ -1,39 +1,41 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { chainAuthFetchMock } = vi.hoisted(() => ({
-  chainAuthFetchMock: vi.fn(),
+const { executeMock, statusRef } = vi.hoisted(() => ({
+  executeMock: vi.fn(),
+  statusRef: { value: 200 },
 }));
 
-vi.mock("$lib/auth/api", () => ({
-  chainAuthFetch: chainAuthFetchMock,
-}));
-
-vi.mock("$lib/url/url", () => ({
-  buildChainApiUrl: (path: string) => `https://api.example.invalid${path}`,
+vi.mock("$lib/chain/dcnClient", () => ({
+  createDcnStatusTrackingClient: () => ({
+    client: {
+      execute: executeMock,
+    },
+    getLastResponseStatus: () => statusRef.value,
+  }),
+  isDcnApiError: (error: unknown) =>
+    Boolean(
+      error && typeof error === "object" && (error as { name?: string }).name === "DcnApiError",
+    ),
 }));
 
 import { ChainApiRequestError, postChainExecuteDetailed } from "../src/lib/chain/registryApi";
 
 describe("registryApi execute payload contract", () => {
   beforeEach(() => {
-    chainAuthFetchMock.mockReset();
+    executeMock.mockReset();
+    statusRef.value = 200;
   });
 
-  it("posts /execute with dynamic_ri payload unchanged and returns normalized current streams", async () => {
-    chainAuthFetchMock.mockResolvedValue(
-      new Response(
-        JSON.stringify([
-          {
-            path: "pitch:0",
-            data: [60, 61, 62],
-          },
-        ]),
+  it("executes with dynamic_ri payload unchanged and returns normalized current streams", async () => {
+    executeMock.mockImplementation(async () => {
+      statusRef.value = 201;
+      return [
         {
-          status: 201,
-          headers: { "Content-Type": "application/json" },
+          path: "pitch:0",
+          data: [60, 61, 62],
         },
-      ),
-    );
+      ];
+    });
 
     const payload = {
       connector_name: "root_connector",
@@ -46,11 +48,12 @@ describe("registryApi execute payload contract", () => {
 
     const result = await postChainExecuteDetailed(payload);
 
-    expect(chainAuthFetchMock).toHaveBeenCalledTimes(1);
-    const [path, requestInit] = chainAuthFetchMock.mock.calls[0] ?? [];
-    expect(path).toBe("/execute");
-    expect(requestInit?.method).toBe("POST");
-    expect(JSON.parse(String(requestInit?.body))).toEqual(payload);
+    expect(executeMock).toHaveBeenCalledTimes(1);
+    expect(executeMock).toHaveBeenCalledWith(
+      payload.connector_name,
+      payload.particles_count,
+      payload.dynamic_ri,
+    );
     expect(result.status).toBe(201);
     expect(Array.isArray(result.body)).toBe(true);
     expect(result.body[0]).toEqual({
@@ -60,20 +63,12 @@ describe("registryApi execute payload contract", () => {
   });
 
   it("normalizes legacy execute stream payloads that still use feature_path", async () => {
-    chainAuthFetchMock.mockResolvedValue(
-      new Response(
-        JSON.stringify([
-          {
-            feature_path: "time:0",
-            data: [0, 10, 20],
-          },
-        ]),
-        {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        },
-      ),
-    );
+    executeMock.mockResolvedValue([
+      {
+        feature_path: "time:0",
+        data: [0, 10, 20],
+      },
+    ]);
 
     const result = await postChainExecuteDetailed({
       connector_name: "root_connector",
@@ -88,12 +83,7 @@ describe("registryApi execute payload contract", () => {
   });
 
   it("rejects malformed success execute payloads instead of returning empty output", async () => {
-    chainAuthFetchMock.mockResolvedValue(
-      new Response(JSON.stringify({ message: "unexpected envelope" }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      }),
-    );
+    executeMock.mockResolvedValue({ message: "unexpected envelope" });
 
     await expect(
       postChainExecuteDetailed({
@@ -108,12 +98,11 @@ describe("registryApi execute payload contract", () => {
   });
 
   it("surfaces backend execute errors as ChainApiRequestError", async () => {
-    chainAuthFetchMock.mockResolvedValue(
-      new Response(JSON.stringify({ message: "Failed to execute connector." }), {
-        status: 400,
-        headers: { "Content-Type": "application/json" },
-      }),
-    );
+    executeMock.mockRejectedValue({
+      name: "DcnApiError",
+      status: 400,
+      body: { message: "Failed to execute connector." },
+    });
 
     await expect(
       postChainExecuteDetailed({
@@ -125,7 +114,7 @@ describe("registryApi execute payload contract", () => {
       }),
     ).rejects.toBeInstanceOf(ChainApiRequestError);
 
-    expect(chainAuthFetchMock).toHaveBeenCalledTimes(1);
+    expect(executeMock).toHaveBeenCalledTimes(1);
   });
 
   it("rejects invalid execute payload shape before issuing network request", async () => {
@@ -142,6 +131,6 @@ describe("registryApi execute payload contract", () => {
       }),
     ).rejects.toThrow(/unsupported top-level keys/i);
 
-    expect(chainAuthFetchMock).toHaveBeenCalledTimes(0);
+    expect(executeMock).toHaveBeenCalledTimes(0);
   });
 });

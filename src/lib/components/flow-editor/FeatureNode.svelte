@@ -6,7 +6,7 @@
   import type { FeatureNodePropsType } from "./FlowEditorTypes";
 
   import Input from "$lib/components/ui/Input.svelte";
-  import { buildChainApiUrl } from "$lib/url/url";
+  import { doesChainConnectorFeatureExist } from "$lib/chain/flowFeatureApi";
 
   let { id, data, isConnectable, selected }: FeatureNodePropsType = $props();
 
@@ -16,11 +16,8 @@
     loadFeatureGraphFromServer: (rootNodeId: string, featureName: string) => Promise<void>;
   }>("flow-graph-loader");
 
-  // create style for selected node
-  let selectedStyle = $derived(() => (selected ? "border-green-400" : "border-white/20"));
-
-  //
-  let existsOnServerStyle = $derived(() => (data.exists_on_server ? "bg-gray-800" : "bg-black"));
+  const selectedStyle = $derived(selected ? "border-green-400" : "border-white/20");
+  const existsOnServerStyle = $derived(data.exists_on_server ? "bg-gray-800" : "bg-black");
 
   async function checkFeatureExists(featureName: string) {
     const trimmed = featureName.trim();
@@ -31,12 +28,8 @@
     }
 
     try {
-      const res = await fetch(buildChainApiUrl(`/feature/${encodeURIComponent(trimmed)}`), {
-        method: "HEAD",
-        cache: "no-store",
-      });
-
-      if (!res.ok) {
+      const exists = await doesChainConnectorFeatureExist(trimmed);
+      if (!exists) {
         // 404 etc → mark as not existing, no throw
         updateNodeData(id, { exists_on_server: false });
         return;
@@ -56,7 +49,7 @@
 
 <div
   class="relative rounded-lg border
-         px-3 py-2 text-white text-sm shadow-md {selectedStyle()} {existsOnServerStyle()}"
+         px-3 py-2 text-white text-sm shadow-md {selectedStyle} {existsOnServerStyle}"
 >
   <!-- Top handle (target) -->
   <Handle type="target" position={Position.Top} {isConnectable} class="translate-y-[-50%]" />
