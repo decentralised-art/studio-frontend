@@ -12,7 +12,28 @@ export type DcnClientFactoryOptions = {
   fetch?: typeof fetch;
 };
 
-const getChainApiBaseUrl = (): string => buildChainApiUrl("").replace(/\/+$/, "");
+const defaultChainApiBaseUrl = "https://api.decentralised.art/chain";
+
+const stripTrailingSlashes = (value: string): string => value.replace(/\/+$/, "");
+
+const isAbsoluteUrl = (value: string): boolean => /^[a-z][a-z\d+\-.]*:\/\//i.test(value);
+
+const getRuntimeOrigin = (): string | null => {
+  const origin = globalThis.location?.origin;
+  return typeof origin === "string" && origin.length > 0 ? origin : null;
+};
+
+export const resolveDcnClientBaseUrl = (rawBaseUrl: string): string => {
+  const baseUrl = stripTrailingSlashes(rawBaseUrl.trim());
+  if (baseUrl.length === 0) return defaultChainApiBaseUrl;
+  if (isAbsoluteUrl(baseUrl)) return baseUrl;
+
+  const origin = getRuntimeOrigin() ?? defaultChainApiBaseUrl;
+  const absolutePath = baseUrl.startsWith("/") ? baseUrl : `/${baseUrl}`;
+  return stripTrailingSlashes(new URL(absolutePath, origin).toString());
+};
+
+const getChainApiBaseUrl = (): string => resolveDcnClientBaseUrl(buildChainApiUrl(""));
 
 const withChainFetchDefaults =
   (baseFetch: typeof fetch): typeof fetch =>
