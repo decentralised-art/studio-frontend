@@ -11,6 +11,8 @@ import {
   TONE_WORLD_REQUIRED_SCALARS,
   TONE_WORLD_REQUIRED_SCALAR_SETS,
 } from "$lib/toneWorld";
+import { listWorlds, type ListWorldsOptions } from "./api";
+import { backendWorldToFrontendDescriptor, type BackendWorldDescriptor } from "./contract";
 import { WORLD_PROTOCOL_VERSION, type WorldDescriptor, type WorldRuntimeInput } from "./types";
 
 export const MUSICXML_SCORE_WORLD_ID = "world.musicxml-score";
@@ -114,6 +116,7 @@ export const MUSICXML_SCORE_WORLD_VALUE_LIMITS = {
 
 export const MUSICXML_SCORE_WORLD: WorldDescriptor = {
   id: MUSICXML_SCORE_WORLD_ID,
+  source: "first-party",
   slug: MUSICXML_SCORE_WORLD_SLUG,
   name: "MusicXML Score World",
   version: "0.1.0",
@@ -152,6 +155,7 @@ export const MIDI_CLIP_WORLD_VALUE_LIMITS = {
 
 export const MIDI_CLIP_WORLD: WorldDescriptor = {
   id: MIDI_CLIP_WORLD_ID,
+  source: "first-party",
   slug: MIDI_CLIP_WORLD_SLUG,
   name: "MIDI World",
   version: "0.1.0",
@@ -206,6 +210,7 @@ export const TONE_WORLD_EXCLUDED_CONNECTORS = [
 
 export const TONE_WORLD: WorldDescriptor = {
   id: TONE_WORLD_ID,
+  source: "first-party",
   slug: TONE_WORLD_SLUG,
   name: "Tone World",
   version: "0.1.0",
@@ -239,6 +244,119 @@ export const FIRST_PARTY_WORLDS = [MUSICXML_SCORE_WORLD, MIDI_CLIP_WORLD, TONE_W
 
 export const findFirstPartyWorldBySlug = (slug: string | null | undefined) =>
   FIRST_PARTY_WORLDS.find((world) => world.slug === slug);
+
+export type FetchBackendWorlds = (options: ListWorldsOptions) => Promise<BackendWorldDescriptor[]>;
+
+export type WorldRegistryLoadOptions = ListWorldsOptions & {
+  fetchBackendWorlds?: FetchBackendWorlds;
+  firstPartyWorlds?: readonly WorldDescriptor[];
+  includeFirstParty?: boolean;
+};
+
+export type WorldRegistryLoadResult = {
+  worlds: WorldDescriptor[];
+  backendWorlds: BackendWorldDescriptor[];
+  backendError: unknown | null;
+  usedFirstPartyFallback: boolean;
+};
+
+const normalizeRegistryKey = (value: string | null | undefined): string =>
+  value?.trim().toLowerCase() ?? "";
+
+const registerWorldKey = (
+  indexes: Map<string, number>,
+  kind: "slug" | "id",
+  value: string | null | undefined,
+  index: number,
+) => {
+  const normalized = normalizeRegistryKey(value);
+  if (!normalized) return;
+  indexes.set(`${kind}:${normalized}`, index);
+};
+
+const findWorldIndex = (indexes: Map<string, number>, world: WorldDescriptor): number | undefined =>
+  indexes.get(`slug:${normalizeRegistryKey(world.slug)}`) ??
+  indexes.get(`id:${normalizeRegistryKey(world.id)}`);
+
+const buildWorldIndexes = (worlds: readonly WorldDescriptor[]): Map<string, number> => {
+  const indexes = new Map<string, number>();
+  worlds.forEach((world, index) => {
+    registerWorldKey(indexes, "slug", world.slug, index);
+    registerWorldKey(indexes, "id", world.id, index);
+  });
+  return indexes;
+};
+
+export const mergeWorldDescriptors = ({
+  backendWorlds = [],
+  firstPartyWorlds = FIRST_PARTY_WORLDS,
+  includeFirstParty = true,
+}: {
+  backendWorlds?: readonly BackendWorldDescriptor[];
+  firstPartyWorlds?: readonly WorldDescriptor[];
+  includeFirstParty?: boolean;
+}): WorldDescriptor[] => {
+  const merged: WorldDescriptor[] = includeFirstParty ? [...firstPartyWorlds] : [];
+  let indexes = buildWorldIndexes(merged);
+
+  backendWorlds.forEach((backendWorld) => {
+    const world = backendWorldToFrontendDescriptor(backendWorld);
+    const existingIndex = findWorldIndex(indexes, world);
+    if (existingIndex !== undefined) {
+      merged[existingIndex] = world;
+      indexes = buildWorldIndexes(merged);
+      return;
+    }
+
+    const index = merged.length;
+    merged.push(world);
+    registerWorldKey(indexes, "slug", world.slug, index);
+    registerWorldKey(indexes, "id", world.id, index);
+  });
+
+  return merged;
+};
+
+export const resolveWorldBySlugOrId = (
+  worlds: readonly WorldDescriptor[],
+  slugOrId: string | null | undefined,
+): WorldDescriptor | undefined => {
+  const normalized = normalizeRegistryKey(slugOrId);
+  if (!normalized) return undefined;
+  return worlds.find(
+    (world) =>
+      normalizeRegistryKey(world.slug) === normalized ||
+      normalizeRegistryKey(world.id) === normalized,
+  );
+};
+
+export const loadWorldRegistry = async ({
+  fetchBackendWorlds = listWorlds,
+  firstPartyWorlds = FIRST_PARTY_WORLDS,
+  includeFirstParty = true,
+  page,
+  limit,
+  surface,
+  query,
+}: WorldRegistryLoadOptions = {}): Promise<WorldRegistryLoadResult> => {
+  try {
+    const backendWorlds = await fetchBackendWorlds({ page, limit, surface, query });
+    return {
+      worlds: mergeWorldDescriptors({ backendWorlds, firstPartyWorlds, includeFirstParty }),
+      backendWorlds,
+      backendError: null,
+      usedFirstPartyFallback: false,
+    };
+  } catch (error) {
+    const fallbackWorlds = includeFirstParty ? [...firstPartyWorlds] : [];
+    return {
+      worlds: fallbackWorlds,
+      backendWorlds: [],
+      backendError: error,
+      usedFirstPartyFallback: fallbackWorlds.length > 0,
+    };
+  }
+};
 
 export const buildMusicXmlWorldInput = ({
   scoreData,

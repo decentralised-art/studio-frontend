@@ -59,6 +59,32 @@ describe("world format connector discovery", () => {
     });
   });
 
+  it("fetches connector candidates declared directly by backend connector sets", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/connector/pitch") {
+        return Response.json({
+          name: "pitch",
+          owner: "0xb530bf08d76015080c67d6b5f00cdee53b45bdda",
+          format_hash: formatHash,
+          dimensions: [{ transformations: [{ name: "add", args: [1] }], bindings: {} }],
+        });
+      }
+      throw new Error(`Unexpected request: ${url.pathname}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await fetchWorldFormatConnectorEvents({
+      acceptedConnectorNames: ["pitch", "pitch", "ignored"],
+      excludedConnectorNames: ["ignored"],
+    });
+
+    expect(result.errors).toEqual([]);
+    expect(result.formatHashes).toEqual([]);
+    expect(result.events.map((event) => event.particleId)).toEqual(["pitch"]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("discovers compatible format hashes from accepted terminal scalar names", async () => {
     const compatibleHash = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
     const incompatibleHash = "0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";

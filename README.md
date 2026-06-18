@@ -58,12 +58,14 @@ VITE_CHAIN_API_BASE_URL=https://api.decentralised.art/chain
 
 Runtime behavior notes:
 
-1. Dev is proxy-first by default (`/services`, `/chain`) via `vite.config.ts`.
+1. Dev is proxy-first by default (`/services`, `/chain`, `/world-assets`, `/js/sdk`) via `vite.config.ts`; world asset and SDK traffic is routed to the backend services gateway.
 2. Production serves the SvelteKit app at the decentralised.art root, with `/app/*` kept as a compatibility redirect.
 3. The former Astro website is migrated into this SvelteKit app and is no longer a production dependency.
 4. Production defaults are strict network-only:
    - `https://api.decentralised.art/services`
    - `https://api.decentralised.art/chain`
+   - `https://api.decentralised.art/services/world-assets`
+   - `https://api.decentralised.art/services/js/sdk`
 5. Set `VITE_*_API_BASE_URL` only when intentionally overriding targets.
 
 Detailed matrix:

@@ -26,8 +26,13 @@ describe("Studio left panel templates removal", () => {
     const source = readStudioSource();
 
     expect(source).toContain(
-      "const allStudioPlugins = $derived.by<StudioPluginDescriptor[]>(() => listStudioPlugins());",
+      "const allStudioPlugins = $derived.by<StudioPluginDescriptor[]>(() => [",
     );
+    expect(source).toContain("...listStudioPlugins(),");
+    expect(source).toContain("...listStudioWorldPlugins(studioBackendWorlds),");
+    expect(source).toContain("const result = await loadWorldRegistry({");
+    expect(source).toContain('surface: "studio-plugin"');
+    expect(source).toContain("includeFirstParty: false");
     expect(source).toContain("{#each allStudioPlugins as plugin (plugin.id)}");
     expect(source).toContain("const addStandaloneStudioPlugin = (");
     expect(source).toContain("const addStudioPluginToFlow = (");

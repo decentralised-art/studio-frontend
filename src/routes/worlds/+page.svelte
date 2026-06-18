@@ -1,7 +1,40 @@
 <script lang="ts">
   import { resolve } from "$app/paths";
+  import { onMount } from "svelte";
 
-  import { FIRST_PARTY_WORLDS } from "$lib/worlds/registry";
+  import { FIRST_PARTY_WORLDS, loadWorldRegistry } from "$lib/worlds/registry";
+  import type { WorldDescriptor } from "$lib/worlds/types";
+
+  let worlds = $state<WorldDescriptor[]>([...FIRST_PARTY_WORLDS]);
+  let registryLoading = $state(true);
+  let registryLoadWarning = $state(false);
+
+  onMount(() => {
+    let mounted = true;
+
+    const loadWorlds = async () => {
+      try {
+        const result = await loadWorldRegistry({ surface: "world-page" });
+        if (!mounted) return;
+
+        worlds = result.worlds;
+        registryLoadWarning = result.backendError !== null && result.usedFirstPartyFallback;
+      } catch {
+        if (!mounted) return;
+        registryLoadWarning = true;
+      } finally {
+        if (mounted) {
+          registryLoading = false;
+        }
+      }
+    };
+
+    void loadWorlds();
+
+    return () => {
+      mounted = false;
+    };
+  });
 </script>
 
 <svelte:head>
@@ -13,8 +46,21 @@
     <p>Worlds</p>
   </section>
 
+  {#if registryLoading || registryLoadWarning}
+    <p
+      class="worlds-status"
+      class:worlds-status-warning={registryLoadWarning}
+      role="status"
+      aria-live="polite"
+    >
+      {registryLoading
+        ? "Loading worlds..."
+        : "Showing bundled worlds. Backend registry unavailable."}
+    </p>
+  {/if}
+
   <section class="world-grid" aria-label="Available worlds">
-    {#each FIRST_PARTY_WORLDS as world (world.id)}
+    {#each worlds as world (world.id)}
       <a class="world-card" href={resolve("/worlds/[slug]", { slug: world.slug })}>
         <div class="world-graphic" style={`--world-accent: ${world.accentColor ?? "#67d6ff"}`}>
           <div class="score-lines" aria-hidden="true">
@@ -33,19 +79,17 @@
       </a>
     {/each}
 
-    <article
-      class="world-card world-card-placeholder"
-      aria-label="Add a new world feature in development"
-    >
+    <a class="world-card world-card-placeholder" href={resolve("/worlds/upload")}>
       <div class="world-graphic world-placeholder-graphic" style="--world-accent: #8de58f">
         <span class="world-plus" aria-hidden="true">+</span>
       </div>
       <div class="world-card-body">
         <div>
-          <h2>Add a new world (feature in development)</h2>
+          <h2>Upload a world bundle</h2>
+          <p>Validate and publish a backend-hosted iframe world from a ZIP bundle.</p>
         </div>
       </div>
-    </article>
+    </a>
   </section>
 </main>
 
@@ -65,6 +109,15 @@
   .worlds-header p {
     @apply m-0 text-[0.68rem] uppercase tracking-[0.18em];
     color: var(--text-muted);
+  }
+
+  .worlds-status {
+    @apply mx-auto mt-3 max-w-6xl text-sm;
+    color: var(--text-muted);
+  }
+
+  .worlds-status-warning {
+    color: #fbbf24;
   }
 
   .world-grid {
