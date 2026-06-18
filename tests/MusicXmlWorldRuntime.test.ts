@@ -6,6 +6,7 @@ import { MUSICXML_SCORE_WORLD, MUSICXML_SCORE_WORLD_ID } from "../src/lib/worlds
 import {
   WORLD_PROTOCOL_VERSION,
   WORLD_STATE_MESSAGE_TYPE,
+  type WorldDescriptor,
   type WorldRuntimeInput,
 } from "../src/lib/worlds/types";
 
@@ -80,6 +81,32 @@ const loadRuntimePage = async () =>
 
 const loadWorldFrame = async () =>
   (await import("../src/lib/components/worlds/WorldFrame.svelte")).default;
+
+const backendWorld: WorldDescriptor = {
+  id: "backend-world-1",
+  source: "backend",
+  slug: "backend-world",
+  name: "Backend World",
+  version: "0.1.0",
+  entry: "/world-assets/backend-world-1/index.html",
+  entryUrn: "/world-assets/backend-world-1/index.html",
+  runtime: "iframe",
+  permissions: ["dcn.execute", "browser.downloads"],
+  acceptedPluginIds: [],
+  acceptedConnectorSets: [{ connectors: ["pitch"], optionalConnectors: [] }],
+  surfaces: ["world-page"],
+  description: "A backend-hosted world.",
+  backend: {
+    ownerId: "user-1",
+    bundleHash: "a".repeat(64),
+    manifestHash: "b".repeat(64),
+    entryPath: "index.html",
+    entryUrn: "/world-assets/backend-world-1/index.html",
+    status: "active",
+    createdAt: "2026-06-17T12:00:00Z",
+    updatedAt: "2026-06-17T12:00:00Z",
+  },
+};
 
 const postWorldState = (payload: WorldRuntimeInput) => {
   window.postMessage(
@@ -194,6 +221,33 @@ describe("MusicXML world runtime", () => {
       "sandbox",
       expect.stringContaining("allow-downloads"),
     );
+  });
+
+  it("mounts backend worlds through the SDK host channel", async () => {
+    const WorldFrame = await loadWorldFrame();
+    render(WorldFrame, {
+      props: {
+        world: backendWorld,
+        input: {
+          protocolVersion: WORLD_PROTOCOL_VERSION,
+          worldId: backendWorld.id,
+          surface: "world-page",
+          label: "Backend World",
+        },
+      },
+    });
+
+    const iframe = screen.getByTitle(backendWorld.name);
+
+    await waitFor(() => {
+      expect(iframe).toHaveAttribute(
+        "src",
+        expect.stringContaining("/services/world-assets/backend-world-1/index.html"),
+      );
+      expect(iframe).toHaveAttribute("src", expect.stringContaining("dcnWorldChannel="));
+    });
+    expect(iframe).toHaveAttribute("sandbox", "allow-scripts allow-downloads");
+    expect(iframe).not.toHaveAttribute("sandbox", expect.stringContaining("allow-same-origin"));
   });
 
   it("posts updated world input into an already loaded iframe", async () => {

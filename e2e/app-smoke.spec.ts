@@ -135,6 +135,34 @@ const stubRemoteApis = async (
       bindings: {},
     })),
   });
+  const backendE2eWorld = {
+    id: "world-backend-e2e",
+    slug: "backend-e2e-world",
+    name: "Backend E2E World",
+    version: "1.0.0",
+    entryUrn: "/world-assets/world-backend-e2e/index.html",
+    runtime: "iframe",
+    surfaces: ["world-page", "studio-plugin"],
+    permissions: [],
+    description: "A backend-hosted world fixture for Studio smoke coverage.",
+    shortDescription: "Backend Studio smoke world.",
+    heroLabel: "Backend E2E",
+    accentColor: "#6ee7b7",
+    acceptedFormatHashes: [],
+    acceptedConnectorSets: [
+      {
+        connectors: ["melody_root", "duration"],
+        optionalConnectors: ["velocity"],
+      },
+    ],
+    ownerId: fixtureUserId,
+    bundleHash: "sha256:backend-e2e-bundle",
+    manifestHash: "sha256:backend-e2e-manifest",
+    entryPath: "index.html",
+    status: "active",
+    createdAt: "2026-06-17T12:00:00.000Z",
+    updatedAt: "2026-06-17T12:00:00.000Z",
+  };
   const scoreConnectors: Record<string, object> = {
     test_position_score_e2e_06052026: collectorScoreConnector(
       "test_position_score_e2e_06052026",
@@ -247,7 +275,45 @@ const stubRemoteApis = async (
     score_placement: terminalScoreConnector("score_placement", "0x0022"),
     score_slur_number: terminalScoreConnector("score_slur_number", "0x0023"),
     score_slur_type: terminalScoreConnector("score_slur_type", "0x0024"),
+    melody_root: terminalScoreConnector(
+      "melody_root",
+      "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    ),
+    duration: terminalScoreConnector(
+      "duration",
+      "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    ),
+    velocity: terminalScoreConnector(
+      "velocity",
+      "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    ),
   };
+
+  await page.route(/.*\/world-assets\/world-backend-e2e\/index\.html.*/, async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "text/html",
+      body: `<!doctype html>
+        <html>
+          <body>
+            <div id="world-root">Backend E2E World Runtime</div>
+            <script>
+              const params = new URLSearchParams(window.location.search);
+              const channelToken = params.get("dcnWorldChannel");
+              const worldId = "world-backend-e2e";
+              const post = (message) => window.parent.postMessage({ ...message, worldId, channelToken }, "*");
+              window.addEventListener("message", (event) => {
+                const data = event.data || {};
+                if (data.type === "dcn:world-state" && data.channelToken === channelToken) {
+                  post({ type: "dcn:world-rendered", requestId: data.requestId });
+                }
+              });
+              post({ type: "dcn:world-ready", protocolVersion: 1 });
+            </script>
+          </body>
+        </html>`,
+    });
+  });
 
   await page.route(/.*\/(?:services|chain)\/.*/, async (route) => {
     const url = route.request().url();
@@ -290,6 +356,15 @@ const stubRemoteApis = async (
         status: 200,
         contentType: "application/json",
         body: JSON.stringify([buildFixtureUser(publicDisplayName)]),
+      });
+      return;
+    }
+
+    if (url.includes("/services/worlds")) {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify([backendE2eWorld]),
       });
       return;
     }
@@ -577,12 +652,16 @@ const stubRemoteApis = async (
 
 const authenticateFixtureSession = async (page: Page) => {
   await page.addInitScript(() => {
-    window.localStorage.setItem("hypermusic_token", "playwright-e2e-services-token");
-    window.localStorage.setItem("hypermusic_chain_token", "playwright-e2e-chain-token");
-    window.localStorage.setItem(
-      "hypermusic_chain_token_user_id",
-      "wallet:0xb584a15f38c2014cff54fdb1b417428b51999276",
-    );
+    try {
+      window.localStorage.setItem("hypermusic_token", "playwright-e2e-services-token");
+      window.localStorage.setItem("hypermusic_chain_token", "playwright-e2e-chain-token");
+      window.localStorage.setItem(
+        "hypermusic_chain_token_user_id",
+        "wallet:0xb584a15f38c2014cff54fdb1b417428b51999276",
+      );
+    } catch {
+      // Sandboxed backend-world iframes intentionally do not expose origin storage.
+    }
   });
 };
 
@@ -969,6 +1048,103 @@ const seedMovableConnectorTreeSession = async (page: Page) => {
   });
 };
 
+const seedBackendWorldConnectorSetSession = async (page: Page) => {
+  await page.addInitScript(() => {
+    const makeConnector = (
+      id: string,
+      label: string,
+      x: number,
+      y: number,
+      options: { tabRoot?: boolean; definitionRole?: "root" | "member" } = {},
+    ) => ({
+      id,
+      type: "connector",
+      draggable: true,
+      position: { x, y },
+      data: {
+        label,
+        kind: "connector",
+        dimensions: 1,
+        connectorRows: [{ dimension: 1, transformations: [] }],
+        conditionLabel: null,
+        sourceId: `feature-${label}`,
+        networkId: label,
+        fromNetwork: true,
+        tabRoot: Boolean(options.tabRoot),
+        definitionRole: options.definitionRole ?? null,
+        hideOutlets: false,
+        riPosition: 0,
+        riStart: 0,
+        riShift: 0,
+        riLocked: false,
+      },
+    });
+
+    const rootNode = makeConnector("connector-backend-world-root", "melody_root", 260, 120, {
+      tabRoot: true,
+      definitionRole: "root",
+    });
+    const durationNode = makeConnector("connector-backend-world-duration", "duration", 520, 300, {
+      definitionRole: "member",
+    });
+    const velocityNode = makeConnector("connector-backend-world-velocity", "velocity", 760, 300, {
+      definitionRole: "member",
+    });
+    const graphEdges = [
+      {
+        id: "edge-backend-world-root-duration",
+        source: rootNode.id,
+        sourceHandle: "dim-0",
+        target: durationNode.id,
+        targetHandle: "in",
+        label: "composite · D1",
+        data: { relation: "composite" },
+      },
+      {
+        id: "edge-backend-world-root-velocity",
+        source: rootNode.id,
+        sourceHandle: "dim-0",
+        target: velocityNode.id,
+        targetHandle: "in",
+        label: "composite · D1",
+        data: { relation: "composite" },
+      },
+    ];
+
+    try {
+      window.sessionStorage.setItem(
+        "dcn_studio_tabs_session_v1",
+        JSON.stringify({
+          version: 1,
+          tabs: [
+            {
+              id: "tab-backend-world-connectors",
+              label: "melody_root",
+              particleId: "melody_root",
+            },
+          ],
+          activeTabId: "tab-backend-world-connectors",
+          tabGraphs: {
+            "tab-backend-world-connectors": {
+              nodes: [rootNode, durationNode, velocityNode],
+              edges: graphEdges,
+            },
+          },
+          connectorTreeModels: {
+            "tab-backend-world-connectors": {
+              rootConnectorName: "melody_root",
+              nodes: [rootNode, durationNode, velocityNode],
+              edges: graphEdges,
+            },
+          },
+        }),
+      );
+    } catch {
+      // Sandboxed backend-world iframes intentionally do not expose origin storage.
+    }
+  });
+};
+
 test("renders the public landing page for anonymous root visitors", async ({ page }) => {
   const assertNoPageErrors = collectPageErrors(page);
 
@@ -1025,6 +1201,39 @@ test("keeps old /app world links working through redirects", async ({ page }) =>
 
   await expect(page).toHaveURL(/\/worlds$/);
   await expect(page.locator('section[aria-label="Available worlds"]')).toBeVisible();
+  assertNoPageErrors();
+});
+
+test("renders backend worlds in the public Worlds surface", async ({ page }) => {
+  const assertNoPageErrors = collectPageErrors(page);
+  await stubRemoteApis(page);
+  await authenticateFixtureSession(page);
+
+  await page.goto("/worlds");
+
+  await expect(page.locator('section[aria-label="Available worlds"]')).toBeVisible();
+  const backendWorldCard = page.locator(".world-card").filter({ hasText: "Backend E2E World" });
+  await expect(backendWorldCard).toBeVisible({ timeout: 15_000 });
+  await expect(backendWorldCard).toContainText("Backend Studio smoke world.");
+
+  await backendWorldCard.click();
+
+  await expect(page).toHaveURL(/\/worlds\/backend-e2e-world$/);
+  await expect(page.getByRole("heading", { name: "Backend E2E World" })).toBeVisible();
+  await expect(page.getByText("Source: Backend world")).toBeVisible();
+  await expect(page.getByText("Version: 1.0.0")).toBeVisible();
+  await expect(page.getByText("Status: active")).toBeVisible();
+  await expect(page.locator(".world-renderer-panel iframe")).toHaveAttribute(
+    "src",
+    /\/world-assets\/world-backend-e2e\/index\.html.*dcnWorldChannel=/,
+  );
+
+  await expect(page.locator('section[aria-label="Declared connector sets"]')).toHaveCount(0);
+  const compatibleConnectors = page.locator('section[aria-label="Compatible connectors"]');
+  await expect(compatibleConnectors).toBeVisible();
+  await expect(compatibleConnectors.getByRole("link", { name: "duration" })).toBeVisible();
+  await expect(compatibleConnectors.getByRole("link", { name: "melody_root" })).toBeVisible();
+  await expect(compatibleConnectors.getByRole("link", { name: "velocity" })).toBeVisible();
   assertNoPageErrors();
 });
 
@@ -1122,6 +1331,40 @@ test("attaches worlds to the draft root connector", async ({ page }) => {
   await expect(
     page.locator('.svelte-flow__edge[data-id^="edge-plugin-music-score-v1"]'),
   ).toHaveCount(1);
+  assertNoPageErrors();
+});
+
+test("attaches backend connector-set worlds to matching Studio connectors", async ({ page }) => {
+  const assertNoPageErrors = collectPageErrors(page);
+  await stubRemoteApis(page);
+  await authenticateFixtureSession(page);
+  await seedBackendWorldConnectorSetSession(page);
+
+  await page.goto("/studio");
+  await page.getByRole("button", { name: "Worlds", exact: true }).click();
+
+  const backendWorldPlugin = page.locator(".plugin-card").filter({ hasText: "Backend E2E World" });
+  await expect(backendWorldPlugin).toBeVisible({ timeout: 15_000 });
+  await expect(backendWorldPlugin).toContainText("Backend");
+  await expect(backendWorldPlugin).toContainText("Connector set");
+  await expect(backendWorldPlugin).toContainText("Set 1: melody_root, duration; optional velocity");
+  await expect(backendWorldPlugin).toContainText("Matches set 1");
+
+  await backendWorldPlugin.getByRole("button", { name: "+" }).click();
+
+  await expect(page.locator(".plugins-feedback")).toContainText(
+    "Connected 'Backend E2E World' to 'melody_root + duration + velocity'.",
+  );
+  const backendWorldNode = page.locator(".plugin-node").filter({ hasText: "Backend E2E World" });
+  await expect(backendWorldNode).toBeVisible();
+  await expect(backendWorldNode).toContainText("0 streams | 0 values | backend world");
+  await expect(backendWorldNode.locator("iframe")).toHaveAttribute(
+    "src",
+    /\/world-assets\/world-backend-e2e\/index\.html.*dcnWorldChannel=/,
+  );
+  await expect(
+    page.locator('.svelte-flow__edge[data-id^="edge-plugin-world:world-backend-e2e"]'),
+  ).toHaveCount(3);
   assertNoPageErrors();
 });
 
@@ -1422,7 +1665,10 @@ test("renders account activity from feed events owned by the current chain addre
   });
   await expect(page.getByText("No activity by this user yet.")).toHaveCount(0);
   expect(remoteApis.chainFeedRequests.some((url) => url.includes("/chain/feed"))).toBe(true);
-  expect(remoteApis.chainAccountRequests).toEqual([]);
+  expect(remoteApis.chainAccountRequests).toHaveLength(1);
+  const accountSnapshotUrl = new URL(remoteApis.chainAccountRequests[0]);
+  expect(accountSnapshotUrl.pathname).toBe(`/chain/account/${fixtureAddress}`);
+  expect(accountSnapshotUrl.searchParams.get("limit")).toBe("256");
   assertNoPageErrors();
 });
 

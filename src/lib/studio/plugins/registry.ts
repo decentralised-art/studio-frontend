@@ -1,12 +1,16 @@
 import { normalizeFormatHash } from "$lib/chain/registryApi";
 import { MUSIC_SCORE_PLUGIN_ID, MUSIC_SCORE_PLUGIN_NAME } from "$lib/score/codebook";
+import type { WorldAcceptedConnectorSet, WorldDescriptor } from "$lib/worlds/types";
 
 export type StudioPluginDescriptor = {
   id: string;
   name: string;
   summary: string;
   supportedFormatHashes: string[];
-  status: "alpha" | "planned";
+  acceptedConnectorSets?: WorldAcceptedConnectorSet[];
+  status: "alpha" | "planned" | "active" | "deleted";
+  source?: "builtin" | "backend-world";
+  worldDescriptor?: WorldDescriptor;
 };
 
 export const MIDI_CLIP_PLUGIN_ID = "midi-clip-export-v1";
@@ -25,6 +29,7 @@ const BUILTIN_STUDIO_PLUGINS: StudioPluginDescriptor[] = [
       "Generates MIDI clips from pitch/time/duration/velocity connector streams and supports file export.",
     supportedFormatHashes: [MIDI_QUAD_FORMAT_HASH],
     status: "alpha",
+    source: "builtin",
   },
   {
     id: MUSIC_SCORE_PLUGIN_ID,
@@ -33,6 +38,7 @@ const BUILTIN_STUDIO_PLUGINS: StudioPluginDescriptor[] = [
       "Renders compatible connector/RIs output as MusicXML 4.0 notation in a sandboxed world.",
     supportedFormatHashes: MUSIC_SCORE_PLUGIN_FORMAT_HASHES,
     status: "alpha",
+    source: "builtin",
   },
   {
     id: TONE_WORLD_PLUGIN_ID,
@@ -40,8 +46,47 @@ const BUILTIN_STUDIO_PLUGINS: StudioPluginDescriptor[] = [
     summary: "Runs compatible connector/RIs output inside the Tone World audiovisual runtime.",
     supportedFormatHashes: [],
     status: "alpha",
+    source: "builtin",
   },
 ];
+
+export const BACKEND_WORLD_PLUGIN_ID_PREFIX = "world:";
+
+export const studioPluginIdForWorld = (world: Pick<WorldDescriptor, "id">): string =>
+  `${BACKEND_WORLD_PLUGIN_ID_PREFIX}${world.id}`;
+
+const normalizeSupportedFormatHashes = (hashes: readonly string[] | null | undefined): string[] =>
+  (hashes ?? []).flatMap((hash) => {
+    try {
+      return [normalizeFormatHash(hash)];
+    } catch {
+      return [];
+    }
+  });
+
+export const studioPluginFromWorldDescriptor = (
+  world: WorldDescriptor,
+): StudioPluginDescriptor => ({
+  id: studioPluginIdForWorld(world),
+  name: world.name,
+  summary: world.shortDescription ?? world.description,
+  supportedFormatHashes: normalizeSupportedFormatHashes(world.acceptedFormatHashes),
+  acceptedConnectorSets: world.acceptedConnectorSets?.map((connectorSet) => ({
+    connectors: [...connectorSet.connectors],
+    optionalConnectors: [...connectorSet.optionalConnectors],
+  })),
+  status: world.backend?.status ?? "active",
+  source: "backend-world",
+  worldDescriptor: world,
+});
+
+export const listStudioWorldPlugins = (
+  worlds: readonly WorldDescriptor[],
+): StudioPluginDescriptor[] =>
+  worlds
+    .filter((world) => world.source === "backend")
+    .filter((world) => world.surfaces.includes("studio-plugin"))
+    .map(studioPluginFromWorldDescriptor);
 
 export const listStudioPlugins = (): StudioPluginDescriptor[] => [...BUILTIN_STUDIO_PLUGINS];
 

@@ -101,6 +101,20 @@ const normalizeRequiredScalarSets = (options: {
   return scalars.length > 0 ? [{ id: "required", label: "Required", scalars }] : [];
 };
 
+const normalizeExplicitConnectorNames = (options: {
+  acceptedConnectorNames?: readonly string[];
+  excludedConnectorNames?: ReadonlySet<string>;
+}): string[] => {
+  const seen = new Set<string>();
+  return (options.acceptedConnectorNames ?? [])
+    .map((name) => name.trim())
+    .filter((name) => {
+      if (!name || seen.has(name) || options.excludedConnectorNames?.has(name)) return false;
+      seen.add(name);
+      return true;
+    });
+};
+
 export const isFormatCompatibleWithScalarContract = (
   format: RawChainFormatResponse,
   options: {
@@ -183,6 +197,7 @@ const discoverFormatHashesByScalarContract = async (options: {
 };
 
 export const fetchWorldFormatConnectorEvents = async (options: {
+  acceptedConnectorNames?: readonly string[];
   acceptedFormatHashes?: readonly string[];
   acceptedScalars?: readonly string[];
   excludedConnectorNames?: readonly string[];
@@ -214,6 +229,10 @@ export const fetchWorldFormatConnectorEvents = async (options: {
   const excludedConnectorNames = new Set(
     (options.excludedConnectorNames ?? []).map((name) => name.trim()).filter(Boolean),
   );
+  const explicitConnectorNames = normalizeExplicitConnectorNames({
+    acceptedConnectorNames: options.acceptedConnectorNames,
+    excludedConnectorNames,
+  });
   if (
     normalizedHashes.length === 0 &&
     options.acceptedScalars?.length &&
@@ -228,39 +247,45 @@ export const fetchWorldFormatConnectorEvents = async (options: {
     normalizedHashes = discovery.formatHashes;
   }
 
-  if (normalizedHashes.length === 0)
+  if (normalizedHashes.length === 0 && explicitConnectorNames.length === 0)
     return { events: [], formatHashes: [], hasMore: false, errors };
 
-  const formatResults = await runSettledWithConcurrency(
-    normalizedHashes,
-    CONNECTOR_HYDRATION_CONCURRENCY,
-    async (formatHash) => ({
-      formatHash,
-      response: await getChainFormat(formatHash, { limit: formatConnectorPageLimit }),
-    }),
-  );
-
   const connectorFormatByName = new Map<string, string>();
-  formatResults.forEach((result, index) => {
-    const formatHash = normalizedHashes[index];
-    if (result.status === "rejected") {
-      errors.push(`${formatHash}: ${errorMessage(result.reason)}`);
-      return;
-    }
-    normalizeConnectorNamesFromFormat(result.value.response).forEach((connectorName) => {
-      if (excludedConnectorNames.has(connectorName)) return;
-      if (!connectorFormatByName.has(connectorName)) {
-        connectorFormatByName.set(connectorName, result.value.formatHash);
+  explicitConnectorNames.forEach((connectorName) => connectorFormatByName.set(connectorName, ""));
+
+  let formatPagesHaveMore = false;
+  if (normalizedHashes.length > 0) {
+    const formatResults = await runSettledWithConcurrency(
+      normalizedHashes,
+      CONNECTOR_HYDRATION_CONCURRENCY,
+      async (formatHash) => ({
+        formatHash,
+        response: await getChainFormat(formatHash, { limit: formatConnectorPageLimit }),
+      }),
+    );
+
+    formatResults.forEach((result, index) => {
+      const formatHash = normalizedHashes[index];
+      if (result.status === "rejected") {
+        errors.push(`${formatHash}: ${errorMessage(result.reason)}`);
+        return;
       }
+      normalizeConnectorNamesFromFormat(result.value.response).forEach((connectorName) => {
+        if (excludedConnectorNames.has(connectorName)) return;
+        if (!connectorFormatByName.has(connectorName)) {
+          connectorFormatByName.set(connectorName, result.value.formatHash);
+        }
+      });
     });
-  });
+
+    formatPagesHaveMore = formatResults.some(
+      (result) => result.status === "fulfilled" && Boolean(result.value.response.cursor?.has_more),
+    );
+  }
 
   const connectorNames = [...connectorFormatByName.keys()]
     .sort((a, b) => a.localeCompare(b))
     .slice(0, connectorLimit);
-  const formatPagesHaveMore = formatResults.some(
-    (result) => result.status === "fulfilled" && Boolean(result.value.response.cursor?.has_more),
-  );
   const hasMore = connectorFormatByName.size > connectorLimit || formatPagesHaveMore;
   const connectorResults = await runSettledWithConcurrency(
     connectorNames,

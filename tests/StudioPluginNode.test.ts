@@ -14,6 +14,9 @@ import {
   SALAMANDER_GRAND_PIANO_SAMPLE_URLS,
   SALAMANDER_GRAND_PIANO_SOURCE_URL,
 } from "../src/lib/studio/plugins/salamanderGrandPiano";
+import type { StudioWorldConnectorSetSelection } from "../src/lib/studio/plugins/worldCompatibility";
+import { connectorBindingValueKey } from "../src/lib/worlds/runtimeInput";
+import type { WorldDescriptor } from "../src/lib/worlds/types";
 
 const toneMock = vi.hoisted(() => {
   const polySynthArgs: unknown[][] = [];
@@ -98,7 +101,25 @@ const osmdMock = vi.hoisted(() => {
   return { OpenSheetMusicDisplay, clear, instances, load, render };
 });
 
+const worldHostMock = vi.hoisted(() => {
+  const pushState = vi.fn();
+  const dispose = vi.fn();
+  const createWorldHost = vi.fn(() => ({
+    channelToken: "test-channel",
+    dispose,
+    pushConnectors: vi.fn(),
+    pushState,
+    worldId: "backend-world-1",
+    worldUrl: (url: string) => `${url}${url.includes("?") ? "&" : "?"}dcnWorldChannel=test-channel`,
+  }));
+
+  return { createWorldHost, dispose, pushState };
+});
+
 vi.mock("tone", () => toneMock);
+vi.mock("dcn/worlds/host", () => ({
+  createWorldHost: worldHostMock.createWorldHost,
+}));
 vi.mock("opensheetmusicdisplay", () => ({
   OpenSheetMusicDisplay: osmdMock.OpenSheetMusicDisplay,
 }));
@@ -148,6 +169,9 @@ beforeEach(() => {
   osmdMock.instances.length = 0;
   osmdMock.load.mockClear();
   osmdMock.render.mockClear();
+  worldHostMock.createWorldHost.mockClear();
+  worldHostMock.dispose.mockClear();
+  worldHostMock.pushState.mockClear();
 });
 
 const loadComponent = async () =>
@@ -316,6 +340,77 @@ const renderToneWorldPluginNode = async (
   });
 };
 
+const backendWorldDescriptor: WorldDescriptor = {
+  id: "backend-world-1",
+  source: "backend",
+  slug: "backend-world",
+  name: "Backend World",
+  version: "0.1.0",
+  entry: "/world-assets/backend-world-1/index.html",
+  entryUrn: "/world-assets/backend-world-1/index.html",
+  runtime: "iframe",
+  permissions: ["dcn.execute", "browser.downloads"],
+  acceptedPluginIds: [],
+  acceptedConnectorSets: [{ connectors: ["pitch"], optionalConnectors: [] }],
+  surfaces: ["studio-plugin", "world-page"],
+  description: "A backend-hosted world.",
+  backend: {
+    ownerId: "user-1",
+    bundleHash: "a".repeat(64),
+    manifestHash: "b".repeat(64),
+    entryPath: "index.html",
+    entryUrn: "/world-assets/backend-world-1/index.html",
+    status: "active",
+    createdAt: "2026-06-17T12:00:00Z",
+    updatedAt: "2026-06-17T12:00:00Z",
+  },
+};
+
+const backendRuntimeData: StudioPluginRuntimeData = {
+  pluginId: "world:backend-world-1",
+  connectorTargets: ["pitch"],
+  streams: [{ feature_path: "/pitch:0", data: [60, 64, 67] }],
+  midiGroups: [],
+};
+
+const renderBackendWorldPluginNode = async (
+  pluginData: StudioPluginRuntimeData | null = backendRuntimeData,
+  worldDescriptor: WorldDescriptor = backendWorldDescriptor,
+  worldConnectorSetSelection?: StudioWorldConnectorSetSelection,
+) => {
+  const StudioPluginNode = await loadComponent();
+
+  return render(StudioPluginNode, {
+    props: {
+      id: "plugin-node-backend-world",
+      type: "plugin",
+      selected: true,
+      dragging: false,
+      zIndex: 0,
+      selectable: true,
+      deletable: true,
+      draggable: true,
+      isConnectable: true,
+      positionAbsoluteX: 0,
+      positionAbsoluteY: 0,
+      width: undefined,
+      height: undefined,
+      sourcePosition: undefined,
+      targetPosition: undefined,
+      dragHandle: undefined,
+      parentId: undefined,
+      data: {
+        label: "Backend World",
+        sourceId: `world:${worldDescriptor.id}`,
+        worldDescriptor,
+        pluginData: pluginData ?? undefined,
+        pluginTargets: pluginData?.connectorTargets ?? ["pitch"],
+        ...(worldConnectorSetSelection ? { worldConnectorSetSelection } : {}),
+      },
+    },
+  });
+};
+
 describe("StudioPluginNode", () => {
   it("exposes unbounded corner and edge resize controls when selected", async () => {
     await renderPluginNode(true);
@@ -396,6 +491,100 @@ describe("StudioPluginNode", () => {
 
     expect(screen.getByText("Run the flow to generate Tone World data.")).toBeInTheDocument();
     expect(screen.queryByTitle("Tone World preview")).not.toBeInTheDocument();
+  });
+
+  it("renders backend world nodes through the SDK-hosted WorldFrame", async () => {
+    await renderBackendWorldPluginNode();
+
+    await waitFor(() => expect(worldHostMock.createWorldHost).toHaveBeenCalledTimes(1));
+    expect(screen.getByText("1 streams | 3 values | backend world")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Open" })).toHaveAttribute(
+      "href",
+      "/worlds/backend-world",
+    );
+
+    const frame = screen.getByTitle("Backend World preview");
+    await waitFor(() => {
+      expect(frame).toHaveAttribute(
+        "src",
+        expect.stringContaining("/services/world-assets/backend-world-1/index.html"),
+      );
+    });
+    expect(frame).toHaveAttribute("src", expect.stringContaining("dcnWorldChannel=test-channel"));
+    expect(frame).toHaveAttribute("sandbox", "allow-scripts allow-downloads");
+
+    await fireEvent.load(frame);
+    await waitFor(() => expect(worldHostMock.pushState).toHaveBeenCalled());
+    expect(worldHostMock.pushState).toHaveBeenLastCalledWith({
+      payload: expect.objectContaining({
+        worldId: "backend-world-1",
+        surface: "studio-plugin",
+        label: "Backend World",
+        connectorName: "pitch",
+        connectorNames: ["pitch"],
+        connectorBindings: [{ slot: "pitch", connectorName: "pitch" }],
+        connectorSet: {
+          index: 0,
+          connectors: ["pitch"],
+          optionalConnectors: [],
+        },
+        particlesCount: 3,
+        executeOutput: [{ path: "/pitch:0", data: [60, 64, 67] }],
+      }),
+    });
+  });
+
+  it("uses the stored backend connector-set selection instead of recomputing by exact target names", async () => {
+    const multiSetBackendWorld: WorldDescriptor = {
+      ...backendWorldDescriptor,
+      acceptedConnectorSets: [
+        { connectors: ["foo", "bar"], optionalConnectors: [] },
+        { connectors: ["pitch", "duration"], optionalConnectors: ["velocity"] },
+      ],
+    };
+    const multiSetRuntimeData: StudioPluginRuntimeData = {
+      pluginId: "world:backend-world-1",
+      connectorTargets: ["lead_pitch", "duration", "velocity"],
+      streams: [
+        { feature_path: "/lead_pitch:0", data: [60] },
+        { feature_path: "/duration:0", data: [1] },
+        { feature_path: "/velocity:0", data: [96] },
+      ],
+      midiGroups: [],
+    };
+
+    await renderBackendWorldPluginNode(multiSetRuntimeData, multiSetBackendWorld, {
+      connectorSetIndex: 1,
+      connectorBindingValues: {
+        [connectorBindingValueKey("pitch")]: "lead_pitch",
+        [connectorBindingValueKey("duration")]: "duration",
+        [connectorBindingValueKey("velocity", true)]: "velocity",
+      },
+    });
+
+    await waitFor(() => expect(worldHostMock.createWorldHost).toHaveBeenCalledTimes(1));
+    const frame = screen.getByTitle("Backend World preview");
+    await fireEvent.load(frame);
+
+    await waitFor(() => expect(worldHostMock.pushState).toHaveBeenCalled());
+    expect(worldHostMock.pushState).toHaveBeenLastCalledWith({
+      payload: expect.objectContaining({
+        worldId: "backend-world-1",
+        surface: "studio-plugin",
+        connectorName: "lead_pitch + duration + velocity",
+        connectorNames: ["lead_pitch + duration + velocity", "lead_pitch", "duration", "velocity"],
+        connectorBindings: [
+          { slot: "pitch", connectorName: "lead_pitch" },
+          { slot: "duration", connectorName: "duration" },
+          { slot: "velocity", connectorName: "velocity", optional: true },
+        ],
+        connectorSet: {
+          index: 1,
+          connectors: ["pitch", "duration"],
+          optionalConnectors: ["velocity"],
+        },
+      }),
+    });
   });
 
   it("renders an empty score staff before plugin runtime data is available", async () => {

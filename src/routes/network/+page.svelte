@@ -809,6 +809,22 @@
     return Array.from(byAddress.values()).sort((a, b) => a.address.localeCompare(b.address));
   };
 
+  const ensureDiscoveredServiceUsers = async () => {
+    if (discoveredUsersLoaded || discoveredUsersLoading) return;
+    discoveredUsersLoading = true;
+    try {
+      const users = await loadDiscoveredUsers({ includeChainAccounts: false });
+      if (!pageMounted) return;
+      discoveredUsers = [...users];
+      discoveredUsersLoaded = true;
+    } catch (error) {
+      if (!pageMounted) return;
+      console.warn("[Network feed] Failed to load users from services API.", error);
+    } finally {
+      if (pageMounted) discoveredUsersLoading = false;
+    }
+  };
+
   const extractDisplayName = (value: unknown): string => {
     if (!value || typeof value !== "object") return "";
     const root = value as Record<string, unknown>;
@@ -825,22 +841,7 @@
 
   $effect(() => {
     if (searchQuery.length === 0) return;
-    if (discoveredUsersLoaded || discoveredUsersLoading) return;
-    discoveredUsersLoading = true;
-    void loadDiscoveredUsers({ includeChainAccounts: false })
-      .then((users) => {
-        if (!pageMounted) return;
-        discoveredUsers = [...users];
-        discoveredUsersLoaded = true;
-      })
-      .catch((error) => {
-        if (!pageMounted) return;
-        console.warn("[Network feed] Failed to load users from services API.", error);
-      })
-      .finally(() => {
-        if (!pageMounted) return;
-        discoveredUsersLoading = false;
-      });
+    void ensureDiscoveredServiceUsers();
   });
 
   $effect(() => {
@@ -869,6 +870,7 @@
       socialPreferencesHydrated = false;
       feedLoading = true;
       feedSyncSettled = false;
+      void ensureDiscoveredServiceUsers();
       void hydrateProfileStateForNetwork({ preferCached: false })
         .then(async (resolvedSourceAddresses) => {
           if (!pageMounted || !isAuthenticated) return;

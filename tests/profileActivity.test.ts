@@ -63,6 +63,9 @@ describe("profile activity feed loading", () => {
       if (url.pathname === "/connector/owned_connector") {
         return connectorResponse("owned_connector", OWNER);
       }
+      if (url.pathname === `/account/${OWNER}`) {
+        return accountResponse(["owned_connector"]);
+      }
       throw new Error(`Unexpected request: ${url.pathname}`);
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -77,6 +80,8 @@ describe("profile activity feed loading", () => {
       "/feed",
       "/feed",
       "/connector/owned_connector",
+      `/account/${OWNER}`,
+      "/connector/owned_connector",
     ]);
     expect(events).toEqual([
       expect.objectContaining({
@@ -87,13 +92,90 @@ describe("profile activity feed loading", () => {
     ]);
     expect(mod.listProfileActivityEvents([OWNER])).toEqual(events);
   });
+
+  it("backfills profile connectors from the owned account snapshot when feed history is incomplete", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/feed") {
+        return jsonResponse({
+          limit: 128,
+          cursor: {
+            has_more: false,
+            next_before: null,
+          },
+          items: [
+            feedItem({
+              feed_id: "feed-visible",
+              created_at_ms: 500_000,
+              payload: {
+                type: "connector",
+                name: "visible_connector",
+                owner: OWNER,
+              },
+            }),
+          ],
+        });
+      }
+      if (url.pathname === `/account/${OWNER}`) {
+        return accountResponse(["visible_connector", "snapshot_only_connector"]);
+      }
+      if (url.pathname === "/connector/visible_connector") {
+        return connectorResponse("visible_connector", OWNER, 500);
+      }
+      if (url.pathname === "/connector/snapshot_only_connector") {
+        return connectorResponse("snapshot_only_connector", OWNER, 400);
+      }
+      throw new Error(`Unexpected request: ${url.pathname}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const mod = await import("../src/lib/feed/profileActivity");
+    const events = await mod.syncProfileActivityFromEventFeed({
+      sourceAddresses: [OWNER],
+      minVisibleEvents: 1,
+    });
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        id: "event-connector-created-feed-visible",
+        particleId: "visible_connector",
+        createdAt: 500_000,
+      }),
+      expect.objectContaining({
+        id: "event-profile-snapshot-connector-snapshot_only_connector",
+        particleId: "snapshot_only_connector",
+        createdAt: 400_000,
+      }),
+    ]);
+    expect(events.filter((event) => event.type === "connector")).toHaveLength(2);
+    expect(fetchMock.mock.calls.map(([input]) => new URL(String(input)).pathname)).toEqual([
+      "/feed",
+      "/connector/visible_connector",
+      `/account/${OWNER}`,
+      "/connector/visible_connector",
+      "/connector/snapshot_only_connector",
+    ]);
+  });
 });
 
-const connectorResponse = (name: string, owner: string) =>
+const accountResponse = (ownedConnectors: string[]) =>
+  jsonResponse({
+    address: OWNER,
+    limit: 256,
+    owned_connectors: ownedConnectors,
+    owned_transformations: [],
+    owned_conditions: [],
+    cursor_connectors: { has_more: false, next_after: null },
+    cursor_transformations: { has_more: false, next_after: null },
+    cursor_conditions: { has_more: false, next_after: null },
+  });
+
+const connectorResponse = (name: string, owner: string, createdAt?: number) =>
   jsonResponse({
     name,
     owner,
     format_hash: FORMAT_HASH,
+    ...(typeof createdAt === "number" ? { created_at: createdAt } : {}),
     dimensions: [
       {
         composite: null,

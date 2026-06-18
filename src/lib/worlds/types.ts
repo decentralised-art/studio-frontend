@@ -7,6 +7,21 @@ export const WORLD_ERROR_MESSAGE_TYPE = "hypermusic:world-error";
 
 export type WorldRuntimeSurface = "world-page" | "studio-plugin";
 
+export type WorldRuntimeKind = "iframe";
+
+export type WorldDescriptorSource = "first-party" | "backend";
+
+export type WorldPermission =
+  | "dcn.connectors.read"
+  | "dcn.transformations.read"
+  | "dcn.conditions.read"
+  | "dcn.social.read"
+  | "dcn.execute"
+  | "browser.audio"
+  | "browser.downloads";
+
+export type WorldStatus = "active" | "deleted";
+
 export type WorldRiCoordinate = {
   start_point: number;
   transformation_shift: number;
@@ -19,8 +34,11 @@ export type WorldRuntimeInput = {
   requestId?: string;
   label?: string;
   connectorName?: string;
+  connectorNames?: string[];
   connectorAddress?: string;
   connectorFormatHash?: string;
+  connectorBindings?: WorldRuntimeConnectorBinding[];
+  connectorSet?: WorldRuntimeConnectorSetSelection;
   particlesCount?: number;
   riCoordinate?: number | number[] | Record<string, number>;
   dynamicRiInput?: Record<string, WorldRiCoordinate>;
@@ -39,6 +57,20 @@ export type WorldRuntimeInput = {
     midiStatsText?: string;
     toneStatsText?: string;
   };
+};
+
+export type WorldRuntimeConnectorBinding = {
+  slot: string;
+  connectorName: string;
+  optional?: boolean;
+  address?: string;
+  formatHash?: string;
+};
+
+export type WorldRuntimeConnectorSetSelection = {
+  index: number;
+  connectors: string[];
+  optionalConnectors: string[];
 };
 
 export type WorldStateMessage = {
@@ -76,21 +108,48 @@ export type WorldValueLimits = {
   scalarValues?: Record<string, WorldNumericValueLimit>;
 };
 
+export type WorldBackendValueLimits = {
+  particlesCount?: WorldNumericValueLimit;
+  connectorValues?: Record<string, WorldNumericValueLimit>;
+};
+
+export type WorldAcceptedConnectorSet = {
+  connectors: string[];
+  optionalConnectors: string[];
+};
+
 export type WorldRequiredScalarSet = {
   id: string;
   label: string;
   scalars: string[];
 };
 
+export type WorldBackendMetadata = {
+  ownerId: string;
+  bundleHash: string;
+  manifestHash: string;
+  entryPath: string;
+  entryUrn: string;
+  status: WorldStatus;
+  createdAt: string;
+  updatedAt: string;
+  preview?: string;
+  valueLimits?: WorldBackendValueLimits;
+};
+
 export type WorldDescriptor = {
   id: string;
+  source?: WorldDescriptorSource;
   slug: string;
   name: string;
   version: string;
   entry: string;
-  runtime: "iframe";
+  entryUrn?: string;
+  runtime: WorldRuntimeKind;
+  permissions?: WorldPermission[];
   acceptedPluginIds: string[];
   acceptedFormatHashes?: string[];
+  acceptedConnectorSets?: WorldAcceptedConnectorSet[];
   acceptedScalars?: string[];
   excludedConnectorNames?: string[];
   requiredScalars?: string[];
@@ -102,6 +161,7 @@ export type WorldDescriptor = {
   accentColor?: string;
   valueLimits?: WorldValueLimits;
   stats?: Array<{ label: string; value: string }>;
+  backend?: WorldBackendMetadata;
 };
 
 export const isWorldRuntimeMessage = (value: unknown): value is WorldRuntimeMessage => {

@@ -35,6 +35,14 @@ Resolution rules:
      - dev: `/chain`
      - prod: `https://api.decentralised.art/chain`
 
+3. World runtime assets:
+   - world bundle entries are resolved from backend `entryUrn` values such as
+     `/world-assets/{world_id}/index.html`
+   - world SDK modules are served from `/js/sdk/*`
+   - dev: same-origin proxy paths
+   - prod: `https://api.decentralised.art/services/world-assets/*` and
+     `https://api.decentralised.art/services/js/sdk/*`
+
 ## Environment Matrix
 
 ### Local dev (`npm run dev`)
@@ -43,10 +51,14 @@ Expected defaults:
 
 - services: `/services`
 - chain: `/chain`
+- world assets: `/services/world-assets` (legacy `/world-assets` is proxied there)
+- world SDK: `/services/js/sdk` (legacy `/js/sdk` is proxied there)
 
 Proxy authority:
 
-- `vite.config.ts` dev proxy rewrites `/services/*` and `/chain/*` to `https://api.decentralised.art`.
+- `vite.config.ts` dev proxy rewrites `/services/*` and `/chain/*` directly, with
+  legacy `/world-assets/*` and `/js/sdk/*` routed through `/services/*` on
+  `https://api.decentralised.art`.
 
 Implication:
 
@@ -58,6 +70,8 @@ Expected defaults:
 
 - services: `https://api.decentralised.art/services`
 - chain: `https://api.decentralised.art/chain`
+- world assets: `https://api.decentralised.art/services/world-assets`
+- world SDK: `https://api.decentralised.art/services/js/sdk`
 - base path: `/`
 
 Implication:

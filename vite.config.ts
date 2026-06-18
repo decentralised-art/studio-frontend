@@ -65,6 +65,18 @@ export default defineConfig(({ isSsrBuild }) => ({
         secure: true,
         rewrite: (path) => path.replace(/^\/services(\/|$)/, "/services/"),
       },
+      "/world-assets": {
+        target: "https://api.decentralised.art",
+        changeOrigin: true,
+        secure: true,
+        rewrite: (path) => path.replace(/^\/world-assets(\/|$)/, "/services/world-assets/"),
+      },
+      "/js/sdk": {
+        target: "https://api.decentralised.art",
+        changeOrigin: true,
+        secure: true,
+        rewrite: (path) => path.replace(/^\/js\/sdk(\/|$)/, "/services/js/sdk/"),
+      },
       "/api/auth": {
         target: "http://127.0.0.1:4000",
         changeOrigin: true,

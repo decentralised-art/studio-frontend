@@ -2,6 +2,7 @@
   import { onDestroy, untrack } from "svelte";
   import { browser } from "$app/environment";
   import { Handle, NodeResizer, Position, type Node, type NodeProps } from "@xyflow/svelte";
+  import BackendWorldPluginNodeBody from "$lib/components/studio/BackendWorldPluginNodeBody.svelte";
   import ScorePluginNodeBody from "$lib/components/studio/ScorePluginNodeBody.svelte";
   import ToneWorldPluginNodeBody from "$lib/components/studio/ToneWorldPluginNodeBody.svelte";
   import Button from "$lib/components/ui/Button.svelte";
@@ -22,13 +23,17 @@
     pathStartsWithAnyConnectorPrefix,
     type StudioPluginRuntimeData,
   } from "$lib/studio/plugins/runtime";
+  import type { StudioWorldConnectorSetSelection } from "$lib/studio/plugins/worldCompatibility";
   import { TONE_WORLD_PLUGIN_ID } from "$lib/studio/plugins/registry";
+  import type { WorldDescriptor } from "$lib/worlds/types";
 
   type PluginNodeData = {
     label: string;
     sourceId?: string;
+    worldDescriptor?: WorldDescriptor;
     pluginData?: StudioPluginRuntimeData;
     pluginTargets?: string[];
+    worldConnectorSetSelection?: StudioWorldConnectorSetSelection;
     selectedConnectorContextNames?: string[];
     selectedConnectorContextPathPrefixes?: string[];
   };
@@ -49,10 +54,18 @@
   const skippedCount = $derived(midiClip?.skippedNotes ?? 0);
   const groupsCount = $derived(runtimeData?.midiGroups.length ?? 0);
   const pluginId = $derived(data.sourceId ?? runtimeData?.pluginId ?? "");
+  const worldDescriptor = $derived(data.worldDescriptor ?? null);
+  const isBackendWorldPlugin = $derived(worldDescriptor?.source === "backend");
   const isScorePlugin = $derived(pluginId === MUSIC_SCORE_PLUGIN_ID);
   const isToneWorldPlugin = $derived(pluginId === TONE_WORLD_PLUGIN_ID);
   const resizeColor = $derived(
-    isScorePlugin ? "#67d6ff" : isToneWorldPlugin ? "#f59e0b" : "#34d399",
+    isBackendWorldPlugin
+      ? (worldDescriptor?.accentColor ?? "#a78bfa")
+      : isScorePlugin
+        ? "#67d6ff"
+        : isToneWorldPlugin
+          ? "#f59e0b"
+          : "#34d399",
   );
   const tempo = $derived(midiClip?.tempo ?? 120);
   const channelCount = $derived(midiClip?.channels ?? 1);
@@ -416,7 +429,16 @@
   {#if pluginId}
     <div class="plugin-id">{pluginId}</div>
   {/if}
-  {#if isScorePlugin}
+  {#if isBackendWorldPlugin && worldDescriptor}
+    <BackendWorldPluginNodeBody
+      label={data.label}
+      world={worldDescriptor}
+      {runtimeData}
+      connectorSetSelection={data.worldConnectorSetSelection}
+      {selectedConnectorContextNames}
+      {selectedConnectorContextPathPrefixes}
+    />
+  {:else if isScorePlugin}
     <ScorePluginNodeBody
       label={data.label}
       {runtimeData}

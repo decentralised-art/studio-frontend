@@ -2,7 +2,10 @@
   import { browser } from "$app/environment";
   import { base } from "$app/paths";
   import { onDestroy, onMount } from "svelte";
+  import { createWorldHost, type WorldHost } from "dcn/worlds/host";
 
+  import { createDcnClient } from "$lib/chain/dcnClient";
+  import { buildWorldAssetUrl } from "$lib/worlds/api";
   import {
     isWorldRuntimeMessage,
     WORLD_ERROR_MESSAGE_TYPE,
@@ -30,7 +33,7 @@
     srcOverride,
     title = world.name,
     showStatus = false,
-    sandboxPermissions = "allow-scripts allow-same-origin allow-downloads",
+    sandboxPermissions,
   }: Props = $props();
 
   let iframeElement: HTMLIFrameElement | null = $state(null);
@@ -38,14 +41,50 @@
   let worldReady = $state(false);
   let statusText = $state("Loading world");
   let errorText = $state("");
+  let sdkFrameSrc = $state("");
+  let worldHost: WorldHost | null = null;
+  let worldHostKey = "";
 
-  const src = $derived(srcOverride ?? `${base}${world.entry}`);
+  const usesSdkWorldHost = $derived(world.source === "backend");
+  const rawSrc = $derived.by(() => {
+    const entry = srcOverride ?? world.entry;
+    if (world.source === "backend") return buildWorldAssetUrl(entry);
+    return srcOverride ?? `${base}${world.entry}`;
+  });
+  const src = $derived(usesSdkWorldHost ? sdkFrameSrc || "about:blank" : rawSrc);
+  const resolvedSandboxPermissions = $derived.by(() => {
+    if (sandboxPermissions) return sandboxPermissions;
+    if (world.source !== "backend") return "allow-scripts allow-same-origin allow-downloads";
+    const permissions = world.permissions ?? [];
+    return permissions.includes("browser.downloads")
+      ? "allow-scripts allow-downloads"
+      : "allow-scripts";
+  });
 
   const cloneWorldRuntimeInput = (value: WorldRuntimeInput): WorldRuntimeInput =>
     JSON.parse(JSON.stringify(value)) as WorldRuntimeInput;
 
+  const disposeWorldHost = () => {
+    worldHost?.dispose();
+    worldHost = null;
+    worldHostKey = "";
+    sdkFrameSrc = "";
+  };
+
+  const resetRuntimeState = () => {
+    frameLoaded = false;
+    worldReady = false;
+    statusText = "Loading world";
+    errorText = "";
+  };
+
   const postInput = () => {
     if (!browser || !iframeElement?.contentWindow || !input) return;
+    if (usesSdkWorldHost) {
+      worldHost?.pushState({ payload: cloneWorldRuntimeInput(input) });
+      statusText = worldReady ? "Sent world state" : "Waiting for world runtime";
+      return;
+    }
     const message: WorldStateMessage = {
       type: WORLD_STATE_MESSAGE_TYPE,
       payload: cloneWorldRuntimeInput(input),
@@ -79,6 +118,45 @@
   };
 
   $effect(() => {
+    const currentFrame = iframeElement;
+    const currentWorld = world;
+    const currentSrc = rawSrc;
+
+    if (!browser || !currentFrame || currentWorld.source !== "backend") {
+      disposeWorldHost();
+      return;
+    }
+
+    const nextHostKey = `${currentWorld.id}:${currentSrc}`;
+    if (worldHost && worldHostKey === nextHostKey) return;
+
+    disposeWorldHost();
+    resetRuntimeState();
+    worldHost = createWorldHost({
+      client: createDcnClient(),
+      permissions: currentWorld.permissions ?? [],
+      valueLimits: currentWorld.backend?.valueLimits,
+      iframe: currentFrame,
+      expectedOrigin: "null",
+      onReady: () => {
+        worldReady = true;
+        errorText = "";
+        statusText = "World ready";
+        postInput();
+      },
+      onRendered: () => {
+        statusText = "World rendered";
+      },
+      onError: (message) => {
+        errorText = message.message;
+        statusText = "World error";
+      },
+    });
+    worldHostKey = nextHostKey;
+    sdkFrameSrc = worldHost.worldUrl(currentSrc);
+  });
+
+  $effect(() => {
     const currentInput = input;
     const currentFrame = iframeElement;
     if (!browser || !currentInput || !currentFrame || !frameLoaded) return;
@@ -95,6 +173,7 @@
   });
 
   onDestroy(() => {
+    disposeWorldHost();
     worldReady = false;
   });
 </script>
@@ -110,7 +189,7 @@
     class="world-frame"
     {src}
     {title}
-    sandbox={sandboxPermissions}
+    sandbox={resolvedSandboxPermissions}
     referrerpolicy="no-referrer"
     onload={handleFrameLoad}
   ></iframe>

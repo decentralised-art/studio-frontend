@@ -226,12 +226,26 @@
     buildStudioPluginRuntimeData,
     type StudioPluginRuntimeData,
   } from "$lib/studio/plugins/runtime";
-  import { listStudioPlugins, type StudioPluginDescriptor } from "$lib/studio/plugins/registry";
+  import {
+    listStudioPlugins,
+    listStudioWorldPlugins,
+    type StudioPluginDescriptor,
+  } from "$lib/studio/plugins/registry";
+  import {
+    describeStudioWorldPluginCompatibility,
+    resolveStudioWorldConnectorSetMatch,
+    studioWorldConnectorSetSelectionFromMatch,
+    summarizeStudioWorldConnectorSets,
+    type StudioWorldConnectorSetSelection,
+    type StudioWorldConnectorTarget,
+  } from "$lib/studio/plugins/worldCompatibility";
   import {
     bindStudioCanvasDragDrop,
     readStudioPluginDropData,
     writeStudioPluginDragData,
   } from "$lib/studio/studioPluginDragDrop";
+  import { loadWorldRegistry } from "$lib/worlds/registry";
+  import type { WorldDescriptor } from "$lib/worlds/types";
 
   type PanelMode = StudioPanelMode;
   type RightPanelMode = "assistant" | "inspector" | "runner" | "hidden";
@@ -377,6 +391,7 @@
     kind: StudioNodeKind;
     particleId?: string;
     sourceId?: string;
+    worldDescriptor?: WorldDescriptor;
     viewId?: string;
     dimensions?: number;
     parentFeatureId?: string;
@@ -405,6 +420,7 @@
     pluginOutput?: PtOutputFeature[];
     pluginData?: StudioPluginRuntimeData;
     pluginTargets?: string[];
+    worldConnectorSetSelection?: StudioWorldConnectorSetSelection;
     selectedConnectorContextNames?: string[];
     selectedConnectorContextPathPrefixes?: string[];
     riStart?: number;
@@ -555,6 +571,10 @@
   let libraryCreateActionError = $state<string | null>(null);
   let pluginAttachStatus = $state<string | null>(null);
   let pluginAttachError = $state<string | null>(null);
+  let studioBackendWorlds = $state<WorldDescriptor[]>([]);
+  let studioWorldRegistryBusy = $state(false);
+  let studioWorldRegistryWarning = $state<string | null>(null);
+  let studioWorldRegistryLoadRequestId = 0;
   let standaloneDraftTransformations = $state<StandaloneTransformationDraft[]>([]);
   const conditionCodeById = new SvelteMap<string, string>();
 
@@ -2155,6 +2175,31 @@
     }
   };
 
+  const loadStudioWorldRegistry = async () => {
+    const requestId = (studioWorldRegistryLoadRequestId += 1);
+    studioWorldRegistryBusy = true;
+    studioWorldRegistryWarning = null;
+    try {
+      const result = await loadWorldRegistry({
+        surface: "studio-plugin",
+        includeFirstParty: false,
+      });
+      if (requestId !== studioWorldRegistryLoadRequestId) return;
+      studioBackendWorlds = result.worlds.filter((world) => world.source === "backend");
+      if (result.backendError) {
+        studioWorldRegistryWarning = "Backend world registry unavailable.";
+      }
+    } catch {
+      if (requestId !== studioWorldRegistryLoadRequestId) return;
+      studioBackendWorlds = [];
+      studioWorldRegistryWarning = "Backend world registry unavailable.";
+    } finally {
+      if (requestId === studioWorldRegistryLoadRequestId) {
+        studioWorldRegistryBusy = false;
+      }
+    }
+  };
+
   onMount(() => {
     viewportWidthPx = window.innerWidth;
     applyResponsivePanelWidths();
@@ -2263,6 +2308,7 @@
     restoreStudioTabsSession();
     tabsSessionRestoreReady = true;
     void loadStudioAuthorUsers();
+    void loadStudioWorldRegistry();
     void loadToolboxLibraryFromProfile();
     void (async () => {
       await loadNetworkSelectionFromQuery();
@@ -3675,18 +3721,41 @@
     });
   };
 
-  const getPluginTargetNames = (
+  const getPluginTargetNodes = (
     pluginId: string,
     nodeLookup: Record<string, StudioNode>,
     graphEdges: Edge[],
   ) => {
-    const targets = graphEdges
+    const seen = new SvelteSet<string>();
+    return graphEdges
       .filter((item) => item.source === pluginId && item.target)
       .map((item) => nodeLookup[item.target!])
       .filter((node): node is StudioNode => Boolean(node))
       .filter((node) => isConnectorKind(node.data.kind))
-      .map((node) => resolveNodeName(node));
-    return Array.from(new SvelteSet(targets));
+      .filter((node) => {
+        if (seen.has(node.id)) return false;
+        seen.add(node.id);
+        return true;
+      });
+  };
+
+  const resolvePluginWorldConnectorSetSelection = (
+    node: StudioNode,
+    targetNodes: StudioNode[],
+  ): StudioWorldConnectorSetSelection | undefined => {
+    const world = node.data.worldDescriptor;
+    if (world?.source !== "backend" || !world.acceptedConnectorSets?.length) return undefined;
+
+    const availableTargets = targetNodes
+      .map((targetNode) => ({ id: targetNode.id, name: resolveNodeName(targetNode) }))
+      .filter((target) => target.name.trim());
+    const rootConnectorName = node.data.networkId?.trim() || availableTargets[0]?.name || "";
+    const match = resolveStudioWorldConnectorSetMatch({
+      connectorSets: world.acceptedConnectorSets,
+      rootConnectorName,
+      availableTargets,
+    });
+    return studioWorldConnectorSetSelectionFromMatch(match);
   };
 
   const refreshPluginOutputs = (
@@ -3701,7 +3770,10 @@
     if (!hasPlugins) return;
     const updatedNodes = graphNodes.map((node) => {
       if (node.data.kind !== "plugin") return node;
-      const targetNames = getPluginTargetNames(node.id, nodeLookup, graphEdges);
+      const targetNodes = getPluginTargetNodes(node.id, nodeLookup, graphEdges);
+      const targetNames = Array.from(
+        new SvelteSet(targetNodes.map((target) => resolveNodeName(target))),
+      );
       if (!targetNames.length) {
         return {
           ...node,
@@ -3710,6 +3782,7 @@
             pluginOutput: [],
             pluginData: undefined,
             pluginTargets: undefined,
+            worldConnectorSetSelection: undefined,
           },
         };
       }
@@ -3725,6 +3798,7 @@
           pluginOutput: pluginData.streams,
           pluginData,
           pluginTargets: targetNames,
+          worldConnectorSetSelection: resolvePluginWorldConnectorSetSelection(node, targetNodes),
         },
       };
     });
@@ -4836,7 +4910,16 @@
       return "";
     }
   });
-  const allStudioPlugins = $derived.by<StudioPluginDescriptor[]>(() => listStudioPlugins());
+  const activeStudioWorldConnectorTargets = $derived.by<StudioWorldConnectorTarget[]>(() =>
+    nodes
+      .filter((node) => isConnectorKind(node.data.kind))
+      .map((node) => ({ id: node.id, name: resolveNodeName(node) }))
+      .filter((target) => target.name.trim()),
+  );
+  const allStudioPlugins = $derived.by<StudioPluginDescriptor[]>(() => [
+    ...listStudioPlugins(),
+    ...listStudioWorldPlugins(studioBackendWorlds),
+  ]);
   const pluginSourceInfoMessage = $derived.by(() => {
     if (!activePluginSourceRootConnectorName) {
       return "No root connector selected in this tab.";
@@ -4845,10 +4928,22 @@
       return "Worlds are available only for deployed connectors. Deploy this connector first.";
     }
     if (!activePluginSourceFormatHash) {
-      return "This connector has no normalized format hash, so world compatibility cannot be resolved.";
+      return "This connector has no normalized format hash. Connector-set backend worlds can still attach by slot.";
     }
     return "";
   });
+  const getStudioPluginCompatibility = (plugin: StudioPluginDescriptor) =>
+    describeStudioWorldPluginCompatibility({
+      plugin,
+      rootConnectorName: activePluginSourceRootConnectorName,
+      rootFormatHash: activePluginSourceFormatHash,
+      availableTargets: activeStudioWorldConnectorTargets,
+    });
+  const isStudioPluginAttachable = (
+    compatibility: ReturnType<typeof getStudioPluginCompatibility>,
+  ): boolean => compatibility.kind !== "partial" && compatibility.kind !== "unavailable";
+  const getStudioPluginConnectorSetSummary = (plugin: StudioPluginDescriptor) =>
+    summarizeStudioWorldConnectorSets(plugin.acceptedConnectorSets);
   const resolvePluginAttachSourceNode = (): StudioNode | null => {
     const rootConnectorName = activePluginSourceRootConnectorName.trim();
     if (!rootConnectorName) return null;
@@ -4876,6 +4971,7 @@
       label: plugin.name,
       kind: "plugin",
       sourceId: plugin.id,
+      ...(plugin.worldDescriptor ? { worldDescriptor: plugin.worldDescriptor } : {}),
       fromNetwork: false,
     },
   });
@@ -4896,6 +4992,30 @@
     scheduleLayout();
   };
 
+  const resolveStudioPluginAttachTargets = (
+    plugin: StudioPluginDescriptor,
+    sourceNode: StudioNode,
+  ): { targetNodes: StudioNode[]; missingRequiredConnectors: string[] } => {
+    const compatibility = getStudioPluginCompatibility(plugin);
+    const matchedTargetNodes =
+      compatibility.match?.attachedTargetIds
+        .map((targetId) => nodesById[targetId] ?? null)
+        .filter((node): node is StudioNode => Boolean(node && isConnectorKind(node.data.kind))) ??
+      [];
+    const targetNodes = matchedTargetNodes.some((node) => node.id === sourceNode.id)
+      ? matchedTargetNodes
+      : [sourceNode, ...matchedTargetNodes];
+    const seen = new SvelteSet<string>();
+    return {
+      targetNodes: targetNodes.filter((node) => {
+        if (seen.has(node.id)) return false;
+        seen.add(node.id);
+        return true;
+      }),
+      missingRequiredConnectors: compatibility.match?.missingRequiredConnectors ?? [],
+    };
+  };
+
   const attachStudioPluginToRoot = (
     plugin: StudioPluginDescriptor,
     options?: { position?: { x: number; y: number } | null },
@@ -4909,16 +5029,32 @@
       return;
     }
 
+    const compatibility = getStudioPluginCompatibility(plugin);
+    if (!isStudioPluginAttachable(compatibility)) {
+      pluginAttachError =
+        compatibility.detail || `World '${plugin.name}' is not compatible with this connector.`;
+      return;
+    }
+
+    const { targetNodes, missingRequiredConnectors } = resolveStudioPluginAttachTargets(
+      plugin,
+      sourceNode,
+    );
+    const targetNodeIds = new SvelteSet(targetNodes.map((node) => node.id));
     const existingPluginNode = nodes.find(
       (node) =>
         node.data.kind === "plugin" &&
         node.data.sourceId === plugin.id &&
-        edges.some((edge) => edge.source === node.id && edge.target === sourceNode.id),
+        targetNodes.every((targetNode) =>
+          edges.some((edge) => edge.source === node.id && edge.target === targetNode.id),
+        ),
     );
     if (existingPluginNode) {
       selectedNodeId = existingPluginNode.id;
       selectedEdgeId = null;
-      pluginAttachStatus = `World '${plugin.name}' is already attached to '${resolveNodeName(sourceNode)}'.`;
+      pluginAttachStatus = `World '${plugin.name}' is already attached to '${targetNodes
+        .map(resolveNodeName)
+        .join(" + ")}'.`;
       return;
     }
 
@@ -4930,7 +5066,7 @@
     );
 
     const attachedPluginCount = edges
-      .filter((edge) => edge.target === sourceNode.id)
+      .filter((edge) => targetNodeIds.has(edge.target))
       .filter((edge) => {
         const sourcePluginNode = nodesById[edge.source] ?? null;
         return sourcePluginNode?.data.kind === "plugin";
@@ -4954,22 +5090,29 @@
       },
     };
 
-    const pluginEdge: Edge = {
-      id: `edge-${attachedPluginNode.id}-${sourceNode.id}-${crypto.randomUUID()}`,
-      source: attachedPluginNode.id,
-      sourceHandle: "out",
-      target: sourceNode.id,
-      targetHandle: "plugin-in",
-      data: { relation: "plugin", pluginId: plugin.id },
-      label: "plugin",
-    };
-
     const nextNodes: StudioNode[] = nodes.map((node) => ({
       ...(node.id === attachedPluginNode.id ? attachedPluginNode : node),
       selected: node.id === attachedPluginNode.id,
     }));
     if (!reusablePluginNode) nextNodes.push(attachedPluginNode);
-    const nextEdges = [...edges, pluginEdge];
+    const existingEdgeTargetIds = new SvelteSet(
+      edges
+        .filter((edge) => edge.source === attachedPluginNode.id)
+        .filter((edge) => edge.data?.relation === "plugin")
+        .map((edge) => edge.target),
+    );
+    const pluginEdges: Edge[] = targetNodes
+      .filter((targetNode) => !existingEdgeTargetIds.has(targetNode.id))
+      .map((targetNode) => ({
+        id: `edge-${attachedPluginNode.id}-${targetNode.id}-${crypto.randomUUID()}`,
+        source: attachedPluginNode.id,
+        sourceHandle: "out",
+        target: targetNode.id,
+        targetHandle: targetNode.data.tabRoot ? "plugin-in" : "in",
+        data: { relation: "plugin", pluginId: plugin.id },
+        label: "plugin",
+      }));
+    const nextEdges = [...edges, ...pluginEdges];
 
     nodes = nextNodes;
     edges = nextEdges;
@@ -4983,9 +5126,12 @@
       refreshPluginOutputs([], nextNodes, nextEdges);
     }
 
-    pluginAttachStatus = `Connected '${plugin.name}' to '${resolveNodeName(sourceNode)}'.`;
+    const targetLabel = targetNodes.map(resolveNodeName).join(" + ");
+    pluginAttachStatus = missingRequiredConnectors.length
+      ? `Connected '${plugin.name}' to '${targetLabel}'. Missing connector slots: ${missingRequiredConnectors.join(", ")}.`
+      : `Connected '${plugin.name}' to '${targetLabel}'.`;
     scheduleLayout();
-    scheduleCanvasFitView(0.25, [attachedPluginNode.id, sourceNode.id]);
+    scheduleCanvasFitView(0.25, [attachedPluginNode.id, ...targetNodes.map((node) => node.id)]);
     scheduleCanvasCenter(
       {
         x: (attachedPluginNode.position.x + sourceNode.position.x) / 2,
@@ -7943,8 +8089,12 @@
     }
 
     if (sourceNode.data.kind === "plugin" && isConnectorKind(targetNode.data.kind)) {
-      if (!targetNode.data.tabRoot) return false;
-      return connection.sourceHandle === "out" && connection.targetHandle === "plugin-in";
+      const pluginAcceptsConnectorSetTargets = Boolean(
+        sourceNode.data.worldDescriptor?.acceptedConnectorSets?.length,
+      );
+      if (connection.sourceHandle !== "out") return false;
+      if (targetNode.data.tabRoot) return connection.targetHandle === "plugin-in";
+      return pluginAcceptsConnectorSetTargets && connection.targetHandle === "in";
     }
 
     return false;
@@ -8699,24 +8849,58 @@
             {#if pluginSourceInfoMessage}
               <p class="plugins-empty">{pluginSourceInfoMessage}</p>
             {/if}
+            {#if studioWorldRegistryBusy && studioBackendWorlds.length === 0}
+              <p class="plugins-empty">Loading backend worlds.</p>
+            {/if}
+            {#if studioWorldRegistryWarning}
+              <p class="plugins-feedback is-error">{studioWorldRegistryWarning}</p>
+            {/if}
             {#if allStudioPlugins.length > 0}
               <div class="plugins-list">
                 {#each allStudioPlugins as plugin (plugin.id)}
+                  {@const pluginCompatibility = getStudioPluginCompatibility(plugin)}
+                  {@const pluginCanAttach = isStudioPluginAttachable(pluginCompatibility)}
+                  {@const connectorSetSummary = getStudioPluginConnectorSetSummary(plugin)}
                   <article
-                    class="plugin-card"
-                    draggable
-                    data-disabled={false}
-                    ondragstart={(event) => handlePluginDragStart(event, plugin)}
+                    class={`plugin-card is-${pluginCompatibility.kind}`}
+                    draggable={pluginCanAttach}
+                    data-disabled={!pluginCanAttach}
+                    data-compatibility={pluginCompatibility.kind}
+                    ondragstart={(event) => {
+                      if (!pluginCanAttach) {
+                        event.preventDefault();
+                        return;
+                      }
+                      handlePluginDragStart(event, plugin);
+                    }}
                   >
                     <header class="plugin-card-header">
                       <h4>{plugin.name}</h4>
+                      <div class="plugin-card-badges">
+                        {#if plugin.source === "backend-world"}
+                          <span class="plugin-card-badge">Backend</span>
+                        {/if}
+                        <span class={`plugin-card-compat is-${pluginCompatibility.kind}`}>
+                          {pluginCompatibility.label}
+                        </span>
+                      </div>
                     </header>
                     <p>{plugin.summary}</p>
+                    {#if connectorSetSummary}
+                      <p class="plugin-card-detail">{connectorSetSummary}</p>
+                    {/if}
+                    {#if pluginCompatibility.detail}
+                      <p class={`plugin-card-detail is-${pluginCompatibility.kind}`}>
+                        {pluginCompatibility.detail}
+                      </p>
+                    {/if}
                     <footer class="plugin-card-footer">
                       <span>{plugin.id}</span>
                       <Button
                         variant="ghost"
                         type="button"
+                        title={pluginCompatibility.detail}
+                        disabled={!pluginCanAttach}
                         onclick={() => addStudioPluginToFlow(plugin)}
                       >
                         +
@@ -10727,15 +10911,58 @@
   }
 
   .plugin-card-header {
-    @apply flex items-center justify-between gap-2;
+    @apply flex items-start justify-between gap-2;
   }
 
   .plugin-card-header h4 {
     @apply m-0 text-[0.72rem] font-semibold text-white/90;
   }
 
+  .plugin-card-badges {
+    @apply flex shrink-0 flex-wrap justify-end gap-1;
+  }
+
+  .plugin-card-badge {
+    @apply rounded-sm border border-cyan-300/20 bg-cyan-300/10 px-1.5 py-0.5 text-[0.48rem] uppercase tracking-[0.14em] text-cyan-100/75;
+  }
+
+  .plugin-card-compat {
+    @apply rounded-sm border border-white/10 bg-white/5 px-1.5 py-0.5 text-[0.48rem] uppercase tracking-[0.14em] text-white/55;
+  }
+
+  .plugin-card-compat.is-format,
+  .plugin-card-compat.is-connector-set {
+    @apply border-emerald-300/25 bg-emerald-400/10 text-emerald-100/80;
+  }
+
+  .plugin-card-compat.is-partial {
+    @apply border-amber-300/25 bg-amber-400/10 text-amber-100/80;
+  }
+
+  .plugin-card-compat.is-unavailable {
+    @apply border-rose-300/20 bg-rose-400/10 text-rose-100/75;
+  }
+
   .plugin-card p {
     @apply mt-2 text-[0.62rem] leading-5 text-white/70;
+  }
+
+  .plugin-card-detail {
+    @apply rounded-md border border-white/10 bg-white/5 px-2 py-1 text-white/55;
+    word-break: break-word;
+  }
+
+  .plugin-card-detail.is-format,
+  .plugin-card-detail.is-connector-set {
+    @apply border-emerald-300/15 text-emerald-100/75;
+  }
+
+  .plugin-card-detail.is-partial {
+    @apply border-amber-300/15 text-amber-100/80;
+  }
+
+  .plugin-card-detail.is-unavailable {
+    @apply border-rose-300/10 text-rose-100/75;
   }
 
   .plugin-card-footer {
