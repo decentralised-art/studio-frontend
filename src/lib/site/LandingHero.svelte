@@ -799,19 +799,19 @@
   }
 
   @media (max-width: 900px) {
-    .hero-title {
+    .immersive-hero .hero-title {
       font-size: clamp(1.12rem, 6.3vmin, 2.05rem) !important;
       line-height: 1.06;
     }
 
-    .hero-subtitle {
+    .immersive-hero .hero-subtitle {
       font-size: clamp(0.72rem, 2.5vmin, 0.98rem);
       line-height: 1.45;
       max-width: 92vw;
     }
 
-    .hero-title-focus,
-    .hero-title-prefix {
+    .immersive-hero .hero-title-focus,
+    .immersive-hero .hero-title-prefix {
       white-space: normal;
       text-wrap: balance;
       overflow-wrap: anywhere;
@@ -858,19 +858,19 @@
       transform: translateY(-50%);
     }
 
-    .hero-title {
+    .immersive-hero .hero-title {
       font-size: clamp(1rem, 6.8vmin, 1.65rem) !important;
       line-height: 1.07;
     }
 
-    .hero-title-prefix,
-    .hero-title-focus {
+    .immersive-hero .hero-title-prefix,
+    .immersive-hero .hero-title-focus {
       white-space: normal;
       text-wrap: balance;
       overflow-wrap: anywhere;
     }
 
-    .hero-subtitle {
+    .immersive-hero .hero-subtitle {
       font-size: clamp(0.68rem, 2.7vmin, 0.88rem);
       line-height: 1.34;
       margin-top: 0.58rem;
@@ -915,19 +915,19 @@
       transform: translateY(-50%);
     }
 
-    .hero-title {
+    .immersive-hero .hero-title {
       font-size: clamp(0.9rem, 4.4vmin, 1.45rem) !important;
       line-height: 1.12;
     }
 
-    .hero-title-prefix,
-    .hero-title-focus {
+    .immersive-hero .hero-title-prefix,
+    .immersive-hero .hero-title-focus {
       white-space: normal;
       text-wrap: balance;
       overflow-wrap: anywhere;
     }
 
-    .hero-subtitle {
+    .immersive-hero .hero-subtitle {
       margin-top: 0.42rem;
       font-size: clamp(0.58rem, 2.1vmin, 0.84rem);
       line-height: 1.26;
