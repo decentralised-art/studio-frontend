@@ -42,6 +42,7 @@ export class WorldContractError extends Error {
 }
 
 export type BackendWorldDescriptor = {
+  chainApiVersion?: 1 | 2;
   id: string;
   slug: string;
   name: string;
@@ -68,6 +69,7 @@ export type BackendWorldDescriptor = {
 };
 
 export type BackendWorldDescriptorPreview = {
+  chainApiVersion?: 1 | 2;
   slug: string;
   name: string;
   version: string;
@@ -276,6 +278,13 @@ const assertCompatibilityContract = (
   }
 };
 
+const chainApiVersion = (record: Record<string, unknown>): 1 | 2 => {
+  const version = record.chainApiVersion ?? 1;
+  if (version !== 1 && version !== 2)
+    throw new WorldContractError("world.chainApiVersion must be 1 or 2.");
+  return version;
+};
+
 export const normalizeBackendWorldDescriptor = (value: unknown): BackendWorldDescriptor => {
   const record = asRecord(value, "world");
   const acceptedFormatHashes = stringArray(record, "acceptedFormatHashes", "world");
@@ -290,6 +299,7 @@ export const normalizeBackendWorldDescriptor = (value: unknown): BackendWorldDes
     entryUrn: requiredString(record, "entryUrn", "world"),
     runtime: normalizeRuntime(requiredString(record, "runtime", "world"), "world.runtime"),
     surfaces: normalizeSurfaces(record, "world"),
+    chainApiVersion: chainApiVersion(record),
     permissions: normalizePermissions(record, "world"),
     description: requiredString(record, "description", "world"),
     shortDescription: optionalString(record, "shortDescription", "world"),
@@ -341,6 +351,7 @@ export const normalizeBackendWorldDescriptorPreview = (
       "world descriptor preview.runtime",
     ),
     surfaces: normalizeSurfaces(record, "world descriptor preview"),
+    chainApiVersion: chainApiVersion(record),
     permissions: normalizePermissions(record, "world descriptor preview"),
     description: requiredString(record, "description", "world descriptor preview"),
     acceptedFormatHashes,
@@ -380,6 +391,7 @@ export const backendWorldToFrontendDescriptor = (
 ): WorldDescriptor => ({
   id: world.id,
   source: "backend",
+  chainApiVersion: world.chainApiVersion ?? 1,
   slug: world.slug,
   name: world.name,
   version: world.version,

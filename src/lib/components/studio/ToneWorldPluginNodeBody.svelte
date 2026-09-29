@@ -55,6 +55,8 @@
           streams: toneStreams,
           label,
           surface: "studio-plugin",
+          executionProvenance: runtimeData?.executionProvenance,
+          executionMode: runtimeData?.executionMode,
           connectorTargets: runtimeData.connectorTargets,
           particlesCount,
           statsText,

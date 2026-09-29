@@ -164,7 +164,18 @@
     publishConnectorWithTrace,
     publishTransformationWithTrace,
     type DeployTraceEntry,
+    type StudioChainPostTracer,
   } from "$lib/studio/studioDeployTrace";
+  import { buildChainApiUrl } from "$lib/url/url";
+  import {
+    createPublicationDraft,
+    createPublicationStore,
+    publishStudioEntity,
+    recoverPublicationHash,
+    type PublicationRecord,
+    type PublicationStore,
+  } from "$lib/studio/studioPublication";
+  import type { EntityKind } from "dcn";
   import { buildStudioDeployPlan, type StudioDeployPlan } from "$lib/studio/studioDeployPlan";
   import {
     clampPanelWidth,
@@ -196,6 +207,7 @@
     getCurrentUserProfileState,
     getCurrentUserToolboxLibrary,
     getMe,
+    getBrowserEthereumProvider,
     listServicesUsers,
     chainTokenIdentityForWalletAddress,
     loginWithBrowserWalletChainAccount,
@@ -206,10 +218,14 @@
   import {
     ChainApiRequestError,
     type ChainExecutePayload,
+    type ChainExecutionProvenance,
     getChainCondition,
     getChainTransformation,
     normalizeFormatHash,
     postChainExecuteDetailed,
+    postChainSimulateDetailed,
+    postChainPublishPrepareDetailed,
+    postChainPublishConfirmDetailed,
   } from "$lib/chain/registryApi";
   import { createEphemeralDeployName, isReservedCoreCollectionName } from "$lib/chain/deployNaming";
   import { type LibraryItem } from "$lib/data/studioLibrary";
@@ -483,6 +499,8 @@
   let runOutputByTab = $state<Record<string, PtOutputFeature[]>>({});
   let runWarningsByTab = $state<Record<string, string[]>>({});
   let runTimestampByTab = $state<Record<string, number>>({});
+  let runProvenanceByTab = $state<Record<string, ChainExecutionProvenance | undefined>>({});
+  let runModeByTab = $state<Record<string, "execute" | "simulate">>({});
   let chainRunBusy = $state(false);
   let chainRunMessageByTab = $state<Record<string, string>>({});
   let chainRunTimestampByTab = $state<Record<string, number>>({});
@@ -497,6 +515,41 @@
   let lastStudioSyncedSourcesCount = $state(0);
   let toolboxLoadBusy = $state(true);
   let toolboxLoadError = $state<string | null>(null);
+  let publicationRecords = $state<PublicationRecord[]>([]);
+  let recoveryTxHash = $state("");
+  const publicationStores = new SvelteMap<string, PublicationStore>();
+  const getPublicationStore = () => {
+    const scope = `${buildChainApiUrl("")}:${getCurrentStudioAuthorId()}`;
+    let store = publicationStores.get(scope);
+    if (!store) {
+      store = createPublicationStore(scope, browser ? window.localStorage : undefined);
+      publicationStores.set(scope, store);
+    }
+    return store;
+  };
+  const recoverWalletTransaction = (record: PublicationRecord) => {
+    try {
+      const store = getPublicationStore();
+      const current = store.get(record.kind, record.name);
+      if (
+        !current ||
+        current.fingerprint !== record.fingerprint ||
+        current.owner !== record.owner ||
+        current.tx_hash !== record.tx_hash
+      ) {
+        throw new Error(
+          "This recovery belongs to another wallet session. Select the original account and retry Publish.",
+        );
+      }
+      recoverPublicationHash(store, current, recoveryTxHash);
+      publicationRecords = store.list();
+      recoveryTxHash = "";
+      chainDeployError = null;
+      chainDeployStatus = "Transaction recovered. Retry Publish to confirm and continue.";
+    } catch (error) {
+      chainDeployError = error instanceof Error ? error.message : "Could not recover transaction.";
+    }
+  };
   let chainDeployBusy = $state(false);
   let chainDeployStatus = $state<string | null>(null);
   let chainDeployError = $state<string | null>(null);
@@ -1881,7 +1934,7 @@
         message: `Removed transformation '${target.name}' from '${resolveNodeName(connectorNode)}' D${dimension}.`,
       };
     },
-    runConnector: async ({ connector, particles_count }) => {
+    runConnector: async ({ connector, particles_count, mode }) => {
       if (particles_count && Number.isFinite(particles_count)) {
         runSamplesCount = Math.max(1, Math.trunc(particles_count));
       }
@@ -1890,13 +1943,13 @@
         if (!node) throw new Error(`Connector '${connector}' not found in current flow.`);
         selectedNodeId = node.id;
       }
-      await executeActiveGraph();
+      await executeActiveGraph(mode ?? "execute");
       if (chainDeployError) {
         throw new Error(chainDeployError);
       }
       const output = chainRunMessageByTab[activeTabId] ?? "[]";
       return {
-        message: "Run completed.",
+        message: mode === "simulate" ? "Local simulation completed." : "Chain execution completed.",
         data: output,
       };
     },
@@ -3791,6 +3844,8 @@
         targetNames,
         output,
       );
+      pluginData.executionProvenance = runProvenanceByTab[activeTabId];
+      pluginData.executionMode = runModeByTab[activeTabId];
       return {
         ...node,
         data: {
@@ -3974,6 +4029,7 @@
     if (getChainToken() && walletIdentity && storedUserId === walletIdentity) {
       chainTokenUserId = walletIdentity;
       if (authContext.ethereumAddress) currentStudioAuthorId = authContext.ethereumAddress;
+      publicationRecords = getPublicationStore().list();
       return;
     }
 
@@ -3981,6 +4037,7 @@
       .then((result) => {
         chainTokenUserId = chainTokenIdentityForWalletAddress(result.address);
         currentStudioAuthorId = result.address.trim().toLowerCase() || getCurrentStudioAuthorId();
+        publicationRecords = getPublicationStore().list();
       })
       .finally(() => {
         chainAuthPromise = null;
@@ -4510,6 +4567,87 @@
       networkConnectorNames: networkLibrary.feature.map((item) => item.id.replace(/^feature-/, "")),
     });
 
+  const createDeployStepDraft = (
+    step: StudioDeployPlan["steps"][number],
+    tracer = traceStudioChainPost,
+  ) => {
+    if (step.kind === "condition") return publishConditionWithTrace(tracer, step.body);
+    if (step.kind === "transformation") return publishTransformationWithTrace(tracer, step.body);
+    return publishConnectorWithTrace(tracer, step.body);
+  };
+
+  const createPublicationTracer = (expectedOwner: string) =>
+    createStudioChainPostTracer({
+      appendEntry: appendDeployTraceEntry,
+      withAuthRetry: (operation) =>
+        withChainAuthRetry(() => {
+          if (getCurrentStudioAuthorId().toLowerCase() !== expectedOwner.toLowerCase()) {
+            throw new Error(
+              "Wallet account changed during authentication. Retry Publish from the selected account.",
+            );
+          }
+          return operation();
+        }),
+    });
+
+  const publishEntityToChain = async (
+    kind: EntityKind,
+    name: string,
+    body: unknown,
+    createDraft: (tracer: StudioChainPostTracer) => Promise<unknown>,
+  ) => {
+    const expectedOwner = getCurrentStudioAuthorId();
+    const tracer = createPublicationTracer(expectedOwner);
+    const store = getPublicationStore();
+    try {
+      await publishStudioEntity({
+        kind,
+        name,
+        body,
+        store,
+        expectedOwner,
+        provider: getBrowserEthereumProvider(),
+        onStatus: (message) => {
+          chainDeployStatus = message;
+          publicationRecords = store.list();
+        },
+        api: {
+          createDraft: () => createDraft(tracer),
+          prepare: () =>
+            tracer(`/chain/publish/${kind}/prepare`, { name }, () =>
+              postChainPublishPrepareDetailed(kind, name),
+            ),
+          confirm: (request) =>
+            tracer(`/chain/publish/${kind}`, request, () =>
+              postChainPublishConfirmDetailed(kind, request),
+            ),
+        },
+      });
+    } finally {
+      publicationRecords = getPublicationStore().list();
+    }
+  };
+
+  const createDraftsForSimulation = async () => {
+    nodes = materializeLockedReferencedRiAsRootStatic(
+      applyComputedRiPositionsToGraphNodes(nodes, edges),
+    );
+    const compiled = compileDraftTransformations(nodes);
+    if (compiled.warnings.length) throw new Error(compiled.warnings.join(" "));
+    const plan = buildDeployPlanForGraph(nodes, edges, compiled.registry);
+    if (!plan.ok) throw new Error(plan.errors.join(" "));
+    const store = getPublicationStore();
+    const tracer = createPublicationTracer(getCurrentStudioAuthorId());
+    for (const step of plan.steps) {
+      chainDeployStatus = `Creating local draft '${step.name}' for simulation...`;
+      await createPublicationDraft({
+        ...step,
+        store,
+        createDraft: () => createDeployStepDraft(step, tracer),
+      });
+    }
+  };
+
   const publishDeployPlanToChain = async (plan: StudioDeployPlan) => {
     chainDeployError = null;
     if (!plan.ok) {
@@ -4523,17 +4661,10 @@
     await ensureChainAuthForStudio();
 
     for (const step of plan.steps) {
-      chainDeployStatus = `Publishing ${step.kind} ${step.name} (${step.order}/${plan.steps.length})...`;
-      if (step.kind === "condition") {
-        await publishConditionWithTrace(traceStudioChainPost, step.body);
-        addItemToToolboxLibrary("condition", step.name);
-      } else if (step.kind === "transformation") {
-        await publishTransformationWithTrace(traceStudioChainPost, step.body);
-        addItemToToolboxLibrary("transformation", step.name);
-      } else {
-        await publishConnectorWithTrace(traceStudioChainPost, step.body);
-        addItemToToolboxLibrary("connector", step.name);
-      }
+      await publishEntityToChain(step.kind, step.name, step.body, (tracer) =>
+        createDeployStepDraft(step, tracer),
+      );
+      addItemToToolboxLibrary(step.kind, step.name);
     }
 
     if (!plan.localConnectorNames.length) {
@@ -4635,7 +4766,7 @@
         return;
       }
       const key = normalizeKey(name);
-      if (networkNames.has(key)) {
+      if (networkNames.has(key) && !getPublicationStore().get("transformation", name)) {
         warnings.push(`Transformation already exists in network: ${name}.`);
         return;
       }
@@ -5273,7 +5404,7 @@
     }
   }
 
-  const executeActiveGraph = async () => {
+  const executeActiveGraph = async (mode: "execute" | "simulate" = "execute") => {
     if (!activeTab || chainRunBusy || chainDeployBusy) return;
     const runTabId = activeTabId;
     const runStartedAt = performance.now();
@@ -5287,6 +5418,10 @@
 
     try {
       measureStudioRunStep(timings, "save", () => saveActiveGraph());
+      if (mode === "simulate") {
+        await ensureChainAuthForStudio();
+        await createDraftsForSimulation();
+      }
       const requestPreview = measureStudioRunStep(timings, "prepare", () =>
         prepareExecuteRequest(nodes, edges),
       );
@@ -5318,12 +5453,30 @@
 
       chainDeployStatus = "Authenticating with chain...";
       await measureAsyncStudioRunStep(timings, "auth", () => ensureChainAuthForStudio());
-      chainDeployStatus = "Running on chain...";
+      chainDeployStatus =
+        mode === "simulate"
+          ? "Simulating local drafts (no chain transaction)..."
+          : "Executing published connector on chain...";
       const result = await measureAsyncStudioRunStep(timings, "execute", () =>
-        withChainAuthRetry(() => postChainExecuteDetailed(requestPreview.requestBody)),
+        withChainAuthRetry(async () =>
+          mode === "simulate"
+            ? postChainSimulateDetailed(requestPreview.requestBody)
+            : postChainExecuteDetailed(requestPreview.requestBody),
+        ),
       );
+      runModeByTab = { ...runModeByTab, [runTabId]: mode };
+      runProvenanceByTab = {
+        ...runProvenanceByTab,
+        [runTabId]: Array.isArray(result.body)
+          ? undefined
+          : {
+              block_number: result.body.block_number,
+              block_hash: result.body.block_hash,
+              runner: result.body.runner,
+            },
+      };
       output = measureStudioRunStep(timings, "normalize", () =>
-        result.body.map((stream) => ({
+        (Array.isArray(result.body) ? result.body : result.body.particles).map((stream) => ({
           feature_path: stream.path,
           data: [...stream.data],
         })),
@@ -5337,7 +5490,10 @@
         [runTabId]: responseJson,
       };
       chainRunTimestampByTab = { ...chainRunTimestampByTab, [runTabId]: Date.now() };
-      chainDeployStatus = "Run completed.";
+      chainDeployStatus =
+        mode === "simulate"
+          ? "Local simulation completed. Publish to make this connector available on chain."
+          : `Chain execution completed at block ${!Array.isArray(result.body) ? result.body.block_number : ""}.`;
     } catch (error) {
       runStatus = "failed";
       const err = extractExecuteErrorDetail(error);
@@ -5360,13 +5516,16 @@
       chainDeployStatus = null;
       chainDeployError = err.headline;
       output = [];
+      runProvenanceByTab = { ...runProvenanceByTab, [runTabId]: undefined };
     } finally {
       measureStudioRunStep(timings, "store", () => {
         runOutputByTab = { ...runOutputByTab, [runTabId]: output };
         runWarningsByTab = { ...runWarningsByTab, [runTabId]: warnings };
         runTimestampByTab = { ...runTimestampByTab, [runTabId]: Date.now() };
       });
-      measureStudioRunStep(timings, "plugins", () => refreshPluginOutputs(output));
+      measureStudioRunStep(timings, "plugins", () => {
+        if (activeTabId === runTabId) refreshPluginOutputs(output);
+      });
       logStudioRunTiming(runStatus, timings, performance.now() - runStartedAt);
       chainRunBusy = false;
     }
@@ -5409,7 +5568,11 @@
         ...Object.keys(deployedRegistry.connectors).map(normalizeKey),
         ...networkLibrary.feature.map((item) => normalizeKey(item.id.replace(/^feature-/, ""))),
       ]);
-      if (!activeTab.particleId && networkConnectorKeys.has(connectorKey)) {
+      if (
+        !activeTab.particleId &&
+        networkConnectorKeys.has(connectorKey) &&
+        !getPublicationStore().get("connector", connectorName)
+      ) {
         warnings.push(`Connector already exists in network: ${connectorName}.`);
       }
     }
@@ -5417,7 +5580,13 @@
     nodes.forEach((node) => {
       if (node.data.fromNetwork) return;
       const existing = findRegistryMatch(node.data.kind, node.data.label);
-      if (existing && normalizeKey(existing.name) === normalizeKey(node.data.label)) {
+      if (
+        existing &&
+        normalizeKey(existing.name) === normalizeKey(node.data.label) &&
+        !getPublicationStore()
+          .list()
+          .some((record) => normalizeKey(record.name) === normalizeKey(node.data.label))
+      ) {
         warnings.push(`${titleize(node.data.kind)} already exists: ${node.data.label}.`);
       }
     });
@@ -5512,257 +5681,281 @@
   };
 
   const deployActiveGraph = async () => {
-    if (!activeTab) return;
-    const positionedNodes = applyComputedRiPositionsToGraphNodes(nodes, edges);
-    nodes = materializeLockedReferencedRiAsRootStatic(positionedNodes);
-    chainDeployError = null;
-    chainDeployStatus = null;
-    await hydrateMissingAttachedNetworkConditions(nodes, edges);
-    const warnings = compileActiveGraph();
-    if (warnings && warnings.length) {
-      chainDeployError = warnings.join(" ");
-      return;
-    }
-
-    const compiled = compiledTransformationsByTab[activeTabId] ?? {};
-    const deployPlan = buildDeployPlanForGraph(nodes, edges, compiled);
-    if (!deployPlan.ok) {
-      const message = deployPlan.errors.join(" ");
-      chainDeployError = message;
-      compileWarningsByTab = {
-        ...compileWarningsByTab,
-        [activeTabId]: [message],
-      };
-      compileTimestampByTab = { ...compileTimestampByTab, [activeTabId]: Date.now() };
-      return;
-    }
-    const runtime = deployPlan.runtime;
-
-    const localConditionNodes = nodes.filter(
-      (node) => node.data.kind === "condition" && !node.data.fromNetwork,
-    );
-
-    deployTraceEntries = [];
+    if (!activeTab || chainDeployBusy || chainRunBusy) return;
     chainDeployBusy = true;
-    let publishedRootConnectorName: string | null = null;
+    const publicationTabId = activeTabId;
     try {
-      publishedRootConnectorName = await publishDeployPlanToChain(deployPlan);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Chain deploy failed.";
-      chainDeployError = message;
+      const positionedNodes = applyComputedRiPositionsToGraphNodes(nodes, edges);
+      nodes = materializeLockedReferencedRiAsRootStatic(positionedNodes);
+      chainDeployError = null;
       chainDeployStatus = null;
-      compileWarningsByTab = {
-        ...compileWarningsByTab,
-        [activeTabId]: [message],
-      };
-      compileTimestampByTab = { ...compileTimestampByTab, [activeTabId]: Date.now() };
-      chainDeployBusy = false;
-      return;
-    }
-    chainDeployBusy = false;
-
-    nodes = nodes.map((node) => {
-      if (node.data.kind === "condition" && !node.data.fromNetwork) {
-        const conditionName = resolveNodeName(node);
-        return {
-          ...node,
-          data: {
-            ...node.data,
-            networkId: conditionName,
-            fromNetwork: true,
-          },
-        };
+      // Resolve the wallet-scoped saved receipts before compilation checks for
+      // name collisions, so a partially mined plan can resume after reload.
+      await ensureChainAuthForStudio();
+      await hydrateMissingAttachedNetworkConditions(nodes, edges);
+      if (activeTabId !== publicationTabId)
+        throw new Error("Studio tab changed before publication. Retry from the intended graph.");
+      const warnings = compileActiveGraph();
+      if (warnings && warnings.length) {
+        chainDeployError = warnings.join(" ");
+        return;
       }
-      if (node.data.kind !== "dimension") return node;
-      const next: TransformationInstance[] = (node.data.transformations ?? []).map((tx) =>
-        tx.status === "draft" ? { ...tx, status: "network" as const } : tx,
-      );
-      return { ...node, data: { ...node.data, transformations: next } };
-    });
 
-    if (Object.keys(compiled).length) {
-      deployedRegistry = {
-        ...deployedRegistry,
-        transformations: {
-          ...deployedRegistry.transformations,
-          ...compiled,
-        },
-      };
-
-      deployedLibrary = {
-        ...deployedLibrary,
-        transformations: Object.keys(compiled).reduce((items, name) => {
-          const item: LibraryItem = {
-            id: `transform-${slugify(name)}`,
-            name,
-            kind: "transformation",
-            authorId: getCurrentStudioAuthorId(),
-            summary: "Deployed from Studio.",
-          };
-          return upsertLibraryItem(items, item);
-        }, deployedLibrary.transformations),
-      };
-    }
-    if (Object.keys(compiled).length) {
-      const deployedDraftKeys = new SvelteSet(
-        Object.keys(compiled).map((name) => normalizeKey(name)),
-      );
-      standaloneDraftTransformations = standaloneDraftTransformations.filter(
-        (item) => !deployedDraftKeys.has(normalizeKey(item.name)),
-      );
-    }
-
-    if (localConditionNodes.length) {
-      const localConditionRuntime = collectLocalConditionRuntime(localConditionNodes);
-      deployedRegistry = {
-        ...deployedRegistry,
-        conditions: {
-          ...deployedRegistry.conditions,
-          ...localConditionRuntime,
-        },
-      };
-      deployedLibrary = {
-        ...deployedLibrary,
-        conditions: localConditionNodes.reduce((items, node) => {
-          const name = resolveNodeName(node);
-          return upsertLibraryItem(items, {
-            id: `condition-${name}`,
-            name: node.data.label,
-            kind: "condition",
-            authorId: getCurrentStudioAuthorId(),
-            summary: "Deployed from Studio.",
-          });
-        }, deployedLibrary.conditions),
-      };
-    }
-
-    if (runtime) {
-      const existingConnectorKeys = new SvelteSet([
-        ...Object.keys(deployedRegistry.connectors).map(normalizeKey),
-      ]);
-
-      const localConnectors = nodes.filter(
-        (node) => isConnectorKind(node.data.kind) && !node.data.fromNetwork,
-      );
-
-      localConnectors.forEach((node) => {
-        const connectorName = resolveNodeName(node);
-        const key = normalizeKey(connectorName);
-        if (existingConnectorKeys.has(key)) return;
-        const def = runtime.registry.connectors[connectorName];
-        if (!def) return;
-        const legacyFeatureDef = runtime.registry.features[connectorName];
-        const legacyParticleDef = runtime.registry.particles[connectorName];
-        deployedRegistry = {
-          ...deployedRegistry,
-          connectors: { ...deployedRegistry.connectors, [connectorName]: def },
-          features: legacyFeatureDef
-            ? { ...deployedRegistry.features, [connectorName]: legacyFeatureDef }
-            : deployedRegistry.features,
-          particles: {
-            ...deployedRegistry.particles,
-            ...(legacyParticleDef ? { [connectorName]: legacyParticleDef } : {}),
-          },
+      const compiled = compiledTransformationsByTab[activeTabId] ?? {};
+      const deployPlan = buildDeployPlanForGraph(nodes, edges, compiled);
+      if (!deployPlan.ok) {
+        const message = deployPlan.errors.join(" ");
+        chainDeployError = message;
+        compileWarningsByTab = {
+          ...compileWarningsByTab,
+          [activeTabId]: [message],
         };
-        existingConnectorKeys.add(key);
-        deployedLibrary = {
-          ...deployedLibrary,
-          features: upsertLibraryItem(deployedLibrary.features, {
-            id: `feature-${connectorName}`,
-            name: node.data.label,
-            kind: "feature",
-            authorId: getCurrentStudioAuthorId(),
-            summary: "Deployed from Studio.",
-            dimensions:
-              node.data.dimensions ?? legacyFeatureDef?.dimensions.length ?? def.dimensions.length,
-          }),
+        compileTimestampByTab = { ...compileTimestampByTab, [activeTabId]: Date.now() };
+        return;
+      }
+      const runtime = deployPlan.runtime;
+
+      const localConditionNodes = nodes.filter(
+        (node) => node.data.kind === "condition" && !node.data.fromNetwork,
+      );
+
+      deployTraceEntries = [];
+      let publishedRootConnectorName: string | null = null;
+      try {
+        publishedRootConnectorName = await publishDeployPlanToChain(deployPlan);
+        if (
+          activeTabId !== publicationTabId ||
+          JSON.stringify(buildDeployPlanForGraph(nodes, edges, compiled).steps) !==
+            JSON.stringify(deployPlan.steps)
+        ) {
+          throw new Error(
+            "Publication was confirmed, but the active graph changed while waiting. Its draft markers were preserved. Open the published connector from the network; saved receipts prevent resending.",
+          );
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Chain deploy failed.";
+        chainDeployError = message;
+        chainDeployStatus = null;
+        compileWarningsByTab = {
+          ...compileWarningsByTab,
+          [activeTabId]: [message],
         };
-      });
+        compileTimestampByTab = { ...compileTimestampByTab, [activeTabId]: Date.now() };
+        return;
+      }
 
       nodes = nodes.map((node) => {
-        if (!isConnectorKind(node.data.kind)) return node;
-        if (node.data.fromNetwork) return node;
-        const featureName = resolveNodeName(node);
-        return {
-          ...node,
-          data: {
-            ...node.data,
-            networkId: featureName,
-            fromNetwork: true,
-          },
-        };
+        if (node.data.kind === "condition" && !node.data.fromNetwork) {
+          const conditionName = resolveNodeName(node);
+          return {
+            ...node,
+            data: {
+              ...node.data,
+              networkId: conditionName,
+              fromNetwork: true,
+            },
+          };
+        }
+        if (node.data.kind !== "dimension") return node;
+        const next: TransformationInstance[] = (node.data.transformations ?? []).map((tx) =>
+          tx.status === "draft" ? { ...tx, status: "network" as const } : tx,
+        );
+        return { ...node, data: { ...node.data, transformations: next } };
       });
 
-      const existingParticleKeys = new SvelteSet([
-        ...Object.keys(deployedRegistry.particles).map(normalizeKey),
-      ]);
+      if (Object.keys(compiled).length) {
+        deployedRegistry = {
+          ...deployedRegistry,
+          transformations: {
+            ...deployedRegistry.transformations,
+            ...compiled,
+          },
+        };
 
-      const rootName = runtime.rootConnector;
-      const rootKey = normalizeKey(rootName);
-      if (!existingParticleKeys.has(rootKey)) {
-        const rootConnectorDef = runtime.registry.connectors[rootName];
-        if (rootConnectorDef) {
-          const rootLegacyParticle = runtime.registry.particles[rootName];
+        deployedLibrary = {
+          ...deployedLibrary,
+          transformations: Object.keys(compiled).reduce((items, name) => {
+            const item: LibraryItem = {
+              id: `transform-${slugify(name)}`,
+              name,
+              kind: "transformation",
+              authorId: getCurrentStudioAuthorId(),
+              summary: "Deployed from Studio.",
+            };
+            return upsertLibraryItem(items, item);
+          }, deployedLibrary.transformations),
+        };
+      }
+      if (Object.keys(compiled).length) {
+        const deployedDraftKeys = new SvelteSet(
+          Object.keys(compiled).map((name) => normalizeKey(name)),
+        );
+        standaloneDraftTransformations = standaloneDraftTransformations.filter(
+          (item) => !deployedDraftKeys.has(normalizeKey(item.name)),
+        );
+      }
+
+      if (localConditionNodes.length) {
+        const localConditionRuntime = collectLocalConditionRuntime(localConditionNodes);
+        deployedRegistry = {
+          ...deployedRegistry,
+          conditions: {
+            ...deployedRegistry.conditions,
+            ...localConditionRuntime,
+          },
+        };
+        deployedLibrary = {
+          ...deployedLibrary,
+          conditions: localConditionNodes.reduce((items, node) => {
+            const name = resolveNodeName(node);
+            return upsertLibraryItem(items, {
+              id: `condition-${name}`,
+              name: node.data.label,
+              kind: "condition",
+              authorId: getCurrentStudioAuthorId(),
+              summary: "Deployed from Studio.",
+            });
+          }, deployedLibrary.conditions),
+        };
+      }
+
+      if (runtime) {
+        const existingConnectorKeys = new SvelteSet([
+          ...Object.keys(deployedRegistry.connectors).map(normalizeKey),
+        ]);
+
+        const localConnectors = nodes.filter(
+          (node) => isConnectorKind(node.data.kind) && !node.data.fromNetwork,
+        );
+
+        localConnectors.forEach((node) => {
+          const connectorName = resolveNodeName(node);
+          const key = normalizeKey(connectorName);
+          if (existingConnectorKeys.has(key)) return;
+          const def = runtime.registry.connectors[connectorName];
+          if (!def) return;
+          const legacyFeatureDef = runtime.registry.features[connectorName];
+          const legacyParticleDef = runtime.registry.particles[connectorName];
           deployedRegistry = {
             ...deployedRegistry,
-            particles: rootLegacyParticle
-              ? { ...deployedRegistry.particles, [rootName]: rootLegacyParticle }
-              : deployedRegistry.particles,
+            connectors: { ...deployedRegistry.connectors, [connectorName]: def },
+            features: legacyFeatureDef
+              ? { ...deployedRegistry.features, [connectorName]: legacyFeatureDef }
+              : deployedRegistry.features,
+            particles: {
+              ...deployedRegistry.particles,
+              ...(legacyParticleDef ? { [connectorName]: legacyParticleDef } : {}),
+            },
           };
-          storeParticleRIs(rootName);
-          const createdAt = Date.now();
-          deployedParticles = deployedParticles.some((item) => item.id === rootName)
-            ? deployedParticles
-            : [
-                ...deployedParticles,
-                {
-                  id: rootName,
-                  name: activeTab.label,
-                  summary: "Deployed from Studio.",
-                  authorId: getCurrentStudioAuthorId(),
-                  viewId: mockParticleViews[0]?.id ?? "midi",
-                  createdAt,
-                  createdLabel: "just now",
-                  ingredients: [],
-                  complexity: 1,
-                  transactionName: `${activeTab.label} PT`,
-                  dependencies: rootConnectorDef.dimensions
-                    .map((dimension) => dimension.composite ?? null)
-                    .filter((value): value is string => Boolean(value)),
-                },
-              ];
+          existingConnectorKeys.add(key);
+          deployedLibrary = {
+            ...deployedLibrary,
+            features: upsertLibraryItem(deployedLibrary.features, {
+              id: `feature-${connectorName}`,
+              name: node.data.label,
+              kind: "feature",
+              authorId: getCurrentStudioAuthorId(),
+              summary: "Deployed from Studio.",
+              dimensions:
+                node.data.dimensions ??
+                legacyFeatureDef?.dimensions.length ??
+                def.dimensions.length,
+            }),
+          };
+        });
+
+        nodes = nodes.map((node) => {
+          if (!isConnectorKind(node.data.kind)) return node;
+          if (node.data.fromNetwork) return node;
+          const featureName = resolveNodeName(node);
+          return {
+            ...node,
+            data: {
+              ...node.data,
+              networkId: featureName,
+              fromNetwork: true,
+            },
+          };
+        });
+
+        const existingParticleKeys = new SvelteSet([
+          ...Object.keys(deployedRegistry.particles).map(normalizeKey),
+        ]);
+
+        const rootName = runtime.rootConnector;
+        const rootKey = normalizeKey(rootName);
+        if (!existingParticleKeys.has(rootKey)) {
+          const rootConnectorDef = runtime.registry.connectors[rootName];
+          if (rootConnectorDef) {
+            const rootLegacyParticle = runtime.registry.particles[rootName];
+            deployedRegistry = {
+              ...deployedRegistry,
+              particles: rootLegacyParticle
+                ? { ...deployedRegistry.particles, [rootName]: rootLegacyParticle }
+                : deployedRegistry.particles,
+            };
+            storeParticleRIs(rootName);
+            const createdAt = Date.now();
+            deployedParticles = deployedParticles.some((item) => item.id === rootName)
+              ? deployedParticles
+              : [
+                  ...deployedParticles,
+                  {
+                    id: rootName,
+                    name: activeTab.label,
+                    summary: "Deployed from Studio.",
+                    authorId: getCurrentStudioAuthorId(),
+                    viewId: mockParticleViews[0]?.id ?? "midi",
+                    createdAt,
+                    createdLabel: "just now",
+                    ingredients: [],
+                    complexity: 1,
+                    transactionName: `${activeTab.label} PT`,
+                    dependencies: rootConnectorDef.dimensions
+                      .map((dimension) => dimension.composite ?? null)
+                      .filter((value): value is string => Boolean(value)),
+                  },
+                ];
+          }
+        }
+
+        if (!activeTab.particleId) {
+          tabs = tabs.map((tab) =>
+            tab.id === activeTabId ? { ...tab, particleId: rootName } : tab,
+          );
         }
       }
 
-      if (!activeTab.particleId) {
-        tabs = tabs.map((tab) => (tab.id === activeTabId ? { ...tab, particleId: rootName } : tab));
+      deployTimestampByTab = { ...deployTimestampByTab, [activeTabId]: Date.now() };
+      if (publishedRootConnectorName) {
+        chainDeployStatus = `Published connector '${publishedRootConnectorName}'. Chain execution and discovery may wait for the safe block/indexer; retry Execute without republishing.`;
+        void hydrateDeployedConnectorFromChain(publishedRootConnectorName);
+      } else if (runtime) {
+        chainDeployStatus = "Deploy completed without publishing a connector.";
+      } else {
+        const deployedParts: string[] = [];
+        if (Object.keys(compiled).length) {
+          deployedParts.push(`${Object.keys(compiled).length} transformation(s)`);
+        }
+        if (localConditionNodes.length) {
+          deployedParts.push(`${localConditionNodes.length} condition(s)`);
+        }
+        chainDeployStatus = deployedParts.length
+          ? `Deployed ${deployedParts.join(" and ")} to chain.`
+          : "Deploy completed.";
       }
+      Object.keys(compiled).forEach((name) => {
+        void hydrateDeployedRuntimeFromChain("transformation", name);
+      });
+      localConditionNodes.forEach((node) => {
+        void hydrateDeployedRuntimeFromChain("condition", resolveNodeName(node));
+      });
+    } catch (error) {
+      chainDeployError = error instanceof Error ? error.message : "Publication failed.";
+      chainDeployStatus = null;
+    } finally {
+      chainDeployBusy = false;
     }
-
-    deployTimestampByTab = { ...deployTimestampByTab, [activeTabId]: Date.now() };
-    if (publishedRootConnectorName) {
-      chainDeployStatus = `Deployed connector '${publishedRootConnectorName}' to chain.`;
-      void hydrateDeployedConnectorFromChain(publishedRootConnectorName);
-    } else if (runtime) {
-      chainDeployStatus = "Deploy completed without publishing a connector.";
-    } else {
-      const deployedParts: string[] = [];
-      if (Object.keys(compiled).length) {
-        deployedParts.push(`${Object.keys(compiled).length} transformation(s)`);
-      }
-      if (localConditionNodes.length) {
-        deployedParts.push(`${localConditionNodes.length} condition(s)`);
-      }
-      chainDeployStatus = deployedParts.length
-        ? `Deployed ${deployedParts.join(" and ")} to chain.`
-        : "Deploy completed.";
-    }
-    Object.keys(compiled).forEach((name) => {
-      void hydrateDeployedRuntimeFromChain("transformation", name);
-    });
-    localConditionNodes.forEach((node) => {
-      void hydrateDeployedRuntimeFromChain("condition", resolveNodeName(node));
-    });
   };
 
   const closeTransformationEditor = () => {
@@ -5830,7 +6023,11 @@
     }
 
     const existing = findRegistryMatch("condition", trimmedName);
-    if (existing && !existing.id.startsWith("condition-quick-")) {
+    if (
+      existing &&
+      !existing.id.startsWith("condition-quick-") &&
+      !getPublicationStore().get("condition", trimmedName)
+    ) {
       conditionDraftError = `Condition ${trimmedName} already exists in network.`;
       return;
     }
@@ -5854,7 +6051,9 @@
     const requestBody = { name: trimmedName, sol_src: conditionDraftCode };
     try {
       await ensureChainAuthForStudio();
-      await publishConditionWithTrace(traceStudioChainPost, requestBody);
+      await publishEntityToChain("condition", trimmedName, requestBody, (tracer) =>
+        publishConditionWithTrace(tracer, requestBody),
+      );
 
       const inferredArgsCount = Math.max(
         0,
@@ -5950,7 +6149,11 @@
     }
 
     const existing = findRegistryMatch("transformation", trimmedName);
-    if (existing && !existing.id.startsWith("draft-transform-")) {
+    if (
+      existing &&
+      !existing.id.startsWith("draft-transform-") &&
+      !getPublicationStore().get("transformation", trimmedName)
+    ) {
       transformationDraftError = `Transformation ${trimmedName} already exists in network.`;
       return;
     }
@@ -5963,7 +6166,9 @@
     const requestBody = { name: trimmedName, sol_src: transformationDraftCode };
     try {
       await ensureChainAuthForStudio();
-      await publishTransformationWithTrace(traceStudioChainPost, requestBody);
+      await publishEntityToChain("transformation", trimmedName, requestBody, (tracer) =>
+        publishTransformationWithTrace(tracer, requestBody),
+      );
 
       deployedRegistry = {
         ...deployedRegistry,
@@ -9355,9 +9560,17 @@
               type="button"
               class="runner-action"
               disabled={chainRunBusy || chainDeployBusy}
-              onclick={executeActiveGraph}
+              onclick={() => executeActiveGraph("simulate")}
             >
-              {chainRunBusy ? "Running..." : "Run"}
+              Simulate draft
+            </button>
+            <button
+              type="button"
+              class="runner-action"
+              disabled={chainRunBusy || chainDeployBusy}
+              onclick={() => executeActiveGraph("execute")}
+            >
+              {chainRunBusy ? "Running..." : "Execute on chain"}
             </button>
             <button
               type="button"
@@ -9365,7 +9578,7 @@
               disabled={chainDeployBusy || chainSyncBusy || chainRunBusy || activeTabReadOnly}
               onclick={deployActiveGraph}
             >
-              {chainDeployBusy ? "Deploying..." : "Deploy"}
+              {chainDeployBusy ? "Publishing..." : "Publish / retry"}
             </button>
           </div>
           {#if chainDeployStatus}
@@ -9374,8 +9587,28 @@
           {#if chainDeployError}
             <div class="runner-status is-error">{chainDeployError}</div>
           {/if}
+          {#each publicationRecords.filter((record) => record.stage === "pending" || record.stage === "sending") as record (`${record.kind}:${record.name}`)}
+            <div class="runner-status">
+              <strong>{record.name}: {record.stage}</strong>
+              {#if record.tx_hash}<div style="overflow-wrap: anywhere">{record.tx_hash}</div>{/if}
+              {#if record.stage === "sending" || record.stage === "pending"}
+                <label
+                  >Transaction hash from wallet (including a replacement) <input
+                    aria-label="Recovery transaction hash"
+                    bind:value={recoveryTxHash}
+                    placeholder="0x..."
+                  /></label
+                >
+                <button type="button" onclick={() => recoverWalletTransaction(record)}
+                  >Recover / replace transaction hash</button
+                >
+              {/if}
+            </div>
+          {/each}
           <div class="inspector-section">
-            <div class="inspector-section-title">Network run output</div>
+            <div class="inspector-section-title">
+              Run result (chain provenance or local simulation)
+            </div>
             {#if activeChainRunTimestamp}
               <div class="inspector-row">
                 <span>Last run</span>

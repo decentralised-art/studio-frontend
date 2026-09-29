@@ -143,6 +143,8 @@
       selectedConnectorContextNames,
       selectedConnectorContextPathPrefixes,
       executeOutput: streams,
+      executionProvenance: runtimeData?.executionProvenance,
+      executionMode: runtimeData?.executionMode,
     }),
   );
 </script>

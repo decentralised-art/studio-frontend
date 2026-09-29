@@ -75,3 +75,21 @@ Detailed matrix:
 You can preview the production build with `npm run preview`.
 
 > To deploy your app, you may need to install an [adapter](https://svelte.dev/docs/kit/adapters) for your target environment.
+
+## Current chain lifecycle
+
+The SDK is pinned to `1cc7924` (API specification `8761ecb`). Studio separates **Simulate draft**, **Publish / retry**, and **Execute on chain**. Creating an entity POST saves a server-local draft. Simulation returns streams without chain provenance. Publication prepares each dependency, asks the owner's browser wallet to send its transaction on the server's network (Sepolia), and confirms its saved hash. Only HTTP requests retry authentication; wallet sends do not. Pending receipts and interrupted sends survive reloads in localStorage, scoped by API URL and wallet. The recovery field accepts a hash from wallet activity after an ambiguous send or wallet speed-up. Web Locks serialize publication across tabs and editors for the same API and owner, with persisted state reloaded under the lock. Publishing requires HTTPS or localhost and a browser supporting Web Locks. Do not clear this storage while a publication is pending.
+
+Draft definitions are immutable in this workflow: use a new name after changing saved content. Mined publication does not imply the server's safe block or event indexer has caught up. Retry Execute/discovery rather than publishing again. The complete execute envelope is retained in Studio output; Worlds receive streams plus `executionProvenance` and `executionMode`. Runtime argument metadata uses `args_count`; public GET responses do not supply editable Solidity source.
+
+Uploaded Worlds may declare `chainApiVersion: 2` in `world-manifest.json` to receive the execute envelope. Omission or `1` preserves legacy stream-array shape at the host boundary; it still calls on-chain execute. New bundles should opt into version 2 and read `result.particles`. `sdk.simulate` remains a separate explicit local operation and uses the SDK's existing `dcn.execute` permission. Deploy the coordinated services-backend manifest/SDK update alongside this frontend.
+
+Verification is offline by default. The optional live smoke test requires an explicitly supplied token and published connector fixtures; unit tests mock the server and wallet and send no transactions.
+
+If bundled Playwright Chromium/ffmpeg are not installed, use existing Chrome without video recording:
+
+```sh
+PLAYWRIGHT_CHROMIUM_CHANNEL=chrome PLAYWRIGHT_VIDEO=off npm run test:e2e -- --grep 'Studio simulates a draft|renders the Studio workspace shell|renders backend worlds in the public Worlds surface' --workers=1
+```
+
+These selected browser tests intercept services/chain traffic and inject a mock wallet; they create no live entities or transactions.

@@ -261,6 +261,15 @@ const inferRuntimeArgcFromSolidity = (solSrc: unknown): number => {
   return parsed.ok ? Math.max(0, inferArgsCountFromSnippet(parsed.value).minArgsCount) : 0;
 };
 
+const resolveRuntimeArgc = (
+  payload: ChainTransformationResponse | ChainConditionResponse,
+): number =>
+  typeof payload.args_count === "number" &&
+  Number.isSafeInteger(payload.args_count) &&
+  payload.args_count >= 0
+    ? payload.args_count
+    : inferRuntimeArgcFromSolidity(payload.sol_src);
+
 export const resolveToolboxRuntimeAuthorId = (owner: unknown, fallbackAuthorId: string): string =>
   typeof owner === "string"
     ? normalizeFeedSourceAddress(owner) || fallbackAuthorId
@@ -281,7 +290,7 @@ export const mergeToolboxRuntimePayloadsIntoStudioState = (
         return [
           name,
           {
-            argc: inferRuntimeArgcFromSolidity(payload.sol_src),
+            argc: resolveRuntimeArgc(payload),
             run: identityTransformRun,
           } satisfies RuntimeTransformationDef,
         ];
@@ -320,7 +329,7 @@ export const mergeToolboxRuntimePayloadsIntoStudioState = (
       return [
         name,
         {
-          argc: inferRuntimeArgcFromSolidity(payload.sol_src),
+          argc: resolveRuntimeArgc(payload),
           check: alwaysTrueConditionCheck,
         } satisfies RuntimeConditionDef,
       ];

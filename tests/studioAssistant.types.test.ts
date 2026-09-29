@@ -6,6 +6,27 @@ import {
 } from "../src/lib/studio/assistant/types";
 
 describe("studio assistant tool envelope parsing", () => {
+  it("preserves explicit local simulation and rejects unknown execution modes", () => {
+    const call = parseAssistantToolCall(
+      {
+        id: "run",
+        tool_name: "run_connector",
+        arguments: { mode: "simulate", particles_count: 3 },
+      },
+      0,
+    );
+    expect(call.arguments).toMatchObject({ mode: "simulate", particles_count: 3 });
+    expect(() =>
+      parseAssistantToolCall(
+        {
+          id: "run",
+          tool_name: "run_connector",
+          arguments: { mode: "auto" },
+        },
+        0,
+      ),
+    ).toThrow(/mode/);
+  });
   it("parses valid tool calls and marks high-risk confirmation", () => {
     const envelope = parseAssistantEnvelopeFromJson(
       JSON.stringify({

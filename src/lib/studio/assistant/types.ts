@@ -74,6 +74,7 @@ export type RemoveTransformationFromDimensionArgs = {
 };
 
 export type RunConnectorArgs = {
+  mode?: "execute" | "simulate";
   connector?: string;
   particles_count?: number;
 };
@@ -567,7 +568,10 @@ const parseToolArguments = (
       };
     }
     case "run_connector":
+      if (args.mode != null && args.mode !== "execute" && args.mode !== "simulate")
+        throw new Error("arguments.mode must be execute or simulate.");
       return {
+        ...(args.mode === "execute" || args.mode === "simulate" ? { mode: args.mode } : {}),
         connector: parseAliasedString(
           args,
           ["connector", "connector_name", "name", "target_connector"],

@@ -37,7 +37,7 @@ export type BrowserWalletServicesAuthResult = {
   me: unknown;
 };
 
-type BrowserEthereumProvider = {
+export type BrowserEthereumProvider = {
   request: <T = unknown>(args: { method: string; params?: unknown[] }) => Promise<T>;
 };
 
@@ -240,7 +240,7 @@ const requestChainAuthToken = async (authRequest: ChainAuthPayload): Promise<str
   }
 };
 
-const getBrowserEthereumProvider = (
+export const getBrowserEthereumProvider = (
   provider?: BrowserEthereumProvider,
 ): BrowserEthereumProvider => {
   if (provider) return provider;

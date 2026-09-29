@@ -1263,6 +1263,133 @@ test("renders the Studio workspace shell", async ({ page }) => {
   assertNoPageErrors();
 });
 
+test("Studio simulates a draft, publishes with its wallet once, then preserves chain provenance", async ({
+  page,
+}) => {
+  const assertNoPageErrors = collectPageErrors(page);
+  await stubRemoteApis(page);
+  await authenticateFixtureSession(page);
+  const name = "publication_e2e";
+  const txHash = `0x${"ab".repeat(32)}`;
+  const contentHash = `0x${"cd".repeat(32)}`;
+  const requests: string[] = [];
+  await page.addInitScript(
+    ({ owner, txHash, name }) => {
+      const node = {
+        id: "e2e-root",
+        type: "connector",
+        position: { x: 200, y: 100 },
+        data: {
+          label: name,
+          kind: "connector",
+          dimensions: 1,
+          connectorRows: [{ dimension: 1, transformations: [] }],
+          fromNetwork: false,
+          tabRoot: true,
+          riPosition: 0,
+          riStart: 0,
+          riShift: 0,
+          riLocked: false,
+        },
+      };
+      window.sessionStorage.setItem(
+        "dcn_studio_tabs_session_v1",
+        JSON.stringify({
+          version: 1,
+          tabs: [{ id: "publication-tab", label: name }],
+          activeTabId: "publication-tab",
+          tabGraphs: { "publication-tab": { nodes: [node], edges: [] } },
+          connectorTreeModels: {},
+        }),
+      );
+      Object.assign(window, {
+        publicationSends: 0,
+        ethereum: {
+          request: async ({ method }: { method: string }) => {
+            if (method === "eth_accounts" || method === "eth_requestAccounts") return [owner];
+            if (method === "eth_chainId") return "0xaa36a7";
+            if (method === "eth_sendTransaction") {
+              const state = window as unknown as { publicationSends: number };
+              state.publicationSends += 1;
+              return txHash;
+            }
+            throw new Error(`Unexpected wallet method: ${method}`);
+          },
+        },
+      });
+    },
+    { owner: fixtureAddress, txHash, name },
+  );
+  await page.route(
+    /.*\/chain\/(?:connector$|simulate$|execute$|publish\/connector(?:\/prepare)?$)/,
+    async (route) => {
+      const path = new URL(route.request().url()).pathname;
+      requests.push(path);
+      const particles = [{ path: `/${name}:0`, data: [0, 1, 2] }];
+      let body: unknown;
+      if (path.endsWith("/prepare"))
+        body = {
+          status: "prepared",
+          kind: "connector",
+          name,
+          address: fixtureAddress,
+          content_hash: contentHash,
+          publication_nonce: 0,
+          deadline: 4_000_000_000,
+          transaction: {
+            from: fixtureAddress,
+            to: `0x${"34".repeat(20)}`,
+            chainId: "0xaa36a7",
+            gas: "0x10000",
+            data: "0xabcd",
+          },
+        };
+      else if (path.includes("/publish/"))
+        body = {
+          status: "mined",
+          kind: "connector",
+          name,
+          owner: fixtureAddress,
+          address: fixtureAddress,
+          tx_hash: txHash,
+          content_hash: contentHash,
+          block_number: 76,
+        };
+      else if (path.endsWith("/simulate")) body = particles;
+      else if (path.endsWith("/execute"))
+        body = {
+          block_number: 77,
+          block_hash: `0x${"ef".repeat(32)}`,
+          runner: fixtureAddress,
+          particles,
+        };
+      else body = { name, owner: fixtureAddress, address: "0x0" };
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(body),
+      });
+    },
+  );
+  await page.goto("/studio");
+  await page.getByRole("button", { name: "Toggle run panel", exact: true }).click();
+  await page.getByRole("button", { name: "Simulate draft", exact: true }).click();
+  await expect(page.locator(".runner-output")).toContainText(`/${name}:0`);
+  expect(requests).toContain("/chain/simulate");
+  expect(requests).not.toContain("/chain/execute");
+  await page.getByRole("button", { name: "Publish / retry", exact: true }).click();
+  await expect(page.getByRole("tab", { name: /publication_e2e/ })).toContainText("Network");
+  await page.getByRole("button", { name: "Execute on chain", exact: true }).click();
+  await expect(page.locator(".runner-output")).toContainText('"block_number": 77');
+  await expect(page.locator(".runner-output")).toContainText('"block_hash"');
+  expect(
+    await page.evaluate(() => (window as unknown as { publicationSends: number }).publicationSends),
+  ).toBe(1);
+  expect(requests.filter((path) => path === "/chain/connector")).toHaveLength(1);
+  expect(requests).toContain("/chain/publish/connector");
+  assertNoPageErrors();
+});
+
 test("opens new connector tabs with a reset root-focused viewport", async ({ page }) => {
   const assertNoPageErrors = collectPageErrors(page);
   await stubRemoteApis(page);

@@ -4,6 +4,7 @@ import {
   isDcnApiError,
 } from "$lib/chain/dcnClient";
 import { normalizeChainExecutePayload } from "$lib/chain/executePayloadContract";
+import type { ConfirmRequest, EntityKind } from "dcn";
 
 type DcnClientInstance = ReturnType<typeof createDcnClient>;
 
@@ -105,6 +106,7 @@ export type RawChainTransformationResponse = {
   name?: string;
   owner?: string;
   sol_src?: string;
+  args_count?: number;
   address?: string;
 };
 
@@ -114,6 +116,7 @@ export type RawChainConditionResponse = {
   name?: string;
   owner?: string;
   sol_src?: string;
+  args_count?: number;
   address?: string;
 };
 
@@ -140,14 +143,22 @@ export type RawChainExecuteStreamResponse = {
   data?: number[];
 } & RawChainLegacyExecuteStreamFields;
 
-export type RawChainExecuteResponse = RawChainExecuteStreamResponse[];
+export type ChainExecutionProvenance = {
+  block_number: number;
+  block_hash: string;
+  runner: string;
+};
+
+export type RawChainExecuteResponse = ChainExecutionProvenance & {
+  particles: RawChainExecuteStreamResponse[];
+};
 
 export type ChainExecuteStream = {
   path: string;
   data: number[];
 };
 
-export type ChainExecuteResponse = ChainExecuteStream[];
+export type ChainExecuteResponse = ChainExecutionProvenance & { particles: ChainExecuteStream[] };
 
 export type RawChainCursorResponse = {
   has_more?: boolean;
@@ -293,9 +304,9 @@ const resolveRawChainExecuteStreamPath = (stream: RawChainExecuteStreamResponse)
   return "";
 };
 
-export const normalizeChainExecuteResponse = (
-  payload: RawChainExecuteResponse,
-): ChainExecuteResponse => {
+export const normalizeChainSimulateResponse = (
+  payload: RawChainExecuteStreamResponse[],
+): ChainExecuteStream[] => {
   if (!Array.isArray(payload)) {
     throw new Error("Invalid execute response payload: expected an array of streams.");
   }
@@ -316,7 +327,7 @@ export const normalizeChainExecuteResponse = (
       throw new Error(`Invalid execute response payload: stream ${index} must include data[].`);
     }
 
-    if (stream.data.some((value) => typeof value !== "number")) {
+    if (stream.data.some((value) => typeof value !== "number" || !Number.isFinite(value))) {
       throw new Error(
         `Invalid execute response payload: stream ${index} data[] must contain only numbers.`,
       );
@@ -327,6 +338,32 @@ export const normalizeChainExecuteResponse = (
       data: [...stream.data],
     };
   });
+};
+
+export const normalizeChainExecuteResponse = (
+  payload: RawChainExecuteResponse,
+): ChainExecuteResponse => {
+  if (
+    !payload ||
+    typeof payload !== "object" ||
+    Array.isArray(payload) ||
+    !Number.isSafeInteger(payload.block_number) ||
+    payload.block_number < 0 ||
+    typeof payload.block_hash !== "string" ||
+    !/^0x[0-9a-f]{64}$/i.test(payload.block_hash) ||
+    typeof payload.runner !== "string" ||
+    !/^0x[0-9a-f]{40}$/i.test(payload.runner)
+  ) {
+    throw new Error(
+      "Invalid execute response: expected block_number, block_hash, runner and particles. Use simulate for local drafts.",
+    );
+  }
+  return {
+    block_number: payload.block_number,
+    block_hash: payload.block_hash,
+    runner: payload.runner,
+    particles: normalizeChainSimulateResponse(payload.particles),
+  };
 };
 
 export const resolveChainAccountCursor = (
@@ -577,3 +614,25 @@ export const postChainExecuteDetailed = async (payload: ChainExecutePayload) => 
     }
   });
 };
+
+export const postChainSimulateDetailed = async (payload: ChainExecutePayload) => {
+  const request = normalizeChainExecutePayload(payload);
+  const result = await dcnDetailedRequest((client) =>
+    client.simulate(request.connector_name, request.particles_count, request.dynamic_ri),
+  );
+  try {
+    return { status: result.status, body: normalizeChainSimulateResponse(result.body) };
+  } catch (error) {
+    throw new ChainApiRequestError(
+      error instanceof Error ? error.message : "Invalid simulation response.",
+      result.status,
+      result.body,
+    );
+  }
+};
+
+export const postChainPublishPrepareDetailed = (kind: EntityKind, name: string) =>
+  dcnDetailedRequest((client) => client.publishPrepare(kind, name));
+
+export const postChainPublishConfirmDetailed = (kind: EntityKind, request: ConfirmRequest) =>
+  dcnDetailedRequest((client) => client.publishConfirm(kind, request));

@@ -157,6 +157,24 @@ describe("Studio chain sync helpers", () => {
     expect(merged.state.particles[0].id).toBe("pitch");
   });
 
+  it("uses authoritative args_count without source and over legacy source inference", () => {
+    const state = mergeToolboxRuntimePayloadsIntoStudioState(
+      emptyState(),
+      "transformation",
+      [["add", { args_count: 3 }]],
+      "owner",
+    );
+    const next = mergeToolboxRuntimePayloadsIntoStudioState(
+      state,
+      "condition",
+      [["gate", { args_count: 2, sol_src: "return true;" }]],
+      "owner",
+    );
+    expect(next.registry.transformations.add.argc).toBe(3);
+    expect(next.registry.conditions.gate.argc).toBe(2);
+    expect(next.library.transformations[0].runtimeSnippet).toBeUndefined();
+  });
+
   it("hydrates saved runtime payloads into registry and library state", () => {
     const owner = "0xfa71ff2394596f824d69961293d095a50d322e4e";
     const withTransformation = mergeToolboxRuntimePayloadsIntoStudioState(

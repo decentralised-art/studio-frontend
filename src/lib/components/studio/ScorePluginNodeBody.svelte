@@ -39,6 +39,8 @@
           scoreData,
           label,
           surface: "studio-plugin",
+          executionProvenance: runtimeData?.executionProvenance,
+          executionMode: runtimeData?.executionMode,
           connectorTargets: runtimeData?.connectorTargets ?? [],
           selectedConnectorContextNames,
           selectedConnectorContextPathPrefixes,

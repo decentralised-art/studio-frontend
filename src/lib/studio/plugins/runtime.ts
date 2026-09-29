@@ -1,4 +1,5 @@
 import type { PtOutputFeature } from "$lib/particles/ptMidiAdapter";
+import type { WorldRuntimeInput } from "$lib/worlds/types";
 
 export type MidiScalarKey = "pitch" | "time" | "duration" | "velocity";
 
@@ -11,6 +12,8 @@ export type StudioPluginMidiStreamGroup = {
 };
 
 export type StudioPluginRuntimeData = {
+  executionProvenance?: WorldRuntimeInput["executionProvenance"];
+  executionMode?: WorldRuntimeInput["executionMode"];
   pluginId: string;
   connectorTargets: string[];
   streams: PtOutputFeature[];

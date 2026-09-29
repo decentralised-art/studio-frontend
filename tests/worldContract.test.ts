@@ -45,6 +45,20 @@ const backendWorldFixture = {
 };
 
 describe("world backend contract", () => {
+  it("defaults uploaded Worlds to v1 and preserves explicit v2 through the host descriptor", () => {
+    expect(
+      backendWorldToFrontendDescriptor(normalizeBackendWorldDescriptor(backendWorldFixture))
+        .chainApiVersion,
+    ).toBe(1);
+    expect(
+      backendWorldToFrontendDescriptor(
+        normalizeBackendWorldDescriptor({ ...backendWorldFixture, chainApiVersion: 2 }),
+      ).chainApiVersion,
+    ).toBe(2);
+    expect(() =>
+      normalizeBackendWorldDescriptor({ ...backendWorldFixture, chainApiVersion: 3 }),
+    ).toThrow(/chainApiVersion/);
+  });
   it("normalizes backend world descriptors", () => {
     const descriptor = normalizeBackendWorldDescriptor(backendWorldFixture);
 

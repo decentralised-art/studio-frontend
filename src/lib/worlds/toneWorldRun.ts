@@ -100,7 +100,7 @@ export const executeToneWorldRun = async (input: {
   };
 
   const result = await executeWithAuthRetry(requestBody);
-  const streams = normalizeExecuteOutput(result.body);
+  const streams = normalizeExecuteOutput(result.body.particles);
   const layerCompatibility = getToneWorldLayerCompatibilityFromStreams(streams);
   if (!layerCompatibility.hasAnyLayer) {
     throw new Error(formatMissingRequiredToneLayerError(layerCompatibility));
@@ -116,6 +116,12 @@ export const executeToneWorldRun = async (input: {
       connectorTargets: [connectorName],
       particlesCount,
       dynamicRiInput: input.dynamicRiInput,
+      executionMode: "execute",
+      executionProvenance: {
+        block_number: result.body.block_number,
+        block_hash: result.body.block_hash,
+        runner: result.body.runner,
+      },
       statsText,
     }),
   };

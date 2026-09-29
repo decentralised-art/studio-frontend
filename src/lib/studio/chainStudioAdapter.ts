@@ -461,11 +461,29 @@ export const fetchChainOwnedStudioSnapshot = async (
   });
 
   if (includeRuntimeCode) {
-    // Backfill explicit owned condition names even if no particle references them.
-    conditionPayloads.forEach(([name]) => {
+    // Public runtime metadata is authoritative, including zero arguments. Source
+    // is intentionally absent from current-server GET responses.
+    transformationPayloads.forEach(([name, payload]) => {
       const key = name.trim();
       if (!key) return;
-      conditions[key] ??= { argc: 0 };
+      if (
+        typeof payload.args_count === "number" &&
+        Number.isSafeInteger(payload.args_count) &&
+        payload.args_count >= 0
+      ) {
+        transformations[key] = { argc: payload.args_count };
+      } else transformations[key] ??= { argc: 0 };
+    });
+    conditionPayloads.forEach(([name, payload]) => {
+      const key = name.trim();
+      if (!key) return;
+      if (
+        typeof payload.args_count === "number" &&
+        Number.isSafeInteger(payload.args_count) &&
+        payload.args_count >= 0
+      ) {
+        conditions[key] = { argc: payload.args_count };
+      } else conditions[key] ??= { argc: 0 };
     });
   }
 

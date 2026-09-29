@@ -244,8 +244,9 @@ const ASSISTANT_ENVELOPE_JSON_SCHEMA = {
                 arguments: {
                   type: "object",
                   additionalProperties: false,
-                  required: ["connector", "particles_count"],
+                  required: ["connector", "particles_count", "mode"],
                   properties: {
+                    mode: { type: ["string", "null"], enum: ["execute", "simulate", null] },
                     connector: { type: ["string", "null"] },
                     particles_count: { type: ["integer", "null"] },
                   },
