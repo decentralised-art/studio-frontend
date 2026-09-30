@@ -2,7 +2,7 @@
 
 Status: historical migration record; current code is connector-first at the chain boundary
 Owner: Frontend
-Repo: `hypermusic-frontend`
+Repo: `studio-frontend`
 Last updated: 2026-03-15
 Last reviewed: 2026-04-24
 
@@ -55,9 +55,9 @@ Refactor Studio from the legacy `feature + particle + dimension-node` authoring 
   - `solidity/contracts/connector/ConnectorBase.sol`
   - `solidity/contracts/runner/Runner.sol`
 
-### dcn-server
+### chain-backend
 
-- Local `dcn-server/main` is behind `origin/main` by 15 commits.
+- Local `chain-backend/main` is behind `origin/main` by 15 commits.
 - New head: `2b49373`.
 - Protocol work from former `protocol` branch is merged into `main`; `origin/protocol` is deleted.
 
@@ -69,7 +69,7 @@ The connector model is now fully dimension-native in server/protocol surfaces, w
 
 ### 3.1 Connector payload shape
 
-From `dcn-server/src/pt/proto/connector.proto`:
+From `chain-backend/src/pt/proto/connector.proto`:
 
 - `Connector`
   - `name`
@@ -85,7 +85,7 @@ No `feature_name` in connector contract.
 
 ### 3.2 Exposed server API
 
-From `dcn-server/src/main.cpp` and `src/api/include/api.hpp`:
+From `chain-backend/src/main.cpp` and `src/api/include/api.hpp`:
 
 - `/connector` routes are active
 - `/feature` routes removed

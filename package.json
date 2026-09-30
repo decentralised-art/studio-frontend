@@ -1,5 +1,5 @@
 {
-  "name": "hypermusic-frontend",
+  "name": "studio-frontend",
   "private": true,
   "version": "0.0.1",
   "type": "module",
@@ -7,7 +7,7 @@
     "dev": "vite dev",
     "build": "vite build",
     "preview": "vite preview",
-    "build:dcn-sdk": "node scripts/ensure-dcn-sdk.mjs",
+    "build:dcn-sdk": "node scripts/ensure-sdk.mjs",
     "predev": "npm run build:dcn-sdk",
     "prebuild": "npm run build:dcn-sdk",
     "precheck": "npm run build:dcn-sdk",
@@ -64,7 +64,7 @@
     "d3-selection": "^3.0.0",
     "d3-transition": "^3.0.1",
     "d3-zoom": "^3.0.0",
-    "dcn": "file:submodules/dcn-sdk/js",
+    "dcn": "file:submodules/sdk/js",
     "monaco-editor": "^0.55.1",
     "opensheetmusicdisplay": "^1.9.7",
     "tone": "^14.8.49"

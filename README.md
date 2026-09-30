@@ -1,4 +1,6 @@
-# Hypermusic.ai Svelte
+# studio-frontend
+
+Frontend for decentralised.art, including Studio, Worlds, tutorials, and the Network.
 
 ## Developing
 

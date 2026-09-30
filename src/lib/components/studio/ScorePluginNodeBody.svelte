@@ -76,7 +76,7 @@
     if (signature === loggedDiagnosticSignature) return;
     loggedDiagnosticSignature = signature;
 
-    const message = `[HyperMusic Score World] ${diagnostics.length} score diagnostic(s) for ${label}`;
+    const message = `[decentralised.art Score World] ${diagnostics.length} score diagnostic(s) for ${label}`;
     const payload = {
       plugin: label,
       adapterId: scoreData.adapterId,

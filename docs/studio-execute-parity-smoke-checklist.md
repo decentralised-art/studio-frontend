@@ -4,12 +4,12 @@ Last updated: 2026-04-15
 
 Purpose:
 
-- Verify Studio graph projection and execute payload generation match current `dcn-server` behavior.
+- Verify Studio graph projection and execute payload generation match current `chain-backend` behavior.
 - Focus on high-risk cases: duplicated connector names and binding-slot disambiguation.
 
 Scope:
 
-- `hypermusic-frontend` Studio UI (`/studio`)
+- `studio-frontend` Studio UI (`/studio`)
 - Chain API `/execute` parity against server debug interface.
 
 ## 1. Preconditions
@@ -196,7 +196,7 @@ cat response_debug.json  | tr -d '\n\r\t ' | shasum -a 256
 
 ### 5.5 Re-runnable Live Smoke Command
 
-From `hypermusic-frontend`:
+From `studio-frontend`:
 
 ```bash
 npm run smoke:live

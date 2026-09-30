@@ -238,7 +238,7 @@ isorhythmic_note_table
 
 The product table naturally creates phase drift when the child cycles have different periods.
 
-This is one of the most important Hypermusic-native examples because it shows why independent child connectors are better than flattened note presets.
+This is one of the most important examples native to decentralised.art because it shows why independent child connectors are better than flattened note presets.
 
 ### R6: Meter And Metric Accent
 

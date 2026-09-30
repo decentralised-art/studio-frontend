@@ -229,7 +229,7 @@
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
     anchor.href = url;
-    anchor.download = `${(label || "hypermusic-midi-world").replace(/[^a-z0-9._-]+/gi, "_")}.mid`;
+    anchor.download = `${(label || "decentralised.art-midi-world").replace(/[^a-z0-9._-]+/gi, "_")}.mid`;
     anchor.click();
     URL.revokeObjectURL(url);
   };

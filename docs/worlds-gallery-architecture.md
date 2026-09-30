@@ -6,7 +6,7 @@ Created: 2026-05-08
 
 ## Summary
 
-Hypermusic should model user-created generative environments as **Worlds**, not merely plugins.
+decentralised.art should model user-created generative environments as **Worlds**, not merely plugins.
 
 A world is:
 
@@ -20,13 +20,13 @@ A world render is:
 compatible connector + runtime coordinate / RI input -> generated visual result
 ```
 
-This is inspired by fxhash only at the level of loading a self-contained web visualizer from content-addressed storage and rendering it in an iframe. The Hypermusic version does not copy the collected-iteration storage model. It replaces the fxhash random seed with DCN connector/RIs runtime values.
+This is inspired by fxhash only at the level of loading a self-contained web visualizer from content-addressed storage and rendering it in an iframe. The decentralised.art version does not copy the collected-iteration storage model. It replaces the fxhash random seed with DCN connector/RIs runtime values.
 
 ```text
 fxhash:
   generator code + deterministic hash -> collected iteration
 
-hypermusic:
+decentralised.art:
   world visualizer + connector + RI coordinate -> world render
 ```
 
@@ -36,9 +36,9 @@ If all RIs are static, there may be only one possible render for a connector. If
 
 ## Protocol Boundary
 
-Worlds should not be part of `dcn-server`.
+Worlds should not be part of `chain-backend`.
 
-PT and `dcn-server` should remain world-agnostic:
+PT and `chain-backend` should remain world-agnostic:
 
 ```text
 connectors
@@ -48,11 +48,11 @@ formats
 execute
 ```
 
-The vocabulary of worlds belongs to the Hypermusic application/social layer:
+The vocabulary of worlds belongs to the decentralised.art application/social layer:
 
 ```text
-hypermusic-backend
-hypermusic-frontend
+services-backend
+studio-frontend
 IPFS
 optional separate world registry contract
 ```
@@ -134,7 +134,7 @@ RI normalization/schema version
 
 This address is useful for deterministic reruns, URLs, and preview caches, but it is not a stored iteration object.
 
-Hypermusic should not store user-selected RI iterations. If a result must be fixed permanently, the right protocol-level object is a connector/configuration with static RI values. The world then renders that static connector state like any other connector state.
+decentralised.art should not store user-selected RI iterations. If a result must be fixed permanently, the right protocol-level object is a connector/configuration with static RI values. The world then renders that static connector state like any other connector state.
 
 ## Storage Model
 
@@ -144,7 +144,7 @@ Use IPFS for:
 - world manifest;
 - preview images/videos for worlds.
 
-Use `hypermusic-backend` for:
+Use `services-backend` for:
 
 - upload flow;
 - validation;
@@ -169,7 +169,7 @@ The chain should store references and hashes, not large runtime bundles.
 Worlds should render in sandboxed iframes.
 
 ```text
-hypermusic-frontend
+studio-frontend
   loads world iframe from IPFS/gateway URL
   sends connector/RI render input by postMessage
   receives ready/preview/error events
@@ -280,7 +280,7 @@ Compatibility is based on world-declared accepted format hashes and available co
 
 ## Backend API Plan
 
-Add to `hypermusic-backend`:
+Add to `services-backend`:
 
 ```text
 POST /worlds/upload
@@ -305,7 +305,7 @@ Backend responsibilities:
 
 ## On-Chain Registry
 
-If Hypermusic wants fxhash-like permanence, create a separate world registry contract. Do not put this into PT or `dcn-server`.
+If decentralised.art wants fxhash-like permanence, create a separate world registry contract. Do not put this into PT or `chain-backend`.
 
 World registry fields:
 
@@ -320,7 +320,7 @@ accepted_format_hashes
 version
 ```
 
-The backend can index these events and expose them through Hypermusic APIs.
+The backend can index these events and expose them through decentralised.art APIs.
 
 ## Security
 

@@ -30,7 +30,7 @@ music theory concept
   -> deploy candidate when mature
 ```
 
-The corpus should include common-practice materials, post-tonal theory, modernist and spectral materials, rhythm/time systems, dynamics, articulation, texture, and Hypermusic-native connector logic.
+The corpus should include common-practice materials, post-tonal theory, modernist and spectral materials, rhythm/time systems, dynamics, articulation, texture, and connector logic native to decentralised.art.
 
 ## Precision Levels
 
@@ -117,7 +117,7 @@ P5 superseded
 
 05-composition/texture-form-space.md
   Product-table texture, canons, hockets, drones, polyrhythms, form, and
-  Hypermusic-native world/RI form concepts.
+  world/RI form concepts native to decentralised.art.
 
 05-composition/counterpoint-form-and-grammar-systems.md
   Counterpoint, canon, fugue, phrase, and form grammar gaps.
@@ -162,7 +162,7 @@ optional:
 
 Future score-event scalar groups may include meter, tempo, clef, key, slurs, articulations, and spanners as documented in `../../musicxml-world-format-contract.md`.
 
-## Hypermusic-Native Concepts
+## Concepts Native to decentralised.art
 
 Some concepts should be standard in this system even if they are not standard textbook labels.
 

@@ -4,7 +4,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const sdkDir = resolve(projectRoot, "submodules/dcn-sdk/js");
+const sdkDir = resolve(projectRoot, "submodules/sdk/js");
 const distEntry = resolve(sdkDir, "dist/index.js");
 const sourceEntries = [
   "package.json",
@@ -37,7 +37,7 @@ if (isDistFresh()) {
 }
 
 if (!existsSync(resolve(sdkDir, "package.json"))) {
-  console.error("Missing dcn-sdk submodule. Run: git submodule update --init --recursive");
+  console.error("Missing sdk submodule. Run: git submodule update --init --recursive");
   process.exit(1);
 }
 

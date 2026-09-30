@@ -135,7 +135,7 @@ polyrhythm/polymeter
 register split
 density
 form patterns
-Hypermusic-native form
+form native to decentralised.art
 ```
 
 ## Strongest New Conceptual Insight

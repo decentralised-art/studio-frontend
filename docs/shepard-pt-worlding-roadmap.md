@@ -40,7 +40,7 @@ The system should separate these layers:
 PT / DCN
   world-agnostic protocol for connectors, transformations, conditions, formats, and execution
 
-Hypermusic Studio
+Studio
   authoring environment for connector graphs, RI values, worlds, and execution previews
 
 Cartography
@@ -154,13 +154,13 @@ World render input
   compatible connector + runtime RI values
 ```
 
-This is analogous to fxhash generative artworks at the level of loading a self-contained visualizer, but the render input is different and Hypermusic should not copy the collected-iteration storage model:
+This is analogous to fxhash generative artworks at the level of loading a self-contained visualizer, but the render input is different and decentralised.art should not copy the collected-iteration storage model:
 
 ```text
 fxhash:
   generator code + deterministic random hash -> collected iteration
 
-hypermusic:
+decentralised.art:
   world visualizer + connector + runtime RI values -> world render
 ```
 
@@ -171,7 +171,7 @@ The world renders:
 2. runtime RI values supplied to that connector
 ```
 
-Hypermusic should not store user-selected RI iterations. RIs are already the runtime space of the DCN protocol. If RIs are open, the user inserts values at runtime and the visualizer reads the resulting connector output. If a result must be fixed permanently, the connector/configuration itself should be saved with static RI values.
+decentralised.art should not store user-selected RI iterations. RIs are already the runtime space of the DCN protocol. If RIs are open, the user inserts values at runtime and the visualizer reads the resulting connector output. If a result must be fixed permanently, the connector/configuration itself should be saved with static RI values.
 
 The world creator creates a visual environment for compatible connector/RIs states. The protocol object remains the connector and its RI behavior, not a separate stored iteration.
 
@@ -197,9 +197,9 @@ test_score_root_0_version2_6052026
 
 ## Protocol Boundary
 
-Worlds should not be part of `dcn-server`.
+Worlds should not be part of `chain-backend`.
 
-PT and `dcn-server` should stay world-agnostic:
+PT and `chain-backend` should stay world-agnostic:
 
 ```text
 connectors
@@ -209,38 +209,38 @@ formats
 execute
 ```
 
-The vocabulary of worlds should begin at the Hypermusic social/application layer:
+The vocabulary of worlds should begin at the decentralised.art social/application layer:
 
 ```text
-hypermusic-backend
-hypermusic-frontend
+services-backend
+studio-frontend
 optional separate world registry contract
 IPFS storage
 ```
 
-This preserves DCN as a general protocol for heterogeneous connector composition while allowing Hypermusic to host and index worlds socially.
+This preserves DCN as a general protocol for heterogeneous connector composition while allowing decentralised.art to host and index worlds socially.
 
 ## Repo Impact
 
 Expected first-class changes:
 
 ```text
-hypermusic-frontend
-hypermusic-backend
+studio-frontend
+services-backend
 ```
 
 Potential later additions:
 
 ```text
 separate world registry contract
-dcn-sdk/spec only if world runtime APIs become public SDK contracts
-dcn-mcp only if MCP should inspect or create worlds
+sdk/api-spec only if world runtime APIs become public SDK contracts
+mcp only if MCP should inspect or create worlds
 ```
 
 Not expected for the world vocabulary:
 
 ```text
-dcn-server
+chain-backend
 PT core protocol
 ```
 

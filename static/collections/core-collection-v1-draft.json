@@ -3,14 +3,14 @@
   "schema_version": "dcn-collection-manifest.v1",
   "collection": {
     "id": "core-collection.v1.draft",
-    "name": "DCN Core Collection v1 (Draft)",
+    "name": "decentralised.art Core Collection v1 (Draft)",
     "kind": "core",
     "status": "draft",
-    "maintainer": "hypermusic-ai",
+    "maintainer": "decentralised-art",
     "generated_at_utc": "2026-04-16T00:00:00Z"
   },
   "network": {
-    "chain_name": "DCN Chain (prototype)",
+    "chain_name": "decentralised.art Chain (prototype)",
     "chain_api_base_url": "https://api.decentralised.art/chain"
   },
   "publication_policy": {
@@ -18,7 +18,7 @@
     "requires_source_publication": true,
     "requires_hash_verification": true,
     "naming_policy": "deployable names must use domain_operation_vN (Solidity-safe); canonical_id keeps domain.operation.vN",
-    "snippet_contract_policy": "sol_src is exact Solidity function body injected by dcn-server wrapper; do not include pragma/import/contract/entrypoint declarations in sol_src",
+    "snippet_contract_policy": "sol_src is exact Solidity function body injected by chain-backend wrapper; do not include pragma/import/contract/entrypoint declarations in sol_src",
     "test_name_policy": "experiments must use unique test_* names; core canonical ids are reserved for curated publication"
   },
   "items": {
@@ -53,7 +53,7 @@
           "forbidden_constructs": ["pragma ", "import ", "contract ", "function run("]
         },
         "backend_reference": {
-          "repository": "dcn-server",
+          "repository": "chain-backend",
           "path": "src/pt/src/transformation.cpp",
           "symbol": "constructTransformationSolidityCode"
         }
@@ -88,7 +88,7 @@
           "forbidden_constructs": ["pragma ", "import ", "contract ", "function run("]
         },
         "backend_reference": {
-          "repository": "dcn-server",
+          "repository": "chain-backend",
           "path": "src/pt/src/transformation.cpp",
           "symbol": "constructTransformationSolidityCode"
         }
@@ -123,7 +123,7 @@
           "forbidden_constructs": ["pragma ", "import ", "contract ", "function run("]
         },
         "backend_reference": {
-          "repository": "dcn-server",
+          "repository": "chain-backend",
           "path": "src/pt/src/transformation.cpp",
           "symbol": "constructTransformationSolidityCode"
         }
@@ -158,7 +158,7 @@
           "forbidden_constructs": ["pragma ", "import ", "contract ", "function run("]
         },
         "backend_reference": {
-          "repository": "dcn-server",
+          "repository": "chain-backend",
           "path": "src/pt/src/transformation.cpp",
           "symbol": "constructTransformationSolidityCode"
         }
@@ -193,7 +193,7 @@
           "forbidden_constructs": ["pragma ", "import ", "contract ", "function run("]
         },
         "backend_reference": {
-          "repository": "dcn-server",
+          "repository": "chain-backend",
           "path": "src/pt/src/transformation.cpp",
           "symbol": "constructTransformationSolidityCode"
         }
@@ -228,7 +228,7 @@
           "forbidden_constructs": ["pragma ", "import ", "contract ", "function run("]
         },
         "backend_reference": {
-          "repository": "dcn-server",
+          "repository": "chain-backend",
           "path": "src/pt/src/transformation.cpp",
           "symbol": "constructTransformationSolidityCode"
         }
@@ -263,7 +263,7 @@
           "forbidden_constructs": ["pragma ", "import ", "contract ", "function run("]
         },
         "backend_reference": {
-          "repository": "dcn-server",
+          "repository": "chain-backend",
           "path": "src/pt/src/transformation.cpp",
           "symbol": "constructTransformationSolidityCode"
         }
@@ -298,7 +298,7 @@
           "forbidden_constructs": ["pragma ", "import ", "contract ", "function run("]
         },
         "backend_reference": {
-          "repository": "dcn-server",
+          "repository": "chain-backend",
           "path": "src/pt/src/transformation.cpp",
           "symbol": "constructTransformationSolidityCode"
         }
@@ -333,7 +333,7 @@
           "forbidden_constructs": ["pragma ", "import ", "contract ", "function run("]
         },
         "backend_reference": {
-          "repository": "dcn-server",
+          "repository": "chain-backend",
           "path": "src/pt/src/transformation.cpp",
           "symbol": "constructTransformationSolidityCode"
         }
@@ -368,7 +368,7 @@
           "forbidden_constructs": ["pragma ", "import ", "contract ", "function run("]
         },
         "backend_reference": {
-          "repository": "dcn-server",
+          "repository": "chain-backend",
           "path": "src/pt/src/transformation.cpp",
           "symbol": "constructTransformationSolidityCode"
         }
@@ -403,7 +403,7 @@
           "forbidden_constructs": ["pragma ", "import ", "contract ", "function run("]
         },
         "backend_reference": {
-          "repository": "dcn-server",
+          "repository": "chain-backend",
           "path": "src/pt/src/transformation.cpp",
           "symbol": "constructTransformationSolidityCode"
         }
@@ -439,7 +439,7 @@
           "forbidden_constructs": ["pragma ", "import ", "contract ", "function check("]
         },
         "backend_reference": {
-          "repository": "dcn-server",
+          "repository": "chain-backend",
           "path": "src/pt/src/condition.cpp",
           "symbol": "constructConditionSolidityCode"
         }
@@ -473,7 +473,7 @@
           "forbidden_constructs": ["pragma ", "import ", "contract ", "function check("]
         },
         "backend_reference": {
-          "repository": "dcn-server",
+          "repository": "chain-backend",
           "path": "src/pt/src/condition.cpp",
           "symbol": "constructConditionSolidityCode"
         }
@@ -507,7 +507,7 @@
           "forbidden_constructs": ["pragma ", "import ", "contract ", "function check("]
         },
         "backend_reference": {
-          "repository": "dcn-server",
+          "repository": "chain-backend",
           "path": "src/pt/src/condition.cpp",
           "symbol": "constructConditionSolidityCode"
         }
@@ -541,7 +541,7 @@
           "forbidden_constructs": ["pragma ", "import ", "contract ", "function check("]
         },
         "backend_reference": {
-          "repository": "dcn-server",
+          "repository": "chain-backend",
           "path": "src/pt/src/condition.cpp",
           "symbol": "constructConditionSolidityCode"
         }
@@ -575,7 +575,7 @@
           "forbidden_constructs": ["pragma ", "import ", "contract ", "function check("]
         },
         "backend_reference": {
-          "repository": "dcn-server",
+          "repository": "chain-backend",
           "path": "src/pt/src/condition.cpp",
           "symbol": "constructConditionSolidityCode"
         }

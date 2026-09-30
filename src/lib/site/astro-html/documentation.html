@@ -118,12 +118,13 @@ backend.
     &quot;app_origin&quot;: &quot;https://decentralised.art&quot;
   }&#39;</code>
 </pre>  <pre data-panel="curl" class="bg-gray-50 border border-gray-200 m-0 px-4 py-4 text-sm overflow-x-auto leading-relaxed font-mono text-gray-800" data-astro-cid-jgrc2lfe><code data-astro-cid-jgrc2lfe>{
-  &quot;message&quot;: &quot;decentralised.art wants you to sign in with your Ethereum account:\n0x48f750696ed392ca6d449a3d214656d024c5756f\n\nSign in to Hypermusic.\n\nURI: https://decentralised.art/auth/siwe/verify\nVersion: 1\nChain ID: 1\nNonce: Abcdef123456\nIssued At: 2026-05-25T12:00:00.000Z\nExpiration Time: 2026-05-25T12:05:00.000Z&quot;,
+  &quot;message&quot;: &quot;&lt;SIWE message returned by the services API&gt;&quot;,
   &quot;expires_at&quot;: &quot;2026-05-25T12:05:00Z&quot;
 }</code>
 </pre>  <p class="text-xs text-white/70 mt-2">
-The challenge expires after five minutes and too many active challenges for
-the same address return <code class="font-mono">429</code>.
+Sign the returned <code class="font-mono">message</code> verbatim. The services
+backend generates its wording. The challenge expires after five minutes and too
+many active challenges for the same address return <code class="font-mono">429</code>.
 </p> </article> <article class="mb-8"> <h3 class="font-semibold text-white mb-2">
 POST /auth/siwe/verify </h3> <p class="text-sm text-white/80 mb-2">
 Verifies the exact SIWE message and EIP-191 signature, consumes the challenge,

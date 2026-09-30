@@ -97,7 +97,7 @@ accent phase
 row phase
 ```
 
-This is a core Hypermusic-specific abstraction.
+This is a core abstraction specific to decentralised.art.
 
 ### 5. Named Concepts Should Not Always Be Separate Connectors
 
