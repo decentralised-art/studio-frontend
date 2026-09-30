@@ -334,6 +334,24 @@ test("creates once, simulates without gas, then explicitly publishes and execute
     path: test.info().outputPath("published.png"),
     animations: "disabled",
   });
+  await page.getByRole("button", { name: "Switch to light theme" }).click();
+  const receiptColors = await page.locator(".runner-publications").evaluate((receipt) => {
+    const link = receipt.querySelector("a");
+    return {
+      background: getComputedStyle(receipt).backgroundColor,
+      text: getComputedStyle(receipt).color,
+      link: link ? getComputedStyle(link).color : "",
+    };
+  });
+  expect(receiptColors).toMatchObject({
+    background: "rgba(255, 255, 255, 0.86)",
+    text: "rgb(16, 24, 39)",
+    link: "rgb(6, 78, 59)",
+  });
+  await page.screenshot({
+    path: test.info().outputPath("published-light.png"),
+    animations: "disabled",
+  });
   await expect(
     page.getByRole("button", { name: "Execute on the Network", exact: true }),
   ).toBeEnabled();
