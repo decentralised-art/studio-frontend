@@ -81,8 +81,8 @@
 <header class:is-landing={isLandingRoute} class:is-open={menuOpen} class="site-nav">
   <div class="page-container">
     <nav class="site-nav-inner" aria-label="Primary" bind:this={navElement}>
-      <a href={resolve("/")} class="site-brand" aria-label="Decentralised Creative Network home">
-        Decentralised Creative Network
+      <a href={resolve("/")} class="site-brand" aria-label="decentralised.art home">
+        decentralised.art
       </a>
 
       <button
@@ -214,7 +214,7 @@
     font-size: 0.875rem;
     font-weight: 600;
     letter-spacing: 0.08em;
-    text-transform: uppercase;
+    text-transform: none;
     color: var(--text-primary);
   }
 

@@ -5,7 +5,7 @@
 </script>
 
 <svelte:head>
-  <title>DCN Tutorial for AI Agents</title>
+  <title>decentralised.art Tutorial for AI Agents</title>
 </svelte:head>
 
 <SiteContentPage

@@ -73,7 +73,7 @@
 </script>
 
 <svelte:head>
-  <title>Decentralised Creative Network</title>
+  <title>decentralised.art</title>
   <meta
     name="description"
     content="A decentralised platform for worlds as artworks and reusable intelligence across them."
@@ -81,7 +81,7 @@
   <link rel="canonical" href="https://decentralised.art/" />
   <meta property="og:type" content="website" />
   <meta property="og:site_name" content="decentralised.art" />
-  <meta property="og:title" content="Decentralised Creative Network" />
+  <meta property="og:title" content="decentralised.art" />
   <meta
     property="og:description"
     content="A decentralised platform for worlds as artworks and reusable intelligence across them."
@@ -93,7 +93,7 @@
   <meta property="og:image:width" content="1200" />
   <meta property="og:image:height" content="630" />
   <meta name="twitter:card" content="summary_large_image" />
-  <meta name="twitter:title" content="Decentralised Creative Network" />
+  <meta name="twitter:title" content="decentralised.art" />
   <meta
     name="twitter:description"
     content="A decentralised platform for worlds as artworks and reusable intelligence across them."
@@ -112,11 +112,11 @@
     >
       <div class="tutorial-when-block">
         <div class="tutorial-when-intro">
-          <h2>When do I want to use the Decentralised Creative Network?</h2>
+          <h2>When do I want to use decentralised.art?</h2>
           <p>
-            You use DCN when you want behaviours to outlive apps, teams, and servers. When you care
-            that an operation keeps working tomorrow, under explicit conditions, with no third party
-            deciding whether it still runs.
+            You use decentralised.art when you want behaviours to outlive apps, teams, and servers.
+            When you care that an operation keeps working tomorrow, under explicit conditions, with
+            no third party deciding whether it still runs.
           </p>
         </div>
 

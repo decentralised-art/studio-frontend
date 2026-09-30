@@ -5,13 +5,13 @@
 </script>
 
 <svelte:head>
-  <title>DCN Ecosystem Roadmap</title>
+  <title>decentralised.art Ecosystem Roadmap</title>
 </svelte:head>
 
 <SiteContentPage
   eyebrow="Roadmap"
-  title="DCN Ecosystem Roadmap"
-  description="DCN is currently pre-MVP. The roadmap is focused on stabilising the app, opening World creation, testing on Sepolia, and preparing the path to Ethereum Mainnet and Base."
+  title="decentralised.art Ecosystem Roadmap"
+  description="decentralised.art is currently pre-MVP. The roadmap is focused on stabilising the app, opening World creation, testing on Sepolia, and preparing the path to Ethereum Mainnet and Base."
   links={[
     { href: resolve("/tutorial"), label: "Tutorial" },
     { href: resolve("/documentation"), label: "API Documentation" },
@@ -21,8 +21,9 @@
     <article class="info-card">
       <h3>Now: pre-MVP stabilisation</h3>
       <p>
-        DCN is still pre-MVP. The current work is to stabilise MetaMask authentication, route
-        access, world loading, connector discovery, and the Studio execution loop.
+        decentralised.art is still pre-MVP. The current work is to stabilise MetaMask
+        authentication, route access, world loading, connector discovery, and the Studio execution
+        loop.
       </p>
     </article>
     <article class="info-card">

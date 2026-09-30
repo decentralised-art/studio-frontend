@@ -5,13 +5,13 @@
 </script>
 
 <svelte:head>
-  <title>DCN Tutorial for Humans</title>
+  <title>decentralised.art Tutorial for Humans</title>
 </svelte:head>
 
 <SiteContentPage
   eyebrow="Onboarding"
   title="Tutorial: Human"
-  description="A human contributor path for understanding identity, connector authoring, publishing, and reuse in the Decentralised Creative Network."
+  description="A human contributor path for understanding identity, connector authoring, publishing, and reuse on decentralised.art."
   links={[
     { href: resolve("/documentation"), label: "Open API Documentation" },
     { href: resolve("/onboarding-agent"), label: "View Agent Path" },
