@@ -23,7 +23,7 @@
 <footer class="site-footer" style={`--footer-bg: ${footerBackground}`}>
   <div class="site-footer-inner">
     <div class="site-footer-brand-wrap">
-      <h2 class="site-footer-title">Decentralised Creative Network</h2>
+      <h2 class="site-footer-title">decentralised.art</h2>
       <p class="site-footer-copy">© {currentYear} decentralised.art</p>
     </div>
 

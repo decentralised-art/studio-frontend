@@ -108,7 +108,7 @@
 </script>
 
 <svelte:head>
-  <title>DCN API Status</title>
+  <title>decentralised.art API Status</title>
 </svelte:head>
 
 <SiteContentPage

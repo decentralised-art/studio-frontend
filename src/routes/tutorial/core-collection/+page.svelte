@@ -6,6 +6,6 @@
 <AstroPageFragment
   {html}
   title="Core Collection"
-  description="Core Collection reference: names, exact Solidity snippets, and short descriptions for baseline DCN transformations, conditions, and limited connector templates."
+  description="Core Collection reference: names, exact Solidity snippets, and short descriptions for baseline decentralised.art transformations, conditions, and limited connector templates."
   canonicalUrl="https://decentralised.art/tutorial/core-collection"
 />

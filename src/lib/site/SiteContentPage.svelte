@@ -15,7 +15,7 @@
   };
 
   const {
-    eyebrow = "Decentralised Creative Network",
+    eyebrow = "decentralised.art",
     title,
     description,
     links = [],
@@ -25,7 +25,7 @@
 
 <main class="site-content-page">
   <section class="site-content-hero">
-    <p>{eyebrow}</p>
+    <p class:is-brand={eyebrow === "decentralised.art"}>{eyebrow}</p>
     <h1>{title}</h1>
     <span>{description}</span>
     {#if links.length > 0}
@@ -64,6 +64,10 @@
   .site-content-hero p {
     @apply m-0 text-xs uppercase tracking-[0.22em];
     color: var(--text-faint);
+  }
+
+  .site-content-hero p.is-brand {
+    text-transform: none;
   }
 
   .site-content-hero h1 {
