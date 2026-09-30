@@ -658,7 +658,7 @@
 
   const logScoreDiagnostics = (data: ScorePluginRuntimeData, context: string) => {
     if (!data.diagnostics.length) return;
-    console.groupCollapsed(`[HyperMusic Worlds] ${context} score diagnostics`);
+    console.groupCollapsed(`[decentralised.art Worlds] ${context} score diagnostics`);
     data.diagnostics.forEach((diagnostic) => {
       const message = diagnostic.path
         ? `${diagnostic.message} (${diagnostic.path})`

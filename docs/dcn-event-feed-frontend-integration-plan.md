@@ -1,17 +1,17 @@
 # DCN Event Feed Frontend Integration Plan
 
-This note preserves the detailed context for the planned frontend migration to the new `dcn-server`
+This note preserves the detailed context for the planned frontend migration to the new `chain-backend`
 event system. It is meant as implementation memory for future Codex turns.
 
 ## Current Repository State
 
-- `dcn-server` was fetched with `git fetch origin --prune --tags`.
-- Local `dcn-server/main` is intentionally still behind `origin/main` by 10 commits; the analysis used
+- `chain-backend` was fetched with `git fetch origin --prune --tags`.
+- Local `chain-backend/main` is intentionally still behind `origin/main` by 10 commits; the analysis used
   `origin/main` directly and did not merge it.
 - `origin/main` is currently at `777d9f5`.
 - New server commits introduce a chain event ingestion/projection/feed system plus `GET /feed` and
   `GET /feed/stream`.
-- `hypermusic-frontend` has existing uncommitted work from earlier tasks. Before starting this migration,
+- `studio-frontend` has existing uncommitted work from earlier tasks. Before starting this migration,
   either commit it or intentionally park it, because the migration will touch the same areas.
 
 ## New Server Contract

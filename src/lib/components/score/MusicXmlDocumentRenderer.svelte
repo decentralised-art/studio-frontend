@@ -197,7 +197,7 @@
         if (currentRunId !== renderRunId) return;
         renderStatus = "error";
         renderMessage = formatRenderError(error);
-        console.error(`[HyperMusic Score Renderer] Renderer failed for ${label}`, {
+        console.error(`[decentralised.art Score Renderer] Renderer failed for ${label}`, {
           label,
           error,
           message: renderMessage,

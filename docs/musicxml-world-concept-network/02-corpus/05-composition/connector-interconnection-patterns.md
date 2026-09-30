@@ -254,7 +254,7 @@ augmented by 2 -> [2,3,3] unit 840
 
 This can be metadata, wrapper, or actual transformed connector depending on current operation support.
 
-## Hypermusic-Native Interconnections
+## Interconnections Native to decentralised.art
 
 These are important because they are not obvious in conventional music theory.
 

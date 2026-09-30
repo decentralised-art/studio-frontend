@@ -315,7 +315,7 @@ world-specific layer activates during exhibition
 collective/governance event activates a new section
 ```
 
-These are Hypermusic-native compositional conditions.
+These compositional conditions are native to decentralised.art.
 
 ## Operation Candidate Review Checklist
 

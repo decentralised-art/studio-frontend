@@ -66,7 +66,7 @@ isorhythmic_table
 
 If the child cycles have different periods, their alignment changes as N increases.
 
-This is one of the best models for Hypermusic composition because it makes independent connectors audible as a relation.
+This is one of the best models for decentralised.art composition because it makes independent connectors audible as a relation.
 
 ## Drone And Pedal Textures
 
@@ -211,7 +211,7 @@ number of product tables
 number of voices
 ```
 
-Hypermusic-native insight:
+Insight for decentralised.art:
 
 ```text
 N is a density/time lens.
@@ -261,7 +261,7 @@ condition-gated branches
 
 ## World-Native Form
 
-Hypermusic has form concepts that do not map cleanly to traditional notation.
+decentralised.art has form concepts that do not map cleanly to traditional notation.
 
 ```text
 connector run as an iteration
@@ -286,5 +286,5 @@ Before a texture or form concept becomes P3:
 5. Are child materials independent and reusable?
 6. Does any relation depend on exact PT parent-child semantics that must be smoke-tested?
 7. Can the same texture work in both MusicXML and MIDI worlds?
-8. Is the concept traditional, Hypermusic-native, or both?
+8. Is the concept traditional, native to decentralised.art, or both?
 ```

@@ -1977,7 +1977,7 @@ Let me answer these found in the docs:
 
 1. Should the curated connector database be owned by one canonical project account, or by multiple authors with a collection manifest?
 
-Yes, for now you can just deploy them with the account that you use via the dcn-mcp. In the future that doesn't matter so much, what matters is that prople create various connectors collectivelly.
+Yes, for now you can just deploy them with the account that you use via the MCP server. In the future that doesn't matter so much, what matters is that prople create various connectors collectivelly.
 
 2. Should terminal scalar connectors eventually get versioned replacements that use `math_add_v1`, or should the existing legacy `add`-based terminal scalars remain canonical?
 

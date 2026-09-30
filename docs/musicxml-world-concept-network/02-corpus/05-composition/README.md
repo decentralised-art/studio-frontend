@@ -8,7 +8,7 @@ connector-interconnection-patterns.md
 
 texture-form-space.md
   Product-table texture, canons, hockets, drones, polyrhythms, form, and
-  Hypermusic-native world/RI form concepts.
+  world/RI form concepts native to decentralised.art.
 
 counterpoint-form-and-grammar-systems.md
   Counterpoint, canon, fugue, phrase forms, large forms, and constraint/validation

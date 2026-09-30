@@ -439,7 +439,7 @@ activate a voice only for a collector
 activate extra layers when a group owns a token
 ```
 
-This is not music theory in the old sense, but it is native to Hypermusic as collective composition.
+This is not music theory in the old sense, but it is native to decentralised.art as collective composition.
 
 ### External Signal Gate
 

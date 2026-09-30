@@ -2,13 +2,13 @@
 
 Status: Implemented and verified
 Owner: Frontend  
-Repo: `hypermusic-frontend`  
+Repo: `studio-frontend`<br>
 Created: 2026-04-11
 Last verified: 2026-04-24
 
 ## Goal
 
-Align Studio and chain integration with current PT + dcn-server behavior:
+Align Studio and chain integration with current PT + chain-backend behavior:
 
 - `dynamic_ri` for `/execute`
 - `static_ri` in connector definitions
@@ -183,7 +183,7 @@ Excluded:
 
 ## Verification Commands
 
-Run from `hypermusic-frontend`:
+Run from `studio-frontend`:
 
 ```bash
 PATH="$HOME/.nvm/versions/node/v22.12.0/bin:$PATH" npm run check

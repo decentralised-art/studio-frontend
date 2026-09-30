@@ -9,8 +9,8 @@ Provide a repeatable, deploy-oriented workflow for publishing reusable DCN corpu
 
 ## Scope
 
-- `hypermusic-frontend` Studio authoring UX
-- Deploy + execute flow parity with current `dcn-server` contract
+- `studio-frontend` Studio authoring UX
+- Deploy + execute flow parity with current `chain-backend` contract
 - Toolbox-first reuse loop
 
 ## Preconditions

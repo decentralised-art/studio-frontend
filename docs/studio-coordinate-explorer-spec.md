@@ -277,7 +277,7 @@ Later versions:
 
 The first implementation should not:
 
-- port Shepard_4 generator code into `hypermusic-frontend`;
+- port Shepard_4 generator code into `studio-frontend`;
 - add a new backend API;
 - create a second score renderer;
 - replace the existing inspector RI controls;
