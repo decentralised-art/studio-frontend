@@ -235,7 +235,12 @@ describe("Studio publication lifecycle", () => {
       content_hash: contentHash,
       tx_hash: txHash,
     });
-    expect(input.store.get("connector", "demo")?.stage).toBe("mined");
+    expect(input.store.get("connector", "demo")).toMatchObject({
+      stage: "mined",
+      address: owner,
+      tx_hash: txHash,
+      chainId: "0xaa36a7",
+    });
   });
 
   it("keeps draft creation separate from signing or chain publication", async () => {

@@ -158,7 +158,7 @@
         disabled={publishDisabled}
         onclick={handlePublish}
       >
-        Publish to Sepolia
+        Publish to the Network
       </button>
     {/if}
   </div>

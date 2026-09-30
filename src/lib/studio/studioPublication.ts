@@ -14,6 +14,7 @@ export type PublicationRecord = {
   stage: "draft" | "sending" | "pending" | "mined";
   content_hash?: string;
   tx_hash?: string;
+  address?: string;
   owner?: string;
   chainId?: string;
   tx_history?: string[];
@@ -258,7 +259,12 @@ const runPublication = async (input: PublicationInput): Promise<void> => {
         "Publication owner changed during authentication. Retry from the correct wallet account.",
       );
     if (prepared.status === "published") {
-      store.put({ ...record, content_hash: prepared.content_hash, stage: "mined" });
+      store.put({
+        ...record,
+        content_hash: prepared.content_hash,
+        address: prepared.address,
+        stage: "mined",
+      });
       onStatus(`'${input.name}' is already published.`);
       return;
     }
@@ -345,7 +351,7 @@ const runPublication = async (input: PublicationInput): Promise<void> => {
         result.owner.toLowerCase() !== input.expectedOwner.toLowerCase()
       )
         throw new Error("Confirmation does not match the saved publication.");
-      store.put({ ...record, stage: "mined" });
+      store.put({ ...record, address: result.address, stage: "mined" });
       onStatus(`Published '${input.name}' in block ${result.block_number}.`);
       return;
     }

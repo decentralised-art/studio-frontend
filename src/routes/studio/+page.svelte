@@ -173,6 +173,10 @@
     type PublicationRecord,
     type PublicationStore,
   } from "$lib/studio/studioPublication";
+  import {
+    publicationAddressUrl,
+    publicationTransactionUrl,
+  } from "$lib/studio/publicationExplorer";
   import type { EntityKind } from "dcn";
   import { buildStudioDeployPlan, type StudioDeployPlan } from "$lib/studio/studioDeployPlan";
   import {
@@ -4746,7 +4750,7 @@
         else await hydrateDeployedRuntimeFromChain(entityKind, entityName);
       };
       await publish(kind, name);
-      chainDeployStatus = `Published '${name}' on Sepolia. Execution may wait for the safe block; retry Execute without republishing.`;
+      chainDeployStatus = `Published '${name}' on the network. Execution may wait for the safe block; retry Execute without republishing.`;
       await loadLocalLibrary();
     } catch (error) {
       chainDeployError = error instanceof Error ? error.message : "Publication failed.";
@@ -5510,7 +5514,7 @@
       if (mode === "simulate" && !activeRootIsLocal)
         throw new Error("Create this connector locally before simulating it.");
       if (mode === "execute" && !activeRootIsPublished)
-        throw new Error("Publish this connector on Sepolia before executing it.");
+        throw new Error("Publish this connector on the network before executing it.");
       const requestPreview = measureStudioRunStep(timings, "prepare", () =>
         prepareExecuteRequest(nodes, edges),
       );
@@ -5672,7 +5676,7 @@
       deployTimestampByTab = { ...deployTimestampByTab, [creationTabId]: Date.now() };
       explorerSource = "local";
       chainDeployStatus =
-        "Created locally. Simulate on the server, or publish to Sepolia when ready.";
+        "Created locally. Simulate on the server, or publish to the network when ready.";
       persistStudioTabsSession();
     } catch (error) {
       chainDeployError = error instanceof Error ? error.message : "Local creation failed.";
@@ -8513,9 +8517,9 @@
         {/if}
         {#if explorerSource === "local"}
           <div class="chain-status-strip chain-status-strip--sidebar" role="status">
-            <span>Your entities on the simulation server. No Sepolia gas.</span>
             <button
               type="button"
+              class="runner-action"
               disabled={localLibraryBusy}
               onclick={() => void loadLocalLibrary()}>Refresh Local</button
             >
@@ -9182,59 +9186,97 @@
         </div>
         <div class="runner-panel">
           <div class="runner-controls">
-            <label class="run-label" for="run-samples-panel">N</label>
-            <input
-              id="run-samples-panel"
-              class="run-input"
-              type="number"
-              min="1"
-              inputmode="numeric"
-              value={runSamplesCount}
-              oninput={(event) => {
-                const target = event.target as HTMLInputElement | null;
-                const next = Number(target?.value ?? 1);
-                runSamplesCount = Number.isFinite(next) ? Math.max(1, Math.trunc(next)) : 1;
-              }}
-            />
-            <button
-              type="button"
-              class="runner-action"
-              disabled={chainRunBusy || chainDeployBusy || !activeRootIsLocal}
-              title="Run the created Local connector and its local/network dependencies on the server without gas."
-              onclick={() => executeActiveGraph("simulate")}
-            >
-              Simulate
-            </button>
-            <button
-              type="button"
-              class="runner-action"
-              disabled={chainRunBusy || chainDeployBusy || !activeRootIsPublished}
-              title="Read the published connector on Sepolia at a recorded block."
-              onclick={() => executeActiveGraph("execute")}
-            >
-              {chainRunBusy ? "Running..." : "Execute on Sepolia"}
-            </button>
-            <button
-              type="button"
-              class="runner-action"
-              disabled={chainDeployBusy || chainSyncBusy || chainRunBusy || activeTabReadOnly}
-              onclick={deployActiveGraph}
-            >
-              {chainDeployBusy ? "Creating..." : "Create locally"}
-            </button>
-            <button
-              type="button"
-              class="runner-action"
-              disabled={chainDeployBusy || chainRunBusy || !activeRootIsLocal}
-              title="Publish local dependencies and this connector on Sepolia. Your wallet pays gas."
-              onclick={publishActiveGraph}>Publish to Sepolia</button
-            >
+            <div class="runner-settings">
+              <label class="run-label" for="run-samples-panel">N</label>
+              <input
+                id="run-samples-panel"
+                class="run-input"
+                type="number"
+                min="1"
+                inputmode="numeric"
+                value={runSamplesCount}
+                oninput={(event) => {
+                  const target = event.target as HTMLInputElement | null;
+                  const next = Number(target?.value ?? 1);
+                  runSamplesCount = Number.isFinite(next) ? Math.max(1, Math.trunc(next)) : 1;
+                }}
+              />
+            </div>
+            <div class="runner-action-row">
+              <button
+                type="button"
+                class="runner-action"
+                disabled={chainDeployBusy || chainSyncBusy || chainRunBusy || activeTabReadOnly}
+                onclick={deployActiveGraph}
+              >
+                {chainDeployBusy ? "Creating..." : "Create locally"}
+              </button>
+              <button
+                type="button"
+                class="runner-action"
+                disabled={chainRunBusy || chainDeployBusy || !activeRootIsLocal}
+                title="Run the created Local connector and its local/network dependencies on the server without gas."
+                onclick={() => executeActiveGraph("simulate")}
+              >
+                Simulate
+              </button>
+            </div>
+            <div class="runner-action-row">
+              <button
+                type="button"
+                class="runner-action"
+                disabled={chainDeployBusy || chainRunBusy || !activeRootIsLocal}
+                title="Publish local dependencies and this connector to the network. Your wallet pays gas."
+                onclick={publishActiveGraph}>Publish to the Network</button
+              >
+              <button
+                type="button"
+                class="runner-action"
+                disabled={chainRunBusy || chainDeployBusy || !activeRootIsPublished}
+                title="Read the published connector on the network at a recorded block."
+                onclick={() => executeActiveGraph("execute")}
+              >
+                {chainRunBusy ? "Running..." : "Execute on the Network"}
+              </button>
+            </div>
           </div>
           {#if chainDeployStatus}
             <div class="runner-status is-success">{chainDeployStatus}</div>
           {/if}
           {#if chainDeployError}
             <div class="runner-status is-error">{chainDeployError}</div>
+          {/if}
+          {#if publicationRecords.some((record) => record.stage === "mined" && (record.tx_hash || record.address))}
+            <div class="runner-publications" aria-label="Published transactions">
+              <strong>Published on the Network</strong>
+              {#each [...publicationRecords]
+                .reverse()
+                .filter((record) => record.stage === "mined" && (record.tx_hash || record.address)) as record (`${record.kind}:${record.name}`)}
+                <div class="runner-publication">
+                  <span>{record.kind} {record.name}</span>
+                  {#if record.tx_hash}
+                    <div class="runner-publication-hash">Transaction: {record.tx_hash}</div>
+                    {#if publicationTransactionUrl(record)}
+                      <a
+                        href={publicationTransactionUrl(record) ?? ""}
+                        target="_blank"
+                        rel="external noopener noreferrer">View transaction ↗</a
+                      >
+                    {/if}
+                  {/if}
+                  {#if record.address}
+                    <div class="runner-publication-hash">Address: {record.address}</div>
+                    {#if publicationAddressUrl(record)}
+                      <a
+                        href={publicationAddressUrl(record) ?? ""}
+                        target="_blank"
+                        rel="external noopener noreferrer">View address ↗</a
+                      >
+                    {/if}
+                  {/if}
+                </div>
+              {/each}
+            </div>
           {/if}
           {#each publicationRecords.filter((record) => record.stage === "pending" || record.stage === "sending") as record (`${record.kind}:${record.name}`)}
             <div class="runner-status">
@@ -11424,13 +11466,39 @@
   }
 
   .runner-controls {
-    @apply flex flex-wrap items-center gap-2 rounded-md border border-white/10 bg-black/70 p-2;
+    @apply flex flex-col gap-2 rounded-md border border-white/10 bg-black/70 p-2;
+  }
+
+  .runner-settings {
+    @apply flex items-center gap-2;
+  }
+
+  .runner-action-row {
+    @apply grid grid-cols-2 gap-2;
   }
 
   .runner-action {
-    @apply inline-flex items-center justify-center rounded-md border border-white/20 bg-white/5
+    @apply inline-flex min-w-0 items-center justify-center rounded-md border border-white/20 bg-white/5
       px-2.5 py-1 text-[0.65rem] uppercase tracking-[0.15em] text-white/80 transition
       hover:border-white/35 hover:bg-white/10 hover:text-white disabled:opacity-50 disabled:cursor-not-allowed;
+    line-height: 1.25;
+    text-align: center;
+  }
+
+  .runner-publications {
+    @apply flex max-h-48 flex-col gap-2 overflow-auto rounded-md border border-white/10 bg-black/70 p-2 text-[0.7rem];
+  }
+
+  .runner-publication {
+    @apply border-t border-white/10 pt-2;
+  }
+
+  .runner-publication-hash {
+    overflow-wrap: anywhere;
+  }
+
+  .runner-publication a {
+    @apply text-emerald-200 underline underline-offset-2 hover:text-emerald-100;
   }
 
   .runner-status {

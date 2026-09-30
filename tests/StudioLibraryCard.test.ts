@@ -73,7 +73,7 @@ describe("StudioLibraryCard", () => {
     });
     expect(queryByRole("link", { name: "test_connector" })).not.toBeInTheDocument();
     expect(queryByTitle("Add to toolbox")).not.toBeInTheDocument();
-    await fireEvent.click(getByRole("button", { name: "Publish to Sepolia" }));
+    await fireEvent.click(getByRole("button", { name: "Publish to the Network" }));
     expect(onPublish).toHaveBeenCalledWith(connectorItem);
     await fireEvent.click(getByRole("button", { name: "Open in Studio" }));
     expect(onOpen).toHaveBeenCalledWith(connectorItem);
@@ -85,7 +85,7 @@ describe("StudioLibraryCard", () => {
       onPublish,
       publishDisabled: true,
     });
-    expect(getByRole("button", { name: "Publish to Sepolia" })).toBeDisabled();
+    expect(getByRole("button", { name: "Publish to the Network" })).toBeDisabled();
   });
 
   it("only exposes publication and toolbox actions when their callbacks are supplied", () => {
@@ -93,6 +93,6 @@ describe("StudioLibraryCard", () => {
       props: { item: connectorItem, author: author({}), onToolbox: vi.fn() },
     });
     expect(getByTitle("Add to toolbox")).toBeInTheDocument();
-    expect(queryByRole("button", { name: "Publish to Sepolia" })).not.toBeInTheDocument();
+    expect(queryByRole("button", { name: "Publish to the Network" })).not.toBeInTheDocument();
   });
 });

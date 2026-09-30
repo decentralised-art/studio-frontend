@@ -258,6 +258,8 @@ test("Local lists only owned server entities and Network lists only published en
 }) => {
   const state = await setup(page);
   await page.getByRole("button", { name: "Local", exact: true }).click();
+  await expect(page.getByText("Your entities on the simulation server.")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Refresh Local" })).toHaveClass(/runner-action/);
   await expect(card(page, "LocalChild")).toBeVisible();
   await expect(card(page, "OtherLocal")).toHaveCount(0);
   await expect(card(page, "NetworkChild")).toHaveCount(0);
@@ -278,9 +280,16 @@ test("creates once, simulates without gas, then explicitly publishes and execute
 }) => {
   const state = await setup(page);
   await page.getByRole("button", { name: "Toggle run panel", exact: true }).click();
+  const actionRows = page.locator(".runner-action-row");
+  await expect(actionRows).toHaveCount(2);
+  await expect(actionRows.nth(0).getByRole("button")).toHaveText(["Create locally", "Simulate"]);
+  await expect(actionRows.nth(1).getByRole("button")).toHaveText([
+    "Publish to the Network",
+    "Execute on the Network",
+  ]);
   await expect(page.getByRole("button", { name: "Simulate", exact: true })).toBeDisabled();
   await expect(
-    page.getByRole("button", { name: "Execute on Sepolia", exact: true }),
+    page.getByRole("button", { name: "Execute on the Network", exact: true }),
   ).toBeDisabled();
   await page.getByRole("button", { name: "Create locally", exact: true }).click();
   await expect(card(page, "StudioRoot")).toBeVisible();
@@ -297,7 +306,7 @@ test("creates once, simulates without gas, then explicitly publishes and execute
       .poll(() => controls.evaluate((element) => element.scrollWidth <= element.clientWidth))
       .toBe(true);
     await expect(
-      controls.getByRole("button", { name: "Publish to Sepolia", exact: true }),
+      controls.getByRole("button", { name: "Publish to the Network", exact: true }),
     ).toBeInViewport();
     await page.screenshot({ path: test.info().outputPath(imageName), animations: "disabled" });
   }
@@ -311,16 +320,36 @@ test("creates once, simulates without gas, then explicitly publishes and execute
   ).toBe(0);
   await page
     .locator(".runner-controls")
-    .getByRole("button", { name: "Publish to Sepolia", exact: true })
+    .getByRole("button", { name: "Publish to the Network", exact: true })
     .click();
-  await expect(page.getByRole("button", { name: "Execute on Sepolia", exact: true })).toBeEnabled();
-  await page.getByRole("button", { name: "Execute on Sepolia", exact: true }).click();
+  await expect(page.getByRole("link", { name: "View transaction" })).toHaveAttribute(
+    "href",
+    `https://sepolia.etherscan.io/tx/0x${"ab".repeat(32)}`,
+  );
+  await expect(page.getByRole("link", { name: "View address" })).toHaveAttribute(
+    "href",
+    `https://sepolia.etherscan.io/address/${chainAddress}`,
+  );
+  await page.screenshot({
+    path: test.info().outputPath("published.png"),
+    animations: "disabled",
+  });
+  await expect(
+    page.getByRole("button", { name: "Execute on the Network", exact: true }),
+  ).toBeEnabled();
+  await page.getByRole("button", { name: "Execute on the Network", exact: true }).click();
   await expect(page.locator(".runner-output")).toContainText('"block_number": 10');
   expect(
     await page.evaluate(() => (window as unknown as { walletSends: number }).walletSends),
   ).toBe(1);
   expect(state.creates).toHaveLength(1);
   expect(state.errors).toEqual([]);
+  await page.reload();
+  await page.getByRole("button", { name: "Toggle run panel", exact: true }).click();
+  await expect(page.getByRole("link", { name: "View transaction" })).toHaveAttribute(
+    "href",
+    `https://sepolia.etherscan.io/tx/0x${"ab".repeat(32)}`,
+  );
 });
 
 test("account switching hides the previous owner's Local entries and open graph", async ({
@@ -355,9 +384,11 @@ test("mixed trees reuse existing Local and Network children without recreating o
   expect(state.publications).toEqual([]);
   await page
     .locator(".runner-controls")
-    .getByRole("button", { name: "Publish to Sepolia", exact: true })
+    .getByRole("button", { name: "Publish to the Network", exact: true })
     .click();
-  await expect(page.getByRole("button", { name: "Execute on Sepolia", exact: true })).toBeEnabled();
+  await expect(
+    page.getByRole("button", { name: "Execute on the Network", exact: true }),
+  ).toBeEnabled();
   expect(state.publishedNames).toEqual(["LocalChild", "StudioRoot"]);
   expect(state.creates).toHaveLength(1);
   expect(state.errors).toEqual([]);

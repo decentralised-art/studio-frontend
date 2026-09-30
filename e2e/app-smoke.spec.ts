@@ -1408,10 +1408,10 @@ test("Studio simulates a draft, publishes with its wallet once, then preserves c
   expect(requests).not.toContain("/chain/execute");
   await page
     .locator(".runner-controls")
-    .getByRole("button", { name: "Publish to Sepolia", exact: true })
+    .getByRole("button", { name: "Publish to the Network", exact: true })
     .click();
   await expect(page.getByRole("tab", { name: /publication_e2e/ })).toContainText("Network");
-  await page.getByRole("button", { name: "Execute on Sepolia", exact: true }).click();
+  await page.getByRole("button", { name: "Execute on the Network", exact: true }).click();
   await expect(page.locator(".runner-output")).toContainText('"block_number": 77');
   await expect(page.locator(".runner-output")).toContainText('"block_hash"');
   expect(

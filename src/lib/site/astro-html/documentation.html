@@ -468,7 +468,7 @@ GET /condition/{name} </h3> <pre data-panel="curl" class="bg-gray-50 border bord
   &quot;address&quot;: &quot;0x0&quot;
 }</code>
 </pre>  </article> </section> <section id="publication" class="mb-16"><h2>Local entities and Sepolia publication</h2>
-<p>Studio lists only published Sepolia entities in Network and the current owner’s server-created entities in Local. Create locally is separate from Simulate and Publish to Sepolia. Local and Network dependencies can be combined in a server simulation. Created entities remain immutable.</p>
+<p>Studio lists only published Sepolia entities in Network and the current owner’s server-created entities in Local. Create locally is separate from Simulate and Publish to the Network. Local and Network dependencies can be combined in a server simulation. Created entities remain immutable.</p>
 <p>POST /connector, /transformation and /condition create local simulation entities; address <code>0x0</code> means unpublished. Runtime GET responses expose <code>args_count</code>, owner and address, not Solidity source. Preserve the source in your project.</p>
 <p>Publish conditions and transformations first, then connectors in dependency order. For each entity, authenticate as its owner, prepare, approve the wallet transaction on Sepolia, then confirm the saved transaction hash. The owner pays gas in Sepolia ETH. Publication reserves the name on chain.</p>
 <pre><code>POST /publish/{kind}/prepare
