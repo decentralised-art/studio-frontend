@@ -217,6 +217,8 @@ export function fromProtocolConnectorPayload(
 
   const formatHash = normalizeOptionalFormatHash(payload.format_hash);
   const ownerAddress = typeof payload.owner === "string" ? payload.owner.trim().toLowerCase() : "";
+  const chainAddress =
+    typeof payload.address === "string" ? payload.address.trim().toLowerCase() : "";
   const staticRi = normalizeStaticRi(extractLegacyCompatibleStaticRi(payload), "static_ri");
 
   return {
@@ -227,6 +229,7 @@ export function fromProtocolConnectorPayload(
     ...(staticRi ? { staticRi } : {}),
     ...(formatHash ? { formatHash } : {}),
     ...(ownerAddress ? { ownerAddress } : {}),
+    ...(chainAddress ? { chainAddress } : {}),
   };
 }
 

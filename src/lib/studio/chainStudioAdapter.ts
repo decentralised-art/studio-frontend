@@ -13,6 +13,7 @@ import type { ExploreParticle } from "$lib/data/exploreParticles";
 import type { LibraryItem } from "$lib/data/studioLibrary";
 import type { MockFeatureDef, MockParticleDef } from "$lib/particles/mockPtNetwork";
 import type { StudioConnectorDef } from "$lib/studio/domain/connectorModel";
+import { isOwnedLocalEntity, isPublishedChainAddress } from "$lib/studio/studioEntityOrigin";
 
 type ChainRuntimeShape = {
   connectors: Record<string, StudioConnectorDef>;
@@ -232,6 +233,7 @@ const cloneConnectorDef = (connector: StudioConnectorDef): StudioConnectorDef =>
   ...(connector.conditionArgs ? { conditionArgs: [...connector.conditionArgs] } : {}),
   ...(connector.staticRi ? { staticRi: cloneStaticRi(connector.staticRi) } : {}),
   ...(connector.formatHash ? { formatHash: connector.formatHash } : {}),
+  ...(connector.chainAddress ? { chainAddress: connector.chainAddress } : {}),
   ...(connector.localAddress ? { localAddress: connector.localAddress } : {}),
   ...(connector.ownerAddress ? { ownerAddress: connector.ownerAddress } : {}),
 });
@@ -321,11 +323,20 @@ const mapExploreParticle = (
 
 export const fetchChainOwnedStudioSnapshot = async (
   address: string,
-  options: { authorId: string; limit?: number; includeRuntimeCode?: boolean } = {
+  options: {
+    authorId: string;
+    limit?: number;
+    includeRuntimeCode?: boolean;
+    origin?: "network" | "local";
+  } = {
     authorId: normalizeAddress(address) || "unknown-owner",
     includeRuntimeCode: true,
   },
 ): Promise<ChainStudioSyncResult> => {
+  const acceptsEntity = (payload: { address?: unknown; owner?: unknown }): boolean =>
+    options.origin === "local"
+      ? isOwnedLocalEntity(payload, address)
+      : isPublishedChainAddress(payload.address);
   const pageLimit = options.limit ?? CHAIN_ACCOUNT_OWNED_PAGE_LIMIT;
   const ownedConnectors = new Set<string>();
   const ownedTransformations = new Set<string>();
@@ -386,7 +397,8 @@ export const fetchChainOwnedStudioSnapshot = async (
       (result): result is PromiseFulfilledResult<readonly [string, RawChainConnectorResponse]> =>
         result.status === "fulfilled",
     )
-    .map((result) => result.value);
+    .map((result) => result.value)
+    .filter(([, payload]) => acceptsEntity(payload));
   const includeRuntimeCode = options.includeRuntimeCode !== false;
   const transformationPayloads = includeRuntimeCode
     ? (
@@ -404,6 +416,7 @@ export const fetchChainOwnedStudioSnapshot = async (
           > => result.status === "fulfilled",
         )
         .map((result) => result.value)
+        .filter(([, payload]) => acceptsEntity(payload))
     : [];
   const conditionPayloads = includeRuntimeCode
     ? (
@@ -421,6 +434,7 @@ export const fetchChainOwnedStudioSnapshot = async (
           > => result.status === "fulfilled",
         )
         .map((result) => result.value)
+        .filter(([, payload]) => acceptsEntity(payload))
     : [];
 
   const connectors: Record<string, StudioConnectorDef> = {};
@@ -496,17 +510,38 @@ export const fetchChainOwnedStudioSnapshot = async (
       conditions,
     },
     library: {
-      features: Object.values(features).map((item) =>
-        mapFeatureLibraryItem(item, options.authorId),
-      ),
-      transformations: transformationPayloads.map(([name, payload]) =>
-        mapTransformationLibraryItem(name, options.authorId, payload.sol_src),
-      ),
-      conditions: conditionPayloads.map(([name, payload]) =>
-        mapConditionLibraryItem(name, options.authorId, payload.sol_src),
-      ),
+      features: Object.values(features).map((item) => ({
+        ...mapFeatureLibraryItem(item, connectors[item.name].ownerAddress ?? options.authorId),
+        chainAddress: connectors[item.name].chainAddress,
+        ownerAddress: connectors[item.name].ownerAddress,
+        summary:
+          options.origin === "local" ? "Created locally on this server." : "Published on chain.",
+      })),
+      transformations: transformationPayloads.map(([name, payload]) => ({
+        ...mapTransformationLibraryItem(
+          name,
+          normalizeAddress(payload.owner ?? "") || options.authorId,
+          payload.sol_src,
+        ),
+        chainAddress: payload.address,
+        ownerAddress: normalizeAddress(payload.owner ?? ""),
+        summary:
+          options.origin === "local" ? "Created locally on this server." : "Published on chain.",
+      })),
+      conditions: conditionPayloads.map(([name, payload]) => ({
+        ...mapConditionLibraryItem(
+          name,
+          normalizeAddress(payload.owner ?? "") || options.authorId,
+          payload.sol_src,
+        ),
+        chainAddress: payload.address,
+        ownerAddress: normalizeAddress(payload.owner ?? ""),
+        summary:
+          options.origin === "local" ? "Created locally on this server." : "Published on chain.",
+      })),
     },
     particles: connectorPayloads
+      .filter(([, payload]) => isPublishedChainAddress(payload.address))
       .map(([, payload]) => {
         const connector = normalizeConnector(payload);
         if (!connector) return null;
@@ -525,9 +560,13 @@ export const fetchChainOwnedStudioSnapshot = async (
 
 export const fetchChainParticleForStudio = async (
   particleName: string,
-  options?: { authorId?: string },
+  options?: { authorId?: string; localOwnerAddress?: string },
 ): Promise<ChainStudioParticleFetchResult> => {
   const connectorPayload = await getChainConnector(particleName);
+  const published = isPublishedChainAddress(connectorPayload.address);
+  if (!published && !isOwnedLocalEntity(connectorPayload, options?.localOwnerAddress ?? "")) {
+    return { registry: {} };
+  }
   const connector = normalizeConnector(connectorPayload);
   if (!connector) return { registry: {} };
 
@@ -545,12 +584,14 @@ export const fetchChainParticleForStudio = async (
       feature,
       particle,
     },
-    particleMeta: mapExploreParticle(
-      particle,
-      authorId,
-      extractConnectorCreatedAt(connectorPayload) ?? Date.now(),
-      connector.formatHash,
-      collectConnectorReferenceNames(connector),
-    ),
+    particleMeta: published
+      ? mapExploreParticle(
+          particle,
+          authorId,
+          extractConnectorCreatedAt(connectorPayload) ?? Date.now(),
+          connector.formatHash,
+          collectConnectorReferenceNames(connector),
+        )
+      : undefined,
   };
 };

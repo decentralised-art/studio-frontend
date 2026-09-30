@@ -98,6 +98,7 @@ const stubRemoteApis = async (
   const terminalScoreConnector = (name: string, formatHash: string) => ({
     name,
     owner: fixtureAddress,
+    address: fixtureAddress,
     format_hash: formatHash,
     condition_name: "",
     condition_args: [],
@@ -112,6 +113,7 @@ const stubRemoteApis = async (
   const collectorScoreConnector = (name: string, formatHash: string, composites: string[]) => ({
     name,
     owner: fixtureAddress,
+    address: fixtureAddress,
     format_hash: formatHash,
     condition_name: "",
     condition_args: [],
@@ -125,6 +127,7 @@ const stubRemoteApis = async (
   const openSlotScoreConnector = (name: string, formatHash: string, dimensions: number) => ({
     name,
     owner: fixtureAddress,
+    address: fixtureAddress,
     format_hash: formatHash,
     condition_name: "",
     condition_args: [],
@@ -415,6 +418,7 @@ const stubRemoteApis = async (
                 type: "connector",
                 name: "profile_connector",
                 owner: fixtureAddress,
+                address: fixtureAddress,
               },
             },
             {
@@ -434,6 +438,7 @@ const stubRemoteApis = async (
                 type: "connector",
                 name: "pitch",
                 owner: fixtureAddress,
+                address: fixtureAddress,
               },
             },
             {
@@ -453,6 +458,7 @@ const stubRemoteApis = async (
                 type: "connector",
                 name: "time",
                 owner: fixtureAddress,
+                address: fixtureAddress,
               },
             },
             {
@@ -472,6 +478,7 @@ const stubRemoteApis = async (
                 type: "connector",
                 name: "unlisted_connector",
                 owner: unlistedChainAddress,
+                address: unlistedChainAddress,
               },
             },
             {
@@ -491,6 +498,7 @@ const stubRemoteApis = async (
                 type: "connector",
                 name: "test_full_score_empty_100604052026",
                 owner: fixtureAddress,
+                address: fixtureAddress,
               },
             },
             {
@@ -510,6 +518,7 @@ const stubRemoteApis = async (
                 type: "connector",
                 name: "test_position_score_e2e_06052026",
                 owner: fixtureAddress,
+                address: fixtureAddress,
               },
             },
             {
@@ -529,6 +538,7 @@ const stubRemoteApis = async (
                 type: "transformation",
                 name: "add",
                 owner: fixtureAddress,
+                address: fixtureAddress,
               },
             },
           ],
@@ -568,6 +578,7 @@ const stubRemoteApis = async (
         body: JSON.stringify({
           name: "unlisted_connector",
           owner: unlistedChainAddress,
+          address: unlistedChainAddress,
           format_hash: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
           dimensions: [
             {
@@ -595,6 +606,7 @@ const stubRemoteApis = async (
         body: JSON.stringify({
           name: "profile_connector",
           owner: fixtureAddress,
+          address: fixtureAddress,
           format_hash: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           dimensions: [
             {
@@ -615,6 +627,7 @@ const stubRemoteApis = async (
         body: JSON.stringify({
           name: connectorName,
           owner: fixtureAddress,
+          address: fixtureAddress,
           format_hash: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           dimensions: [
             {
@@ -634,6 +647,7 @@ const stubRemoteApis = async (
         body: JSON.stringify({
           name: "add",
           owner: fixtureAddress,
+          address: fixtureAddress,
           sol_src: "return x + args[0];",
         }),
       });
@@ -712,7 +726,7 @@ const seedRestoredConnectorPluginSession = async (page: Page) => {
     };
 
     window.sessionStorage.setItem(
-      "dcn_studio_tabs_session_v1",
+      "dcn_studio_tabs_session_v1:https://api.decentralised.art/chain/:0xb584a15f38c2014cff54fdb1b417428b51999276",
       JSON.stringify({
         version: 1,
         tabs: [
@@ -813,7 +827,7 @@ const seedRestoredScorePluginSession = async (page: Page) => {
     };
 
     window.sessionStorage.setItem(
-      "dcn_studio_tabs_session_v1",
+      "dcn_studio_tabs_session_v1:https://api.decentralised.art/chain/:0xb584a15f38c2014cff54fdb1b417428b51999276",
       JSON.stringify({
         version: 1,
         tabs: [
@@ -927,7 +941,7 @@ const seedRawFullScorePluginSession = async (page: Page) => {
     };
 
     window.sessionStorage.setItem(
-      "dcn_studio_tabs_session_v1",
+      "dcn_studio_tabs_session_v1:https://api.decentralised.art/chain/:0xb584a15f38c2014cff54fdb1b417428b51999276",
       JSON.stringify({
         version: 1,
         tabs: [
@@ -1031,7 +1045,7 @@ const seedMovableConnectorTreeSession = async (page: Page) => {
     ];
 
     window.sessionStorage.setItem(
-      "dcn_studio_tabs_session_v1",
+      "dcn_studio_tabs_session_v1:https://api.decentralised.art/chain/:0xb584a15f38c2014cff54fdb1b417428b51999276",
       JSON.stringify({
         version: 1,
         tabs: [{ id: "tab-movable-connectors", label: "template_workbench" }],
@@ -1113,7 +1127,7 @@ const seedBackendWorldConnectorSetSession = async (page: Page) => {
 
     try {
       window.sessionStorage.setItem(
-        "dcn_studio_tabs_session_v1",
+        "dcn_studio_tabs_session_v1:https://api.decentralised.art/chain/:0xb584a15f38c2014cff54fdb1b417428b51999276",
         JSON.stringify({
           version: 1,
           tabs: [
@@ -1293,7 +1307,7 @@ test("Studio simulates a draft, publishes with its wallet once, then preserves c
         },
       };
       window.sessionStorage.setItem(
-        "dcn_studio_tabs_session_v1",
+        "dcn_studio_tabs_session_v1:https://api.decentralised.art/chain/:0xb584a15f38c2014cff54fdb1b417428b51999276",
         JSON.stringify({
           version: 1,
           tabs: [{ id: "publication-tab", label: name }],
@@ -1371,15 +1385,33 @@ test("Studio simulates a draft, publishes with its wallet once, then preserves c
       });
     },
   );
+  let published = false;
+  await page.route(`**/chain/connector/${name}`, async (route) =>
+    route.fulfill({
+      json: {
+        name,
+        owner: fixtureAddress,
+        address: published ? fixtureAddress : "0x0",
+        dimensions: [{ transformations: [] }],
+      },
+    }),
+  );
+  page.on("response", (response) => {
+    if (response.url().endsWith("/publish/connector") && response.ok()) published = true;
+  });
   await page.goto("/studio");
   await page.getByRole("button", { name: "Toggle run panel", exact: true }).click();
-  await page.getByRole("button", { name: "Simulate draft", exact: true }).click();
+  await page.getByRole("button", { name: "Create locally", exact: true }).click();
+  await page.getByRole("button", { name: "Simulate", exact: true }).click();
   await expect(page.locator(".runner-output")).toContainText(`/${name}:0`);
   expect(requests).toContain("/chain/simulate");
   expect(requests).not.toContain("/chain/execute");
-  await page.getByRole("button", { name: "Publish / retry", exact: true }).click();
+  await page
+    .locator(".runner-controls")
+    .getByRole("button", { name: "Publish to Sepolia", exact: true })
+    .click();
   await expect(page.getByRole("tab", { name: /publication_e2e/ })).toContainText("Network");
-  await page.getByRole("button", { name: "Execute on chain", exact: true }).click();
+  await page.getByRole("button", { name: "Execute on Sepolia", exact: true }).click();
   await expect(page.locator(".runner-output")).toContainText('"block_number": 77');
   await expect(page.locator(".runner-output")).toContainText('"block_hash"');
   expect(
@@ -1541,7 +1573,11 @@ test("renders the Network shell", async ({ page }) => {
     timeout: 15_000,
   });
   expect(remoteApis.chainFeedRequests.some((url) => url.includes("/chain/feed"))).toBe(true);
-  expect(remoteApis.chainAccountRequests).toEqual([]);
+  expect(
+    remoteApis.chainAccountRequests.every(
+      (url) => new URL(url).pathname === `/chain/account/${fixtureAddress}`,
+    ),
+  ).toBe(true);
   assertNoPageErrors();
 });
 
@@ -1573,7 +1609,11 @@ test("smoke: renders authenticated Network feed through the chain stream without
       { timeout: 15_000 },
     )
     .toBe(true);
-  expect(remoteApis.chainAccountRequests).toEqual([]);
+  expect(
+    remoteApis.chainAccountRequests.every(
+      (url) => new URL(url).pathname === `/chain/account/${fixtureAddress}`,
+    ),
+  ).toBe(true);
   assertNoPageErrors();
   assertNoConsoleErrors();
 });
@@ -1598,7 +1638,11 @@ test("opens and adds a Studio Network connector discovered from the feed", async
   await profileConnectorCard.getByTitle("Open in Studio").click();
   await expect(page.getByRole("tab", { name: /profile_connector/ })).toBeVisible();
   expect(remoteApis.chainFeedRequests.some((url) => url.includes("/chain/feed"))).toBe(true);
-  expect(remoteApis.chainAccountRequests).toEqual([]);
+  expect(
+    remoteApis.chainAccountRequests.every(
+      (url) => new URL(url).pathname === `/chain/account/${fixtureAddress}`,
+    ),
+  ).toBe(true);
   assertNoPageErrors();
 });
 

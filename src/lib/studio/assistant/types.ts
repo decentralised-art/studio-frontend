@@ -14,7 +14,8 @@ export const ASSISTANT_TOOL_NAMES = [
   "add_transformation_to_dimension",
   "remove_transformation_from_dimension",
   "run_connector",
-  "deploy_connector",
+  "create_connector",
+  "publish_connector",
 ] as const;
 
 export type AssistantToolName = (typeof ASSISTANT_TOOL_NAMES)[number];
@@ -79,7 +80,7 @@ export type RunConnectorArgs = {
   particles_count?: number;
 };
 
-export type DeployConnectorArgs = {
+export type CreateConnectorArgs = {
   connector?: string;
 };
 
@@ -95,7 +96,8 @@ export type AssistantToolArgumentsByName = {
   add_transformation_to_dimension: AddTransformationToDimensionArgs;
   remove_transformation_from_dimension: RemoveTransformationFromDimensionArgs;
   run_connector: RunConnectorArgs;
-  deploy_connector: DeployConnectorArgs;
+  create_connector: CreateConnectorArgs;
+  publish_connector: CreateConnectorArgs;
 };
 
 export type AssistantToolCallForName<Name extends AssistantToolName> = {
@@ -137,7 +139,7 @@ export type AssistantExecutionResult = {
 };
 
 const HIGH_RISK_TOOLS = new Set<AssistantToolName>([
-  "deploy_connector",
+  "publish_connector",
   "disconnect_connectors",
   "remove_transformation_from_dimension",
 ]);
@@ -372,8 +374,10 @@ export const summarizeToolCall = (toolCall: AssistantToolCall): string => {
       return toolCall.arguments.connector
         ? `Run connector '${toolCall.arguments.connector}'`
         : "Run active connector";
-    case "deploy_connector":
-      return "Deploy active graph";
+    case "create_connector":
+      return "Create active graph locally";
+    case "publish_connector":
+      return "Publish active connector to Sepolia (wallet gas)";
     default:
       return "Unknown action";
   }
@@ -589,7 +593,8 @@ const parseToolArguments = (
             },
           ) ?? undefined,
       };
-    case "deploy_connector":
+    case "create_connector":
+    case "publish_connector":
       return {
         connector: parseAliasedString(
           args,

@@ -78,9 +78,18 @@ You can preview the production build with `npm run preview`.
 
 ## Current chain lifecycle
 
-The SDK is pinned to `1cc7924` (API specification `8761ecb`). Studio separates **Simulate draft**, **Publish / retry**, and **Execute on chain**. Creating an entity POST saves a server-local draft. Simulation returns streams without chain provenance. Publication prepares each dependency, asks the owner's browser wallet to send its transaction on the server's network (Sepolia), and confirms its saved hash. Only HTTP requests retry authentication; wallet sends do not. Pending receipts and interrupted sends survive reloads in localStorage, scoped by API URL and wallet. The recovery field accepts a hash from wallet activity after an ambiguous send or wallet speed-up. Web Locks serialize publication across tabs and editors for the same API and owner, with persisted state reloaded under the lock. Publishing requires HTTPS or localhost and a browser supporting Web Locks. Do not clear this storage while a publication is pending.
+The SDK is pinned to `1cc7924` (API specification `8761ecb`). Studio has two entity libraries:
 
-Draft definitions are immutable in this workflow: use a new name after changing saved content. Mined publication does not imply the server's safe block or event indexer has caught up. Retry Execute/discovery rather than publishing again. The complete execute envelope is retained in Studio output; Worlds receive streams plus `executionProvenance` and `executionMode`. Runtime argument metadata uses `args_count`; public GET responses do not supply editable Solidity source.
+- **Network** lists published Sepolia connectors, transformations and conditions, discovered through chain events or verified nonzero chain addresses.
+- **Local** lists the signed-in wallet's entities created on the simulation server, including creations made through the API outside this browser. Account discovery is filtered by both owner and the unpublished address `0x0`. Local entries are not added to public Toolbox profiles. Browser graphs and publication records are scoped by API URL and wallet.
+
+**Create locally** creates an immutable entity on the server without a blockchain transaction. Transformation and condition editors use this action too. **Simulate** runs a created Local connector with its Local and Network dependencies on the server without gas. Published dependencies require their verified artifacts to be available on that server.
+
+**Publish to Sepolia** separately publishes the owner's local dependencies before their parent, using wallet-approved transactions and Sepolia ETH for gas. **Execute on Sepolia** reads a published connector at a pinned block using `eth_call`; it does not send a paid wallet transaction. Its output retains `{block_number, block_hash, runner, particles}`. Simulation returns particles without chain provenance.
+
+Pending receipts and interrupted sends survive reloads in localStorage, scoped by API URL and wallet. The recovery field accepts a transaction hash from wallet activity. Web Locks serialize publication for the same API and owner. A mined receipt can precede safe-block execution and indexing: retry execution or confirmation without sending another publication. Publishing requires HTTPS or localhost and a browser supporting Web Locks.
+
+Created definitions remain immutable. Runtime argument metadata uses `args_count`; public GET responses do not return editable Solidity source. Local visibility is scoped in Studio; the current server's GET endpoints remain public, so this is not a server-side confidentiality boundary.
 
 Uploaded Worlds use the current SDK directly: `sdk.execute` returns `{block_number, block_hash, runner, particles}`, and Worlds read `result.particles` for the output streams. `sdk.simulate` returns local output streams and remains a separate operation using the SDK's `dcn.execute` permission. The services backend and frontend use the same pinned SDK.
 
@@ -89,7 +98,7 @@ Verification is offline by default. The optional live smoke test requires an exp
 If bundled Playwright Chromium/ffmpeg are not installed, use existing Chrome without video recording:
 
 ```sh
-PLAYWRIGHT_CHROMIUM_CHANNEL=chrome PLAYWRIGHT_VIDEO=off npm run test:e2e -- --grep 'Studio simulates a draft|renders the Studio workspace shell|renders backend worlds in the public Worlds surface' --workers=1
+PLAYWRIGHT_CHROMIUM_CHANNEL=chrome PLAYWRIGHT_VIDEO=off npm run test:e2e -- e2e/studio-local-network.spec.ts --workers=1
 ```
 
 These selected browser tests intercept services/chain traffic and inject a mock wallet; they create no live entities or transactions.

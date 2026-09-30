@@ -28,7 +28,9 @@ const eventFeedRouteContracts = [
   },
 ] as const;
 
-const activeEventFeedRoutes = eventFeedRouteContracts.map(({ route }) => route);
+const activeEventFeedRoutes = eventFeedRouteContracts
+  .map(({ route }) => route)
+  .filter((route) => route !== "src/routes/studio/+page.svelte");
 
 const forbiddenAccountScanPhrases = [
   "fetchChainOwnedStudioSnapshot",

@@ -9,17 +9,19 @@ describe("Studio left panel templates removal", () => {
   it("does not expose Templates as a Studio left-panel source", () => {
     const source = readStudioSource();
 
-    expect(source).toContain('type ExplorerSource = "network" | "toolbox" | "plugins";');
+    expect(source).toContain('type ExplorerSource = "network" | "local" | "toolbox" | "plugins";');
     expect(source).not.toContain('explorerSource === "templates"');
     expect(source).not.toContain('explorerSource = "templates"');
     expect(source).not.toContain('<div class="templates-panel">');
     expect(source).not.toContain("insertStudioPluginTemplate");
   });
 
-  it("keeps library kind tabs scoped to Network and Toolbox", () => {
+  it("keeps library kind tabs scoped to Network, Local and Toolbox", () => {
     const source = readStudioSource();
 
-    expect(source).toContain('{#if explorerSource === "network" || explorerSource === "toolbox"}');
+    expect(source).toMatch(
+      /explorerSource === "network" \|\|[\s\S]*?explorerSource === "toolbox" \|\|[\s\S]*?explorerSource === "local"/,
+    );
   });
 
   it("keeps plugins available from the installed plugin registry", () => {

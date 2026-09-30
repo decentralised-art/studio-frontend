@@ -27,6 +27,7 @@ export type StudioConnectorDef = {
   // Keys are canonical decimal integer strings: "0", "1", ...
   staticRi?: Record<string, StudioRunningInstanceRef>;
   formatHash?: string;
+  chainAddress?: string;
   localAddress?: string;
   ownerAddress?: string;
 };

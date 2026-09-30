@@ -174,6 +174,7 @@ const connectorResponse = (name: string, owner: string, createdAt?: number) =>
   jsonResponse({
     name,
     owner,
+    address: OWNER,
     format_hash: FORMAT_HASH,
     ...(typeof createdAt === "number" ? { created_at: createdAt } : {}),
     dimensions: [

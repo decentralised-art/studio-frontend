@@ -13,6 +13,7 @@ import {
   extractToolboxRuntimeSnippet,
   identityTransformRun,
 } from "$lib/studio/solidityDraftRuntime";
+import { isOwnedLocalEntity, isPublishedChainAddress } from "$lib/studio/studioEntityOrigin";
 import {
   type DeployedLibrary,
   type DeployedRegistry,
@@ -181,9 +182,18 @@ export const mergeFetchedChainParticleIntoStudioState = (
   const feature = fetched.registry.feature;
   const particle = fetched.registry.particle;
   if (!connector) return { state, merged: false };
+  const published = isPublishedChainAddress(connector.chainAddress);
+  if (
+    !published &&
+    !isOwnedLocalEntity(
+      { address: connector.chainAddress, owner: connector.ownerAddress },
+      fallbackAuthorId,
+    )
+  )
+    return { state, merged: false };
 
   const inferred = inferRuntimeFromConnector(connector);
-  const authorId = fetched.particleMeta?.authorId ?? fallbackAuthorId;
+  const authorId = connector.ownerAddress ?? fetched.particleMeta?.authorId ?? fallbackAuthorId;
 
   return {
     state: {
@@ -216,31 +226,16 @@ export const mergeFetchedChainParticleIntoStudioState = (
           name: connector.name,
           kind: "feature",
           authorId,
-          summary: "Fetched from chain on demand.",
+          chainAddress: connector.chainAddress,
+          ownerAddress: connector.ownerAddress,
+          summary: published ? "Fetched from chain on demand." : "Created locally on this server.",
           dimensions: connector.dimensions.length,
         }),
-        transformations: Object.entries(inferred.transformations).reduce((items, [name]) => {
-          return upsertLibraryItem(items, {
-            id: `transform-${name}`,
-            name,
-            kind: "transformation",
-            authorId,
-            summary: "Fetched from chain on demand.",
-          });
-        }, state.library.transformations),
-        conditions: Object.entries(inferred.conditions).reduce((items, [name]) => {
-          return upsertLibraryItem(items, {
-            id: `condition-${name}`,
-            name,
-            kind: "condition",
-            authorId,
-            summary: "Fetched from chain on demand.",
-          });
-        }, state.library.conditions),
       },
-      particles: fetched.particleMeta
-        ? upsertParticleItem(state.particles, fetched.particleMeta)
-        : state.particles,
+      particles:
+        published && fetched.particleMeta
+          ? upsertParticleItem(state.particles, fetched.particleMeta)
+          : state.particles,
     },
     merged: true,
   };
@@ -281,6 +276,10 @@ export const mergeToolboxRuntimePayloadsIntoStudioState = (
   fetched: readonly (readonly [string, ChainTransformationResponse | ChainConditionResponse])[],
   fallbackAuthorId: string,
 ): DeployedStudioState => {
+  fetched = fetched.filter(
+    ([, payload]) =>
+      isPublishedChainAddress(payload.address) || isOwnedLocalEntity(payload, fallbackAuthorId),
+  );
   if (fetched.length === 0) return state;
 
   if (kind === "transformation") {
@@ -315,7 +314,11 @@ export const mergeToolboxRuntimePayloadsIntoStudioState = (
             name,
             kind: "transformation",
             authorId: resolveToolboxRuntimeAuthorId(payload.owner, fallbackAuthorId),
-            summary: "Saved in toolbox.",
+            chainAddress: payload.address,
+            ownerAddress: resolveToolboxRuntimeAuthorId(payload.owner, fallbackAuthorId),
+            summary: isPublishedChainAddress(payload.address)
+              ? "Published on chain."
+              : "Created locally on this server.",
             runtimeSnippet: extractToolboxRuntimeSnippet(payload.sol_src),
           });
         }, state.library.transformations),
@@ -354,7 +357,11 @@ export const mergeToolboxRuntimePayloadsIntoStudioState = (
           name,
           kind: "condition",
           authorId: resolveToolboxRuntimeAuthorId(payload.owner, fallbackAuthorId),
-          summary: "Saved in toolbox.",
+          chainAddress: payload.address,
+          ownerAddress: resolveToolboxRuntimeAuthorId(payload.owner, fallbackAuthorId),
+          summary: isPublishedChainAddress(payload.address)
+            ? "Published on chain."
+            : "Created locally on this server.",
           runtimeSnippet: extractToolboxRuntimeSnippet(payload.sol_src),
         });
       }, state.library.conditions),

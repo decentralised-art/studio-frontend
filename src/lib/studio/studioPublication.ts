@@ -96,13 +96,13 @@ export const createPublicationDraft = async (input: {
   if (existing) {
     if (existing.fingerprint !== fingerprint) {
       throw new Error(
-        `'${input.name}' already has a saved draft or publication with different content. Use a new name for this revision.`,
+        `'${input.name}' already has a saved draft or publication with different content. Created entities are immutable; create a new entity to use different content.`,
       );
     }
     return existing;
   }
   await input.createDraft();
-  // A simulation in another tab may have started before the publisher acquired
+  // Creation in another tab may have started before the publisher acquired
   // its lock. Never replace a newer pending/mined record with a draft marker.
   const concurrent = input.store.get(input.kind, input.name);
   if (concurrent) {

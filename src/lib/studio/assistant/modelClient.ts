@@ -259,7 +259,7 @@ const ASSISTANT_ENVELOPE_JSON_SCHEMA = {
               required: ["id", "tool_name", "arguments"],
               properties: {
                 id: { type: "string" },
-                tool_name: { type: "string", const: "deploy_connector" },
+                tool_name: { type: "string", enum: ["create_connector", "publish_connector"] },
                 arguments: {
                   type: "object",
                   additionalProperties: false,

@@ -467,8 +467,9 @@ GET /condition/{name} </h3> <pre data-panel="curl" class="bg-gray-50 border bord
   &quot;owner&quot;: &quot;0x48f750696ed392ca6d449a3d214656d024c5756f&quot;,
   &quot;address&quot;: &quot;0x0&quot;
 }</code>
-</pre>  </article> </section> <section id="publication" class="mb-16"><h2>Local drafts and Sepolia publication</h2>
-<p>POST /connector, /transformation and /condition create local simulation drafts; address <code>0x0</code> means unpublished. Runtime GET responses expose <code>args_count</code>, owner and address, not Solidity source. Preserve the source in your project.</p>
+</pre>  </article> </section> <section id="publication" class="mb-16"><h2>Local entities and Sepolia publication</h2>
+<p>Studio lists only published Sepolia entities in Network and the current owner’s server-created entities in Local. Create locally is separate from Simulate and Publish to Sepolia. Local and Network dependencies can be combined in a server simulation. Created entities remain immutable.</p>
+<p>POST /connector, /transformation and /condition create local simulation entities; address <code>0x0</code> means unpublished. Runtime GET responses expose <code>args_count</code>, owner and address, not Solidity source. Preserve the source in your project.</p>
 <p>Publish conditions and transformations first, then connectors in dependency order. For each entity, authenticate as its owner, prepare, approve the wallet transaction on Sepolia, then confirm the saved transaction hash. The owner pays gas in Sepolia ETH. Publication reserves the name on chain.</p>
 <pre><code>POST /publish/{kind}/prepare
 { "name": "my_unique_connector" }
@@ -489,7 +490,7 @@ POST /publish/{kind}
 </section> <section id="execution" class="mb-16"> <h2 class="text-sm uppercase tracking-[0.2em] text-white/60">
 Execution
 </h2> <p class="text-sm text-white/80 mb-3">
-Protected endpoints. <code>/simulate</code> runs server-local drafts and returns a stream array. <code>/execute</code> runs a published connector at a pinned chain block and returns the envelope below. Creation alone does not make a connector executable on chain.
+Protected endpoints. <code>/simulate</code> runs server-local drafts and returns a stream array. <code>/execute</code> reads a published connector using <code>eth_call</code> at a pinned chain block, without a wallet transaction, and returns the envelope below. Creation alone does not make a connector executable on chain.
 </p> <article class="mb-8"> <h3 class="font-semibold text-white mb-2">POST /execute</h3> <pre data-panel="curl" class="bg-gray-50 border border-gray-200 m-0 px-4 py-4 text-sm overflow-x-auto leading-relaxed font-mono text-gray-800" data-astro-cid-jgrc2lfe><code data-astro-cid-jgrc2lfe>curl -X POST &quot;https://api.decentralised.art/chain/execute&quot; \
   -H &quot;Authorization: Bearer &lt;access_token&gt;&quot; \
   -H &quot;Content-Type: application/json&quot; \

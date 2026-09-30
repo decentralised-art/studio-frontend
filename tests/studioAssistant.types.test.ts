@@ -44,7 +44,7 @@ describe("studio assistant tool envelope parsing", () => {
           },
           {
             id: "a2",
-            tool_name: "deploy_connector",
+            tool_name: "publish_connector",
             arguments: {},
           },
         ],
@@ -57,7 +57,7 @@ describe("studio assistant tool envelope parsing", () => {
     expect(envelope.tool_calls).toHaveLength(2);
     expect(envelope.tool_calls[0].tool_name).toBe("set_connector_ri_mode");
     expect(envelope.tool_calls[0].requires_confirmation).toBe(false);
-    expect(envelope.tool_calls[1].tool_name).toBe("deploy_connector");
+    expect(envelope.tool_calls[1].tool_name).toBe("publish_connector");
     expect(envelope.tool_calls[1].requires_confirmation).toBe(true);
     expect(requiresToolConfirmation("disconnect_connectors")).toBe(true);
   });

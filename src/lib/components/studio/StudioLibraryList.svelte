@@ -11,10 +11,13 @@
     toolboxIds = new Set<string>(),
     selectedId,
     draggable = false,
+    local = false,
+    publishDisabled = false,
     showHeader = true,
     onAdd,
     onToolbox,
     onOpen,
+    onPublish,
     onDragStart,
   }: {
     title?: string;
@@ -24,10 +27,13 @@
     toolboxIds?: ReadonlySet<string>;
     selectedId?: LibraryItem["id"];
     draggable?: boolean;
+    local?: boolean;
+    publishDisabled?: boolean;
     showHeader?: boolean;
     onAdd?: (item: LibraryItem) => void;
     onToolbox?: (item: LibraryItem) => void;
     onOpen?: (item: LibraryItem) => void;
+    onPublish?: (item: LibraryItem) => void;
     onDragStart?: (event: DragEvent, item: LibraryItem) => void;
   } = $props();
 
@@ -77,9 +83,12 @@
           inToolbox={toolboxIds.has(item.id)}
           selected={item.id === selectedId}
           {draggable}
+          {local}
+          {publishDisabled}
           {onAdd}
           {onToolbox}
           {onOpen}
+          {onPublish}
           {onDragStart}
         />
       {/each}
