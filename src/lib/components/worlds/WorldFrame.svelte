@@ -6,7 +6,6 @@
 
   import { createDcnClient } from "$lib/chain/dcnClient";
   import { buildWorldAssetUrl } from "$lib/worlds/api";
-  import { createWorldChainClient } from "$lib/worlds/chainApiCompatibility";
   import {
     isWorldRuntimeMessage,
     WORLD_ERROR_MESSAGE_TYPE,
@@ -45,7 +44,6 @@
   let sdkFrameSrc = $state("");
   let worldHost: WorldHost | null = null;
   let worldHostKey = "";
-  let rpcExecutionProvenance = $state<WorldRuntimeInput["executionProvenance"]>();
 
   const usesSdkWorldHost = $derived(world.source === "backend");
   const rawSrc = $derived.by(() => {
@@ -129,20 +127,13 @@
       return;
     }
 
-    const nextHostKey = `${currentWorld.id}:${currentSrc}:${currentWorld.chainApiVersion ?? 1}`;
+    const nextHostKey = `${currentWorld.id}:${currentSrc}`;
     if (worldHost && worldHostKey === nextHostKey) return;
 
     disposeWorldHost();
     resetRuntimeState();
-    rpcExecutionProvenance = undefined;
     worldHost = createWorldHost({
-      client: createWorldChainClient(
-        createDcnClient(),
-        currentWorld.chainApiVersion ?? 1,
-        (provenance) => {
-          rpcExecutionProvenance = provenance;
-        },
-      ),
+      client: createDcnClient(),
       permissions: currentWorld.permissions ?? [],
       valueLimits: currentWorld.backend?.valueLimits,
       iframe: currentFrame,
@@ -191,13 +182,6 @@
   {#if showStatus}
     <div class="world-frame-status" class:is-error={Boolean(errorText)}>
       {errorText || statusText}
-      {#if rpcExecutionProvenance}
-        <span
-          title={`World RPC block ${rpcExecutionProvenance.block_hash}; Runner ${rpcExecutionProvenance.runner}`}
-        >
-          · Last World chain call: block {rpcExecutionProvenance.block_number}</span
-        >
-      {/if}
     </div>
   {/if}
   <iframe

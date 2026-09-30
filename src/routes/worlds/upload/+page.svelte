@@ -210,10 +210,10 @@
           <span>Bundle Contract</span>
           <p>
             The ZIP must contain a root <code>world-manifest.json</code> and the iframe entry file
-            referenced by that manifest. New Worlds should declare
-            <code>"chainApiVersion": 2</code>: SDK execute returns
-            <code>{`{block_number, block_hash, runner, particles}`}</code>. Omission keeps the
-            legacy stream-array result; simulate remains an explicit local operation under
+            referenced by that manifest. SDK execute returns
+            <code>{`{block_number, block_hash, runner, particles}`}</code>; read
+            <code>result.particles</code> for the output streams. SDK simulate returns local output
+            streams and remains a separate operation under
             <code>dcn.execute</code> permission.
           </p>
         </div>

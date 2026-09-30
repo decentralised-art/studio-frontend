@@ -142,7 +142,6 @@ export type WorldBackendMetadata = {
 };
 
 export type WorldDescriptor = {
-  chainApiVersion?: 1 | 2;
   id: string;
   source?: WorldDescriptorSource;
   slug: string;

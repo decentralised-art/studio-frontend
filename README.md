@@ -82,7 +82,7 @@ The SDK is pinned to `1cc7924` (API specification `8761ecb`). Studio separates *
 
 Draft definitions are immutable in this workflow: use a new name after changing saved content. Mined publication does not imply the server's safe block or event indexer has caught up. Retry Execute/discovery rather than publishing again. The complete execute envelope is retained in Studio output; Worlds receive streams plus `executionProvenance` and `executionMode`. Runtime argument metadata uses `args_count`; public GET responses do not supply editable Solidity source.
 
-Uploaded Worlds may declare `chainApiVersion: 2` in `world-manifest.json` to receive the execute envelope. Omission or `1` preserves legacy stream-array shape at the host boundary; it still calls on-chain execute. New bundles should opt into version 2 and read `result.particles`. `sdk.simulate` remains a separate explicit local operation and uses the SDK's existing `dcn.execute` permission. Deploy the coordinated services-backend manifest/SDK update alongside this frontend.
+Uploaded Worlds use the current SDK directly: `sdk.execute` returns `{block_number, block_hash, runner, particles}`, and Worlds read `result.particles` for the output streams. `sdk.simulate` returns local output streams and remains a separate operation using the SDK's `dcn.execute` permission. The services backend and frontend use the same pinned SDK.
 
 Verification is offline by default. The optional live smoke test requires an explicitly supplied token and published connector fixtures; unit tests mock the server and wallet and send no transactions.
 
