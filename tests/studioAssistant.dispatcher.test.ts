@@ -17,7 +17,8 @@ const createBridge = (): AssistantRuntimeBridge => ({
   addTransformationToDimension: vi.fn().mockReturnValue({ message: "tx added" }),
   removeTransformationFromDimension: vi.fn().mockReturnValue({ message: "tx removed" }),
   runConnector: vi.fn().mockResolvedValue({ message: "ran" }),
-  deployConnector: vi.fn().mockResolvedValue({ message: "deployed" }),
+  createConnector: vi.fn().mockResolvedValue({ message: "created locally" }),
+  publishConnector: vi.fn().mockResolvedValue({ message: "deployed" }),
 });
 
 describe("studio assistant dispatcher", () => {
@@ -73,11 +74,11 @@ describe("studio assistant dispatcher", () => {
 
   it("normalizes bridge failures into failed execution result", async () => {
     const bridge = createBridge();
-    bridge.deployConnector = vi.fn().mockRejectedValue(new Error("deploy blocked"));
+    bridge.publishConnector = vi.fn().mockRejectedValue(new Error("deploy blocked"));
     const toolCall = parseAssistantToolCall(
       {
         id: "tool-2",
-        tool_name: "deploy_connector",
+        tool_name: "publish_connector",
         arguments: {},
       },
       0,

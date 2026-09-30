@@ -14,7 +14,7 @@ export default defineConfig({
     baseURL,
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
-    video: "retain-on-failure",
+    video: process.env.PLAYWRIGHT_VIDEO === "off" ? "off" : "retain-on-failure",
   },
   webServer: process.env.PLAYWRIGHT_SKIP_WEB_SERVER
     ? undefined
@@ -29,7 +29,12 @@ export default defineConfig({
   projects: [
     {
       name: "chromium",
-      use: { ...devices["Desktop Chrome"] },
+      use: {
+        ...devices["Desktop Chrome"],
+        ...(process.env.PLAYWRIGHT_CHROMIUM_CHANNEL
+          ? { channel: process.env.PLAYWRIGHT_CHROMIUM_CHANNEL }
+          : {}),
+      },
     },
   ],
 });

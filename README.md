@@ -75,3 +75,30 @@ Detailed matrix:
 You can preview the production build with `npm run preview`.
 
 > To deploy your app, you may need to install an [adapter](https://svelte.dev/docs/kit/adapters) for your target environment.
+
+## Current chain lifecycle
+
+The SDK is pinned to `1cc7924` (API specification `8761ecb`). Studio has two entity libraries:
+
+- **Network** lists published Sepolia connectors, transformations and conditions, discovered through chain events or verified nonzero chain addresses.
+- **Local** lists the signed-in wallet's entities created on the simulation server, including creations made through the API outside this browser. Account discovery is filtered by both owner and the unpublished address `0x0`. Local entries are not added to public Toolbox profiles. Browser graphs and publication records are scoped by API URL and wallet.
+
+**Create locally** creates an immutable entity on the server without a blockchain transaction. Transformation and condition editors use this action too. **Simulate** runs a created Local connector with its Local and Network dependencies on the server without gas. Published dependencies require their verified artifacts to be available on that server.
+
+**Publish to the Network** separately publishes the owner's local dependencies before their parent, using wallet-approved transactions and Sepolia ETH for gas. **Execute on the Network** reads a published connector at a pinned block using `eth_call`; it does not send a paid wallet transaction. Its output retains `{block_number, block_hash, runner, particles}`. Simulation returns particles without chain provenance.
+
+Pending receipts and interrupted sends survive reloads in localStorage, scoped by API URL and wallet. Confirmed publications show their transaction hash, explorer link and contract address in Studio. The recovery field accepts a transaction hash from wallet activity. Web Locks serialize publication for the same API and owner. A mined receipt can precede safe-block execution and indexing: retry execution or confirmation without sending another publication. Publishing requires HTTPS or localhost and a browser supporting Web Locks.
+
+Created definitions remain immutable. Runtime argument metadata uses `args_count`; public GET responses do not return editable Solidity source. Local visibility is scoped in Studio; the current server's GET endpoints remain public, so this is not a server-side confidentiality boundary.
+
+Uploaded Worlds use the current SDK directly: `sdk.execute` returns `{block_number, block_hash, runner, particles}`, and Worlds read `result.particles` for the output streams. `sdk.simulate` returns local output streams and remains a separate operation using the SDK's `dcn.execute` permission. The services backend and frontend use the same pinned SDK.
+
+Verification is offline by default. The optional live smoke test requires an explicitly supplied token and published connector fixtures; unit tests mock the server and wallet and send no transactions.
+
+If bundled Playwright Chromium/ffmpeg are not installed, use existing Chrome without video recording:
+
+```sh
+PLAYWRIGHT_CHROMIUM_CHANNEL=chrome PLAYWRIGHT_VIDEO=off npm run test:e2e -- e2e/studio-local-network.spec.ts --workers=1
+```
+
+These selected browser tests intercept services/chain traffic and inject a mock wallet; they create no live entities or transactions.

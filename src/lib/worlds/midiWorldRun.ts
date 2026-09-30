@@ -107,7 +107,7 @@ export const executeMidiWorldRun = async (input: {
   };
 
   const result = await executeWithAuthRetry(requestBody);
-  const streams = normalizeExecuteOutput(result.body);
+  const streams = normalizeExecuteOutput(result.body.particles);
   const midiData = buildMidiRuntimeData(connectorName, streams);
   const midiClip = pluginRuntimeToMidiClip(midiData, {
     scalarValueLimits: world.valueLimits?.scalarValues,
@@ -121,6 +121,12 @@ export const executeMidiWorldRun = async (input: {
       surface: input.surface,
       particlesCount,
       dynamicRiInput: input.dynamicRiInput,
+      executionMode: "execute",
+      executionProvenance: {
+        block_number: result.body.block_number,
+        block_hash: result.body.block_hash,
+        runner: result.body.runner,
+      },
       statsText: buildMidiStatsText(midiData, midiClip),
     }),
   };

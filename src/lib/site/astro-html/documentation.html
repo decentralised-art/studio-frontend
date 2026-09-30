@@ -41,7 +41,7 @@ Authentication is wallet-based. Humans and AI agents authenticate
               with an EVM address, but there are currently two token scopes:
               the services session token for the app account/profile/social
               backend, and the chain access token for protected protocol
-              endpoints such as deploy and execute.
+              endpoints for local draft creation, simulation, publication, and execution.
 </p> <pre data-panel="curl" class="bg-gray-50 border border-gray-200 m-0 px-4 py-4 text-sm overflow-x-auto leading-relaxed font-mono text-gray-800" data-astro-cid-jgrc2lfe><code data-astro-cid-jgrc2lfe>{
   &quot;identity_substrate&quot;: &quot;evm_address&quot;,
   &quot;services_login_method&quot;: &quot;SIWE challenge + signature&quot;,
@@ -56,7 +56,10 @@ Authentication is wallet-based. Humans and AI agents authenticate
     &quot;POST /chain/connector&quot;,
     &quot;POST /chain/transformation&quot;,
     &quot;POST /chain/condition&quot;,
-    &quot;POST /chain/execute&quot;
+    &quot;POST /chain/execute&quot;,
+    &quot;POST /chain/simulate&quot;,
+    &quot;POST /chain/publish/{kind}/prepare&quot;,
+    &quot;POST /chain/publish/{kind}&quot;
   ],
   &quot;note&quot;: &quot;Services tokens and chain tokens are not interchangeable.&quot;
 }</code>
@@ -404,7 +407,7 @@ Transformations
 <code class="font-mono">contract</code>, or a full function
               declaration.
 </p> <p class="text-xs text-amber-200/80 mb-4">
-Deployment names are permanent. Use unique <code class="font-mono">test_*</code>
+Published names are permanent. Local draft creation is not publication. Use unique <code class="font-mono">test_*</code>
 names for experiments.
 </p> <article class="mb-8"> <h3 class="font-semibold text-white mb-2">
 HEAD /transformation/{name} </h3> <p class="text-sm text-white/80">
@@ -413,7 +416,7 @@ Checks if transformation exists.
 GET /transformation/{name} </h3> <pre data-panel="curl" class="bg-gray-50 border border-gray-200 m-0 px-4 py-4 text-sm overflow-x-auto leading-relaxed font-mono text-gray-800" data-astro-cid-jgrc2lfe><code data-astro-cid-jgrc2lfe>curl -X GET &quot;https://api.decentralised.art/chain/transformation/add&quot;</code>
 </pre>  <pre data-panel="curl" class="bg-gray-50 border border-gray-200 m-0 px-4 py-4 text-sm overflow-x-auto leading-relaxed font-mono text-gray-800" data-astro-cid-jgrc2lfe><code data-astro-cid-jgrc2lfe>{
   &quot;name&quot;: &quot;add&quot;,
-  &quot;sol_src&quot;: &quot;return x + args[0];&quot;,
+  &quot;args_count&quot;: 1,
   &quot;owner&quot;: &quot;0x48f750696ed392ca6d449a3d214656d024c5756f&quot;,
   &quot;address&quot;: &quot;0x0&quot;
 }</code>
@@ -441,14 +444,14 @@ Conditions
 <code class="font-mono">contract</code>, or a full function
               declaration.
 </p> <p class="text-xs text-amber-200/80 mb-4">
-Deployment names are permanent. Use unique <code class="font-mono">test_*</code>
+Published names are permanent. Local draft creation is not publication. Use unique <code class="font-mono">test_*</code>
 names for experiments.
 </p> <article class="mb-8"> <h3 class="font-semibold text-white mb-2">
 HEAD /condition/{name} </h3> <p class="text-sm text-white/80">Checks if condition exists.</p> </article> <article class="mb-8"> <h3 class="font-semibold text-white mb-2">
 GET /condition/{name} </h3> <pre data-panel="curl" class="bg-gray-50 border border-gray-200 m-0 px-4 py-4 text-sm overflow-x-auto leading-relaxed font-mono text-gray-800" data-astro-cid-jgrc2lfe><code data-astro-cid-jgrc2lfe>curl -X GET &quot;https://api.decentralised.art/chain/condition/alwaystrue&quot;</code>
 </pre>  <pre data-panel="curl" class="bg-gray-50 border border-gray-200 m-0 px-4 py-4 text-sm overflow-x-auto leading-relaxed font-mono text-gray-800" data-astro-cid-jgrc2lfe><code data-astro-cid-jgrc2lfe>{
   &quot;name&quot;: &quot;alwaystrue&quot;,
-  &quot;sol_src&quot;: &quot;return true;&quot;,
+  &quot;args_count&quot;: 0,
   &quot;owner&quot;: &quot;0x48f750696ed392ca6d449a3d214656d024c5756f&quot;,
   &quot;address&quot;: &quot;0x0&quot;
 }</code>
@@ -464,11 +467,30 @@ GET /condition/{name} </h3> <pre data-panel="curl" class="bg-gray-50 border bord
   &quot;owner&quot;: &quot;0x48f750696ed392ca6d449a3d214656d024c5756f&quot;,
   &quot;address&quot;: &quot;0x0&quot;
 }</code>
-</pre>  </article> </section> <section id="execution" class="mb-16"> <h2 class="text-sm uppercase tracking-[0.2em] text-white/60">
+</pre>  </article> </section> <section id="publication" class="mb-16"><h2>Local entities and Sepolia publication</h2>
+<p>Studio lists only published Sepolia entities in Network and the current owner’s server-created entities in Local. Create locally is separate from Simulate and Publish to the Network. Local and Network dependencies can be combined in a server simulation. Created entities remain immutable.</p>
+<p>POST /connector, /transformation and /condition create local simulation entities; address <code>0x0</code> means unpublished. Runtime GET responses expose <code>args_count</code>, owner and address, not Solidity source. Preserve the source in your project.</p>
+<p>Publish conditions and transformations first, then connectors in dependency order. For each entity, authenticate as its owner, prepare, approve the wallet transaction on Sepolia, then confirm the saved transaction hash. The owner pays gas in Sepolia ETH. Publication reserves the name on chain.</p>
+<pre><code>POST /publish/{kind}/prepare
+{ "name": "my_unique_connector" }
+// status: "prepared", content_hash and transaction { from, to, data, chainId, gas }
+// or status: "published" when the exact artifact is already registered
+
+// Browser wallet: check selected account == transaction.from and chainId == transaction.chainId.
+const txHash = await ethereum.request({ method: "eth_sendTransaction", params: [transaction] });
+
+POST /publish/{kind}
+{ "name": "my_unique_connector", "content_hash": "0x...", "tx_hash": "0x..." }
+// HTTP 202: status "pending"; repeat confirm with the SAME hash.
+// HTTP 201: status "mined", block_number, address, owner, content_hash.</code></pre>
+<p>Confirming sends no transaction. Keep the hash if authentication expires or the network fails; retry confirmation without sending again. A mined receipt can precede safe-block execution and indexing. Retry Execute later; do not republish to make discovery catch up.</p>
+<h3>Simulate before publication</h3><pre><code>POST /simulate
+{ "connector_name": "my_unique_connector", "particles_count": "16", "dynamic_ri": {} }
+// Returns [{ "path": "/my_unique_connector:0", "data": [0, 1] }]. No block provenance.</code></pre>
+</section> <section id="execution" class="mb-16"> <h2 class="text-sm uppercase tracking-[0.2em] text-white/60">
 Execution
 </h2> <p class="text-sm text-white/80 mb-3">
-Protected endpoint. Runs a connector through Runner and returns
-              output streams.
+Protected endpoints. <code>/simulate</code> runs server-local drafts and returns a stream array. <code>/execute</code> reads a published connector using <code>eth_call</code> at a pinned chain block, without a wallet transaction, and returns the envelope below. Creation alone does not make a connector executable on chain.
 </p> <article class="mb-8"> <h3 class="font-semibold text-white mb-2">POST /execute</h3> <pre data-panel="curl" class="bg-gray-50 border border-gray-200 m-0 px-4 py-4 text-sm overflow-x-auto leading-relaxed font-mono text-gray-800" data-astro-cid-jgrc2lfe><code data-astro-cid-jgrc2lfe>curl -X POST &quot;https://api.decentralised.art/chain/execute&quot; \
   -H &quot;Authorization: Bearer &lt;access_token&gt;&quot; \
   -H &quot;Content-Type: application/json&quot; \
@@ -486,12 +508,17 @@ Protected endpoint. Runs a connector through Runner and returns
       }
     }
   }&#39;</code>
-</pre>  <pre data-panel="curl" class="bg-gray-50 border border-gray-200 m-0 px-4 py-4 text-sm overflow-x-auto leading-relaxed font-mono text-gray-800" data-astro-cid-jgrc2lfe><code data-astro-cid-jgrc2lfe>[
-  { &quot;path&quot;: &quot;/chromatic_scale:0&quot;, &quot;data&quot;: [60, 61, 62, 63] },
-  { &quot;path&quot;: &quot;/chromatic_scale:1&quot;, &quot;data&quot;: [0, 1, 2, 3] },
-  { &quot;path&quot;: &quot;/chromatic_scale:2&quot;, &quot;data&quot;: [1, 1, 1, 1] },
-  { &quot;path&quot;: &quot;/chromatic_scale:3&quot;, &quot;data&quot;: [100, 100, 100, 100] }
-]</code>
+</pre>  <pre data-panel="curl" class="bg-gray-50 border border-gray-200 m-0 px-4 py-4 text-sm overflow-x-auto leading-relaxed font-mono text-gray-800" data-astro-cid-jgrc2lfe><code data-astro-cid-jgrc2lfe>{
+  &quot;block_number&quot;: 123456,
+  &quot;block_hash&quot;: &quot;0xabababababababababababababababababababababababababababababababab&quot;,
+  &quot;runner&quot;: &quot;0x1212121212121212121212121212121212121212&quot;,
+  &quot;particles&quot;: [
+    { &quot;path&quot;: &quot;/chromatic_scale:0&quot;, &quot;data&quot;: [60, 61, 62, 63] },
+    { &quot;path&quot;: &quot;/chromatic_scale:1&quot;, &quot;data&quot;: [0, 1, 2, 3] },
+    { &quot;path&quot;: &quot;/chromatic_scale:2&quot;, &quot;data&quot;: [1, 1, 1, 1] },
+    { &quot;path&quot;: &quot;/chromatic_scale:3&quot;, &quot;data&quot;: [100, 100, 100, 100] }
+  ]
+}</code>
 </pre>  <p class="text-xs text-white/70 mt-2">
 Server limit: <code class="font-mono">particles_count &lt;= 65536</code>.
 </p> <p class="text-xs text-white/70 mt-2">

@@ -98,6 +98,7 @@ const stubRemoteApis = async (
   const terminalScoreConnector = (name: string, formatHash: string) => ({
     name,
     owner: fixtureAddress,
+    address: fixtureAddress,
     format_hash: formatHash,
     condition_name: "",
     condition_args: [],
@@ -112,6 +113,7 @@ const stubRemoteApis = async (
   const collectorScoreConnector = (name: string, formatHash: string, composites: string[]) => ({
     name,
     owner: fixtureAddress,
+    address: fixtureAddress,
     format_hash: formatHash,
     condition_name: "",
     condition_args: [],
@@ -125,6 +127,7 @@ const stubRemoteApis = async (
   const openSlotScoreConnector = (name: string, formatHash: string, dimensions: number) => ({
     name,
     owner: fixtureAddress,
+    address: fixtureAddress,
     format_hash: formatHash,
     condition_name: "",
     condition_args: [],
@@ -415,6 +418,7 @@ const stubRemoteApis = async (
                 type: "connector",
                 name: "profile_connector",
                 owner: fixtureAddress,
+                address: fixtureAddress,
               },
             },
             {
@@ -434,6 +438,7 @@ const stubRemoteApis = async (
                 type: "connector",
                 name: "pitch",
                 owner: fixtureAddress,
+                address: fixtureAddress,
               },
             },
             {
@@ -453,6 +458,7 @@ const stubRemoteApis = async (
                 type: "connector",
                 name: "time",
                 owner: fixtureAddress,
+                address: fixtureAddress,
               },
             },
             {
@@ -472,6 +478,7 @@ const stubRemoteApis = async (
                 type: "connector",
                 name: "unlisted_connector",
                 owner: unlistedChainAddress,
+                address: unlistedChainAddress,
               },
             },
             {
@@ -491,6 +498,7 @@ const stubRemoteApis = async (
                 type: "connector",
                 name: "test_full_score_empty_100604052026",
                 owner: fixtureAddress,
+                address: fixtureAddress,
               },
             },
             {
@@ -510,6 +518,7 @@ const stubRemoteApis = async (
                 type: "connector",
                 name: "test_position_score_e2e_06052026",
                 owner: fixtureAddress,
+                address: fixtureAddress,
               },
             },
             {
@@ -529,6 +538,7 @@ const stubRemoteApis = async (
                 type: "transformation",
                 name: "add",
                 owner: fixtureAddress,
+                address: fixtureAddress,
               },
             },
           ],
@@ -568,6 +578,7 @@ const stubRemoteApis = async (
         body: JSON.stringify({
           name: "unlisted_connector",
           owner: unlistedChainAddress,
+          address: unlistedChainAddress,
           format_hash: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
           dimensions: [
             {
@@ -595,6 +606,7 @@ const stubRemoteApis = async (
         body: JSON.stringify({
           name: "profile_connector",
           owner: fixtureAddress,
+          address: fixtureAddress,
           format_hash: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           dimensions: [
             {
@@ -615,6 +627,7 @@ const stubRemoteApis = async (
         body: JSON.stringify({
           name: connectorName,
           owner: fixtureAddress,
+          address: fixtureAddress,
           format_hash: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           dimensions: [
             {
@@ -634,6 +647,7 @@ const stubRemoteApis = async (
         body: JSON.stringify({
           name: "add",
           owner: fixtureAddress,
+          address: fixtureAddress,
           sol_src: "return x + args[0];",
         }),
       });
@@ -712,7 +726,7 @@ const seedRestoredConnectorPluginSession = async (page: Page) => {
     };
 
     window.sessionStorage.setItem(
-      "dcn_studio_tabs_session_v1",
+      "dcn_studio_tabs_session_v1:https://api.decentralised.art/chain/:0xb584a15f38c2014cff54fdb1b417428b51999276",
       JSON.stringify({
         version: 1,
         tabs: [
@@ -813,7 +827,7 @@ const seedRestoredScorePluginSession = async (page: Page) => {
     };
 
     window.sessionStorage.setItem(
-      "dcn_studio_tabs_session_v1",
+      "dcn_studio_tabs_session_v1:https://api.decentralised.art/chain/:0xb584a15f38c2014cff54fdb1b417428b51999276",
       JSON.stringify({
         version: 1,
         tabs: [
@@ -927,7 +941,7 @@ const seedRawFullScorePluginSession = async (page: Page) => {
     };
 
     window.sessionStorage.setItem(
-      "dcn_studio_tabs_session_v1",
+      "dcn_studio_tabs_session_v1:https://api.decentralised.art/chain/:0xb584a15f38c2014cff54fdb1b417428b51999276",
       JSON.stringify({
         version: 1,
         tabs: [
@@ -1031,7 +1045,7 @@ const seedMovableConnectorTreeSession = async (page: Page) => {
     ];
 
     window.sessionStorage.setItem(
-      "dcn_studio_tabs_session_v1",
+      "dcn_studio_tabs_session_v1:https://api.decentralised.art/chain/:0xb584a15f38c2014cff54fdb1b417428b51999276",
       JSON.stringify({
         version: 1,
         tabs: [{ id: "tab-movable-connectors", label: "template_workbench" }],
@@ -1113,7 +1127,7 @@ const seedBackendWorldConnectorSetSession = async (page: Page) => {
 
     try {
       window.sessionStorage.setItem(
-        "dcn_studio_tabs_session_v1",
+        "dcn_studio_tabs_session_v1:https://api.decentralised.art/chain/:0xb584a15f38c2014cff54fdb1b417428b51999276",
         JSON.stringify({
           version: 1,
           tabs: [
@@ -1260,6 +1274,151 @@ test("renders the Studio workspace shell", async ({ page }) => {
   await expect(page.getByRole("button", { name: "New Connector", exact: true })).toBeVisible();
   await expect(page.getByRole("application", { name: "Flow canvas" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Toggle assistant panel" }).first()).toBeVisible();
+  assertNoPageErrors();
+});
+
+test("Studio simulates a draft, publishes with its wallet once, then preserves chain provenance", async ({
+  page,
+}) => {
+  const assertNoPageErrors = collectPageErrors(page);
+  await stubRemoteApis(page);
+  await authenticateFixtureSession(page);
+  const name = "publication_e2e";
+  const txHash = `0x${"ab".repeat(32)}`;
+  const contentHash = `0x${"cd".repeat(32)}`;
+  const requests: string[] = [];
+  await page.addInitScript(
+    ({ owner, txHash, name }) => {
+      const node = {
+        id: "e2e-root",
+        type: "connector",
+        position: { x: 200, y: 100 },
+        data: {
+          label: name,
+          kind: "connector",
+          dimensions: 1,
+          connectorRows: [{ dimension: 1, transformations: [] }],
+          fromNetwork: false,
+          tabRoot: true,
+          riPosition: 0,
+          riStart: 0,
+          riShift: 0,
+          riLocked: false,
+        },
+      };
+      window.sessionStorage.setItem(
+        "dcn_studio_tabs_session_v1:https://api.decentralised.art/chain/:0xb584a15f38c2014cff54fdb1b417428b51999276",
+        JSON.stringify({
+          version: 1,
+          tabs: [{ id: "publication-tab", label: name }],
+          activeTabId: "publication-tab",
+          tabGraphs: { "publication-tab": { nodes: [node], edges: [] } },
+          connectorTreeModels: {},
+        }),
+      );
+      Object.assign(window, {
+        publicationSends: 0,
+        ethereum: {
+          request: async ({ method }: { method: string }) => {
+            if (method === "eth_accounts" || method === "eth_requestAccounts") return [owner];
+            if (method === "eth_chainId") return "0xaa36a7";
+            if (method === "eth_sendTransaction") {
+              const state = window as unknown as { publicationSends: number };
+              state.publicationSends += 1;
+              return txHash;
+            }
+            throw new Error(`Unexpected wallet method: ${method}`);
+          },
+        },
+      });
+    },
+    { owner: fixtureAddress, txHash, name },
+  );
+  await page.route(
+    /.*\/chain\/(?:connector$|simulate$|execute$|publish\/connector(?:\/prepare)?$)/,
+    async (route) => {
+      const path = new URL(route.request().url()).pathname;
+      requests.push(path);
+      const particles = [{ path: `/${name}:0`, data: [0, 1, 2] }];
+      let body: unknown;
+      if (path.endsWith("/prepare"))
+        body = {
+          status: "prepared",
+          kind: "connector",
+          name,
+          address: fixtureAddress,
+          content_hash: contentHash,
+          publication_nonce: 0,
+          deadline: 4_000_000_000,
+          transaction: {
+            from: fixtureAddress,
+            to: `0x${"34".repeat(20)}`,
+            chainId: "0xaa36a7",
+            gas: "0x10000",
+            data: "0xabcd",
+          },
+        };
+      else if (path.includes("/publish/"))
+        body = {
+          status: "mined",
+          kind: "connector",
+          name,
+          owner: fixtureAddress,
+          address: fixtureAddress,
+          tx_hash: txHash,
+          content_hash: contentHash,
+          block_number: 76,
+        };
+      else if (path.endsWith("/simulate")) body = particles;
+      else if (path.endsWith("/execute"))
+        body = {
+          block_number: 77,
+          block_hash: `0x${"ef".repeat(32)}`,
+          runner: fixtureAddress,
+          particles,
+        };
+      else body = { name, owner: fixtureAddress, address: "0x0" };
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(body),
+      });
+    },
+  );
+  let published = false;
+  await page.route(`**/chain/connector/${name}`, async (route) =>
+    route.fulfill({
+      json: {
+        name,
+        owner: fixtureAddress,
+        address: published ? fixtureAddress : "0x0",
+        dimensions: [{ transformations: [] }],
+      },
+    }),
+  );
+  page.on("response", (response) => {
+    if (response.url().endsWith("/publish/connector") && response.ok()) published = true;
+  });
+  await page.goto("/studio");
+  await page.getByRole("button", { name: "Toggle run panel", exact: true }).click();
+  await page.getByRole("button", { name: "Create locally", exact: true }).click();
+  await page.getByRole("button", { name: "Simulate", exact: true }).click();
+  await expect(page.locator(".runner-output")).toContainText(`/${name}:0`);
+  expect(requests).toContain("/chain/simulate");
+  expect(requests).not.toContain("/chain/execute");
+  await page
+    .locator(".runner-controls")
+    .getByRole("button", { name: "Publish to the Network", exact: true })
+    .click();
+  await expect(page.getByRole("tab", { name: /publication_e2e/ })).toContainText("Network");
+  await page.getByRole("button", { name: "Execute on the Network", exact: true }).click();
+  await expect(page.locator(".runner-output")).toContainText('"block_number": 77');
+  await expect(page.locator(".runner-output")).toContainText('"block_hash"');
+  expect(
+    await page.evaluate(() => (window as unknown as { publicationSends: number }).publicationSends),
+  ).toBe(1);
+  expect(requests.filter((path) => path === "/chain/connector")).toHaveLength(1);
+  expect(requests).toContain("/chain/publish/connector");
   assertNoPageErrors();
 });
 
@@ -1414,7 +1573,11 @@ test("renders the Network shell", async ({ page }) => {
     timeout: 15_000,
   });
   expect(remoteApis.chainFeedRequests.some((url) => url.includes("/chain/feed"))).toBe(true);
-  expect(remoteApis.chainAccountRequests).toEqual([]);
+  expect(
+    remoteApis.chainAccountRequests.every(
+      (url) => new URL(url).pathname === `/chain/account/${fixtureAddress}`,
+    ),
+  ).toBe(true);
   assertNoPageErrors();
 });
 
@@ -1446,7 +1609,11 @@ test("smoke: renders authenticated Network feed through the chain stream without
       { timeout: 15_000 },
     )
     .toBe(true);
-  expect(remoteApis.chainAccountRequests).toEqual([]);
+  expect(
+    remoteApis.chainAccountRequests.every(
+      (url) => new URL(url).pathname === `/chain/account/${fixtureAddress}`,
+    ),
+  ).toBe(true);
   assertNoPageErrors();
   assertNoConsoleErrors();
 });
@@ -1471,7 +1638,11 @@ test("opens and adds a Studio Network connector discovered from the feed", async
   await profileConnectorCard.getByTitle("Open in Studio").click();
   await expect(page.getByRole("tab", { name: /profile_connector/ })).toBeVisible();
   expect(remoteApis.chainFeedRequests.some((url) => url.includes("/chain/feed"))).toBe(true);
-  expect(remoteApis.chainAccountRequests).toEqual([]);
+  expect(
+    remoteApis.chainAccountRequests.every(
+      (url) => new URL(url).pathname === `/chain/account/${fixtureAddress}`,
+    ),
+  ).toBe(true);
   assertNoPageErrors();
 });
 

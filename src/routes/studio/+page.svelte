@@ -35,7 +35,7 @@
   import { renderTransformationSolidity } from "$lib/components/solidity-editor/templates/transformationTemplate";
   import { renderConditionSolidity } from "$lib/components/solidity-editor/templates/conditionTemplate";
   import { inferArgsCountFromSnippet } from "$lib/components/solidity-editor/templates/inferArgsCount";
-  import { mockParticleViews, type ExploreParticle } from "$lib/data/exploreParticles";
+  import type { ExploreParticle } from "$lib/data/exploreParticles";
   import type { PtOutputFeature } from "$lib/particles/ptMidiAdapter";
   import {
     buildExecutePlanConnectorRegistry,
@@ -113,13 +113,11 @@
   import { mergeConnectorTreeProjectionWithOverlay } from "$lib/studio/connectorTreeOverlay";
   import {
     formatTransformationPreview,
-    formatTransformationPreviewLabel,
     isConnectorKind,
     isValidChainName,
     normalizeKey,
     parseArgsInput,
     slugify,
-    titleize,
     toConditionContractName,
     toContractName,
   } from "$lib/studio/studioNaming";
@@ -138,9 +136,9 @@
   } from "$lib/studio/solidityDraftRuntime";
   import {
     buildStudioChainSyncSources,
-    buildStudioChainSyncSummary as formatStudioChainSyncSummary,
     isInvalidChainTokenError,
     mergeFetchedChainParticleIntoStudioState,
+    mergeChainSyncSnapshotIntoStudioState,
     mergeToolboxRuntimePayloadsIntoStudioState,
     type DeployedStudioState,
   } from "$lib/studio/studioChainSync";
@@ -164,7 +162,22 @@
     publishConnectorWithTrace,
     publishTransformationWithTrace,
     type DeployTraceEntry,
+    type StudioChainPostTracer,
   } from "$lib/studio/studioDeployTrace";
+  import { buildChainApiUrl } from "$lib/url/url";
+  import {
+    createPublicationDraft,
+    createPublicationStore,
+    publishStudioEntity,
+    recoverPublicationHash,
+    type PublicationRecord,
+    type PublicationStore,
+  } from "$lib/studio/studioPublication";
+  import {
+    publicationAddressUrl,
+    publicationTransactionUrl,
+  } from "$lib/studio/publicationExplorer";
+  import type { EntityKind } from "dcn";
   import { buildStudioDeployPlan, type StudioDeployPlan } from "$lib/studio/studioDeployPlan";
   import {
     clampPanelWidth,
@@ -181,21 +194,25 @@
     type NetworkLibraryKind,
   } from "$lib/studio/studioToolbox";
   import {
-    addToolboxLibraryItem,
     createEmptyToolboxLibrary,
-    normalizeConnectorToolboxId,
     normalizeToolboxListByKind,
     toggleToolboxLibraryItem,
     type ToolboxLibrary,
   } from "$lib/toolbox/toolboxLibrary";
-  import { orderConnectorDefsForDeploy } from "$lib/studio/connectorDeployOrder";
   import { buildStudioRuntime } from "$lib/studio/studioRuntime";
-  import { fetchChainParticleForStudio } from "$lib/studio/chainStudioAdapter";
+  import {
+    fetchChainParticleForStudio,
+    fetchChainOwnedStudioSnapshot,
+  } from "$lib/studio/chainStudioAdapter";
+  import { isPublishedChainAddress, isOwnedLocalEntity } from "$lib/studio/studioEntityOrigin";
+  import { buildStudioLocalLibrary } from "$lib/studio/studioLocalCatalog";
+  import { fromProtocolConnectorPayload } from "$lib/chain/connectorContractAdapter";
   import {
     getCachedCurrentUserToolboxLibrary,
     getCurrentUserProfileState,
     getCurrentUserToolboxLibrary,
     getMe,
+    getBrowserEthereumProvider,
     listServicesUsers,
     chainTokenIdentityForWalletAddress,
     loginWithBrowserWalletChainAccount,
@@ -206,10 +223,15 @@
   import {
     ChainApiRequestError,
     type ChainExecutePayload,
+    type ChainExecutionProvenance,
     getChainCondition,
+    getChainConnector,
     getChainTransformation,
     normalizeFormatHash,
     postChainExecuteDetailed,
+    postChainSimulateDetailed,
+    postChainPublishPrepareDetailed,
+    postChainPublishConfirmDetailed,
   } from "$lib/chain/registryApi";
   import { createEphemeralDeployName, isReservedCoreCollectionName } from "$lib/chain/deployNaming";
   import { type LibraryItem } from "$lib/data/studioLibrary";
@@ -351,10 +373,12 @@
       can_edit_flow: boolean;
       can_add_connectors: boolean;
       can_run: boolean;
-      can_deploy: boolean;
+      can_create: boolean;
+      can_publish: boolean;
       high_risk_tools_require_confirmation: string[];
     };
     network_connector_catalog: string[];
+    local_connector_catalog: string[];
   };
 
   type StudioNodeKind =
@@ -455,7 +479,7 @@
     | { type: "condition"; connectorId: string }
     | null;
   let connectorDropTarget = $state<ConnectorDropTarget>(null);
-  type ExplorerSource = "network" | "toolbox" | "plugins";
+  type ExplorerSource = "network" | "local" | "toolbox" | "plugins";
   let explorerSource = $state<ExplorerSource>("network");
   let libraryTab = $state<"connectors" | "transformations" | "conditions">("connectors");
   let tooltipX = $state(0);
@@ -483,6 +507,8 @@
   let runOutputByTab = $state<Record<string, PtOutputFeature[]>>({});
   let runWarningsByTab = $state<Record<string, string[]>>({});
   let runTimestampByTab = $state<Record<string, number>>({});
+  let runProvenanceByTab = $state<Record<string, ChainExecutionProvenance | undefined>>({});
+  let runModeByTab = $state<Record<string, "execute" | "simulate">>({});
   let chainRunBusy = $state(false);
   let chainRunMessageByTab = $state<Record<string, string>>({});
   let chainRunTimestampByTab = $state<Record<string, number>>({});
@@ -494,9 +520,46 @@
   let chainSyncError = $state<string | null>(null);
   let studioNetworkLibraryLoaded = false;
   let studioNetworkLibraryLoadPromise: Promise<void> | null = null;
-  let lastStudioSyncedSourcesCount = $state(0);
+  let localLibraryBusy = $state(false);
+  let localLibraryError = $state<string | null>(null);
+  let localLibraryRequestId = 0;
   let toolboxLoadBusy = $state(true);
   let toolboxLoadError = $state<string | null>(null);
+  let publicationRecords = $state<PublicationRecord[]>([]);
+  let recoveryTxHash = $state("");
+  const publicationStores = new SvelteMap<string, PublicationStore>();
+  const getPublicationStore = () => {
+    const scope = `${buildChainApiUrl("")}:${getCurrentStudioAuthorId()}`;
+    let store = publicationStores.get(scope);
+    if (!store) {
+      store = createPublicationStore(scope, browser ? window.localStorage : undefined);
+      publicationStores.set(scope, store);
+    }
+    return store;
+  };
+  const recoverWalletTransaction = (record: PublicationRecord) => {
+    try {
+      const store = getPublicationStore();
+      const current = store.get(record.kind, record.name);
+      if (
+        !current ||
+        current.fingerprint !== record.fingerprint ||
+        current.owner !== record.owner ||
+        current.tx_hash !== record.tx_hash
+      ) {
+        throw new Error(
+          "This recovery belongs to another wallet session. Select the original account and retry Publish.",
+        );
+      }
+      recoverPublicationHash(store, current, recoveryTxHash);
+      publicationRecords = store.list();
+      recoveryTxHash = "";
+      chainDeployError = null;
+      chainDeployStatus = "Transaction recovered. Retry Publish to confirm and continue.";
+    } catch (error) {
+      chainDeployError = error instanceof Error ? error.message : "Could not recover transaction.";
+    }
+  };
   let chainDeployBusy = $state(false);
   let chainDeployStatus = $state<string | null>(null);
   let chainDeployError = $state<string | null>(null);
@@ -517,9 +580,6 @@
   let apiJsonView = $state<"deploy" | "protocol" | "resolved">("deploy");
   let deployPreviewCopyStatus = $state<string | null>(null);
   let deployPreviewCopyTimer = $state<ReturnType<typeof setTimeout> | null>(null);
-  let compiledTransformationsByTab = $state<
-    Record<string, Record<string, RuntimeTransformationDef>>
-  >({});
   let runSamplesCount = $state(12);
   let assistantEnabled = $state(true);
   let assistantApiKey = $state("");
@@ -586,10 +646,6 @@
   );
 
   let deployedRegistry = $state<DeployedRegistry>(createEmptyDeployedRegistry());
-  let deployedParticleRIs = $state<
-    Record<string, { start: number; shift: number; locked: boolean }[]>
-  >({});
-
   let deployedLibrary = $state<DeployedLibrary>(createEmptyDeployedLibrary());
 
   let deployedParticles = $state<ExploreParticle[]>([]);
@@ -738,8 +794,10 @@
   const activeDeployTimestamp = $derived.by(() => deployTimestampByTab[activeTabId] ?? null);
   let tabsSessionRestoreReady = $state(false);
 
+  const studioSessionKey = () =>
+    `${STUDIO_TABS_SESSION_STORAGE_KEY}:${buildChainApiUrl("")}:${currentStudioAuthorId}`;
   const persistStudioTabsSession = () => {
-    if (!browser) return;
+    if (!browser || !/^0x[0-9a-f]{40}$/i.test(currentStudioAuthorId)) return;
     try {
       saveActiveGraph();
       const payload = buildStudioTabsSessionPayload<StudioTab, StudioNode, Edge>({
@@ -749,7 +807,7 @@
         connectorTreeModels: connectorTreeModelsByTab.entries(),
         tabViewports: tabViewports.entries(),
       });
-      window.sessionStorage.setItem(STUDIO_TABS_SESSION_STORAGE_KEY, JSON.stringify(payload));
+      window.sessionStorage.setItem(studioSessionKey(), JSON.stringify(payload));
     } catch (error) {
       console.warn("[Studio] Failed to persist tabs session.", error);
     }
@@ -758,7 +816,7 @@
   const restoreStudioTabsSession = (): boolean => {
     if (!browser) return false;
     const restored = restoreStudioTabsSessionPayload<StudioNode, Edge>(
-      readStudioTabsSession(window.sessionStorage),
+      readStudioTabsSession(window.sessionStorage, studioSessionKey()),
     );
     if (!restored) return false;
 
@@ -814,7 +872,13 @@
   });
 
   const getNodeStatusLabel = (node: StudioNode) =>
-    node.data.fromNetwork ? "Network (view-only)" : "Unpublished";
+    node.data.fromNetwork
+      ? Object.values(localLibrary).some((items) =>
+          items.some((item) => item.name === resolveNodeName(node)),
+        )
+        ? "Local (view-only)"
+        : "Network (view-only)"
+      : "Not created";
 
   const getLeftPanelBounds = () => getStudioPanelBounds("left", viewportWidthPx);
   const getRightPanelBounds = () => getStudioPanelBounds("right", viewportWidthPx);
@@ -1577,14 +1641,21 @@
         can_edit_flow: !activeTabReadOnly,
         can_add_connectors: !activeTabReadOnly,
         can_run: !chainRunBusy && !chainDeployBusy,
-        can_deploy: !activeTabReadOnly && !chainRunBusy && !chainDeployBusy && !chainSyncBusy,
+        can_create: !activeTabReadOnly && !chainRunBusy && !chainDeployBusy && !chainSyncBusy,
+        can_publish: activeRootIsLocal && !chainRunBusy && !chainDeployBusy,
         high_risk_tools_require_confirmation: [
-          "deploy_connector",
+          "publish_connector",
           "disconnect_connectors",
           "remove_transformation_from_dimension",
         ],
       },
+      local_connector_catalog: localLibrary.feature.map((item) => item.name),
       network_connector_catalog: networkLibrary.feature
+        .filter(
+          (item) =>
+            isPublishedChainAddress(item.chainAddress) ||
+            networkFeedLibraryIds.feature.includes(item.id),
+        )
         .map((item) => getLibraryRegistryName(item) || item.name)
         .filter((name, index, all) => name && all.indexOf(name) === index)
         .slice(0, 200),
@@ -1881,7 +1952,7 @@
         message: `Removed transformation '${target.name}' from '${resolveNodeName(connectorNode)}' D${dimension}.`,
       };
     },
-    runConnector: async ({ connector, particles_count }) => {
+    runConnector: async ({ connector, particles_count, mode }) => {
       if (particles_count && Number.isFinite(particles_count)) {
         runSamplesCount = Math.max(1, Math.trunc(particles_count));
       }
@@ -1890,25 +1961,30 @@
         if (!node) throw new Error(`Connector '${connector}' not found in current flow.`);
         selectedNodeId = node.id;
       }
-      await executeActiveGraph();
+      await executeActiveGraph(mode ?? "execute");
       if (chainDeployError) {
         throw new Error(chainDeployError);
       }
       const output = chainRunMessageByTab[activeTabId] ?? "[]";
       return {
-        message: "Run completed.",
+        message: mode === "simulate" ? "Local simulation completed." : "Chain execution completed.",
         data: output,
       };
     },
-    deployConnector: async (_args) => {
+    createConnector: async (_args) => {
       if (activeTabReadOnly) throw new Error("Cannot deploy from view-only tab.");
       await deployActiveGraph();
       if (chainDeployError) {
         throw new Error(chainDeployError);
       }
       return {
-        message: chainDeployStatus || "Deploy completed.",
+        message: chainDeployStatus || "Local creation completed.",
       };
+    },
+    publishConnector: async (_args) => {
+      await publishActiveGraph();
+      if (chainDeployError) throw new Error(chainDeployError);
+      return { message: chainDeployStatus || "Publication completed." };
     },
   };
 
@@ -1936,7 +2012,7 @@
           ok: result.ok,
         });
       }
-      if (call.tool_name === "deploy_connector") {
+      if (call.tool_name === "publish_connector") {
         emitAssistantTelemetry(result.ok ? "deploy_succeeded" : "deploy_failed", {
           source,
           ok: result.ok,
@@ -2275,6 +2351,38 @@
       lastToolboxServicesToken = nextServicesToken;
       studioNetworkLibraryLoaded = false;
       networkFeedLibraryIds = createEmptyNetworkFeedLibraryIds();
+      persistStudioTabsSession();
+      tabsSessionRestoreReady = false;
+      if (persistStudioTabsSessionTimer) {
+        clearTimeout(persistStudioTabsSessionTimer);
+        persistStudioTabsSessionTimer = null;
+      }
+      tabGraphs.clear();
+      connectorTreeModelsByTab.clear();
+      tabViewports.clear();
+      const blankTab = createStudioTab("Untitled Connector");
+      tabs = [blankTab];
+      activeTabId = blankTab.id;
+      nodes = [];
+      edges = [];
+      runOutputByTab = {};
+      runWarningsByTab = {};
+      runProvenanceByTab = {};
+      runModeByTab = {};
+      chainRunMessageByTab = {};
+      standaloneDraftTransformations = [];
+      transformationCodeById.clear();
+      conditionCodeById.clear();
+      currentStudioAuthorId = "";
+      publicationRecords = [];
+      deployedRegistry = createEmptyDeployedRegistry();
+      deployedLibrary = createEmptyDeployedLibrary();
+      deployedParticles = [];
+      localLibraryRequestId += 1;
+      void loadLocalLibrary().then(() => {
+        restoreStudioTabsSession();
+        tabsSessionRestoreReady = true;
+      });
       void loadToolboxLibraryFromProfile();
       if (nextServicesToken && explorerSource === "network") {
         void ensureStudioNetworkLibraryLoaded();
@@ -2305,12 +2413,13 @@
       mutationObserver.observe(canvasEl, { childList: true, subtree: true });
     }
 
-    restoreStudioTabsSession();
-    tabsSessionRestoreReady = true;
     void loadStudioAuthorUsers();
     void loadStudioWorldRegistry();
     void loadToolboxLibraryFromProfile();
     void (async () => {
+      await loadLocalLibrary();
+      restoreStudioTabsSession();
+      tabsSessionRestoreReady = true;
       await loadNetworkSelectionFromQuery();
       if (explorerSource === "network") {
         await ensureStudioNetworkLibraryLoaded();
@@ -2348,20 +2457,6 @@
     } catch (error) {
       console.warn("[Studio] Failed to persist toolbox library.", error);
     }
-  };
-
-  const addItemToToolboxLibrary = (kind: keyof ToolboxLibrary, id: string) => {
-    const {
-      library: next,
-      id: normalizedId,
-      added,
-    } = addToolboxLibraryItem(toolboxLibrary, kind, id);
-    if (!added) return;
-    toolboxLibrary = next;
-    if (kind === "connector") {
-      void hydrateToolboxConnectorsIntoLibrary([normalizedId]);
-    }
-    void persistToolboxLibrary(next);
   };
 
   const loadToolboxLibraryFromProfile = async () => {
@@ -2420,18 +2515,47 @@
   const networkLibrary = $derived.by(
     (): NetworkLibrary => ({
       feature: [...deployedLibrary.features],
-      transformation: [
-        ...deployedLibrary.transformations,
-        ...standaloneDraftTransformations.map((item) => ({
-          id: `draft-transform-${item.id}`,
-          name: item.name,
-          kind: "transformation" as const,
-          authorId: getCurrentStudioAuthorId(),
-          summary: "Unpublished in current tab (publish to chain before reuse).",
-        })),
-      ],
+      transformation: [...deployedLibrary.transformations],
       condition: [...deployedLibrary.conditions],
     }),
+  );
+  const localLibrary = $derived.by((): NetworkLibrary => {
+    const saved = buildStudioLocalLibrary(publicationRecords, currentStudioAuthorId);
+    const localItems = (kind: NetworkLibraryKind, fallback: LibraryItem[]) => {
+      const mined = new Set(
+        publicationRecords
+          .filter((record) => record.stage === "mined")
+          .map((record) => `${record.kind}:${record.name}`),
+      );
+      const entityKind = kind === "feature" ? "connector" : kind;
+      const fetched = networkLibrary[kind].filter((item) =>
+        isOwnedLocalEntity(
+          { address: item.chainAddress, owner: item.ownerAddress },
+          currentStudioAuthorId,
+        ),
+      );
+      return Array.from(
+        new Map([...fallback, ...fetched].map((item) => [item.id, item])).values(),
+      ).filter((item) => !mined.has(`${entityKind}:${item.name}`));
+    };
+    return {
+      feature: localItems("feature", saved.features),
+      transformation: localItems("transformation", saved.transformations),
+      condition: localItems("condition", saved.conditions),
+    };
+  });
+  const activeRootName = $derived.by(() => resolveActiveExecuteConnectorName(nodes).trim());
+  const activeRootIsLocal = $derived.by(() =>
+    localLibrary.feature.some((item) => item.name === activeRootName),
+  );
+  const activeRootIsPublished = $derived.by(
+    () =>
+      isPublishedChainAddress(deployedRegistry.connectors[activeRootName]?.chainAddress) ||
+      networkFeedLibraryIds.feature.includes(`feature-${activeRootName}`) ||
+      publicationRecords.some(
+        (record) =>
+          record.kind === "connector" && record.name === activeRootName && record.stage === "mined",
+      ),
   );
   const selectedNode = $derived.by(() => nodes.find((node) => node.id === selectedNodeId) ?? null);
   const selectedEdge = $derived.by(() => edges.find((edge) => edge.id === selectedEdgeId) ?? null);
@@ -3791,6 +3915,8 @@
         targetNames,
         output,
       );
+      pluginData.executionProvenance = runProvenanceByTab[activeTabId];
+      pluginData.executionMode = runModeByTab[activeTabId];
       return {
         ...node,
         data: {
@@ -3865,21 +3991,6 @@
         discovery.library.conditions,
       ),
     };
-  };
-
-  const buildStudioChainSyncSummary = (): string => {
-    return formatStudioChainSyncSummary({
-      sourceCount: lastStudioSyncedSourcesCount,
-      connectorEntryCount: deployedParticles.length,
-      connectorCount: deployedLibrary.features.length,
-      transformationCount: deployedLibrary.transformations.length,
-      conditionCount: deployedLibrary.conditions.length,
-    });
-  };
-
-  const refreshStudioChainSyncSummary = () => {
-    if (lastStudioSyncedSourcesCount <= 0) return;
-    chainSyncStatus = buildStudioChainSyncSummary();
   };
 
   const buildStudioEventFeedSyncSummary = (
@@ -3957,6 +4068,39 @@
     };
   };
 
+  const loadLocalLibrary = async () => {
+    const requestId = ++localLibraryRequestId;
+    const servicesToken = getToken();
+    if (!servicesToken) {
+      currentStudioAuthorId = "";
+      publicationRecords = [];
+      localLibraryBusy = false;
+      return;
+    }
+    localLibraryBusy = true;
+    localLibraryError = null;
+    try {
+      const context = await resolveCurrentStudioChainAuthContext();
+      if (requestId !== localLibraryRequestId || servicesToken !== getToken()) return;
+      currentStudioAuthorId = context.authorId.toLowerCase();
+      publicationRecords = getPublicationStore().list();
+      const snapshot = await fetchChainOwnedStudioSnapshot(context.ethereumAddress, {
+        authorId: currentStudioAuthorId,
+        origin: "local",
+      });
+      if (requestId !== localLibraryRequestId || servicesToken !== getToken()) return;
+      applyDeployedStudioState(
+        mergeChainSyncSnapshotIntoStudioState(getDeployedStudioState(), snapshot),
+      );
+    } catch (error) {
+      if (requestId === localLibraryRequestId)
+        localLibraryError =
+          error instanceof Error ? error.message : "Could not load your local entities.";
+    } finally {
+      if (requestId === localLibraryRequestId) localLibraryBusy = false;
+    }
+  };
+
   let chainTokenUserId = getChainTokenUserId() ?? "";
   let chainAuthPromise: Promise<void> | null = null;
   const ensureChainAuthForStudio = async (forceRefresh = false) => {
@@ -3974,6 +4118,7 @@
     if (getChainToken() && walletIdentity && storedUserId === walletIdentity) {
       chainTokenUserId = walletIdentity;
       if (authContext.ethereumAddress) currentStudioAuthorId = authContext.ethereumAddress;
+      publicationRecords = getPublicationStore().list();
       return;
     }
 
@@ -3981,6 +4126,7 @@
       .then((result) => {
         chainTokenUserId = chainTokenIdentityForWalletAddress(result.address);
         currentStudioAuthorId = result.address.trim().toLowerCase() || getCurrentStudioAuthorId();
+        publicationRecords = getPublicationStore().list();
       })
       .finally(() => {
         chainAuthPromise = null;
@@ -3999,7 +4145,9 @@
   }
 
   const syncSingleChainParticle = async (particleName: string) => {
-    const fetched = await fetchChainParticleForStudio(particleName);
+    const fetched = await fetchChainParticleForStudio(particleName, {
+      localOwnerAddress: getCurrentStudioAuthorId(),
+    });
     const merged = mergeFetchedChainParticleIntoStudioState(
       getDeployedStudioState(),
       fetched,
@@ -4076,7 +4224,10 @@
     if (!name) return;
     try {
       const result = await withChainAuthRetry(() => syncConnectorTreeFromChain(name));
-      if (!result.missing.includes(name)) {
+      if (
+        !result.missing.includes(name) &&
+        isPublishedChainAddress(deployedRegistry.connectors[name]?.chainAddress)
+      ) {
         markNetworkLibraryItemVisible("feature", `feature-${name}`);
       }
     } catch (error) {
@@ -4105,10 +4256,11 @@
           getCurrentStudioAuthorId(),
         ),
       );
-      markNetworkLibraryItemVisible(
-        kind,
-        kind === "transformation" ? `transform-${trimmedName}` : `condition-${trimmedName}`,
-      );
+      if (isPublishedChainAddress(payload.address))
+        markNetworkLibraryItemVisible(
+          kind,
+          kind === "transformation" ? `transform-${trimmedName}` : `condition-${trimmedName}`,
+        );
       return true;
     } catch (error) {
       if (import.meta.env.DEV) {
@@ -4146,44 +4298,6 @@
     );
     if (!missing.length) return;
     await Promise.all(missing.map((name) => hydrateDeployedRuntimeFromChain("condition", name)));
-  };
-
-  const hydrateToolboxConnectorsIntoLibrary = async (connectorIds: string[]) => {
-    const normalizedConnectorIds = Array.from(
-      new SvelteSet(
-        connectorIds.map((value) => normalizeConnectorToolboxId(value)).filter(Boolean),
-      ),
-    );
-    if (normalizedConnectorIds.length === 0) return;
-
-    const settled = await Promise.allSettled(
-      normalizedConnectorIds.map(
-        async (connectorId) =>
-          [connectorId, await syncConnectorTreeFromChain(connectorId)] as const,
-      ),
-    );
-
-    const mergedCount = settled.reduce((count, result) => {
-      if (result.status !== "fulfilled") return count;
-      return count + result.value[1].loaded.length;
-    }, 0);
-    if (!chainSyncBusy && mergedCount > 0) {
-      refreshStudioChainSyncSummary();
-    }
-
-    if (import.meta.env.DEV) {
-      const failed = settled.filter(
-        (result) =>
-          result.status === "rejected" ||
-          (result.status === "fulfilled" && result.value[1].missing.length > 0),
-      ).length;
-      if (failed > 0) {
-        console.warn("[Studio] Some toolbox connectors could not be hydrated from chain.", {
-          failed,
-          requested: normalizedConnectorIds.length,
-        });
-      }
-    }
   };
 
   const collectLocalConditionRuntime = (
@@ -4238,7 +4352,6 @@
       });
       applyStudioNetworkFeedLibraryDiscovery(discovery);
       refreshConnectorTreeTabs();
-      lastStudioSyncedSourcesCount = sources.length;
       studioNetworkLibraryLoaded = true;
       chainSyncStatus = buildStudioEventFeedSyncSummary(discovery, sources.length);
       chainSyncError = null;
@@ -4510,38 +4623,149 @@
       networkConnectorNames: networkLibrary.feature.map((item) => item.id.replace(/^feature-/, "")),
     });
 
-  const publishDeployPlanToChain = async (plan: StudioDeployPlan) => {
-    chainDeployError = null;
-    if (!plan.ok) {
-      throw new Error(plan.errors.join(" "));
-    }
-    if (!plan.steps.length) {
-      throw new Error("Nothing to deploy.");
-    }
-
-    chainDeployStatus = "Authenticating with chain...";
-    await ensureChainAuthForStudio();
-
-    for (const step of plan.steps) {
-      chainDeployStatus = `Publishing ${step.kind} ${step.name} (${step.order}/${plan.steps.length})...`;
-      if (step.kind === "condition") {
-        await publishConditionWithTrace(traceStudioChainPost, step.body);
-        addItemToToolboxLibrary("condition", step.name);
-      } else if (step.kind === "transformation") {
-        await publishTransformationWithTrace(traceStudioChainPost, step.body);
-        addItemToToolboxLibrary("transformation", step.name);
-      } else {
-        await publishConnectorWithTrace(traceStudioChainPost, step.body);
-        addItemToToolboxLibrary("connector", step.name);
-      }
-    }
-
-    if (!plan.localConnectorNames.length) {
-      return null;
-    }
-    chainDeployStatus = `Published connector ${plan.rootConnectorName}.`;
-    return plan.rootConnectorName;
+  const createDeployStepDraft = (
+    step: StudioDeployPlan["steps"][number],
+    tracer = traceStudioChainPost,
+  ) => {
+    if (step.kind === "condition") return publishConditionWithTrace(tracer, step.body);
+    if (step.kind === "transformation") return publishTransformationWithTrace(tracer, step.body);
+    return publishConnectorWithTrace(tracer, step.body);
   };
+
+  const createPublicationTracer = (expectedOwner: string) =>
+    createStudioChainPostTracer({
+      appendEntry: appendDeployTraceEntry,
+      withAuthRetry: (operation) =>
+        withChainAuthRetry(() => {
+          if (getCurrentStudioAuthorId().toLowerCase() !== expectedOwner.toLowerCase()) {
+            throw new Error(
+              "Wallet account changed during authentication. Retry Publish from the selected account.",
+            );
+          }
+          return operation();
+        }),
+    });
+
+  const publishEntityToChain = async (
+    kind: EntityKind,
+    name: string,
+    body: unknown,
+    createDraft: (tracer: StudioChainPostTracer) => Promise<unknown>,
+  ) => {
+    const expectedOwner = getCurrentStudioAuthorId();
+    const tracer = createPublicationTracer(expectedOwner);
+    const store = getPublicationStore();
+    try {
+      await publishStudioEntity({
+        kind,
+        name,
+        body,
+        store,
+        expectedOwner,
+        provider: getBrowserEthereumProvider(),
+        onStatus: (message) => {
+          chainDeployStatus = message;
+          publicationRecords = store.list();
+        },
+        api: {
+          createDraft: () => createDraft(tracer),
+          prepare: () =>
+            tracer(`/chain/publish/${kind}/prepare`, { name }, () =>
+              postChainPublishPrepareDetailed(kind, name),
+            ),
+          confirm: (request) =>
+            tracer(`/chain/publish/${kind}`, request, () =>
+              postChainPublishConfirmDetailed(kind, request),
+            ),
+        },
+      });
+    } finally {
+      publicationRecords = getPublicationStore().list();
+    }
+  };
+
+  const createEntityLocally = async (
+    kind: EntityKind,
+    name: string,
+    body: unknown,
+    create: (tracer: StudioChainPostTracer) => Promise<unknown>,
+  ) => {
+    const owner = getCurrentStudioAuthorId();
+    const store = getPublicationStore();
+    await createPublicationDraft({
+      kind,
+      name,
+      body,
+      store,
+      createDraft: () => create(createPublicationTracer(getCurrentStudioAuthorId())),
+    });
+    if (owner === getCurrentStudioAuthorId()) publicationRecords = store.list();
+  };
+
+  const publishLocalEntity = async (kind: EntityKind, name: string) => {
+    if (chainDeployBusy || chainRunBusy) return;
+    chainDeployBusy = true;
+    chainDeployError = null;
+    try {
+      await ensureChainAuthForStudio();
+      const owner = getCurrentStudioAuthorId();
+      const visited = new SvelteSet<string>();
+      const visiting = new SvelteSet<string>();
+      const publish = async (entityKind: EntityKind, entityName: string): Promise<void> => {
+        if (owner !== getCurrentStudioAuthorId())
+          throw new Error("Account changed during publication.");
+        const key = `${entityKind}:${entityName}`;
+        if (visited.has(key)) return;
+        if (visiting.has(key)) throw new Error(`Cyclic connector reference: ${entityName}.`);
+        visiting.add(key);
+        const payload = await (entityKind === "connector"
+          ? getChainConnector(entityName)
+          : entityKind === "transformation"
+            ? getChainTransformation(entityName)
+            : getChainCondition(entityName));
+        if (isPublishedChainAddress(payload.address)) {
+          visited.add(key);
+          visiting.delete(key);
+          return;
+        }
+        if (!isOwnedLocalEntity(payload, owner))
+          throw new Error(`'${entityName}' is not a local ${entityKind} owned by your account.`);
+        if (entityKind === "connector") {
+          const connector = fromProtocolConnectorPayload(payload);
+          if (connector.conditionName) await publish("condition", connector.conditionName);
+          for (const dimension of connector.dimensions) {
+            for (const transformation of dimension.transformations)
+              await publish("transformation", transformation.name);
+            if (dimension.composite) await publish("connector", dimension.composite);
+            for (const binding of Object.values(dimension.bindings))
+              await publish("connector", binding);
+          }
+        }
+        const saved = getPublicationStore().get(entityKind, entityName);
+        const body: unknown = saved ? JSON.parse(saved.fingerprint) : payload;
+        await publishEntityToChain(entityKind, entityName, body, async () => undefined);
+        visited.add(key);
+        visiting.delete(key);
+        if (entityKind === "connector") await hydrateDeployedConnectorFromChain(entityName);
+        else await hydrateDeployedRuntimeFromChain(entityKind, entityName);
+      };
+      await publish(kind, name);
+      chainDeployStatus = `Published '${name}' on the network. Execution may wait for the safe block; retry Execute without republishing.`;
+      await loadLocalLibrary();
+    } catch (error) {
+      chainDeployError = error instanceof Error ? error.message : "Publication failed.";
+      chainDeployStatus = null;
+    } finally {
+      chainDeployBusy = false;
+    }
+  };
+
+  const publishLocalLibraryItem = (item: LibraryItem) =>
+    publishLocalEntity(
+      item.kind === "feature" ? "connector" : (item.kind as EntityKind),
+      getLibraryRegistryName(item),
+    );
+  const publishActiveGraph = () => publishLocalEntity("connector", activeRootName);
 
   const collectRuntimeConnectorClosure = (graphNodes: StudioNode[]) => {
     const graphConnectorNames = graphNodes
@@ -4635,7 +4859,7 @@
         return;
       }
       const key = normalizeKey(name);
-      if (networkNames.has(key)) {
+      if (networkNames.has(key) && !getPublicationStore().get("transformation", name)) {
         warnings.push(`Transformation already exists in network: ${name}.`);
         return;
       }
@@ -5273,7 +5497,7 @@
     }
   }
 
-  const executeActiveGraph = async () => {
+  const executeActiveGraph = async (mode: "execute" | "simulate" = "execute") => {
     if (!activeTab || chainRunBusy || chainDeployBusy) return;
     const runTabId = activeTabId;
     const runStartedAt = performance.now();
@@ -5287,6 +5511,10 @@
 
     try {
       measureStudioRunStep(timings, "save", () => saveActiveGraph());
+      if (mode === "simulate" && !activeRootIsLocal)
+        throw new Error("Create this connector locally before simulating it.");
+      if (mode === "execute" && !activeRootIsPublished)
+        throw new Error("Publish this connector on the network before executing it.");
       const requestPreview = measureStudioRunStep(timings, "prepare", () =>
         prepareExecuteRequest(nodes, edges),
       );
@@ -5318,12 +5546,30 @@
 
       chainDeployStatus = "Authenticating with chain...";
       await measureAsyncStudioRunStep(timings, "auth", () => ensureChainAuthForStudio());
-      chainDeployStatus = "Running on chain...";
+      chainDeployStatus =
+        mode === "simulate"
+          ? "Simulating local drafts (no chain transaction)..."
+          : "Executing published connector on chain...";
       const result = await measureAsyncStudioRunStep(timings, "execute", () =>
-        withChainAuthRetry(() => postChainExecuteDetailed(requestPreview.requestBody)),
+        withChainAuthRetry(async () =>
+          mode === "simulate"
+            ? postChainSimulateDetailed(requestPreview.requestBody)
+            : postChainExecuteDetailed(requestPreview.requestBody),
+        ),
       );
+      runModeByTab = { ...runModeByTab, [runTabId]: mode };
+      runProvenanceByTab = {
+        ...runProvenanceByTab,
+        [runTabId]: Array.isArray(result.body)
+          ? undefined
+          : {
+              block_number: result.body.block_number,
+              block_hash: result.body.block_hash,
+              runner: result.body.runner,
+            },
+      };
       output = measureStudioRunStep(timings, "normalize", () =>
-        result.body.map((stream) => ({
+        (Array.isArray(result.body) ? result.body : result.body.particles).map((stream) => ({
           feature_path: stream.path,
           data: [...stream.data],
         })),
@@ -5337,7 +5583,10 @@
         [runTabId]: responseJson,
       };
       chainRunTimestampByTab = { ...chainRunTimestampByTab, [runTabId]: Date.now() };
-      chainDeployStatus = "Run completed.";
+      chainDeployStatus =
+        mode === "simulate"
+          ? "Local simulation completed. Publish to make this connector available on chain."
+          : `Chain execution completed at block ${!Array.isArray(result.body) ? result.body.block_number : ""}.`;
     } catch (error) {
       runStatus = "failed";
       const err = extractExecuteErrorDetail(error);
@@ -5360,409 +5609,81 @@
       chainDeployStatus = null;
       chainDeployError = err.headline;
       output = [];
+      runProvenanceByTab = { ...runProvenanceByTab, [runTabId]: undefined };
     } finally {
       measureStudioRunStep(timings, "store", () => {
         runOutputByTab = { ...runOutputByTab, [runTabId]: output };
         runWarningsByTab = { ...runWarningsByTab, [runTabId]: warnings };
         runTimestampByTab = { ...runTimestampByTab, [runTabId]: Date.now() };
       });
-      measureStudioRunStep(timings, "plugins", () => refreshPluginOutputs(output));
+      measureStudioRunStep(timings, "plugins", () => {
+        if (activeTabId === runTabId) refreshPluginOutputs(output);
+      });
       logStudioRunTiming(runStatus, timings, performance.now() - runStartedAt);
       chainRunBusy = false;
     }
   };
 
-  const compileActiveGraph = () => {
-    if (!activeTab) return;
-    saveActiveGraph();
-    const warnings: string[] = [];
-    const compiled = compileDraftTransformations(nodes);
-    warnings.push(...compiled.warnings);
-
-    const hasChainConnectorReference = (connectorName: string) => {
-      const trimmed = connectorName.trim();
-      if (!trimmed) return false;
-      if (deployedRegistry.connectors[trimmed]) return true;
-
-      const normalized = normalizeKey(trimmed);
-      if (!normalized) return false;
-
-      if (
-        Object.keys(deployedRegistry.connectors).some((name) => normalizeKey(name) === normalized)
-      )
-        return true;
-
-      return networkLibrary.feature.some((item) => {
-        const registryName = item.id.replace(/^feature-/, "");
-        return normalizeKey(registryName) === normalized || normalizeKey(item.name) === normalized;
-      });
-    };
-
-    const hasLocalConnectors = nodes.some(
-      (node) => isConnectorKind(node.data.kind) && !node.data.fromNetwork,
-    );
-
-    if (hasLocalConnectors) {
-      const connectorName = activeTab.particleId ?? (activeTab.label.trim() || activeTab.label);
-      const connectorKey = normalizeKey(connectorName);
-      const networkConnectorKeys = new SvelteSet([
-        ...Object.keys(deployedRegistry.connectors).map(normalizeKey),
-        ...networkLibrary.feature.map((item) => normalizeKey(item.id.replace(/^feature-/, ""))),
-      ]);
-      if (!activeTab.particleId && networkConnectorKeys.has(connectorKey)) {
-        warnings.push(`Connector already exists in network: ${connectorName}.`);
-      }
-    }
-
-    nodes.forEach((node) => {
-      if (node.data.fromNetwork) return;
-      const existing = findRegistryMatch(node.data.kind, node.data.label);
-      if (existing && normalizeKey(existing.name) === normalizeKey(node.data.label)) {
-        warnings.push(`${titleize(node.data.kind)} already exists: ${node.data.label}.`);
-      }
-    });
-
-    const hasStandaloneElements =
-      standaloneDraftTransformations.length > 0 ||
-      nodes.some((node) => node.data.kind === "condition" && !node.data.fromNetwork);
-    if (!hasLocalConnectors && !hasStandaloneElements) {
-      warnings.push("No local connectors or standalone conditions/transformations to deploy.");
-      compiledTransformationsByTab = {
-        ...compiledTransformationsByTab,
-        [activeTabId]: compiled.registry,
-      };
-      compileWarningsByTab = { ...compileWarningsByTab, [activeTabId]: warnings };
-      compileTimestampByTab = { ...compileTimestampByTab, [activeTabId]: Date.now() };
-      return warnings;
-    }
-
-    if (hasLocalConnectors) {
-      try {
-        const runtime = buildStudioRuntime(
-          { nodes, edges },
-          { rootLabel: activeTab.label, rootParticleId: activeTab.particleId },
-          buildRuntimeOverrides(compiled.registry),
-        );
-        const blockingRuntimeWarnings = runtime.warnings.filter(
-          (warning) => !warning.startsWith("Using local override for network connector:"),
-        );
-        warnings.push(...blockingRuntimeWarnings);
-
-        const rootDef = runtime.registry.connectors[runtime.rootConnector];
-        if (!rootDef) {
-          warnings.push("Graph does not produce a publishable root connector.");
-        } else {
-          const localConnectorNodes = nodes.filter(
-            (node) => isConnectorKind(node.data.kind) && !node.data.fromNetwork,
-          );
-          const localConnectorKeys = new SvelteSet(
-            localConnectorNodes.map((node) => normalizeKey(resolveNodeName(node))),
-          );
-          if (
-            localConnectorNodes.some(
-              (node) =>
-                Boolean(node.data.tabRoot) || resolveNodeName(node) === runtime.rootConnector,
-            )
-          ) {
-            localConnectorKeys.add(normalizeKey(runtime.rootConnector));
-          }
-
-          rootDef.dimensions.forEach((dimension, index) => {
-            const compositeName = dimension.composite ?? null;
-            if (!compositeName) return;
-            if (
-              !hasChainConnectorReference(compositeName) &&
-              !localConnectorKeys.has(normalizeKey(compositeName))
-            ) {
-              warnings.push(
-                `Dependency connector is not available on chain (sync required): ${compositeName} (dimension ${index + 1}).`,
-              );
-            }
-          });
-
-          const localConnectorDefs: StudioConnectorDef[] = [];
-          const localConnectorDefNames = new SvelteSet<string>();
-          localConnectorNodes.forEach((node) => {
-            const def = runtime.registry.connectors[resolveNodeName(node)];
-            if (!def || localConnectorDefNames.has(def.name)) return;
-            localConnectorDefNames.add(def.name);
-            localConnectorDefs.push(def);
-          });
-          if (localConnectorKeys.has(normalizeKey(runtime.rootConnector))) {
-            const rootConnectorDef = runtime.registry.connectors[runtime.rootConnector];
-            if (rootConnectorDef && !localConnectorDefNames.has(rootConnectorDef.name)) {
-              localConnectorDefNames.add(rootConnectorDef.name);
-              localConnectorDefs.push(rootConnectorDef);
-            }
-          }
-          warnings.push(...orderConnectorDefsForDeploy(localConnectorDefs).warnings);
-        }
-      } catch (error) {
-        warnings.push(error instanceof Error ? error.message : "Failed to build deploy preview.");
-      }
-    }
-
-    compiledTransformationsByTab = {
-      ...compiledTransformationsByTab,
-      [activeTabId]: compiled.registry,
-    };
-    compileWarningsByTab = { ...compileWarningsByTab, [activeTabId]: warnings };
-    compileTimestampByTab = { ...compileTimestampByTab, [activeTabId]: Date.now() };
-    return warnings;
-  };
-
   const deployActiveGraph = async () => {
-    if (!activeTab) return;
-    const positionedNodes = applyComputedRiPositionsToGraphNodes(nodes, edges);
-    nodes = materializeLockedReferencedRiAsRootStatic(positionedNodes);
-    chainDeployError = null;
-    chainDeployStatus = null;
-    await hydrateMissingAttachedNetworkConditions(nodes, edges);
-    const warnings = compileActiveGraph();
-    if (warnings && warnings.length) {
-      chainDeployError = warnings.join(" ");
-      return;
-    }
-
-    const compiled = compiledTransformationsByTab[activeTabId] ?? {};
-    const deployPlan = buildDeployPlanForGraph(nodes, edges, compiled);
-    if (!deployPlan.ok) {
-      const message = deployPlan.errors.join(" ");
-      chainDeployError = message;
-      compileWarningsByTab = {
-        ...compileWarningsByTab,
-        [activeTabId]: [message],
-      };
-      compileTimestampByTab = { ...compileTimestampByTab, [activeTabId]: Date.now() };
-      return;
-    }
-    const runtime = deployPlan.runtime;
-
-    const localConditionNodes = nodes.filter(
-      (node) => node.data.kind === "condition" && !node.data.fromNetwork,
-    );
-
-    deployTraceEntries = [];
+    if (!activeTab || activeTabReadOnly || chainDeployBusy || chainRunBusy) return;
     chainDeployBusy = true;
-    let publishedRootConnectorName: string | null = null;
+    const creationTabId = activeTabId;
     try {
-      publishedRootConnectorName = await publishDeployPlanToChain(deployPlan);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Chain deploy failed.";
-      chainDeployError = message;
-      chainDeployStatus = null;
-      compileWarningsByTab = {
-        ...compileWarningsByTab,
-        [activeTabId]: [message],
-      };
-      compileTimestampByTab = { ...compileTimestampByTab, [activeTabId]: Date.now() };
-      chainDeployBusy = false;
-      return;
-    }
-    chainDeployBusy = false;
-
-    nodes = nodes.map((node) => {
-      if (node.data.kind === "condition" && !node.data.fromNetwork) {
-        const conditionName = resolveNodeName(node);
-        return {
-          ...node,
-          data: {
-            ...node.data,
-            networkId: conditionName,
-            fromNetwork: true,
-          },
-        };
+      chainDeployError = null;
+      chainDeployStatus = "Creating on the simulation server...";
+      await ensureChainAuthForStudio();
+      const creationOwner = getCurrentStudioAuthorId();
+      for (const node of nodes.filter(
+        (node) => isConnectorKind(node.data.kind) && node.data.fromNetwork,
+      )) {
+        await syncConnectorTreeFromChain(resolveNodeName(node));
       }
-      if (node.data.kind !== "dimension") return node;
-      const next: TransformationInstance[] = (node.data.transformations ?? []).map((tx) =>
-        tx.status === "draft" ? { ...tx, status: "network" as const } : tx,
+      await hydrateMissingAttachedNetworkConditions(nodes, edges);
+      if (creationOwner !== getCurrentStudioAuthorId())
+        throw new Error("Account changed before local creation.");
+      if (activeTabId !== creationTabId) throw new Error("Studio tab changed before creation.");
+      nodes = materializeLockedReferencedRiAsRootStatic(
+        applyComputedRiPositionsToGraphNodes(nodes, edges),
       );
-      return { ...node, data: { ...node.data, transformations: next } };
-    });
-
-    if (Object.keys(compiled).length) {
-      deployedRegistry = {
-        ...deployedRegistry,
-        transformations: {
-          ...deployedRegistry.transformations,
-          ...compiled,
-        },
-      };
-
-      deployedLibrary = {
-        ...deployedLibrary,
-        transformations: Object.keys(compiled).reduce((items, name) => {
-          const item: LibraryItem = {
-            id: `transform-${slugify(name)}`,
-            name,
-            kind: "transformation",
-            authorId: getCurrentStudioAuthorId(),
-            summary: "Deployed from Studio.",
-          };
-          return upsertLibraryItem(items, item);
-        }, deployedLibrary.transformations),
-      };
-    }
-    if (Object.keys(compiled).length) {
-      const deployedDraftKeys = new SvelteSet(
-        Object.keys(compiled).map((name) => normalizeKey(name)),
-      );
+      const compiled = compileDraftTransformations(nodes);
+      if (compiled.warnings.length) throw new Error(compiled.warnings.join(" "));
+      const plan = buildDeployPlanForGraph(nodes, edges, compiled.registry);
+      if (!plan.ok) throw new Error(plan.errors.join(" "));
+      for (const step of plan.steps) {
+        chainDeployStatus = `Creating local ${step.kind} '${step.name}'...`;
+        await createEntityLocally(step.kind, step.name, step.body, (tracer) =>
+          createDeployStepDraft(step, tracer),
+        );
+      }
+      await loadLocalLibrary();
+      for (const step of plan.steps) {
+        if (step.kind === "connector") await hydrateDeployedConnectorFromChain(step.name);
+        else await hydrateDeployedRuntimeFromChain(step.kind, step.name);
+      }
+      if (creationOwner !== getCurrentStudioAuthorId())
+        throw new Error("Account changed after local creation.");
+      if (activeTabId === creationTabId && plan.rootConnectorName) {
+        saveActiveGraph();
+        tabs = tabs.map((tab) =>
+          tab.id === creationTabId ? { ...tab, particleId: plan.rootConnectorName! } : tab,
+        );
+        await ensureConnectorTreeTabGraph(creationTabId, plan.rootConnectorName);
+      }
       standaloneDraftTransformations = standaloneDraftTransformations.filter(
-        (item) => !deployedDraftKeys.has(normalizeKey(item.name)),
+        (item) =>
+          !plan.steps.some((step) => step.kind === "transformation" && step.name === item.name),
       );
+      deployTimestampByTab = { ...deployTimestampByTab, [creationTabId]: Date.now() };
+      explorerSource = "local";
+      chainDeployStatus =
+        "Created locally. Simulate on the server, or publish to the network when ready.";
+      persistStudioTabsSession();
+    } catch (error) {
+      chainDeployError = error instanceof Error ? error.message : "Local creation failed.";
+      chainDeployStatus = null;
+    } finally {
+      chainDeployBusy = false;
     }
-
-    if (localConditionNodes.length) {
-      const localConditionRuntime = collectLocalConditionRuntime(localConditionNodes);
-      deployedRegistry = {
-        ...deployedRegistry,
-        conditions: {
-          ...deployedRegistry.conditions,
-          ...localConditionRuntime,
-        },
-      };
-      deployedLibrary = {
-        ...deployedLibrary,
-        conditions: localConditionNodes.reduce((items, node) => {
-          const name = resolveNodeName(node);
-          return upsertLibraryItem(items, {
-            id: `condition-${name}`,
-            name: node.data.label,
-            kind: "condition",
-            authorId: getCurrentStudioAuthorId(),
-            summary: "Deployed from Studio.",
-          });
-        }, deployedLibrary.conditions),
-      };
-    }
-
-    if (runtime) {
-      const existingConnectorKeys = new SvelteSet([
-        ...Object.keys(deployedRegistry.connectors).map(normalizeKey),
-      ]);
-
-      const localConnectors = nodes.filter(
-        (node) => isConnectorKind(node.data.kind) && !node.data.fromNetwork,
-      );
-
-      localConnectors.forEach((node) => {
-        const connectorName = resolveNodeName(node);
-        const key = normalizeKey(connectorName);
-        if (existingConnectorKeys.has(key)) return;
-        const def = runtime.registry.connectors[connectorName];
-        if (!def) return;
-        const legacyFeatureDef = runtime.registry.features[connectorName];
-        const legacyParticleDef = runtime.registry.particles[connectorName];
-        deployedRegistry = {
-          ...deployedRegistry,
-          connectors: { ...deployedRegistry.connectors, [connectorName]: def },
-          features: legacyFeatureDef
-            ? { ...deployedRegistry.features, [connectorName]: legacyFeatureDef }
-            : deployedRegistry.features,
-          particles: {
-            ...deployedRegistry.particles,
-            ...(legacyParticleDef ? { [connectorName]: legacyParticleDef } : {}),
-          },
-        };
-        existingConnectorKeys.add(key);
-        deployedLibrary = {
-          ...deployedLibrary,
-          features: upsertLibraryItem(deployedLibrary.features, {
-            id: `feature-${connectorName}`,
-            name: node.data.label,
-            kind: "feature",
-            authorId: getCurrentStudioAuthorId(),
-            summary: "Deployed from Studio.",
-            dimensions:
-              node.data.dimensions ?? legacyFeatureDef?.dimensions.length ?? def.dimensions.length,
-          }),
-        };
-      });
-
-      nodes = nodes.map((node) => {
-        if (!isConnectorKind(node.data.kind)) return node;
-        if (node.data.fromNetwork) return node;
-        const featureName = resolveNodeName(node);
-        return {
-          ...node,
-          data: {
-            ...node.data,
-            networkId: featureName,
-            fromNetwork: true,
-          },
-        };
-      });
-
-      const existingParticleKeys = new SvelteSet([
-        ...Object.keys(deployedRegistry.particles).map(normalizeKey),
-      ]);
-
-      const rootName = runtime.rootConnector;
-      const rootKey = normalizeKey(rootName);
-      if (!existingParticleKeys.has(rootKey)) {
-        const rootConnectorDef = runtime.registry.connectors[rootName];
-        if (rootConnectorDef) {
-          const rootLegacyParticle = runtime.registry.particles[rootName];
-          deployedRegistry = {
-            ...deployedRegistry,
-            particles: rootLegacyParticle
-              ? { ...deployedRegistry.particles, [rootName]: rootLegacyParticle }
-              : deployedRegistry.particles,
-          };
-          storeParticleRIs(rootName);
-          const createdAt = Date.now();
-          deployedParticles = deployedParticles.some((item) => item.id === rootName)
-            ? deployedParticles
-            : [
-                ...deployedParticles,
-                {
-                  id: rootName,
-                  name: activeTab.label,
-                  summary: "Deployed from Studio.",
-                  authorId: getCurrentStudioAuthorId(),
-                  viewId: mockParticleViews[0]?.id ?? "midi",
-                  createdAt,
-                  createdLabel: "just now",
-                  ingredients: [],
-                  complexity: 1,
-                  transactionName: `${activeTab.label} PT`,
-                  dependencies: rootConnectorDef.dimensions
-                    .map((dimension) => dimension.composite ?? null)
-                    .filter((value): value is string => Boolean(value)),
-                },
-              ];
-        }
-      }
-
-      if (!activeTab.particleId) {
-        tabs = tabs.map((tab) => (tab.id === activeTabId ? { ...tab, particleId: rootName } : tab));
-      }
-    }
-
-    deployTimestampByTab = { ...deployTimestampByTab, [activeTabId]: Date.now() };
-    if (publishedRootConnectorName) {
-      chainDeployStatus = `Deployed connector '${publishedRootConnectorName}' to chain.`;
-      void hydrateDeployedConnectorFromChain(publishedRootConnectorName);
-    } else if (runtime) {
-      chainDeployStatus = "Deploy completed without publishing a connector.";
-    } else {
-      const deployedParts: string[] = [];
-      if (Object.keys(compiled).length) {
-        deployedParts.push(`${Object.keys(compiled).length} transformation(s)`);
-      }
-      if (localConditionNodes.length) {
-        deployedParts.push(`${localConditionNodes.length} condition(s)`);
-      }
-      chainDeployStatus = deployedParts.length
-        ? `Deployed ${deployedParts.join(" and ")} to chain.`
-        : "Deploy completed.";
-    }
-    Object.keys(compiled).forEach((name) => {
-      void hydrateDeployedRuntimeFromChain("transformation", name);
-    });
-    localConditionNodes.forEach((node) => {
-      void hydrateDeployedRuntimeFromChain("condition", resolveNodeName(node));
-    });
   };
 
   const closeTransformationEditor = () => {
@@ -5830,7 +5751,11 @@
     }
 
     const existing = findRegistryMatch("condition", trimmedName);
-    if (existing && !existing.id.startsWith("condition-quick-")) {
+    if (
+      existing &&
+      !existing.id.startsWith("condition-quick-") &&
+      !getPublicationStore().get("condition", trimmedName)
+    ) {
       conditionDraftError = `Condition ${trimmedName} already exists in network.`;
       return;
     }
@@ -5849,12 +5774,14 @@
     conditionEditorDeployBusy = true;
     conditionDraftError = null;
     chainDeployError = null;
-    chainDeployStatus = `Deploying condition ${trimmedName}...`;
+    chainDeployStatus = `Creating local condition ${trimmedName}...`;
 
     const requestBody = { name: trimmedName, sol_src: conditionDraftCode };
     try {
       await ensureChainAuthForStudio();
-      await publishConditionWithTrace(traceStudioChainPost, requestBody);
+      await createEntityLocally("condition", trimmedName, requestBody, (tracer) =>
+        publishConditionWithTrace(tracer, requestBody),
+      );
 
       const inferredArgsCount = Math.max(
         0,
@@ -5889,7 +5816,8 @@
           summary: "Deployed from Studio.",
         }),
       };
-      addItemToToolboxLibrary("condition", trimmedName);
+      await loadLocalLibrary();
+      explorerSource = "local";
       void hydrateDeployedRuntimeFromChain("condition", trimmedName);
 
       if (!nodeId && targetConnectorId) {
@@ -5901,7 +5829,7 @@
         });
       }
 
-      chainDeployStatus = `Deployed condition ${trimmedName}.`;
+      chainDeployStatus = `Created local condition ${trimmedName}.`;
       closeConditionEditor();
     } catch (error) {
       const message = extractChainDeployErrorMessage(error, "Failed to deploy condition.");
@@ -5950,7 +5878,11 @@
     }
 
     const existing = findRegistryMatch("transformation", trimmedName);
-    if (existing && !existing.id.startsWith("draft-transform-")) {
+    if (
+      existing &&
+      !existing.id.startsWith("draft-transform-") &&
+      !getPublicationStore().get("transformation", trimmedName)
+    ) {
       transformationDraftError = `Transformation ${trimmedName} already exists in network.`;
       return;
     }
@@ -5958,12 +5890,14 @@
     transformationEditorDeployBusy = true;
     transformationDraftError = null;
     chainDeployError = null;
-    chainDeployStatus = `Deploying transformation ${trimmedName}...`;
+    chainDeployStatus = `Creating local transformation ${trimmedName}...`;
 
     const requestBody = { name: trimmedName, sol_src: transformationDraftCode };
     try {
       await ensureChainAuthForStudio();
-      await publishTransformationWithTrace(traceStudioChainPost, requestBody);
+      await createEntityLocally("transformation", trimmedName, requestBody, (tracer) =>
+        publishTransformationWithTrace(tracer, requestBody),
+      );
 
       deployedRegistry = {
         ...deployedRegistry,
@@ -5985,7 +5919,8 @@
           summary: "Deployed from Studio.",
         }),
       };
-      addItemToToolboxLibrary("transformation", trimmedName);
+      await loadLocalLibrary();
+      explorerSource = "local";
 
       const dimensionId = transformationEditorDimensionId;
       if (dimensionId) {
@@ -6000,7 +5935,7 @@
         (item) => normalizeKey(item.name) !== normalizeKey(trimmedName),
       );
       void hydrateDeployedRuntimeFromChain("transformation", trimmedName);
-      chainDeployStatus = `Deployed transformation ${trimmedName}.`;
+      chainDeployStatus = `Created local transformation ${trimmedName}.`;
       closeTransformationEditor();
     } catch (error) {
       const message = extractChainDeployErrorMessage(error, "Failed to deploy transformation.");
@@ -6139,115 +6074,6 @@
       activeTabId = nextActive.id;
       loadTabGraph(nextActive.id);
     }
-  };
-
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const buildParticleGraph = (particleName: string) => {
-    const particle = deployedRegistry.particles[particleName];
-    if (!particle) return { nodes: [], edges: [] };
-
-    const feature = deployedRegistry.features[particle.featureName];
-    if (!feature) return { nodes: [], edges: [] };
-
-    const graphNodes: StudioNode[] = [];
-    const graphEdges: Edge[] = [];
-
-    const featureItem = networkLibrary.feature.find(
-      (item) => getLibraryRegistryName(item) === feature.name,
-    );
-    const featureLabel = featureItem?.name ?? feature.name;
-    const featureId = `feature-${feature.name}-${crypto.randomUUID()}`;
-    const featureX = 360;
-    const featureY = 80;
-    graphNodes.push({
-      id: featureId,
-      type: "connector",
-      draggable: false,
-      position: { x: featureX, y: featureY },
-      data: {
-        label: featureLabel,
-        kind: "connector",
-        dimensions: feature.dimensions.length,
-        connectorRows: feature.dimensions.map((dimension, dimIndex) => ({
-          dimension: dimIndex + 1,
-          transformations: dimension.transformations.map((transformation) =>
-            formatTransformationPreviewLabel(transformation.name, transformation.args),
-          ),
-        })),
-        conditionLabel: particle.conditionName ? particle.conditionName : null,
-        conditionArgs: particle.conditionName ? [...(particle.conditionArgs ?? [])] : [],
-        sourceId: feature.name,
-        networkId: feature.name,
-        fromNetwork: true,
-      },
-    });
-
-    const dimensionSpacingX = 200;
-    const dimensionRowY = featureY + 160;
-    const dimensionStartX = featureX - ((feature.dimensions.length - 1) * dimensionSpacingX) / 2;
-    const compositeRowY = dimensionRowY + 160;
-
-    feature.dimensions.forEach((dimension, dimIndex) => {
-      const dimensionId = `dimension-${feature.name}-${dimIndex}-${crypto.randomUUID()}`;
-      const columnX = dimensionStartX + dimIndex * dimensionSpacingX;
-      const riConfig = deployedParticleRIs[particleName]?.[dimIndex];
-      graphNodes.push({
-        id: dimensionId,
-        type: "dimension",
-        hidden: true,
-        draggable: false,
-        position: { x: columnX, y: dimensionRowY },
-        data: {
-          label: `#${dimIndex + 1}`,
-          kind: "dimension",
-          parentFeatureId: featureId,
-          dimensionIndex: dimIndex,
-          transformations: dimension.transformations.map((transformation) =>
-            createTransformationInstance(transformation.name, transformation.args, "network"),
-          ),
-          fromNetwork: true,
-          riStart: riConfig?.start ?? 0,
-          riShift: riConfig?.shift ?? 0,
-          riLocked: riConfig?.locked ?? false,
-        },
-      });
-
-      graphEdges.push({
-        id: `edge-${featureId}-${dimensionId}`,
-        source: featureId,
-        sourceHandle: `dim-${dimIndex}`,
-        target: dimensionId,
-        targetHandle: "in",
-      });
-
-      const compositeName = particle.composites[dimIndex];
-      if (compositeName) {
-        const compositeId = `particle-${compositeName}-${crypto.randomUUID()}`;
-        const compositeItem = networkParticles.find((item) => item.id === compositeName);
-        graphNodes.push({
-          id: compositeId,
-          type: "particle",
-          draggable: false,
-          position: { x: columnX, y: compositeRowY },
-          data: {
-            label: compositeItem?.name ?? compositeName,
-            kind: "particle",
-            particleId: compositeName,
-            networkId: compositeName,
-            fromNetwork: true,
-          },
-        });
-        graphEdges.push({
-          id: `edge-${featureId}-dim-${dimIndex}-${compositeId}`,
-          source: featureId,
-          sourceHandle: `dim-${dimIndex}`,
-          target: compositeId,
-          targetHandle: "in",
-        });
-      }
-    });
-
-    return { nodes: graphNodes, edges: graphEdges };
   };
 
   const getConnectorLibraryLabel = (connectorName: string) =>
@@ -6829,22 +6655,6 @@
     });
   };
 
-  const storeParticleRIs = (particleName: string) => {
-    const rootFeatureNode = nodes.find((node) => isConnectorKind(node.data.kind));
-    if (!rootFeatureNode) return;
-    const dims = getDimensionNodesForFeature(rootFeatureNode.id).sort(
-      (a, b) => (a.data.dimensionIndex ?? 0) - (b.data.dimensionIndex ?? 0),
-    );
-    deployedParticleRIs = {
-      ...deployedParticleRIs,
-      [particleName]: dims.map((dimension) => ({
-        start: toInt(dimension.data.riStart) ?? 0,
-        shift: toInt(dimension.data.riShift) ?? 0,
-        locked: Boolean(dimension.data.riLocked),
-      })),
-    };
-  };
-
   const createDimensionNode = (
     feature: StudioNode,
     dimensionIndex: number,
@@ -7133,17 +6943,21 @@
 
     const source: LibraryItem[] = networkLibrary[kind] ?? [];
 
+    if (explorerSource === "local") return localLibrary[kind];
+    const publishedSource = source.filter(
+      (item) =>
+        isPublishedChainAddress(item.chainAddress) || networkFeedLibraryIds[kind].includes(item.id),
+    );
     if (explorerSource === "toolbox") {
       return listToolboxLibraryItemsForKind({
         kind,
-        source,
+        source: publishedSource,
         toolboxLibrary,
       });
     }
 
     if (explorerSource === "network") {
-      const networkIds = new SvelteSet(networkFeedLibraryIds[kind] ?? []);
-      return source.filter((item) => networkIds.has(item.id));
+      return publishedSource;
     }
 
     return source;
@@ -8496,7 +8310,11 @@
               >
                 <span class="tab-label">{tab.label}</span>
                 <span class={`tab-status ${tab.particleId ? "is-network" : "is-draft"}`}>
-                  {tab.particleId ? "Network (view-only)" : "in-progress"}
+                  {tab.particleId
+                    ? localLibrary.feature.some((item) => item.name === tab.particleId)
+                      ? "Local (view-only)"
+                      : "Network (view-only)"
+                    : "in-progress"}
                 </span>
               </button>
             {/if}
@@ -8603,13 +8421,13 @@
         <div class="chain-status-strip" role="status" aria-live="polite">
           {#if chainDeployStatus}
             <div class="chain-status-chip is-success">
-              <span>Deploy</span>
+              <span>Status</span>
               <strong>{chainDeployStatus}</strong>
             </div>
           {/if}
           {#if chainDeployError}
             <div class="chain-status-chip is-error">
-              <span>Deploy error</span>
+              <span>Error</span>
               <strong>{chainDeployError}</strong>
             </div>
           {/if}
@@ -8642,6 +8460,14 @@
           >
             Network
           </button>
+          <button
+            type="button"
+            class={`source-tab ${explorerSource === "local" ? "is-active" : ""}`}
+            onclick={() => {
+              explorerSource = "local";
+              void loadLocalLibrary();
+            }}>Local</button
+          >
           <button
             type="button"
             class={`source-tab ${explorerSource === "toolbox" ? "is-active" : ""}`}
@@ -8689,7 +8515,18 @@
             </div>
           </div>
         {/if}
-        {#if explorerSource === "network" || explorerSource === "toolbox"}
+        {#if explorerSource === "local"}
+          <div class="chain-status-strip chain-status-strip--sidebar" role="status">
+            <button
+              type="button"
+              class="runner-action"
+              disabled={localLibraryBusy}
+              onclick={() => void loadLocalLibrary()}>Refresh Local</button
+            >
+            {#if localLibraryError}<span>{localLibraryError}</span>{/if}
+          </div>
+        {/if}
+        {#if explorerSource === "network" || explorerSource === "toolbox" || explorerSource === "local"}
           <div class="left-tabs">
             <button
               type="button"
@@ -8752,11 +8589,15 @@
               title="Connectors"
               items={libraryItems}
               toolboxIds={savedToolboxIdsForLibraryTab}
-              loading={(explorerSource === "network" && chainSyncBusy) ||
+              loading={(explorerSource === "local" && localLibraryBusy) ||
+                (explorerSource === "network" && chainSyncBusy) ||
                 (explorerSource === "toolbox" && toolboxLoadBusy)}
               usersById={studioUsersById}
               onAdd={(item) => void addLibraryNode(item, null)}
-              onToolbox={toggleLibraryToolbox}
+              onToolbox={explorerSource === "local" ? undefined : toggleLibraryToolbox}
+              local={explorerSource === "local"}
+              onPublish={explorerSource === "local" ? publishLocalLibraryItem : undefined}
+              publishDisabled={chainDeployBusy || chainRunBusy}
               onOpen={(item) => void openConnectorTab(getLibraryRegistryName(item))}
               onDragStart={handleLibraryDragStart}
               draggable
@@ -8780,11 +8621,15 @@
               title="Transformations"
               items={libraryItems}
               toolboxIds={savedToolboxIdsForLibraryTab}
-              loading={(explorerSource === "network" && chainSyncBusy) ||
+              loading={(explorerSource === "local" && localLibraryBusy) ||
+                (explorerSource === "network" && chainSyncBusy) ||
                 (explorerSource === "toolbox" && toolboxLoadBusy)}
               usersById={studioUsersById}
               onAdd={(item) => void addLibraryNode(item, null)}
-              onToolbox={toggleLibraryToolbox}
+              onToolbox={explorerSource === "local" ? undefined : toggleLibraryToolbox}
+              local={explorerSource === "local"}
+              onPublish={explorerSource === "local" ? publishLocalLibraryItem : undefined}
+              publishDisabled={chainDeployBusy || chainRunBusy}
               onDragStart={handleLibraryDragStart}
               draggable
               showHeader={false}
@@ -8807,11 +8652,15 @@
               title="Conditions"
               items={libraryItems}
               toolboxIds={savedToolboxIdsForLibraryTab}
-              loading={(explorerSource === "network" && chainSyncBusy) ||
+              loading={(explorerSource === "local" && localLibraryBusy) ||
+                (explorerSource === "network" && chainSyncBusy) ||
                 (explorerSource === "toolbox" && toolboxLoadBusy)}
               usersById={studioUsersById}
               onAdd={(item) => void addLibraryNode(item, null)}
-              onToolbox={toggleLibraryToolbox}
+              onToolbox={explorerSource === "local" ? undefined : toggleLibraryToolbox}
+              local={explorerSource === "local"}
+              onPublish={explorerSource === "local" ? publishLocalLibraryItem : undefined}
+              publishDisabled={chainDeployBusy || chainRunBusy}
               onDragStart={handleLibraryDragStart}
               draggable
               showHeader={false}
@@ -9289,7 +9138,7 @@
 
   {#if rightMode === "runner"}
     <DockPanel
-      title="Run + Deploy"
+      title="Run + Publish"
       position="right"
       resizable
       sizePx={rightPanelWidthPx}
@@ -9337,36 +9186,59 @@
         </div>
         <div class="runner-panel">
           <div class="runner-controls">
-            <label class="run-label" for="run-samples-panel">N</label>
-            <input
-              id="run-samples-panel"
-              class="run-input"
-              type="number"
-              min="1"
-              inputmode="numeric"
-              value={runSamplesCount}
-              oninput={(event) => {
-                const target = event.target as HTMLInputElement | null;
-                const next = Number(target?.value ?? 1);
-                runSamplesCount = Number.isFinite(next) ? Math.max(1, Math.trunc(next)) : 1;
-              }}
-            />
-            <button
-              type="button"
-              class="runner-action"
-              disabled={chainRunBusy || chainDeployBusy}
-              onclick={executeActiveGraph}
-            >
-              {chainRunBusy ? "Running..." : "Run"}
-            </button>
-            <button
-              type="button"
-              class="runner-action"
-              disabled={chainDeployBusy || chainSyncBusy || chainRunBusy || activeTabReadOnly}
-              onclick={deployActiveGraph}
-            >
-              {chainDeployBusy ? "Deploying..." : "Deploy"}
-            </button>
+            <div class="runner-settings">
+              <label class="run-label" for="run-samples-panel">N</label>
+              <input
+                id="run-samples-panel"
+                class="run-input"
+                type="number"
+                min="1"
+                inputmode="numeric"
+                value={runSamplesCount}
+                oninput={(event) => {
+                  const target = event.target as HTMLInputElement | null;
+                  const next = Number(target?.value ?? 1);
+                  runSamplesCount = Number.isFinite(next) ? Math.max(1, Math.trunc(next)) : 1;
+                }}
+              />
+            </div>
+            <div class="runner-action-row">
+              <button
+                type="button"
+                class="runner-action"
+                disabled={chainDeployBusy || chainSyncBusy || chainRunBusy || activeTabReadOnly}
+                onclick={deployActiveGraph}
+              >
+                {chainDeployBusy ? "Creating..." : "Create locally"}
+              </button>
+              <button
+                type="button"
+                class="runner-action"
+                disabled={chainRunBusy || chainDeployBusy || !activeRootIsLocal}
+                title="Run the created Local connector and its local/network dependencies on the server without gas."
+                onclick={() => executeActiveGraph("simulate")}
+              >
+                Simulate
+              </button>
+            </div>
+            <div class="runner-action-row">
+              <button
+                type="button"
+                class="runner-action"
+                disabled={chainDeployBusy || chainRunBusy || !activeRootIsLocal}
+                title="Publish local dependencies and this connector to the network. Your wallet pays gas."
+                onclick={publishActiveGraph}>Publish to the Network</button
+              >
+              <button
+                type="button"
+                class="runner-action"
+                disabled={chainRunBusy || chainDeployBusy || !activeRootIsPublished}
+                title="Read the published connector on the network at a recorded block."
+                onclick={() => executeActiveGraph("execute")}
+              >
+                {chainRunBusy ? "Running..." : "Execute on the Network"}
+              </button>
+            </div>
           </div>
           {#if chainDeployStatus}
             <div class="runner-status is-success">{chainDeployStatus}</div>
@@ -9374,8 +9246,60 @@
           {#if chainDeployError}
             <div class="runner-status is-error">{chainDeployError}</div>
           {/if}
+          {#if publicationRecords.some((record) => record.stage === "mined" && (record.tx_hash || record.address))}
+            <div class="runner-publications" aria-label="Published transactions">
+              <strong>Published on the Network</strong>
+              {#each [...publicationRecords]
+                .reverse()
+                .filter((record) => record.stage === "mined" && (record.tx_hash || record.address)) as record (`${record.kind}:${record.name}`)}
+                <div class="runner-publication">
+                  <span>{record.kind} {record.name}</span>
+                  {#if record.tx_hash}
+                    <div class="runner-publication-hash">Transaction: {record.tx_hash}</div>
+                    {#if publicationTransactionUrl(record)}
+                      <a
+                        href={publicationTransactionUrl(record) ?? ""}
+                        target="_blank"
+                        rel="external noopener noreferrer">View transaction ↗</a
+                      >
+                    {/if}
+                  {/if}
+                  {#if record.address}
+                    <div class="runner-publication-hash">Address: {record.address}</div>
+                    {#if publicationAddressUrl(record)}
+                      <a
+                        href={publicationAddressUrl(record) ?? ""}
+                        target="_blank"
+                        rel="external noopener noreferrer">View address ↗</a
+                      >
+                    {/if}
+                  {/if}
+                </div>
+              {/each}
+            </div>
+          {/if}
+          {#each publicationRecords.filter((record) => record.stage === "pending" || record.stage === "sending") as record (`${record.kind}:${record.name}`)}
+            <div class="runner-status">
+              <strong>{record.name}: {record.stage}</strong>
+              {#if record.tx_hash}<div style="overflow-wrap: anywhere">{record.tx_hash}</div>{/if}
+              {#if record.stage === "sending" || record.stage === "pending"}
+                <label
+                  >Transaction hash from wallet (including a replacement) <input
+                    aria-label="Recovery transaction hash"
+                    bind:value={recoveryTxHash}
+                    placeholder="0x..."
+                  /></label
+                >
+                <button type="button" onclick={() => recoverWalletTransaction(record)}
+                  >Recover / replace transaction hash</button
+                >
+              {/if}
+            </div>
+          {/each}
           <div class="inspector-section">
-            <div class="inspector-section-title">Network run output</div>
+            <div class="inspector-section-title">
+              Run result (chain provenance or local simulation)
+            </div>
             {#if activeChainRunTimestamp}
               <div class="inspector-row">
                 <span>Last run</span>
@@ -10088,7 +10012,7 @@
                 <pre class="inspector-code-preview">{chainApiProtocolJson}</pre>
               {:else}
                 <div class="inspector-hint">
-                  Edit computed full-tree JSON to update the flow. Read-only (on-chain) connectors
+                  Edit computed full-tree JSON to update the flow. Created (read-only) connectors
                   are preserved automatically.
                 </div>
                 <div class="inspector-api-controls">
@@ -10168,7 +10092,7 @@
               {/if}
             </div>
             <div class="inspector-section">
-              <div class="inspector-section-title">Deploy trace</div>
+              <div class="inspector-section-title">Creation / publication trace</div>
               <div class="inspector-hint">
                 Endpoint-by-endpoint responses from the latest deploy attempt.
               </div>
@@ -10350,10 +10274,10 @@
     <div class="confirm-overlay" role="dialog" aria-modal="true">
       <div class="editor-modal">
         <div class="editor-header">
-          <div class="editor-title">Publish transformation</div>
+          <div class="editor-title">Create transformation</div>
           <div class="editor-header-actions">
             <span class="editor-status">
-              {transformationEditorStatus === "network" ? "Published" : "Unpublished"}
+              {transformationEditorStatus === "network" ? "Created (view-only)" : "Not created"}
             </span>
             <button type="button" class="editor-fork" onclick={toggleTransformationAiAssistant}>
               AI assistant
@@ -10364,12 +10288,12 @@
           </div>
         </div>
         <div class="editor-hint">
-          Deploy-oriented flow: this publishes directly to chain and adds the transformation to your
-          toolbox.
+          Create this transformation on the simulation server without gas. Publish it separately
+          from Local.
         </div>
         {#if transformationEditorDimensionId}
           <div class="editor-hint">
-            After publish, it will be attached to the selected dimension.
+            After creation, it will be attached to the selected dimension.
           </div>
         {/if}
         <div class="editor-fields">
@@ -10474,7 +10398,7 @@
             disabled={transformationEditorReadOnly || transformationEditorDeployBusy}
             onclick={saveTransformationEditor}
           >
-            {transformationEditorDeployBusy ? "Publishing..." : "Publish to chain"}
+            {transformationEditorDeployBusy ? "Creating..." : "Create locally"}
           </button>
         </div>
       </div>
@@ -10485,10 +10409,10 @@
     <div class="confirm-overlay" role="dialog" aria-modal="true">
       <div class="editor-modal">
         <div class="editor-header">
-          <div class="editor-title">Publish condition</div>
+          <div class="editor-title">Create condition</div>
           <div class="editor-header-actions">
             <span class="editor-status"
-              >{conditionEditorStatus === "network" ? "Published" : "Unpublished"}</span
+              >{conditionEditorStatus === "network" ? "Created (view-only)" : "Not created"}</span
             >
             <button type="button" class="editor-fork" onclick={toggleConditionAiAssistant}>
               AI assistant
@@ -10497,14 +10421,14 @@
           </div>
         </div>
         <div class="editor-hint">
-          Deploy-oriented flow: this publishes directly to chain and adds the condition to your
-          toolbox.
+          Create this condition on the simulation server without gas. Publish it separately from
+          Local.
         </div>
         {#if conditionEditorTargetConnectorId}
           {@const targetConnectorLabel =
             nodesById[conditionEditorTargetConnectorId]?.data.label ?? "selected connector"}
           <div class="editor-hint">
-            After publish, it will be attached to <code>{targetConnectorLabel}</code>.
+            After creation, it will be attached to <code>{targetConnectorLabel}</code>.
           </div>
         {/if}
         <div class="editor-fields">
@@ -10609,7 +10533,7 @@
             disabled={conditionEditorReadOnly || conditionEditorDeployBusy}
             onclick={saveConditionEditor}
           >
-            {conditionEditorDeployBusy ? "Publishing..." : "Publish to chain"}
+            {conditionEditorDeployBusy ? "Creating..." : "Create locally"}
           </button>
         </div>
       </div>
@@ -11538,17 +11462,43 @@
   }
 
   .runner-panel {
-    @apply mt-3 flex min-h-0 flex-1 flex-col gap-3;
+    @apply mt-3 flex min-h-0 min-w-0 flex-1 flex-col gap-3;
   }
 
   .runner-controls {
-    @apply flex items-center gap-2 rounded-md border border-white/10 bg-black/70 p-2;
+    @apply flex flex-col gap-2 rounded-md border border-white/10 bg-black/70 p-2;
+  }
+
+  .runner-settings {
+    @apply flex items-center gap-2;
+  }
+
+  .runner-action-row {
+    @apply grid grid-cols-2 gap-2;
   }
 
   .runner-action {
-    @apply inline-flex items-center justify-center rounded-md border border-white/20 bg-white/5
+    @apply inline-flex min-w-0 items-center justify-center rounded-md border border-white/20 bg-white/5
       px-2.5 py-1 text-[0.65rem] uppercase tracking-[0.15em] text-white/80 transition
       hover:border-white/35 hover:bg-white/10 hover:text-white disabled:opacity-50 disabled:cursor-not-allowed;
+    line-height: 1.25;
+    text-align: center;
+  }
+
+  .runner-publications {
+    @apply flex max-h-48 flex-col gap-2 overflow-auto rounded-md border border-white/10 bg-black/70 p-2 text-[0.7rem];
+  }
+
+  .runner-publication {
+    @apply border-t border-white/10 pt-2;
+  }
+
+  .runner-publication-hash {
+    overflow-wrap: anywhere;
+  }
+
+  .runner-publication a {
+    @apply text-emerald-200 underline underline-offset-2 hover:text-emerald-100;
   }
 
   .runner-status {
@@ -11571,7 +11521,7 @@
   }
 
   .right-panel-content {
-    @apply h-full flex flex-col;
+    @apply h-full min-w-0 flex flex-col;
   }
 
   .right-panel-controls {

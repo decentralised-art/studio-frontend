@@ -9,9 +9,12 @@
     inToolbox = false,
     selected = false,
     draggable = false,
+    local = false,
+    publishDisabled = false,
     onAdd,
     onToolbox,
     onOpen,
+    onPublish,
     onDragStart,
   }: {
     item: LibraryItem;
@@ -19,9 +22,12 @@
     inToolbox?: boolean;
     selected?: boolean;
     draggable?: boolean;
+    local?: boolean;
+    publishDisabled?: boolean;
     onAdd?: (item: LibraryItem) => void;
     onToolbox?: (item: LibraryItem) => void;
     onOpen?: (item: LibraryItem) => void;
+    onPublish?: (item: LibraryItem) => void;
     onDragStart?: (event: DragEvent, item: LibraryItem) => void;
   } = $props();
 
@@ -38,6 +44,11 @@
   const handleOpen = (event: MouseEvent) => {
     event.stopPropagation();
     onOpen?.(item);
+  };
+
+  const handlePublish = (event: MouseEvent) => {
+    event.stopPropagation();
+    onPublish?.(item);
   };
 
   const handleDragStart = (event: DragEvent) => {
@@ -87,7 +98,7 @@
   {draggable}
 >
   <div class="card-content">
-    {#if item.kind === "feature"}
+    {#if item.kind === "feature" && !local}
       <a class="item-name item-link" href={resolve("/c/[id]", { id: registryName })}>
         {item.name}
       </a>
@@ -109,18 +120,20 @@
       </a>
 
       <div class="card-actions">
-        <button
-          class={`icon-button ${inToolbox ? "is-saved" : ""}`}
-          type="button"
-          title={inToolbox ? "Remove from toolbox" : "Add to toolbox"}
-          onclick={handleToolbox}
-        >
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path
-              d="M19.5 12.572 12 20l-7.5-7.428a4.5 4.5 0 0 1 6.364-6.364L12 7.5l1.136-1.292a4.5 4.5 0 0 1 6.364 6.364Z"
-            ></path>
-          </svg>
-        </button>
+        {#if onToolbox}
+          <button
+            class={`icon-button ${inToolbox ? "is-saved" : ""}`}
+            type="button"
+            title={inToolbox ? "Remove from toolbox" : "Add to toolbox"}
+            onclick={handleToolbox}
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                d="M19.5 12.572 12 20l-7.5-7.428a4.5 4.5 0 0 1 6.364-6.364L12 7.5l1.136-1.292a4.5 4.5 0 0 1 6.364 6.364Z"
+              ></path>
+            </svg>
+          </button>
+        {/if}
         {#if item.kind === "feature"}
           <button class="icon-button" type="button" title="Open in Studio" onclick={handleOpen}>
             <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -138,6 +151,16 @@
         </button>
       </div>
     </div>
+    {#if onPublish}
+      <button
+        class="publish-button"
+        type="button"
+        disabled={publishDisabled}
+        onclick={handlePublish}
+      >
+        Publish to the Network
+      </button>
+    {/if}
   </div>
 </div>
 
@@ -190,6 +213,12 @@
 
   .card-actions {
     @apply flex shrink-0 items-center gap-1;
+  }
+
+  .publish-button {
+    @apply self-start rounded-md border border-emerald-300/30 bg-emerald-400/10 px-2 py-1
+      text-[0.62rem] text-emerald-200 hover:border-emerald-300/60
+      disabled:cursor-not-allowed disabled:opacity-50;
   }
 
   .icon-button {

@@ -173,7 +173,7 @@
     <div class="connector-title-row">
       <div class="connector-title">{connectorTitle}</div>
       {#if readOnly}
-        <span class="connector-readonly-chip">On-chain (read-only)</span>
+        <span class="connector-readonly-chip">Created (read-only)</span>
       {/if}
       {#if riLocked}
         <span class="connector-static-ri-chip">Static RI</span>

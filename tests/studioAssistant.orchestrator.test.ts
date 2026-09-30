@@ -71,7 +71,7 @@ describe("studio assistant orchestrator helpers", () => {
       parseAssistantToolCall(
         {
           id: "call-2",
-          tool_name: "deploy_connector",
+          tool_name: "publish_connector",
           arguments: {},
         },
         1,
@@ -81,7 +81,7 @@ describe("studio assistant orchestrator helpers", () => {
     const summary = summarizeAssistantToolCalls(calls);
 
     expect(summary).toContain("1. Inspect current flow");
-    expect(summary).toContain("2. Deploy active graph");
+    expect(summary).toContain("2. Publish active connector to Sepolia (wallet gas)");
   });
 
   it("builds corrective repair prompt with failed execution details", () => {

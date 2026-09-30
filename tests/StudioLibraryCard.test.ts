@@ -1,6 +1,6 @@
 import "@testing-library/jest-dom/vitest";
-import { render } from "@testing-library/svelte";
-import { describe, expect, it } from "vitest";
+import { fireEvent, render } from "@testing-library/svelte";
+import { describe, expect, it, vi } from "vitest";
 
 import StudioLibraryCard from "../src/lib/components/studio/StudioLibraryCard.svelte";
 import type { LibraryItem } from "../src/lib/data/studioLibrary";
@@ -63,5 +63,36 @@ describe("StudioLibraryCard", () => {
     });
     expect(authorLink).toHaveAttribute("title", "0xb584a15f38c2014cff54fdb1b417428b51999276");
     expect(authorLink).toHaveAttribute("href", "/u/0xb584a15f38c2014cff54fdb1b417428b51999276");
+  });
+
+  it("offers Local publication without a public connector link or toolbox action", async () => {
+    const onPublish = vi.fn();
+    const onOpen = vi.fn();
+    const { getByRole, queryByRole, queryByTitle, rerender } = render(StudioLibraryCard, {
+      props: { item: connectorItem, author: author({}), local: true, onPublish, onOpen },
+    });
+    expect(queryByRole("link", { name: "test_connector" })).not.toBeInTheDocument();
+    expect(queryByTitle("Add to toolbox")).not.toBeInTheDocument();
+    await fireEvent.click(getByRole("button", { name: "Publish to the Network" }));
+    expect(onPublish).toHaveBeenCalledWith(connectorItem);
+    await fireEvent.click(getByRole("button", { name: "Open in Studio" }));
+    expect(onOpen).toHaveBeenCalledWith(connectorItem);
+
+    await rerender({
+      item: connectorItem,
+      author: author({}),
+      local: true,
+      onPublish,
+      publishDisabled: true,
+    });
+    expect(getByRole("button", { name: "Publish to the Network" })).toBeDisabled();
+  });
+
+  it("only exposes publication and toolbox actions when their callbacks are supplied", () => {
+    const { getByTitle, queryByRole } = render(StudioLibraryCard, {
+      props: { item: connectorItem, author: author({}), onToolbox: vi.fn() },
+    });
+    expect(getByTitle("Add to toolbox")).toBeInTheDocument();
+    expect(queryByRole("button", { name: "Publish to the Network" })).not.toBeInTheDocument();
   });
 });

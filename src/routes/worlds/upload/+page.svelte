@@ -209,8 +209,12 @@
         <div class="empty-preview">
           <span>Bundle Contract</span>
           <p>
-            The ZIP must contain a root <code>world-manifest.json</code> and the iframe entry file referenced
-            by that manifest.
+            The ZIP must contain a root <code>world-manifest.json</code> and the iframe entry file
+            referenced by that manifest. SDK execute returns
+            <code>{`{block_number, block_hash, runner, particles}`}</code>; read
+            <code>result.particles</code> for the output streams. SDK simulate returns local output
+            streams and remains a separate operation under
+            <code>dcn.execute</code> permission.
           </p>
         </div>
       {/if}

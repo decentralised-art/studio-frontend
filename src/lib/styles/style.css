@@ -654,6 +654,20 @@
   color: var(--color-accent-strong) !important;
 }
 
+:root[data-theme="light"] .studio .runner-publications {
+  background: var(--surface-card) !important;
+  border-color: var(--border-subtle) !important;
+  color: var(--text-primary) !important;
+}
+
+:root[data-theme="light"] .studio .runner-publication {
+  border-color: var(--border-subtle) !important;
+}
+
+:root[data-theme="light"] .studio .runner-publication a {
+  color: var(--color-accent-strong) !important;
+}
+
 :root[data-theme="light"]
   :where(
     .plugins-feedback.is-error,

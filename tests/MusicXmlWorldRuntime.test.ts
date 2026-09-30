@@ -1,5 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/svelte";
+import { DcnClient } from "dcn";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { MUSICXML_SCORE_WORLD, MUSICXML_SCORE_WORLD_ID } from "../src/lib/worlds/registry";
@@ -121,6 +122,7 @@ const postWorldState = (payload: WorldRuntimeInput) => {
 describe("MusicXML world runtime", () => {
   afterEach(() => {
     cleanup();
+    vi.restoreAllMocks();
   });
 
   beforeEach(() => {
@@ -249,6 +251,56 @@ describe("MusicXML world runtime", () => {
     expect(iframe).toHaveAttribute("sandbox", "allow-scripts allow-downloads");
     expect(iframe).not.toHaveAttribute("sandbox", expect.stringContaining("allow-same-origin"));
   });
+
+  it.each(["execute", "simulate"] as const)(
+    "returns the current SDK %s result to uploaded worlds",
+    async (method) => {
+      const particles = [{ path: "/pitch:0", data: [60, 64, 67] }];
+      const envelope = {
+        block_number: 123,
+        block_hash: `0x${"ab".repeat(32)}`,
+        runner: `0x${"12".repeat(20)}`,
+        particles,
+      };
+      const execute = vi.spyOn(DcnClient.prototype, "execute").mockResolvedValue(envelope);
+      const simulate = vi.spyOn(DcnClient.prototype, "simulate").mockResolvedValue(particles);
+      const WorldFrame = await loadWorldFrame();
+      render(WorldFrame, { props: { world: backendWorld, input: null } });
+      const iframe = screen.getByTitle(backendWorld.name) as HTMLIFrameElement;
+      await waitFor(() => expect(iframe.src).toContain("dcnWorldChannel="));
+      const channelToken = new URL(iframe.src).searchParams.get("dcnWorldChannel");
+      const postMessage = vi.spyOn(iframe.contentWindow!, "postMessage");
+      const send = (data: Record<string, unknown>) =>
+        window.dispatchEvent(
+          new MessageEvent("message", {
+            origin: "null",
+            source: iframe.contentWindow,
+            data: { worldId: backendWorld.id, channelToken, ...data },
+          }),
+        );
+      send({ type: "dcn:world-ready", protocolVersion: WORLD_PROTOCOL_VERSION });
+      send({
+        type: "dcn:world-rpc-request",
+        requestId: "run-1",
+        method,
+        params: { connectorName: "pitch", particlesCount: 3 },
+      });
+
+      await waitFor(() =>
+        expect(postMessage).toHaveBeenCalledWith(
+          expect.objectContaining({
+            type: "dcn:world-rpc-response",
+            requestId: "run-1",
+            ok: true,
+            result: method === "execute" ? envelope : particles,
+          }),
+          "*",
+        ),
+      );
+      expect(method === "execute" ? execute : simulate).toHaveBeenCalledOnce();
+      expect(method === "execute" ? simulate : execute).not.toHaveBeenCalled();
+    },
+  );
 
   it("posts updated world input into an already loaded iframe", async () => {
     const WorldFrame = await loadWorldFrame();

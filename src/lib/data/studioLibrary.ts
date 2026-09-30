@@ -9,6 +9,8 @@ export type LibraryItem = {
   name: string;
   kind: LibraryKind;
   authorId: string;
+  chainAddress?: string;
+  ownerAddress?: string;
   summary?: string;
   runtimeSnippet?: string;
   viewId?: ParticleView["id"];

@@ -1,3 +1,5 @@
+import type { ChainExecutionProvenance } from "$lib/chain/registryApi";
+
 export const WORLD_PROTOCOL_VERSION = 1;
 
 export const WORLD_STATE_MESSAGE_TYPE = "hypermusic:world-state";
@@ -45,6 +47,8 @@ export type WorldRuntimeInput = {
   selectedConnectorContextNames?: string[];
   selectedConnectorContextPathPrefixes?: string[];
   connectorGraph?: unknown;
+  executionProvenance?: ChainExecutionProvenance;
+  executionMode?: "execute" | "simulate";
   executeOutput?: Array<{
     path: string;
     data: number[];

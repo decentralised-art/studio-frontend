@@ -4,7 +4,7 @@ import type {
   AssistantExecutionResult,
   AssistantToolCall,
   ConnectConnectorsArgs,
-  DeployConnectorArgs,
+  CreateConnectorArgs,
   DisconnectConnectorsArgs,
   InspectFlowArgs,
   RemoveTransformationFromDimensionArgs,
@@ -52,7 +52,8 @@ export type AssistantRuntimeBridge = {
     args: RemoveTransformationFromDimensionArgs,
   ) => Promise<AssistantRuntimeActionResult> | AssistantRuntimeActionResult;
   runConnector: (args: RunConnectorArgs) => Promise<AssistantRuntimeActionResult>;
-  deployConnector: (args: DeployConnectorArgs) => Promise<AssistantRuntimeActionResult>;
+  createConnector: (args: CreateConnectorArgs) => Promise<AssistantRuntimeActionResult>;
+  publishConnector: (args: CreateConnectorArgs) => Promise<AssistantRuntimeActionResult>;
 };
 
 const toErrorMessage = (error: unknown): string => {
@@ -203,9 +204,17 @@ export const dispatchAssistantToolCall = async (
           data: normalized.data,
         };
       }
-      case "deploy_connector": {
-        const result = await bridge.deployConnector(call.arguments);
-        const normalized = asResult(result, "Connector deployed.");
+      case "create_connector":
+      case "publish_connector": {
+        const result = await (call.tool_name === "create_connector"
+          ? bridge.createConnector(call.arguments)
+          : bridge.publishConnector(call.arguments));
+        const normalized = asResult(
+          result,
+          call.tool_name === "create_connector"
+            ? "Connector created locally."
+            : "Connector published on Sepolia.",
+        );
         return {
           callId: call.id,
           toolName: call.tool_name,

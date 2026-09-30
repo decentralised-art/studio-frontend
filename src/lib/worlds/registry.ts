@@ -368,6 +368,8 @@ export const buildMusicXmlWorldInput = ({
   riCoordinate,
   selectedConnectorContextNames,
   selectedConnectorContextPathPrefixes,
+  executionProvenance,
+  executionMode,
 }: {
   scoreData: ScorePluginRuntimeData;
   label: string;
@@ -378,6 +380,8 @@ export const buildMusicXmlWorldInput = ({
   riCoordinate?: WorldRuntimeInput["riCoordinate"];
   selectedConnectorContextNames?: string[];
   selectedConnectorContextPathPrefixes?: string[];
+  executionProvenance?: WorldRuntimeInput["executionProvenance"];
+  executionMode?: WorldRuntimeInput["executionMode"];
 }): WorldRuntimeInput => {
   const { stats } = scoreData;
   return {
@@ -391,6 +395,8 @@ export const buildMusicXmlWorldInput = ({
     dynamicRiInput,
     selectedConnectorContextNames,
     selectedConnectorContextPathPrefixes,
+    executionProvenance,
+    executionMode,
     artifacts: {
       musicXml: scoreData.musicXml,
       scoreRenderedNotes: scoreData.renderedNotes,
@@ -410,6 +416,8 @@ export const buildMidiWorldInput = ({
   statsText,
   selectedConnectorContextNames,
   selectedConnectorContextPathPrefixes,
+  executionProvenance,
+  executionMode,
 }: {
   runtimeData: StudioPluginRuntimeData;
   label: string;
@@ -420,6 +428,8 @@ export const buildMidiWorldInput = ({
   statsText?: string;
   selectedConnectorContextNames?: string[];
   selectedConnectorContextPathPrefixes?: string[];
+  executionProvenance?: WorldRuntimeInput["executionProvenance"];
+  executionMode?: WorldRuntimeInput["executionMode"];
 }): WorldRuntimeInput => ({
   protocolVersion: WORLD_PROTOCOL_VERSION,
   worldId: MIDI_CLIP_WORLD_ID,
@@ -431,6 +441,8 @@ export const buildMidiWorldInput = ({
   dynamicRiInput,
   selectedConnectorContextNames,
   selectedConnectorContextPathPrefixes,
+  executionProvenance,
+  executionMode,
   executeOutput: runtimeData.streams.map((stream) => ({
     path: stream.feature_path,
     data: [...stream.data],
@@ -451,6 +463,8 @@ export const buildToneWorldInput = ({
   statsText,
   selectedConnectorContextNames,
   selectedConnectorContextPathPrefixes,
+  executionProvenance,
+  executionMode,
 }: {
   streams: Array<{ path: string; data: number[] }>;
   label: string;
@@ -462,6 +476,8 @@ export const buildToneWorldInput = ({
   statsText?: string;
   selectedConnectorContextNames?: string[];
   selectedConnectorContextPathPrefixes?: string[];
+  executionProvenance?: WorldRuntimeInput["executionProvenance"];
+  executionMode?: WorldRuntimeInput["executionMode"];
 }): WorldRuntimeInput => ({
   protocolVersion: WORLD_PROTOCOL_VERSION,
   worldId: TONE_WORLD_ID,
@@ -473,6 +489,8 @@ export const buildToneWorldInput = ({
   dynamicRiInput,
   selectedConnectorContextNames,
   selectedConnectorContextPathPrefixes,
+  executionProvenance,
+  executionMode,
   executeOutput: streams.map((stream) => ({
     path: stream.path,
     data: [...stream.data],

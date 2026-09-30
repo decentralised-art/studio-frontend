@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
 
+import {
+  normalizeChainExecuteResponse,
+  type RawChainExecuteResponse,
+} from "../src/lib/chain/registryApi";
 import { buildChainApiUrl } from "../src/lib/url/url";
 
 type ExecutePayload = {
@@ -65,9 +69,8 @@ describe("live execute parity smoke (manual, opt-in)", () => {
         const result = await runLiveExecute(liveChainToken, payload);
         expect(result.ok).toBe(true);
 
-        const body = result.body;
-        expect(Array.isArray(body)).toBe(true);
-        const rows = body as ExecuteResponseEntry[];
+        const body = normalizeChainExecuteResponse(result.body as RawChainExecuteResponse);
+        const rows = body.particles as ExecuteResponseEntry[];
         expect(rows.length).toBeGreaterThan(0);
 
         rows.forEach((row) => {

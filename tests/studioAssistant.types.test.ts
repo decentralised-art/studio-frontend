@@ -6,6 +6,27 @@ import {
 } from "../src/lib/studio/assistant/types";
 
 describe("studio assistant tool envelope parsing", () => {
+  it("preserves explicit local simulation and rejects unknown execution modes", () => {
+    const call = parseAssistantToolCall(
+      {
+        id: "run",
+        tool_name: "run_connector",
+        arguments: { mode: "simulate", particles_count: 3 },
+      },
+      0,
+    );
+    expect(call.arguments).toMatchObject({ mode: "simulate", particles_count: 3 });
+    expect(() =>
+      parseAssistantToolCall(
+        {
+          id: "run",
+          tool_name: "run_connector",
+          arguments: { mode: "auto" },
+        },
+        0,
+      ),
+    ).toThrow(/mode/);
+  });
   it("parses valid tool calls and marks high-risk confirmation", () => {
     const envelope = parseAssistantEnvelopeFromJson(
       JSON.stringify({
@@ -23,7 +44,7 @@ describe("studio assistant tool envelope parsing", () => {
           },
           {
             id: "a2",
-            tool_name: "deploy_connector",
+            tool_name: "publish_connector",
             arguments: {},
           },
         ],
@@ -36,7 +57,7 @@ describe("studio assistant tool envelope parsing", () => {
     expect(envelope.tool_calls).toHaveLength(2);
     expect(envelope.tool_calls[0].tool_name).toBe("set_connector_ri_mode");
     expect(envelope.tool_calls[0].requires_confirmation).toBe(false);
-    expect(envelope.tool_calls[1].tool_name).toBe("deploy_connector");
+    expect(envelope.tool_calls[1].tool_name).toBe("publish_connector");
     expect(envelope.tool_calls[1].requires_confirmation).toBe(true);
     expect(requiresToolConfirmation("disconnect_connectors")).toBe(true);
   });

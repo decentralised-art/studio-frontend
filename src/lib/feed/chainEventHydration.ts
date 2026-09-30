@@ -248,7 +248,12 @@ const hydrateRuntimeCodeDetail = async (
   const owner = resolveOwner(raw.owner, target.owner);
   const solSrc = normalizeOptionalString(raw.sol_src);
   const runtimeSnippet = extractRuntimeSnippet(solSrc);
-  const argsCount = inferArgsCountFromSnippet(solSrc as SoliditySnippet).minArgsCount;
+  const argsCount =
+    typeof raw.args_count === "number" &&
+    Number.isSafeInteger(raw.args_count) &&
+    raw.args_count >= 0
+      ? raw.args_count
+      : inferArgsCountFromSnippet(solSrc as SoliditySnippet).minArgsCount;
   const address = normalizeOptionalString(raw.address);
 
   return {

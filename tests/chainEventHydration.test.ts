@@ -156,6 +156,26 @@ describe("chainEventHydration", () => {
     );
   });
 
+  it.each([0, 3])(
+    "hydrates authoritative runtime args_count=%s without source",
+    async (argsCount) => {
+      vi.stubGlobal(
+        "fetch",
+        vi
+          .fn()
+          .mockResolvedValue(
+            jsonResponse({ name: "add", owner: OWNER, args_count: argsCount, address: "0x0" }),
+          ),
+      );
+      const detail = await hydrateChainEventDetail({
+        type: "transformation",
+        name: "add",
+        owner: OWNER,
+      });
+      expect(detail).toMatchObject({ argsCount });
+    },
+  );
+
   it("normalizes bare chain owner addresses from chain detail payloads", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       jsonResponse({

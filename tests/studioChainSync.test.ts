@@ -122,6 +122,7 @@ describe("Studio chain sync helpers", () => {
   it("merges fetched connector details into deployed registry state", () => {
     const connector = {
       name: "pitch",
+      chainAddress: `0x${"ab".repeat(20)}`,
       dimensions: [
         {
           transformations: [
@@ -157,18 +158,46 @@ describe("Studio chain sync helpers", () => {
     expect(merged.state.particles[0].id).toBe("pitch");
   });
 
+  it("uses authoritative args_count without source and over legacy source inference", () => {
+    const state = mergeToolboxRuntimePayloadsIntoStudioState(
+      emptyState(),
+      "transformation",
+      [["add", { args_count: 3, address: `0x${"ab".repeat(20)}` }]],
+      "owner",
+    );
+    const next = mergeToolboxRuntimePayloadsIntoStudioState(
+      state,
+      "condition",
+      [["gate", { args_count: 2, sol_src: "return true;", address: `0x${"ab".repeat(20)}` }]],
+      "owner",
+    );
+    expect(next.registry.transformations.add.argc).toBe(3);
+    expect(next.registry.conditions.gate.argc).toBe(2);
+    expect(next.library.transformations[0].runtimeSnippet).toBeUndefined();
+  });
+
   it("hydrates saved runtime payloads into registry and library state", () => {
     const owner = "0xfa71ff2394596f824d69961293d095a50d322e4e";
     const withTransformation = mergeToolboxRuntimePayloadsIntoStudioState(
       emptyState(),
       "transformation",
-      [["fallbackAdd", { name: "add", owner, sol_src: "return x + args[0];" }]],
+      [
+        [
+          "fallbackAdd",
+          { name: "add", owner, sol_src: "return x + args[0];", address: `0x${"ab".repeat(20)}` },
+        ],
+      ],
       "fallback-author",
     );
     const withCondition = mergeToolboxRuntimePayloadsIntoStudioState(
       withTransformation,
       "condition",
-      [["fallbackGate", { owner: "", sol_src: "return args[0] > 0;" }]],
+      [
+        [
+          "fallbackGate",
+          { owner: "", sol_src: "return args[0] > 0;", address: `0x${"ab".repeat(20)}` },
+        ],
+      ],
       "fallback-author",
     );
 
@@ -185,5 +214,54 @@ describe("Studio chain sync helpers", () => {
       id: "condition-fallbackGate",
       authorId: "fallback-author",
     });
+  });
+
+  it("keeps foreign and unclassified local runtime payloads out of the toolbox", () => {
+    const owner = `0x${"12".repeat(20)}`;
+    const state = mergeToolboxRuntimePayloadsIntoStudioState(
+      emptyState(),
+      "transformation",
+      [
+        ["Mine", { name: "Mine", address: "0x0", owner, args_count: 1 }],
+        [
+          "Foreign",
+          { name: "Foreign", address: "0x0", owner: `0x${"34".repeat(20)}`, args_count: 1 },
+        ],
+        ["Unknown", { name: "Unknown", args_count: 1 }],
+      ],
+      owner,
+    );
+    expect(Object.keys(state.registry.transformations)).toEqual(["Mine"]);
+    expect(state.library.transformations).toHaveLength(1);
+    expect(state.library.transformations[0]).toMatchObject({
+      name: "Mine",
+      chainAddress: "0x0",
+      ownerAddress: owner,
+    });
+  });
+
+  it("keeps an owned local connector out of Explore and does not invent dependency provenance", () => {
+    const owner = `0x${"12".repeat(20)}`;
+    const fetched = {
+      registry: {
+        connector: {
+          name: "Local",
+          chainAddress: "0x0",
+          ownerAddress: owner,
+          dimensions: [{ transformations: [{ name: "Dependency", args: [1] }], bindings: {} }],
+        },
+      },
+      particleMeta: particleMeta("Local"),
+    };
+    expect(
+      mergeFetchedChainParticleIntoStudioState(emptyState(), fetched, `0x${"34".repeat(20)}`)
+        .merged,
+    ).toBe(false);
+    const result = mergeFetchedChainParticleIntoStudioState(emptyState(), fetched, owner);
+    expect(result.merged).toBe(true);
+    expect(result.state.particles).toEqual([]);
+    expect(result.state.library.features[0].chainAddress).toBe("0x0");
+    expect(result.state.library.transformations).toEqual([]);
+    expect(result.state.registry.transformations.Dependency.argc).toBe(1);
   });
 });

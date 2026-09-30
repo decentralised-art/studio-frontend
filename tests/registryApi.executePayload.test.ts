@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { executeMock, statusRef } = vi.hoisted(() => ({
+const { executeMock, simulateMock, statusRef } = vi.hoisted(() => ({
   executeMock: vi.fn(),
+  simulateMock: vi.fn(),
   statusRef: { value: 200 },
 }));
 
@@ -9,6 +10,7 @@ vi.mock("$lib/chain/dcnClient", () => ({
   createDcnStatusTrackingClient: () => ({
     client: {
       execute: executeMock,
+      simulate: simulateMock,
     },
     getLastResponseStatus: () => statusRef.value,
   }),
@@ -18,7 +20,11 @@ vi.mock("$lib/chain/dcnClient", () => ({
     ),
 }));
 
-import { ChainApiRequestError, postChainExecuteDetailed } from "../src/lib/chain/registryApi";
+import {
+  ChainApiRequestError,
+  postChainExecuteDetailed,
+  postChainSimulateDetailed,
+} from "../src/lib/chain/registryApi";
 
 describe("registryApi execute payload contract", () => {
   beforeEach(() => {
@@ -29,12 +35,17 @@ describe("registryApi execute payload contract", () => {
   it("executes with dynamic_ri payload unchanged and returns normalized current streams", async () => {
     executeMock.mockImplementation(async () => {
       statusRef.value = 201;
-      return [
-        {
-          path: "pitch:0",
-          data: [60, 61, 62],
-        },
-      ];
+      return {
+        block_number: 42,
+        block_hash: `0x${"ab".repeat(32)}`,
+        runner: `0x${"12".repeat(20)}`,
+        particles: [
+          {
+            path: "pitch:0",
+            data: [60, 61, 62],
+          },
+        ],
+      };
     });
 
     const payload = {
@@ -55,31 +66,48 @@ describe("registryApi execute payload contract", () => {
       payload.dynamic_ri,
     );
     expect(result.status).toBe(201);
-    expect(Array.isArray(result.body)).toBe(true);
-    expect(result.body[0]).toEqual({
+    expect(result.body.block_number).toBe(42);
+    expect(result.body.block_hash).toBe(`0x${"ab".repeat(32)}`);
+    expect(result.body.runner).toBe(`0x${"12".repeat(20)}`);
+    expect(result.body.particles[0]).toEqual({
       path: "pitch:0",
       data: [60, 61, 62],
     });
   });
 
-  it("normalizes legacy execute stream payloads that still use feature_path", async () => {
-    executeMock.mockResolvedValue([
-      {
-        feature_path: "time:0",
-        data: [0, 10, 20],
-      },
-    ]);
-
-    const result = await postChainExecuteDetailed({
-      connector_name: "root_connector",
+  it("keeps simulation as an array, with no invented chain provenance", async () => {
+    simulateMock.mockResolvedValue([{ path: "time:0", data: [0, 10, 20] }]);
+    const result = await postChainSimulateDetailed({
+      connector_name: "draft",
       particles_count: "3",
       dynamic_ri: {},
     });
+    expect(result.body).toEqual([{ path: "time:0", data: [0, 10, 20] }]);
+    expect(simulateMock).toHaveBeenCalledWith("draft", "3", {});
+    expect(executeMock).not.toHaveBeenCalled();
+  });
 
-    expect(result.body[0]).toEqual({
-      path: "time:0",
-      data: [0, 10, 20],
-    });
+  it.each([
+    [],
+    {
+      block_number: -1,
+      block_hash: `0x${"ab".repeat(32)}`,
+      runner: `0x${"12".repeat(20)}`,
+      particles: [],
+    },
+    { block_number: 1, block_hash: "0xwrong", runner: `0x${"12".repeat(20)}`, particles: [] },
+    { block_number: 1, block_hash: `0x${"ab".repeat(32)}`, runner: "0x0", particles: [] },
+    {
+      block_number: 1,
+      block_hash: `0x${"ab".repeat(32)}`,
+      runner: `0x${"12".repeat(20)}`,
+      particles: [{ path: "a", data: [NaN] }],
+    },
+  ])("rejects legacy/malformed chain results: %j", async (body) => {
+    executeMock.mockResolvedValue(body);
+    await expect(
+      postChainExecuteDetailed({ connector_name: "x", particles_count: "1", dynamic_ri: {} }),
+    ).rejects.toBeInstanceOf(ChainApiRequestError);
   });
 
   it("rejects malformed success execute payloads instead of returning empty output", async () => {
