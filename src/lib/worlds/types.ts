@@ -14,6 +14,11 @@ export type WorldRuntimeKind = "iframe";
 export type WorldDescriptorSource = "first-party" | "backend";
 
 export type WorldPermission =
+  | "decentralised.art.connectors.read"
+  | "decentralised.art.transformations.read"
+  | "decentralised.art.conditions.read"
+  | "decentralised.art.social.read"
+  | "decentralised.art.execute"
   | "dcn.connectors.read"
   | "dcn.transformations.read"
   | "dcn.conditions.read"
@@ -138,6 +143,7 @@ export type WorldBackendMetadata = {
   createdAt: string;
   updatedAt: string;
   preview?: string;
+  previewUrn?: string;
   valueLimits?: WorldBackendValueLimits;
 };
 

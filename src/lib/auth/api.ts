@@ -643,7 +643,7 @@ const hydrateServicesUsersById = async (
 
   const settled = await Promise.allSettled(
     toHydrate.map(async (user) => {
-      const response = await authFetch(`/users/${encodeURIComponent(user.id)}`);
+      const response = await fetch(buildServicesApiUrl(`/users/${encodeURIComponent(user.id)}`));
       const payload = await parseResponseBody(response);
       if (!response.ok) return [user.id, null] as const;
       return [user.id, coerceServicesUserRecord(payload)] as const;

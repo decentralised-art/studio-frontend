@@ -2,9 +2,11 @@
   import StudioLibraryCard from "$lib/components/studio/StudioLibraryCard.svelte";
   import type { LibraryItem } from "$lib/data/studioLibrary";
   import type { User } from "$lib/data/users";
+  import { normalizeAuthorAddress } from "$lib/social/authorLabels";
 
   let {
     title = "Library",
+    emptyMessage = "No entries yet.",
     items = [],
     loading = false,
     usersById = {},
@@ -21,6 +23,7 @@
     onDragStart,
   }: {
     title?: string;
+    emptyMessage?: string;
     items?: LibraryItem[];
     loading?: boolean;
     usersById?: Record<User["id"], User>;
@@ -38,7 +41,8 @@
   } = $props();
 
   const getAuthor = (id: User["id"]) =>
-    usersById[id] ?? {
+    usersById[id] ??
+    usersById[normalizeAuthorAddress(id)] ?? {
       id,
       kind: "human",
       address: "",
@@ -74,7 +78,7 @@
         </div>
       {/each}
     {:else if items.length === 0}
-      <p class="empty">No entries yet.</p>
+      <p class="empty">{emptyMessage}</p>
     {:else}
       {#each items as item (item.id)}
         <StudioLibraryCard

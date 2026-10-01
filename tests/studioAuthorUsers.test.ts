@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { ServicesUserRecord } from "../src/lib/auth/api";
 import type { User } from "../src/lib/data/users";
 import {
+  buildStudioAuthorIndex,
   buildStudioUsersById,
   mapServicesUserToStudioAuthor,
 } from "../src/lib/studio/studioAuthorUsers";
@@ -62,5 +63,26 @@ describe("studio author users", () => {
     expect(usersById["0xb584a15f38c2014cff54fdb1b417428b51999276"]?.nickname).toBe(
       "prototype_test_account",
     );
+  });
+
+  it("resolves profile nicknames for every address linked to a services account", () => {
+    const primary = "0xb584a15f38c2014cff54fdb1b417428b51999276";
+    const sourceAlias = "0xfa71ff2394596f824d69961293d095a50d322e4e";
+    const authors = buildStudioAuthorIndex([
+      {
+        id: "service-user",
+        ethereum_address: primary,
+        display_name: primary,
+        profile_json: {
+          public: {
+            nickname: "Sawyer",
+            chain_source_addresses: [sourceAlias.toUpperCase()],
+          },
+        },
+      },
+    ]);
+
+    expect(authors[primary]?.nickname).toBe("Sawyer");
+    expect(authors[sourceAlias]?.nickname).toBe("Sawyer");
   });
 });

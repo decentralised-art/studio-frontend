@@ -2,10 +2,8 @@
   import { browser } from "$app/environment";
   import { base } from "$app/paths";
   import { onDestroy, onMount } from "svelte";
-  import { createWorldHost, type WorldHost } from "dcn/worlds/host";
-
-  import { createDcnClient } from "$lib/chain/dcnClient";
   import { buildWorldAssetUrl } from "$lib/worlds/api";
+  import { createBackendWorldHost, type BackendWorldHost } from "$lib/worlds/backendHost";
   import {
     isWorldRuntimeMessage,
     WORLD_ERROR_MESSAGE_TYPE,
@@ -42,8 +40,9 @@
   let statusText = $state("Loading world");
   let errorText = $state("");
   let sdkFrameSrc = $state("");
-  let worldHost: WorldHost | null = null;
+  let worldHost: BackendWorldHost | null = null;
   let worldHostKey = "";
+  let hostGeneration = 0;
 
   const usesSdkWorldHost = $derived(world.source === "backend");
   const rawSrc = $derived.by(() => {
@@ -123,6 +122,7 @@
     const currentSrc = rawSrc;
 
     if (!browser || !currentFrame || currentWorld.source !== "backend") {
+      hostGeneration += 1;
       disposeWorldHost();
       return;
     }
@@ -130,30 +130,44 @@
     const nextHostKey = `${currentWorld.id}:${currentSrc}`;
     if (worldHost && worldHostKey === nextHostKey) return;
 
+    const generation = ++hostGeneration;
     disposeWorldHost();
     resetRuntimeState();
-    worldHost = createWorldHost({
-      client: createDcnClient(),
+    void createBackendWorldHost({
       permissions: currentWorld.permissions ?? [],
       valueLimits: currentWorld.backend?.valueLimits,
       iframe: currentFrame,
-      expectedOrigin: "null",
       onReady: () => {
+        if (generation !== hostGeneration) return;
         worldReady = true;
         errorText = "";
         statusText = "World ready";
         postInput();
       },
       onRendered: () => {
+        if (generation !== hostGeneration) return;
         statusText = "World rendered";
       },
       onError: (message) => {
+        if (generation !== hostGeneration) return;
         errorText = message.message;
         statusText = "World error";
       },
-    });
-    worldHostKey = nextHostKey;
-    sdkFrameSrc = worldHost.worldUrl(currentSrc);
+    })
+      .then((host) => {
+        if (generation !== hostGeneration || iframeElement !== currentFrame) {
+          host.dispose();
+          return;
+        }
+        worldHost = host;
+        worldHostKey = nextHostKey;
+        sdkFrameSrc = host.worldUrl(currentSrc);
+      })
+      .catch((error) => {
+        if (generation !== hostGeneration) return;
+        errorText = error instanceof Error ? error.message : "Could not start World host";
+        statusText = "World error";
+      });
   });
 
   $effect(() => {
@@ -173,13 +187,14 @@
   });
 
   onDestroy(() => {
+    hostGeneration += 1;
     disposeWorldHost();
     worldReady = false;
   });
 </script>
 
 <div class="world-frame-shell">
-  {#if showStatus}
+  {#if showStatus || errorText}
     <div class="world-frame-status" class:is-error={Boolean(errorText)}>
       {errorText || statusText}
     </div>

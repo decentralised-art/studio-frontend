@@ -1,22 +1,28 @@
 export const LOGIN_ROUTE = "/login";
-export const DEFAULT_AUTHENTICATED_ROUTE = "/network";
+export const DEFAULT_AUTHENTICATED_ROUTE = "/studio";
 export const DEFAULT_UNAUTHENTICATED_ROUTE = "/";
 
 const PUBLIC_ROUTE_IDS = new Set([
   "/",
   LOGIN_ROUTE,
+  "/about",
+  "/api-reference",
   "/api-status",
   "/api-tutorial",
   "/documentation",
   "/gallery",
+  "/mcp",
+  "/network",
   "/onboarding",
   "/onboarding-agent",
   "/onboarding-human",
   "/roadmap",
+  "/sdk",
+  "/studio",
   "/tutorial",
 ]);
 const PUBLIC_ROUTE_PREFIXES = ["/gallery", "/tutorial", "/world-runtimes", "/worlds"];
-const PROTECTED_ROUTE_IDS = new Set(["/account", "/network", "/studio"]);
+const PROTECTED_ROUTE_IDS = new Set(["/account"]);
 
 export const isPublicRouteId = (routeId: string | null | undefined): boolean =>
   typeof routeId === "string" &&

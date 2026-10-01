@@ -4,45 +4,28 @@
   import { page } from "$app/state";
 
   import WalletAuthButton from "$lib/components/auth/WalletAuthButton.svelte";
-
-  type Props = {
-    isAuthenticated: boolean;
-  };
-
-  const { isAuthenticated }: Props = $props();
+  import ThemeToggle from "$lib/components/theme/ThemeToggle.svelte";
+  import { docsNavLinks, primaryNavLinks } from "$lib/site/navigation";
 
   let menuOpen = $state(false);
   let docsMenuOpen = $state(false);
   let navElement: HTMLElement | null = null;
-  const isLandingRoute = $derived(page.route.id === "/");
+  const isLandingRoute = $derived(page.route.id === "/" || page.route.id === "/worlds");
+  const isStudioRoute = $derived(page.route.id === "/studio");
 
-  const primaryLinks = [
-    { href: "/", label: "Home" },
-    { href: "/worlds", label: "Worlds" },
-  ] as const;
-
-  const authenticatedLinks = [
-    { href: "/network", label: "Network" },
-    { href: "/studio", label: "Studio" },
-  ] as const;
-
-  const docsLinks = [
-    { href: "/tutorial", label: "Tutorial" },
-    { href: "/documentation", label: "API Docs" },
-  ] as const;
-
-  type NavHref =
-    | (typeof primaryLinks)[number]["href"]
-    | (typeof authenticatedLinks)[number]["href"]
-    | (typeof docsLinks)[number]["href"];
+  type NavHref = (typeof primaryNavLinks)[number]["href"] | (typeof docsNavLinks)[number]["href"];
 
   const isActive = (href: NavHref) => {
     const current = page.url.pathname.replace(/\/+$/, "") || "/";
     const target = resolve(href).replace(/\/+$/, "") || "/";
-    return current === target || (target !== "/" && current.startsWith(`${target}/`));
+    return (
+      current === target ||
+      (target === "/" && current === resolve("/worlds")) ||
+      (target !== "/" && current.startsWith(`${target}/`))
+    );
   };
 
-  const isDocsActive = $derived(docsLinks.some((link) => isActive(link.href)));
+  const isDocsActive = $derived(docsNavLinks.some((link) => isActive(link.href)));
 
   const toggleDocsMenu = () => {
     docsMenuOpen = !docsMenuOpen;
@@ -78,12 +61,21 @@
   });
 </script>
 
-<header class:is-landing={isLandingRoute} class:is-open={menuOpen} class="site-nav">
+<header
+  class:is-landing={isLandingRoute}
+  class:is-matched={!isLandingRoute}
+  class:is-studio={isStudioRoute}
+  class:is-open={menuOpen}
+  class="site-nav"
+>
   <div class="page-container">
     <nav class="site-nav-inner" aria-label="Primary" bind:this={navElement}>
-      <a href={resolve("/")} class="site-brand" aria-label="decentralised.art home">
-        decentralised.art
-      </a>
+      <div class="site-brand-lockup">
+        <a href={resolve("/")} class="site-brand" aria-label="decentralised.art home">
+          decentralised.art
+        </a>
+        <span class="brand-strapline">Collective performative intelligence</span>
+      </div>
 
       <button
         type="button"
@@ -100,7 +92,7 @@
       </button>
 
       <div class="site-links" id="site-primary-links">
-        {#each primaryLinks as link (link.href)}
+        {#each primaryNavLinks as link (link.href)}
           <a
             class:active={isActive(link.href)}
             class="site-link"
@@ -111,20 +103,6 @@
             {link.label}
           </a>
         {/each}
-
-        {#if isAuthenticated}
-          {#each authenticatedLinks as link (link.href)}
-            <a
-              class:active={isActive(link.href)}
-              class="site-link"
-              href={resolve(link.href)}
-              aria-current={isActive(link.href) ? "page" : undefined}
-              onclick={closeMenu}
-            >
-              {link.label}
-            </a>
-          {/each}
-        {/if}
 
         <div class="site-docs-menu">
           <button
@@ -141,7 +119,7 @@
 
           {#if docsMenuOpen}
             <div class="site-docs-menu-list" role="menu">
-              {#each docsLinks as link (link.href)}
+              {#each docsNavLinks as link (link.href)}
                 <a
                   class:active={isActive(link.href)}
                   class="site-docs-menu-item"
@@ -157,7 +135,14 @@
           {/if}
         </div>
 
-        <WalletAuthButton className="site-wallet-auth" />
+        {#if isLandingRoute}
+          <WalletAuthButton className="site-wallet-auth" />
+        {:else}
+          <div class="nav-utilities">
+            <ThemeToggle variant="inline" className="site-theme-toggle" />
+            <WalletAuthButton className="site-wallet-auth" />
+          </div>
+        {/if}
       </div>
     </nav>
   </div>
@@ -184,7 +169,7 @@
     backdrop-filter: blur(12px);
   }
 
-  .site-nav.is-landing {
+  :is(.site-nav.is-landing, .site-nav.is-matched) {
     background: linear-gradient(180deg, rgba(13, 15, 18, 0.5) 0%, rgba(13, 15, 18, 0.24) 100%);
     border-bottom: 1px solid rgba(255, 255, 255, 0.2);
     backdrop-filter: blur(12px);
@@ -196,6 +181,12 @@
     margin-right: auto;
     padding-left: 1rem;
     padding-right: calc(1rem + 2.75rem);
+  }
+
+  :is(.site-nav.is-landing, .site-nav.is-matched) .page-container {
+    max-width: none;
+    padding-left: clamp(0.75rem, 2vw, 2rem);
+    padding-right: clamp(0.75rem, 2vw, 2rem);
   }
 
   .site-nav-inner {
@@ -218,8 +209,22 @@
     color: var(--text-primary);
   }
 
-  .site-nav.is-landing .site-brand,
-  .site-nav.is-landing .site-link {
+  .site-brand-lockup {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+    gap: clamp(0.8rem, 1.5vw, 1.5rem);
+  }
+
+  .brand-strapline {
+    color: rgba(255, 255, 255, 0.78);
+    font-size: 0.68rem;
+    white-space: nowrap;
+    text-shadow: 0 1px 6px rgba(0, 0, 0, 0.45);
+  }
+
+  :is(.site-nav.is-landing, .site-nav.is-matched) .site-brand,
+  :is(.site-nav.is-landing, .site-nav.is-matched) .site-link {
     color: #ffffff;
     text-shadow: 0 1px 6px rgba(0, 0, 0, 0.45);
   }
@@ -229,6 +234,24 @@
     align-items: center;
     gap: 0.25rem;
     overflow: visible;
+  }
+
+  .nav-utilities {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+
+  .site-nav.is-matched .nav-utilities :global(.site-theme-toggle) {
+    width: 2rem;
+    height: 2rem;
+    border-color: rgba(255, 255, 255, 0.24) !important;
+    background: rgba(255, 255, 255, 0.08) !important;
+    color: #fff !important;
+  }
+
+  .site-nav.is-matched .nav-utilities :global(.site-theme-toggle:hover) {
+    background: rgba(255, 255, 255, 0.18) !important;
   }
 
   .site-link {
@@ -257,12 +280,12 @@
     border-color: var(--border-subtle);
   }
 
-  .site-nav.is-landing .site-link:hover {
+  :is(.site-nav.is-landing, .site-nav.is-matched) .site-link:hover {
     color: #ffffff;
     background: rgba(255, 255, 255, 0.16);
   }
 
-  .site-nav.is-landing .site-link.active {
+  :is(.site-nav.is-landing, .site-nav.is-matched) .site-link.active {
     color: #ffffff;
     background: transparent;
   }
@@ -320,19 +343,19 @@
     color: var(--text-primary);
   }
 
-  .site-nav.is-landing .site-docs-menu-list {
+  :is(.site-nav.is-landing, .site-nav.is-matched) .site-docs-menu-list {
     border-color: rgba(255, 255, 255, 0.2);
     background: rgba(10, 13, 16, 0.88);
   }
 
-  .site-nav.is-landing .site-docs-menu-item {
+  :is(.site-nav.is-landing, .site-nav.is-matched) .site-docs-menu-item {
     color: rgba(255, 255, 255, 0.84);
     text-shadow: 0 1px 6px rgba(0, 0, 0, 0.45);
   }
 
-  .site-nav.is-landing .site-docs-menu-item:hover,
-  .site-nav.is-landing .site-docs-menu-item:focus-visible,
-  .site-nav.is-landing .site-docs-menu-item.active {
+  :is(.site-nav.is-landing, .site-nav.is-matched) .site-docs-menu-item:hover,
+  :is(.site-nav.is-landing, .site-nav.is-matched) .site-docs-menu-item:focus-visible,
+  :is(.site-nav.is-landing, .site-nav.is-matched) .site-docs-menu-item.active {
     color: #ffffff;
     background: rgba(255, 255, 255, 0.16);
   }
@@ -352,7 +375,7 @@
     line-height: 1;
   }
 
-  .site-nav.is-landing .site-nav-toggle {
+  :is(.site-nav.is-landing, .site-nav.is-matched) .site-nav-toggle {
     color: #ffffff;
     border-color: rgba(255, 255, 255, 0.32);
     background: rgba(8, 12, 14, 0.35);
@@ -362,7 +385,7 @@
     background: var(--surface-card-hover);
   }
 
-  .site-nav.is-landing .site-nav-toggle:hover {
+  :is(.site-nav.is-landing, .site-nav.is-matched) .site-nav-toggle:hover {
     background: rgba(255, 255, 255, 0.18);
   }
 
@@ -382,6 +405,66 @@
 
   .site-nav-backdrop {
     display: none;
+  }
+
+  /* Studio in light mode: plain white header with black text. */
+  :global(:root[data-theme="light"]) .site-nav.is-studio {
+    background: #ffffff;
+    border-bottom-color: rgba(17, 17, 17, 0.12);
+    backdrop-filter: none;
+  }
+
+  :global(:root[data-theme="light"])
+    .site-nav.is-studio
+    :is(.site-brand, .site-link, .brand-strapline) {
+    color: #111111;
+    text-shadow: none;
+  }
+
+  :global(:root[data-theme="light"]) .site-nav.is-studio .site-link:hover,
+  :global(:root[data-theme="light"]) .site-nav.is-studio .site-link.active {
+    color: #111111;
+    background: rgba(17, 17, 17, 0.06);
+    border-color: rgba(17, 17, 17, 0.12);
+  }
+
+  :global(:root[data-theme="light"]) .site-nav.is-studio .site-docs-menu-list {
+    border-color: rgba(17, 17, 17, 0.12);
+    background: #ffffff;
+  }
+
+  :global(:root[data-theme="light"]) .site-nav.is-studio .site-docs-menu-item {
+    color: #111111;
+    text-shadow: none;
+  }
+
+  :global(:root[data-theme="light"]) .site-nav.is-studio .site-docs-menu-item:hover,
+  :global(:root[data-theme="light"]) .site-nav.is-studio .site-docs-menu-item:focus-visible,
+  :global(:root[data-theme="light"]) .site-nav.is-studio .site-docs-menu-item.active {
+    color: #111111;
+    background: rgba(17, 17, 17, 0.06);
+  }
+
+  :global(:root[data-theme="light"])
+    .site-nav.is-studio
+    .nav-utilities
+    :global(.site-theme-toggle) {
+    border-color: rgba(17, 17, 17, 0.16) !important;
+    background: rgba(17, 17, 17, 0.04) !important;
+    color: #111111 !important;
+  }
+
+  :global(:root[data-theme="light"])
+    .site-nav.is-studio
+    .nav-utilities
+    :global(.site-theme-toggle:hover) {
+    background: rgba(17, 17, 17, 0.08) !important;
+  }
+
+  :global(:root[data-theme="light"]) .site-nav.is-studio .site-nav-toggle {
+    color: #111111;
+    border-color: rgba(17, 17, 17, 0.16);
+    background: #ffffff;
   }
 
   :global(.site-wallet-auth) {
@@ -418,8 +501,8 @@
     color: #06130c !important;
   }
 
-  .site-nav.is-landing :global(.site-wallet-auth .wallet-login-trigger),
-  .site-nav.is-landing :global(.site-wallet-auth .wallet-menu-trigger) {
+  :is(.site-nav.is-landing, .site-nav.is-matched) :global(.site-wallet-auth .wallet-login-trigger),
+  :is(.site-nav.is-landing, .site-nav.is-matched) :global(.site-wallet-auth .wallet-menu-trigger) {
     border-color: rgba(17, 17, 17, 0.2);
   }
 
@@ -505,13 +588,16 @@
       pointer-events: auto;
     }
 
-    .site-nav.is-landing + .site-nav-backdrop {
+    :is(.site-nav.is-landing, .site-nav.is-matched) + .site-nav-backdrop {
       background: rgba(6, 10, 12, 0.34);
     }
 
-    .site-brand {
+    .site-brand-lockup {
       grid-column: 1;
-      max-width: calc(100% - 2.8rem);
+      max-width: 100%;
+    }
+
+    .site-brand {
       line-height: 1.25;
     }
 
@@ -546,7 +632,7 @@
       display: flex;
     }
 
-    .site-nav.is-landing .site-links {
+    :is(.site-nav.is-landing, .site-nav.is-matched) .site-links {
       border-color: rgba(255, 255, 255, 0.2);
       background: rgba(10, 13, 16, 0.82);
     }
@@ -583,19 +669,49 @@
       white-space: normal;
     }
 
-    .site-nav.is-landing .site-link {
+    :is(.site-nav.is-landing, .site-nav.is-matched) .site-link {
       background: rgba(10, 13, 16, 0.42);
       border-color: rgba(255, 255, 255, 0.18);
     }
 
-    .site-nav.is-landing .site-link:hover {
+    :is(.site-nav.is-landing, .site-nav.is-matched) .site-link:hover {
       background: rgba(255, 255, 255, 0.16);
       border-color: rgba(255, 255, 255, 0.25);
     }
 
-    .site-nav.is-landing .site-link.active {
+    :is(.site-nav.is-landing, .site-nav.is-matched) .site-link.active {
       background: rgba(10, 13, 16, 0.42);
       border-color: rgba(255, 255, 255, 0.18);
+    }
+
+    :global(:root[data-theme="light"]) .site-nav.is-studio .site-links {
+      border-color: rgba(17, 17, 17, 0.12);
+      background: #ffffff;
+    }
+
+    :global(:root[data-theme="light"]) .site-nav.is-studio .site-link,
+    :global(:root[data-theme="light"]) .site-nav.is-studio .site-link.active {
+      background: #ffffff;
+      border-color: rgba(17, 17, 17, 0.12);
+    }
+
+    :global(:root[data-theme="light"]) .site-nav.is-studio .site-link:hover {
+      background: rgba(17, 17, 17, 0.06);
+      border-color: rgba(17, 17, 17, 0.16);
+    }
+
+    :global(:root[data-theme="light"]) .site-nav.is-studio + .site-nav-backdrop {
+      background: rgba(255, 255, 255, 0.5);
+    }
+
+    .nav-utilities {
+      width: 100%;
+    }
+
+    .nav-utilities :global(.site-wallet-auth) {
+      flex: 1;
+      min-width: 0;
+      width: auto;
     }
 
     :global(.site-wallet-auth) {
@@ -614,6 +730,10 @@
   }
 
   @media (max-width: 640px) {
+    .brand-strapline {
+      display: none;
+    }
+
     .site-nav-inner {
       height: 3.3rem;
       min-height: 3.3rem;

@@ -276,7 +276,7 @@ const elementColors = async (locator: Locator) =>
   });
 
 test("theme toggle switches and persists light mode", async ({ page }) => {
-  await page.goto("/worlds");
+  await page.goto("/studio");
 
   const html = page.locator("html");
   const toggle = page.getByRole("button", { name: "Switch to light theme" });
@@ -288,6 +288,9 @@ test("theme toggle switches and persists light mode", async ({ page }) => {
   await page.reload();
   await expect(html).toHaveAttribute("data-theme", "light");
   await expect(page.getByRole("button", { name: "Switch to dark theme" })).toBeVisible();
+
+  await page.goto("/");
+  await expect(page.getByRole("button", { name: /Switch to (light|dark) theme/ })).toHaveCount(0);
 });
 
 test("light theme restyles the Studio flow canvas and node text", async ({ page }) => {
@@ -328,62 +331,6 @@ test("light theme restyles the Studio flow canvas and node text", async ({ page 
     ratio,
     JSON.stringify({ canvasColors, nodeColors, titleColors, titleColor, nodeBg }),
   ).toBeGreaterThanOrEqual(4.5);
-});
-
-test("light theme restyles Network feed links, icons, and mini flows", async ({ page }) => {
-  await stubStudioApis(page);
-  await authenticateFixtureSession(page);
-
-  await page.goto("/network");
-  await page.getByRole("button", { name: "Switch to light theme" }).click();
-
-  const connectorLink = page.getByRole("link", { name: "theme_connector" }).first();
-  const feedCard = page.locator(".feed-card-shell").first();
-  const miniFlow = page.locator(".social-dependency-flow").first();
-  const flowBackground = miniFlow.locator(".svelte-flow__background").first();
-  const toolboxButton = page.getByRole("button", { name: "Add connector to toolbox" }).first();
-
-  await expect(connectorLink).toBeVisible({ timeout: 15_000 });
-  await expect(miniFlow).toBeVisible();
-  await expect(flowBackground).toBeVisible();
-  await expect(toolboxButton).toBeVisible();
-
-  const cardColors = await elementColors(feedCard);
-  const linkColors = await elementColors(connectorLink);
-  const flowColors = await elementColors(flowBackground);
-  const iconColors = await elementColors(toolboxButton);
-
-  expect(flowColors.backgroundColor).not.toBe("rgb(0, 0, 0)");
-  expect(linkColors.color).not.toBe("rgb(255, 255, 255)");
-  expect(iconColors.color).not.toBe("rgb(255, 255, 255)");
-
-  expect(
-    contrastRatio(parseRgba(linkColors.color), parseRgba(cardColors.backgroundColor)),
-    JSON.stringify({ cardColors, linkColors }),
-  ).toBeGreaterThanOrEqual(4.5);
-});
-
-test("Network toolbox button toggles connector saved state", async ({ page }) => {
-  await stubStudioApis(page);
-  await authenticateFixtureSession(page);
-
-  await page.goto("/network");
-
-  const addButton = page.getByRole("button", { name: "Add connector to toolbox" }).first();
-  await expect(addButton).toBeVisible({ timeout: 15_000 });
-  await expect(addButton).toHaveAttribute("aria-pressed", "false");
-
-  await addButton.click();
-
-  const removeButton = page.getByRole("button", { name: "Remove connector from toolbox" }).first();
-  await expect(removeButton).toBeVisible();
-  await expect(removeButton).toHaveAttribute("aria-pressed", "true");
-
-  await removeButton.click();
-
-  const restoredAddButton = page.getByRole("button", { name: "Add connector to toolbox" }).first();
-  await expect(restoredAddButton).toBeVisible();
-  await expect(restoredAddButton).toHaveAttribute("aria-pressed", "false");
 });
 
 test("light theme keeps Account content shells from adding a background band", async ({ page }) => {

@@ -104,21 +104,21 @@ const osmdMock = vi.hoisted(() => {
 const worldHostMock = vi.hoisted(() => {
   const pushState = vi.fn();
   const dispose = vi.fn();
-  const createWorldHost = vi.fn(() => ({
+  const createWorldHost = vi.fn(async () => ({
     channelToken: "test-channel",
     dispose,
     pushConnectors: vi.fn(),
     pushState,
     worldId: "backend-world-1",
-    worldUrl: (url: string) => `${url}${url.includes("?") ? "&" : "?"}dcnWorldChannel=test-channel`,
+    worldUrl: (url: string) => `${url}${url.includes("?") ? "&" : "?"}worldChannel=test-channel`,
   }));
 
   return { createWorldHost, dispose, pushState };
 });
 
 vi.mock("tone", () => toneMock);
-vi.mock("dcn/worlds/host", () => ({
-  createWorldHost: worldHostMock.createWorldHost,
+vi.mock("$lib/worlds/backendHost", () => ({
+  createBackendWorldHost: worldHostMock.createWorldHost,
 }));
 vi.mock("opensheetmusicdisplay", () => ({
   OpenSheetMusicDisplay: osmdMock.OpenSheetMusicDisplay,
@@ -510,7 +510,7 @@ describe("StudioPluginNode", () => {
         expect.stringContaining("/services/world-assets/backend-world-1/index.html"),
       );
     });
-    expect(frame).toHaveAttribute("src", expect.stringContaining("dcnWorldChannel=test-channel"));
+    expect(frame).toHaveAttribute("src", expect.stringContaining("worldChannel=test-channel"));
     expect(frame).toHaveAttribute("sandbox", "allow-scripts allow-downloads");
 
     await fireEvent.load(frame);

@@ -7,14 +7,6 @@ const readSource = (relativePath: string): string =>
 
 const eventFeedRouteContracts = [
   {
-    route: "src/routes/network/+page.svelte",
-    requiredPhrases: [
-      "syncParticlePostDataFromChain",
-      "loadMoreConnectorPostDataFromChain",
-      "createConnectorPostDataStream",
-    ],
-  },
-  {
     route: "src/routes/account/+page.svelte",
     requiredPhrases: ["syncProfileActivityFromEventFeed", "listProfileActivityEvents"],
   },

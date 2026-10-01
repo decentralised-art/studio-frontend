@@ -13,7 +13,7 @@
   title="decentralised.art Ecosystem Roadmap"
   description="decentralised.art is currently pre-MVP. The roadmap is focused on stabilising the app, opening World creation, testing on Sepolia, and preparing the path to Ethereum Mainnet and Base."
   links={[
-    { href: resolve("/tutorial"), label: "Tutorial" },
+    { href: resolve("/about"), label: "About" },
     { href: resolve("/documentation"), label: "API Documentation" },
   ]}
 >

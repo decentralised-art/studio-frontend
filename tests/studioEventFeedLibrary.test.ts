@@ -181,4 +181,29 @@ describe("studioEventFeedLibrary", () => {
       conditions: [],
     });
   });
+
+  it("discovers published entries from all authors for the public Studio library", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse({
+          limit: 2,
+          cursor: { has_more: false, next_before: null },
+          items: [
+            rawFeedItem("pitch", "connector_added"),
+            rawFeedItem("rhythm", "connector_added", {
+              payload: { name: "rhythm", owner: OTHER_OWNER },
+            }),
+          ],
+        }),
+      ),
+    );
+
+    const discovery = await loadStudioNetworkLibraryFromEventFeed({
+      sourceAddresses: [],
+      includeAllOwners: true,
+    });
+
+    expect(discovery.library.features.map((item) => item.name)).toEqual(["pitch", "rhythm"]);
+  });
 });

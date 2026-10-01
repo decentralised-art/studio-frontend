@@ -6,7 +6,6 @@ const readSource = (relativePath: string): string =>
   readFileSync(resolve(process.cwd(), relativePath), "utf8");
 
 const connectorDeepLinkRoutes = [
-  "src/routes/network/+page.svelte",
   "src/routes/account/+page.svelte",
   "src/routes/u/[id]/+page.svelte",
   "src/routes/f/[slug]/+page.svelte",
