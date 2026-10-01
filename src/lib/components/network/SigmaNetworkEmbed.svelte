@@ -8,7 +8,7 @@
     networkNodePalette,
     type NetworkGraphEdge,
     type NetworkGraphNode,
-  } from "$lib/network/mockNetworkGraph";
+  } from "$lib/network/networkGraph";
 
   type SigmaCtor = new (
     graph: unknown,

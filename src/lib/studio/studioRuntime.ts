@@ -1,14 +1,11 @@
-import {
-  mockConditionRegistry,
-  mockRegistrySnapshot,
-  mockTransformationRegistry,
-  type MockFeatureDef,
-  type MockParticleDef,
-  type MockRunConfig,
-  type MockRunningInstance,
-  type MockTransformationDef,
-} from "$lib/particles/mockPtNetwork";
 import type { PtOutputFeature } from "$lib/particles/ptMidiAdapter";
+import type {
+  RuntimeFeatureDef,
+  RuntimeParticleDef,
+  RuntimeRunConfig,
+  RuntimeRunningInstance,
+  RuntimeTransformationRef,
+} from "$lib/particles/runtimeModel";
 import type {
   StudioConnectorDef,
   StudioRunningInstanceRef,
@@ -90,8 +87,8 @@ type ConditionRegistry = Record<
 
 type RuntimeRegistry = {
   connectors: Record<string, StudioConnectorDef>;
-  features: Record<string, MockFeatureDef>;
-  particles: Record<string, MockParticleDef>;
+  features: Record<string, RuntimeFeatureDef>;
+  particles: Record<string, RuntimeParticleDef>;
   transformations: TransformationRegistry;
   conditions: ConditionRegistry;
 };
@@ -122,7 +119,7 @@ const buildNameMap = (names: string[]) => {
 const parseTransformationLabel = (
   label: string,
   nameMap: Map<string, string>,
-): MockTransformationDef => {
+): RuntimeTransformationRef => {
   const match = label.match(/^\s*([^()]+?)(?:\(([^)]*)\))?\s*$/);
   const rawName = (match?.[1] ?? label).trim();
   const normalized = normalizeKey(rawName);
@@ -132,85 +129,27 @@ const parseTransformationLabel = (
     .split(",")
     .map((value) => Math.trunc(Number(value.trim())))
     .filter((value) => Number.isFinite(value));
-  return { name: canonical as MockTransformationDef["name"], args };
+  return { name: canonical as RuntimeTransformationRef["name"], args };
 };
 
-const connectorToFeature = (connector: StudioConnectorDef): MockFeatureDef => ({
+const connectorToFeature = (connector: StudioConnectorDef): RuntimeFeatureDef => ({
   name: connector.name,
   dimensions: connector.dimensions.map((dimension, index) => ({
     label: `dim-${index + 1}`,
     transformations: dimension.transformations.map((tx) => ({
-      name: tx.name as MockTransformationDef["name"],
+      name: tx.name as RuntimeTransformationRef["name"],
       args: [...tx.args],
     })),
   })),
 });
 
-const connectorToParticle = (connector: StudioConnectorDef): MockParticleDef => ({
+const connectorToParticle = (connector: StudioConnectorDef): RuntimeParticleDef => ({
   name: connector.name,
   featureName: connector.name,
   composites: connector.dimensions.map((dimension) => dimension.composite ?? null),
   conditionName: connector.conditionName,
   conditionArgs: connector.conditionName ? [...(connector.conditionArgs ?? [])] : undefined,
 });
-
-const buildBaseRegistry = (): RuntimeRegistry => {
-  const features = Object.fromEntries(
-    mockRegistrySnapshot.features.map((feature) => [
-      feature.name,
-      {
-        name: feature.name,
-        dimensions: feature.dimensions.map((dimension) => ({
-          label: dimension.label,
-          transformations: dimension.transformations.map((tx) => ({
-            name: tx.name,
-            args: [...tx.args],
-          })),
-        })),
-      } satisfies MockFeatureDef,
-    ]),
-  );
-
-  const particles: Record<string, MockParticleDef> = Object.fromEntries(
-    mockRegistrySnapshot.particles.map((particle) => [
-      particle.name,
-      {
-        name: particle.name,
-        featureName: particle.featureName,
-        composites: [...particle.composites],
-        conditionName: particle.conditionName,
-        conditionArgs: particle.conditionArgs ? [...particle.conditionArgs] : undefined,
-      } satisfies MockParticleDef,
-    ]),
-  );
-
-  const connectors: Record<string, StudioConnectorDef> = {};
-  Object.values(particles).forEach((particle) => {
-    const feature = features[particle.featureName];
-    if (!feature) return;
-    connectors[particle.name] = {
-      name: particle.name,
-      dimensions: feature.dimensions.map((dimension, index) => ({
-        transformations: dimension.transformations.map((tx) => ({
-          name: tx.name as string,
-          args: [...tx.args],
-        })),
-        composite: particle.composites[index] ?? undefined,
-        bindings: {},
-      })),
-      conditionName: particle.conditionName,
-      conditionArgs: particle.conditionName ? [...(particle.conditionArgs ?? [])] : undefined,
-    };
-  });
-
-  return {
-    connectors,
-    features,
-    particles,
-    transformations: { ...mockTransformationRegistry },
-    conditions: { ...mockConditionRegistry },
-  };
-};
 
 const parseDimensionHandle = (handle?: string | null) => {
   if (!handle || !handle.startsWith("dim-")) return null;
@@ -709,16 +648,12 @@ export const buildStudioRuntime = (
   options: { rootLabel: string; rootParticleId?: string; rootConnectorId?: string },
   overrides: Partial<RuntimeRegistry> = {},
 ): StudioRuntimeSnapshot => {
-  const baseRegistry = buildBaseRegistry();
   const registry: RuntimeRegistry = {
-    connectors: { ...baseRegistry.connectors, ...(overrides.connectors ?? {}) },
-    features: { ...baseRegistry.features, ...(overrides.features ?? {}) },
-    particles: { ...baseRegistry.particles, ...(overrides.particles ?? {}) },
-    transformations: {
-      ...baseRegistry.transformations,
-      ...(overrides.transformations ?? {}),
-    },
-    conditions: { ...baseRegistry.conditions, ...(overrides.conditions ?? {}) },
+    connectors: { ...(overrides.connectors ?? {}) },
+    features: { ...(overrides.features ?? {}) },
+    particles: { ...(overrides.particles ?? {}) },
+    transformations: { ...(overrides.transformations ?? {}) },
+    conditions: { ...(overrides.conditions ?? {}) },
   };
   const warnings: string[] = [];
   const transformationNameMap = buildNameMap(Object.keys(registry.transformations));
@@ -784,7 +719,7 @@ export const buildStudioRuntime = (
   return { registry, rootConnector: rootName, rootParticle: rootName, warnings };
 };
 
-const resolveRunningInstance = (instance?: MockRunningInstance): MockRunningInstance => ({
+const resolveRunningInstance = (instance?: RuntimeRunningInstance): RuntimeRunningInstance => ({
   startPoint: instance?.startPoint ?? 0,
   transformShift: instance?.transformShift ?? 0,
 });
@@ -835,7 +770,7 @@ const genSpace = (
   registry: RuntimeRegistry,
   connector: StudioConnectorDef,
   dimId: number,
-  runningInstance: MockRunningInstance,
+  runningInstance: RuntimeRunningInstance,
   samplesCount: number,
 ) => {
   const transformShift = runningInstance.transformShift ?? 0;
@@ -856,7 +791,7 @@ const sampleSpace = (
   registry: RuntimeRegistry,
   connector: StudioConnectorDef,
   dimId: number,
-  runningInstance: MockRunningInstance,
+  runningInstance: RuntimeRunningInstance,
   samplesIndexes: number[],
 ) => {
   const maxIndex = samplesIndexes.reduce((max, value) => Math.max(max, value), 0);
@@ -891,7 +826,7 @@ const decompose = (
   registry: RuntimeRegistry,
   path: string,
   connector: StudioConnectorDef,
-  runningInstances: MockRunningInstance[],
+  runningInstances: RuntimeRunningInstance[],
   runningInstanceId: number,
   indexes: number[],
   dest: number,
@@ -953,7 +888,7 @@ const decompose = (
 export const runStudioParticle = (
   registry: RuntimeRegistry,
   rootName: string,
-  config: MockRunConfig = {},
+  config: RuntimeRunConfig = {},
 ): PtOutputFeature[] => {
   const samplesCount = Math.max(1, config.samplesCount ?? 12);
   const rootConnector = resolveConnector(registry, rootName);
@@ -978,7 +913,7 @@ export const runStudioParticle = (
 export const runStudioGraph = (
   graph: StudioGraph,
   options: { rootLabel: string; rootParticleId?: string; rootConnectorId?: string },
-  config: MockRunConfig = {},
+  config: RuntimeRunConfig = {},
   overrides: Partial<RuntimeRegistry> = {},
 ): PtOutputFeature[] => {
   const runtime = buildStudioRuntime(graph, options, overrides);

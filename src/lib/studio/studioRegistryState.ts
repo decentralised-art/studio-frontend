@@ -1,6 +1,6 @@
 import type { ExploreParticle } from "$lib/data/exploreParticles";
 import type { LibraryItem } from "$lib/data/studioLibrary";
-import type { MockFeatureDef, MockParticleDef } from "$lib/particles/mockPtNetwork";
+import type { RuntimeFeatureDef, RuntimeParticleDef } from "$lib/particles/runtimeModel";
 import type { StudioConnectorDef } from "$lib/studio/domain/connectorModel";
 import type {
   ConditionDraftRuntime,
@@ -19,8 +19,8 @@ export type RuntimeConditionDef = {
 
 export type DeployedRegistry = {
   connectors: Record<string, StudioConnectorDef>;
-  features: Record<string, MockFeatureDef>;
-  particles: Record<string, MockParticleDef>;
+  features: Record<string, RuntimeFeatureDef>;
+  particles: Record<string, RuntimeParticleDef>;
   transformations: Record<string, RuntimeTransformationDef>;
   conditions: Record<string, RuntimeConditionDef>;
 };

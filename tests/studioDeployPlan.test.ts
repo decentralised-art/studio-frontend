@@ -27,6 +27,34 @@ const edge = (source: string, target: string): StudioEdge => ({
 });
 
 describe("studio deploy plan", () => {
+  it("allows a local connector named time when the server registry is empty", () => {
+    const plan = buildStudioDeployPlan({
+      activeTab: { label: "time" },
+      nodes: [connectorNode("time-node", "time")],
+      edges: [],
+    });
+
+    expect(plan.ok).toBe(true);
+    expect(plan.errors).toEqual([]);
+    expect(plan.steps.map((step) => [step.kind, step.name])).toEqual([["connector", "time"]]);
+  });
+
+  it("rejects a local connector whose name is in the deployed registry", () => {
+    const plan = buildStudioDeployPlan({
+      activeTab: { label: "time" },
+      nodes: [connectorNode("time-node", "time")],
+      edges: [],
+      runtimeOverrides: {
+        connectors: {
+          time: { name: "time", dimensions: [{ transformations: [], bindings: {} }] },
+        },
+      },
+    });
+
+    expect(plan.ok).toBe(false);
+    expect(plan.errors).toContain("Connector already exists in registry: time");
+  });
+
   it("orders local connector deploy requests from leaves to root", () => {
     const nodes = [
       connectorNode("root-node", "root", { tabRoot: true } as Partial<StudioNode["data"]>),

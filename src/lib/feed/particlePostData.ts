@@ -24,7 +24,7 @@ import {
   type HydratedChainEventDetail,
 } from "$lib/feed/chainEventHydration";
 import type { FormatFeedEvent } from "$lib/formats/localFormats";
-import type { MockFeatureDef, MockParticleDef } from "$lib/particles/mockPtNetwork";
+import type { RuntimeFeatureDef, RuntimeParticleDef } from "$lib/particles/runtimeModel";
 import {
   fetchChainOwnedStudioSnapshot,
   fetchChainParticleForStudio,
@@ -76,8 +76,8 @@ export type ParticleRecord = Pick<
 
 type ParticleDependencyRegistrySnapshot = {
   connectors: Record<string, StudioConnectorDef>;
-  particles: Record<string, MockParticleDef>;
-  features: Record<string, MockFeatureDef>;
+  particles: Record<string, RuntimeParticleDef>;
+  features: Record<string, RuntimeFeatureDef>;
 };
 
 type ParticlePostCache = {
@@ -290,7 +290,7 @@ const rebuildRuntimeCodeEvents = (records: RuntimeCodeRecord[]): Array<RuntimeCo
     runtimeSnippet: record.runtimeSnippet,
   }));
 
-const connectorToFeature = (connector: StudioConnectorDef): MockFeatureDef => ({
+const connectorToFeature = (connector: StudioConnectorDef): RuntimeFeatureDef => ({
   name: connector.name,
   dimensions: connector.dimensions.map((dimension, index) => ({
     label: `dim-${index + 1}`,
@@ -301,7 +301,7 @@ const connectorToFeature = (connector: StudioConnectorDef): MockFeatureDef => ({
   })),
 });
 
-const connectorToParticle = (connector: StudioConnectorDef): MockParticleDef => ({
+const connectorToParticle = (connector: StudioConnectorDef): RuntimeParticleDef => ({
   name: connector.name,
   featureName: connector.name,
   composites: connector.dimensions.map((dimension) => dimension.composite ?? null),

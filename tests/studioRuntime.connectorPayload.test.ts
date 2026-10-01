@@ -4,6 +4,14 @@ import { toProtocolConnectorPayload } from "../src/lib/chain/connectorContractAd
 import { buildStudioRuntime } from "../src/lib/studio/studioRuntime";
 
 describe("studioRuntime connector payload preparation", () => {
+  it("starts without bundled connectors, transformations, or conditions", () => {
+    const runtime = buildStudioRuntime({ nodes: [], edges: [] }, { rootLabel: "empty" });
+
+    expect(runtime.registry.connectors).toEqual({});
+    expect(runtime.registry.transformations).toEqual({});
+    expect(runtime.registry.conditions).toEqual({});
+  });
+
   it("reads canonical condition edges and preserves condition args", () => {
     const runtime = buildStudioRuntime(
       {

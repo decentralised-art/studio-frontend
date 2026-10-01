@@ -235,7 +235,7 @@
   } from "$lib/chain/registryApi";
   import { createEphemeralDeployName, isReservedCoreCollectionName } from "$lib/chain/deployNaming";
   import { type LibraryItem } from "$lib/data/studioLibrary";
-  import { displayUsersById, type User } from "$lib/data/users";
+  import type { User } from "$lib/data/users";
   import {
     buildStudioUsersById,
     mapServicesUserToStudioAuthor,
@@ -308,7 +308,7 @@
 
   const studioUsersById = $derived.by(() =>
     buildStudioUsersById({
-      baseUsersById: displayUsersById,
+      baseUsersById: {},
       servicesAuthorUsersById,
     }),
   );

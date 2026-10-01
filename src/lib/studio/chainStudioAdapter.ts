@@ -11,14 +11,14 @@ import {
 } from "$lib/chain/registryApi";
 import type { ExploreParticle } from "$lib/data/exploreParticles";
 import type { LibraryItem } from "$lib/data/studioLibrary";
-import type { MockFeatureDef, MockParticleDef } from "$lib/particles/mockPtNetwork";
+import type { RuntimeFeatureDef, RuntimeParticleDef } from "$lib/particles/runtimeModel";
 import type { StudioConnectorDef } from "$lib/studio/domain/connectorModel";
 import { isOwnedLocalEntity, isPublishedChainAddress } from "$lib/studio/studioEntityOrigin";
 
 type ChainRuntimeShape = {
   connectors: Record<string, StudioConnectorDef>;
-  features: Record<string, MockFeatureDef>;
-  particles: Record<string, MockParticleDef>;
+  features: Record<string, RuntimeFeatureDef>;
+  particles: Record<string, RuntimeParticleDef>;
   transformations: Record<string, { argc: number }>;
   conditions: Record<string, { argc: number }>;
 };
@@ -36,8 +36,8 @@ export type ChainStudioSyncResult = {
 export type ChainStudioParticleFetchResult = {
   registry: {
     connector?: StudioConnectorDef;
-    feature?: MockFeatureDef;
-    particle?: MockParticleDef;
+    feature?: RuntimeFeatureDef;
+    particle?: RuntimeParticleDef;
   };
   particleMeta?: ExploreParticle;
 };
@@ -162,7 +162,7 @@ const extractCreatedAtFromRecord = (record: Record<string, unknown>): number | n
 const extractConnectorCreatedAt = (payload: RawChainConnectorResponse): number | null =>
   extractCreatedAtFromRecord(payload as Record<string, unknown>);
 
-const connectorToFeature = (connector: StudioConnectorDef): MockFeatureDef => ({
+const connectorToFeature = (connector: StudioConnectorDef): RuntimeFeatureDef => ({
   name: connector.name,
   dimensions: connector.dimensions.map((dimension, index) => ({
     label: `dim-${index + 1}`,
@@ -175,7 +175,7 @@ const connectorToFeature = (connector: StudioConnectorDef): MockFeatureDef => ({
   })),
 });
 
-const connectorToParticle = (connector: StudioConnectorDef): MockParticleDef => ({
+const connectorToParticle = (connector: StudioConnectorDef): RuntimeParticleDef => ({
   name: connector.name,
   featureName: connector.name,
   composites: connector.dimensions.map((dimension) => dimension.composite ?? null),
@@ -246,7 +246,7 @@ const normalizeConnector = (payload: RawChainConnectorResponse): StudioConnector
   }
 };
 
-const mapFeatureLibraryItem = (feature: MockFeatureDef, authorId: string): LibraryItem => ({
+const mapFeatureLibraryItem = (feature: RuntimeFeatureDef, authorId: string): LibraryItem => ({
   id: `feature-${feature.name}`,
   name: feature.name,
   kind: "feature",
@@ -293,7 +293,7 @@ const mapConditionLibraryItem = (name: string, authorId: string, solSrc?: string
 });
 
 const mapExploreParticle = (
-  particle: MockParticleDef,
+  particle: RuntimeParticleDef,
   authorId: string,
   createdAt: number,
   formatHash?: string,
@@ -438,8 +438,8 @@ export const fetchChainOwnedStudioSnapshot = async (
     : [];
 
   const connectors: Record<string, StudioConnectorDef> = {};
-  const features: Record<string, MockFeatureDef> = {};
-  const particles: Record<string, MockParticleDef> = {};
+  const features: Record<string, RuntimeFeatureDef> = {};
+  const particles: Record<string, RuntimeParticleDef> = {};
   const transformations: Record<string, { argc: number }> = {};
   const conditions: Record<string, { argc: number }> = {};
 

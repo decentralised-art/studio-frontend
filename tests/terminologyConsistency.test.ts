@@ -18,12 +18,11 @@ const auditedFiles = [
   "src/lib/components/flow-editor/EditorPanel.svelte",
   "src/lib/components/workspace-window/WorkspaceTopBar.svelte",
   "src/lib/components/user/UserContribution.svelte",
-  "src/routes/map/+page.svelte",
   "src/routes/account/+page.svelte",
   "src/routes/c/[id]/+page.svelte",
   "src/routes/f/[slug]/+page.svelte",
   "src/routes/network/+page.svelte",
-  "src/lib/network/mockNetworkGraph.ts",
+  "src/lib/network/networkGraph.ts",
   "src/routes/p/[id]/+page.svelte",
   "src/routes/studio/+page.svelte",
   "src/routes/u/[id]/+page.svelte",
@@ -73,13 +72,7 @@ const requiredConnectorPhrases: Record<string, string[]> = {
   "src/lib/components/flow-editor/EditorPanel.svelte": [" + Connector Schema Node "],
   "src/lib/components/workspace-window/WorkspaceTopBar.svelte": ["Publish Connector", "Connector"],
   "src/lib/components/user/UserContribution.svelte": ["Connectors"],
-  "src/routes/map/+page.svelte": [
-    "Connectors",
-    "Connector Schemas",
-    "Click connector nodes to open them in Studio.",
-    "uses connector schema",
-  ],
-  "src/lib/network/mockNetworkGraph.ts": [
+  "src/lib/network/networkGraph.ts": [
     'label: "Connector"',
     'label: "Connector Schema"',
     'label: "uses connector schema"',
