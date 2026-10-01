@@ -526,8 +526,9 @@
     <CodeBlock samples={samples.publishRelay} />
     <h3>Publish from a browser wallet</h3>
     <p>
-      Browser wallets such as MetaMask send transactions themselves and cannot sign offline. Use the
-      two-step flow: prepare the transaction, let the wallet send it, then confirm it.
+      Browser wallets such as MetaMask send transactions themselves and cannot sign offline, so
+      <code>publish</code> stops with an explanation before anything is signed or sent. Use the two-step
+      flow instead: prepare the transaction, let the wallet send it, then confirm it.
     </p>
     <CodeBlock code={samples.publishBrowser.code} lang="ts" caption="JavaScript" />
     <h3>Step by step</h3>

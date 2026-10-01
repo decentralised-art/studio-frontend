@@ -423,13 +423,13 @@ print(result.particles[0].path, result.particles[0].data)
 ];
 
 export const errors = [
-  js(`try {
+  js(`import { DecentralisedArtApiError } from "decentralised-art";
+
+try {
   await sdk.connectorGet("does_not_exist");
 } catch (error) {
-  // DecentralisedArtApiError: HTTP status plus the decoded response body.
-  if (error instanceof Error && error.name === "DecentralisedArtApiError") {
-    const { status, body } = error as Error & { status: number; body: unknown };
-    console.log(status, body); // 404 { message: "..." }
+  if (error instanceof DecentralisedArtApiError) {
+    console.log(error.status, error.body); // 404 { message: "..." }
   } else {
     throw error; // network failure, aborted request, ...
   }
