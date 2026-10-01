@@ -6,9 +6,9 @@
   import type {
     LineageEdge,
     LineageNode,
-    MockRunDescriptor,
+    RunDescriptor,
     RunInstanceInput,
-  } from "$lib/particles/mockPtNetwork";
+  } from "$lib/particles/runtimeModel";
   import Input from "$lib/components/ui/Input.svelte";
   import LineageEdgeCard from "$lib/components/explore/LineageEdge.svelte";
   import LineageNodeCard from "$lib/components/explore/LineageNode.svelte";
@@ -22,7 +22,7 @@
   }: {
     nodes?: LineageNode[];
     edges?: LineageEdge[];
-    runDescriptors?: MockRunDescriptor[];
+    runDescriptors?: RunDescriptor[];
     runInstances?: RunInstanceInput[];
     onRunInstanceChange?: (
       index: number,

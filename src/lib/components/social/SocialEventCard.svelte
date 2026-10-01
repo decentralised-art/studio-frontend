@@ -2,7 +2,6 @@
   import { resolve } from "$app/paths";
   import Card from "$lib/components/ui/Card.svelte";
   import SocialConnectorDependencyFlow from "$lib/components/social/SocialConnectorDependencyFlow.svelte";
-  import { displayUsersById } from "$lib/data/users";
   import type { ConnectorPostEvent } from "$lib/feed/particlePostData";
   import { getUserAvatarInitials } from "$lib/user/avatarInitials";
   const {
@@ -43,7 +42,6 @@
   };
   const isAddressLabel = (value: string) => /^0x[0-9a-f]{6,}/i.test(value.trim());
 
-  const author = $derived.by(() => displayUsersById[event.authorId] ?? null);
   const mappedAuthorLabel = $derived.by(() => {
     const exact = authorLabelById?.[event.authorId]?.trim();
     if (exact && exact.length > 0) return exact;
@@ -53,7 +51,7 @@
     return "";
   });
   const authorLabel = $derived.by(
-    () => mappedAuthorLabel || author?.nickname || shortAddress(event.authorId) || event.authorId,
+    () => mappedAuthorLabel || shortAddress(event.authorId) || event.authorId,
   );
   const mappedAuthorAvatarUrl = $derived.by(() => {
     const exact = authorAvatarUrlById?.[event.authorId]?.trim();
@@ -63,7 +61,7 @@
     if (byNormalized && byNormalized.length > 0) return byNormalized;
     return "";
   });
-  const authorAvatarUrl = $derived.by(() => mappedAuthorAvatarUrl || author?.avatarUrl || "");
+  const authorAvatarUrl = $derived.by(() => mappedAuthorAvatarUrl);
   const authorAvatarInitials = $derived.by(() =>
     isAddressLabel(authorLabel) ? "?" : getUserAvatarInitials(authorLabel),
   );

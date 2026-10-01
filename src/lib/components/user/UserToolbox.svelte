@@ -2,15 +2,7 @@
   import Tag from "$lib/components/ui/Tag.svelte";
   import SectionShell from "$lib/components/ui/SectionShell.svelte";
   import type { User } from "$lib/data/users";
-  import { mockExploreParticles } from "$lib/data/exploreParticles";
-
   const { user }: { user: User } = $props();
-
-  const toolboxParticles = $derived.by(() =>
-    user.toolbox
-      .map((id) => mockExploreParticles.find((p) => p.id === id))
-      .filter((p): p is (typeof mockExploreParticles)[number] => Boolean(p)),
-  );
 </script>
 
 <SectionShell>
@@ -24,11 +16,11 @@
   </div>
 
   <div class="content">
-    {#if toolboxParticles.length === 0}
+    {#if user.toolbox.length === 0}
       <Tag variant="outline">No saved connectors yet</Tag>
     {:else}
-      {#each toolboxParticles as particle (particle.id)}
-        <Tag variant="outline" preserveCase>{particle.name}</Tag>
+      {#each user.toolbox as connectorId (connectorId)}
+        <Tag variant="outline" preserveCase>{connectorId}</Tag>
       {/each}
     {/if}
   </div>

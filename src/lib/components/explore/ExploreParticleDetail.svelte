@@ -11,9 +11,9 @@
   import type {
     LineageEdge,
     LineageNode,
-    MockRunDescriptor,
+    RunDescriptor,
     RunInstanceInput,
-  } from "$lib/particles/mockPtNetwork";
+  } from "$lib/particles/runtimeModel";
   import type { User } from "$lib/data/users";
 
   let {
@@ -39,7 +39,7 @@
     lineageNodes?: LineageNode[];
     lineageEdges?: LineageEdge[];
     runCount?: string;
-    runDescriptors?: MockRunDescriptor[];
+    runDescriptors?: RunDescriptor[];
     runInstances?: RunInstanceInput[];
     onAdd?: (particle: ExploreParticle) => void;
     onRerun?: (particle: ExploreParticle) => void;
