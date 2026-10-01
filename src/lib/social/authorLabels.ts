@@ -78,16 +78,29 @@ export const getServicesUserChainSourceAddresses = (user: ServicesUserRecord): s
   );
 };
 
+export const getServicesUserNickname = (user: ServicesUserRecord): string => {
+  const profileJson = asRecord(user.profile_json ?? user.profileJson);
+  const profilePublic = asRecord(profileJson.public ?? profileJson.profile ?? profileJson);
+  const candidates = [
+    user.display_name,
+    user.displayName,
+    user.nickname,
+    profilePublic.nickname,
+    profilePublic.name,
+  ];
+  for (const candidate of candidates) {
+    if (typeof candidate !== "string") continue;
+    const name = candidate.trim();
+    if (name && !normalizeAuthorAddress(name) && name.toLowerCase() !== "unknown") return name;
+  }
+  return "";
+};
+
 export const resolveServicesUserDisplayLabel = (
   user: ServicesUserRecord,
   fallbackAddress = "",
 ): string => {
-  const displayName =
-    typeof user.display_name === "string"
-      ? user.display_name.trim()
-      : typeof user.displayName === "string"
-        ? user.displayName.trim()
-        : "";
+  const displayName = getServicesUserNickname(user);
   if (displayName) return displayName;
 
   const email = typeof user.email === "string" ? user.email.trim() : "";

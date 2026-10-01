@@ -18,6 +18,11 @@ export const WORLD_RUNTIME_SURFACES = [
 ] as const satisfies readonly WorldRuntimeSurface[];
 
 export const WORLD_PERMISSION_VALUES = [
+  "decentralised.art.connectors.read",
+  "decentralised.art.transformations.read",
+  "decentralised.art.conditions.read",
+  "decentralised.art.social.read",
+  "decentralised.art.execute",
   "dcn.connectors.read",
   "dcn.transformations.read",
   "dcn.conditions.read",
@@ -58,6 +63,7 @@ export type BackendWorldDescriptor = {
   acceptedConnectorSets: WorldAcceptedConnectorSet[];
   valueLimits?: WorldBackendValueLimits;
   preview?: string;
+  previewUrn?: string;
   ownerId: string;
   bundleHash: string;
   manifestHash: string;
@@ -75,6 +81,7 @@ export type BackendWorldDescriptorPreview = {
   surfaces: WorldRuntimeSurface[];
   permissions: WorldPermission[];
   description: string;
+  preview?: string;
   acceptedFormatHashes: string[];
   acceptedConnectorSets: WorldAcceptedConnectorSet[];
 };
@@ -264,23 +271,10 @@ export const normalizeBackendWorldValueLimits = (
   };
 };
 
-const assertCompatibilityContract = (
-  acceptedFormatHashes: string[],
-  acceptedConnectorSets: WorldAcceptedConnectorSet[],
-  label: string,
-) => {
-  if (acceptedFormatHashes.length === 0 && acceptedConnectorSets.length === 0) {
-    throw new WorldContractError(
-      `${label} must declare acceptedFormatHashes or acceptedConnectorSets.`,
-    );
-  }
-};
-
 export const normalizeBackendWorldDescriptor = (value: unknown): BackendWorldDescriptor => {
   const record = asRecord(value, "world");
   const acceptedFormatHashes = stringArray(record, "acceptedFormatHashes", "world");
   const acceptedConnectorSets = normalizeAcceptedConnectorSets(record, "world");
-  assertCompatibilityContract(acceptedFormatHashes, acceptedConnectorSets, "world");
 
   return {
     id: requiredString(record, "id", "world"),
@@ -299,6 +293,7 @@ export const normalizeBackendWorldDescriptor = (value: unknown): BackendWorldDes
     acceptedConnectorSets,
     valueLimits: normalizeBackendWorldValueLimits(record.valueLimits),
     preview: optionalString(record, "preview", "world"),
+    previewUrn: optionalString(record, "previewUrn", "world"),
     ownerId: requiredString(record, "ownerId", "world"),
     bundleHash: requiredString(record, "bundleHash", "world"),
     manifestHash: requiredString(record, "manifestHash", "world"),
@@ -326,11 +321,6 @@ export const normalizeBackendWorldDescriptorPreview = (
     "world descriptor preview",
   );
   const acceptedConnectorSets = normalizeAcceptedConnectorSets(record, "world descriptor preview");
-  assertCompatibilityContract(
-    acceptedFormatHashes,
-    acceptedConnectorSets,
-    "world descriptor preview",
-  );
 
   return {
     slug: requiredString(record, "slug", "world descriptor preview"),
@@ -343,6 +333,7 @@ export const normalizeBackendWorldDescriptorPreview = (
     surfaces: normalizeSurfaces(record, "world descriptor preview"),
     permissions: normalizePermissions(record, "world descriptor preview"),
     description: requiredString(record, "description", "world descriptor preview"),
+    preview: optionalString(record, "preview", "world descriptor preview"),
     acceptedFormatHashes,
     acceptedConnectorSets,
   };
@@ -406,6 +397,7 @@ export const backendWorldToFrontendDescriptor = (
     createdAt: world.createdAt,
     updatedAt: world.updatedAt,
     preview: world.preview,
+    previewUrn: world.previewUrn,
     valueLimits: world.valueLimits,
   },
 });

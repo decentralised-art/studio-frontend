@@ -269,7 +269,7 @@ test("Local lists only owned server entities and Network lists only published en
   await expect(card(page, "NetworkTransform")).toHaveCount(0);
   await page.getByRole("button", { name: "Conditions", exact: true }).click();
   await expect(card(page, "LocalCondition")).toBeVisible();
-  await page.getByRole("button", { name: "Network", exact: true }).click();
+  await page.getByRole("button", { name: "Published", exact: true }).click();
   await expect(card(page, "NetworkCondition")).toBeVisible();
   await expect(card(page, "LocalCondition")).toHaveCount(0);
   expect(state.errors).toEqual([]);

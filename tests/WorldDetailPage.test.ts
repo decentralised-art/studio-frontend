@@ -36,6 +36,18 @@ const formatDiscoveryMock = vi.hoisted(() => ({
   fetchWorldFormatConnectorEvents: vi.fn(),
 }));
 
+const backendHostMock = vi.hoisted(() => ({
+  createBackendWorldHost: vi.fn(async () => ({
+    worldUrl: (url: string) => `${url}?worldChannel=test-channel`,
+    pushState: vi.fn(),
+    dispose: vi.fn(),
+  })),
+}));
+
+vi.mock("$lib/worlds/backendHost", () => ({
+  createBackendWorldHost: backendHostMock.createBackendWorldHost,
+}));
+
 vi.mock("$app/environment", () => ({
   browser: true,
   building: false,
@@ -220,7 +232,7 @@ describe("world detail page", () => {
         "src",
         expect.stringContaining("/services/world-assets/backend-world-1/index.html"),
       );
-      expect(iframe).toHaveAttribute("src", expect.stringContaining("dcnWorldChannel="));
+      expect(iframe).toHaveAttribute("src", expect.stringContaining("worldChannel="));
     });
     expect(screen.getByText("Compatible Connectors")).toBeInTheDocument();
     expect(screen.queryByText("Declared Connector Sets")).not.toBeInTheDocument();

@@ -6,15 +6,12 @@
   import { isProtectedRouteId, isWorldRuntimeRouteId } from "$lib/auth/routeAccess";
   import { hasAuthSession } from "$lib/auth/session";
   import WalletAuthButton from "$lib/components/auth/WalletAuthButton.svelte";
-  import ThemeToggle from "$lib/components/theme/ThemeToggle.svelte";
   import SiteFooter from "$lib/site/SiteFooter.svelte";
   import SiteNav from "$lib/site/SiteNav.svelte";
 
   let { children, data } = $props();
   let authRevision = $state(0);
   let hasMounted = $state(false);
-  let landingThemeToggleVisible = $state(false);
-  let landingThemeToggleFrame: number | null = null;
   const hasCurrentAuthSession = $derived.by(() => {
     const revision = authRevision;
     return revision >= 0 && hasAuthSession();
@@ -23,11 +20,16 @@
     hasMounted ? hasCurrentAuthSession : Boolean(data.isAuthenticated) || hasCurrentAuthSession,
   );
   const isWorldRuntimeRoute = $derived(isWorldRuntimeRouteId(page.route.id));
-  const isLandingRoute = $derived(page.route.id === "/");
+  const isLandingRoute = $derived(page.route.id === "/" || page.route.id === "/worlds");
   const isDocumentRoute = $derived.by(() => {
     const routeId = page.route.id ?? "";
     return (
       routeId === "/" ||
+      routeId === "/worlds" ||
+      routeId === "/about" ||
+      routeId === "/sdk" ||
+      routeId === "/mcp" ||
+      routeId === "/api-reference" ||
       routeId === "/api-status" ||
       routeId === "/api-tutorial" ||
       routeId === "/documentation" ||
@@ -44,39 +46,13 @@
     const path = page.url.pathname;
     const worldsPath = resolve("/worlds");
     return (
+      !isLandingRoute &&
       path !== resolve("/studio") &&
       path !== resolve("/network") &&
       path !== worldsPath &&
       !path.startsWith(`${worldsPath}/`)
     );
   });
-  const shouldShowThemeToggle = $derived(
-    !isWorldRuntimeRoute && (!isLandingRoute || landingThemeToggleVisible),
-  );
-
-  const updateLandingThemeToggleVisibility = () => {
-    if (page.route.id !== "/") {
-      landingThemeToggleVisible = false;
-      return;
-    }
-
-    const nextSection = document.getElementById("when-do-i-want-dcn");
-    if (!nextSection) {
-      landingThemeToggleVisible = window.scrollY > window.innerHeight * 0.8;
-      return;
-    }
-
-    landingThemeToggleVisible = nextSection.getBoundingClientRect().top <= 140;
-  };
-
-  const queueLandingThemeToggleVisibilityUpdate = () => {
-    if (landingThemeToggleFrame !== null) return;
-    landingThemeToggleFrame = window.requestAnimationFrame(() => {
-      landingThemeToggleFrame = null;
-      updateLandingThemeToggleVisibility();
-    });
-  };
-
   onMount(() => {
     const syncAuth = () => {
       hasMounted = true;
@@ -84,31 +60,12 @@
     };
 
     syncAuth();
-    queueLandingThemeToggleVisibilityUpdate();
     window.addEventListener("auth:change", syncAuth);
     window.addEventListener("storage", syncAuth);
-    window.addEventListener("scroll", queueLandingThemeToggleVisibilityUpdate, { passive: true });
-    window.addEventListener("resize", queueLandingThemeToggleVisibilityUpdate);
     return () => {
       window.removeEventListener("auth:change", syncAuth);
       window.removeEventListener("storage", syncAuth);
-      window.removeEventListener("scroll", queueLandingThemeToggleVisibilityUpdate);
-      window.removeEventListener("resize", queueLandingThemeToggleVisibilityUpdate);
-      if (landingThemeToggleFrame !== null) {
-        window.cancelAnimationFrame(landingThemeToggleFrame);
-        landingThemeToggleFrame = null;
-      }
     };
-  });
-
-  $effect(() => {
-    const routeId = page.route.id;
-    if (!hasMounted) return;
-    if (routeId !== "/") {
-      landingThemeToggleVisible = false;
-      return;
-    }
-    queueLandingThemeToggleVisibilityUpdate();
   });
 
   $effect(() => {
@@ -120,15 +77,11 @@
   });
 </script>
 
-{#if shouldShowThemeToggle}
-  <ThemeToggle className="app-theme-toggle" />
-{/if}
-
 {#if isWorldRuntimeRoute}
   {@render children()}
 {:else}
   <div class="app-shell min-h-screen flex flex-col" class:landing-shell={isLandingRoute}>
-    <SiteNav {isAuthenticated} />
+    <SiteNav />
 
     <main
       class="app-main flex-1 min-h-0 flex flex-col"

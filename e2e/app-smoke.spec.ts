@@ -302,24 +302,53 @@ const stubRemoteApis = async (
             <div id="world-root">Backend E2E World Runtime</div>
             <script>
               const params = new URLSearchParams(window.location.search);
-              const channelToken = params.get("dcnWorldChannel");
+              const channelToken = params.get("worldChannel");
               const worldId = "world-backend-e2e";
               const post = (message) => window.parent.postMessage({ ...message, worldId, channelToken }, "*");
               window.addEventListener("message", (event) => {
                 const data = event.data || {};
-                if (data.type === "dcn:world-state" && data.channelToken === channelToken) {
-                  post({ type: "dcn:world-rendered", requestId: data.requestId });
+                if (data.type === "decentralised.art:world-state" && data.channelToken === channelToken) {
+                  post({ type: "decentralised.art:world-rendered", requestId: data.requestId });
                 }
               });
-              post({ type: "dcn:world-ready", protocolVersion: 1 });
+              post({ type: "decentralised.art:world-ready", protocolVersion: 1 });
             </script>
           </body>
         </html>`,
     });
   });
 
-  await page.route(/.*\/(?:services|chain)\/.*/, async (route) => {
+  await page.route(/^https?:\/\/[^/]+\/(?:services|chain)\//, async (route) => {
     const url = route.request().url();
+
+    if (url.includes("/services/js/sdk/world-host.js")) {
+      await route.fulfill({
+        status: 200,
+        contentType: "text/javascript",
+        body: `export class DecentralisedArtClient { constructor() {} }
+          export function createWorldHost({ iframe, onReady, onRendered }) {
+            const channelToken = "playwright-world";
+            const onMessage = (event) => {
+              if (event.source !== iframe.contentWindow || event.data?.channelToken !== channelToken) return;
+              if (event.data.type === "decentralised.art:world-ready") onReady();
+              if (event.data.type === "decentralised.art:world-rendered") onRendered();
+            };
+            window.addEventListener("message", onMessage);
+            return {
+              worldUrl(url) {
+                const result = new URL(url, window.location.href);
+                result.searchParams.set("worldChannel", channelToken);
+                return result.toString();
+              },
+              pushState(state) {
+                iframe.contentWindow?.postMessage({ type: "decentralised.art:world-state", channelToken, ...state }, "*");
+              },
+              dispose() { window.removeEventListener("message", onMessage); }
+            };
+          }`,
+      });
+      return;
+    }
 
     if (url.includes("/services/auth/me")) {
       const isServicesAuthenticated = route
@@ -1165,13 +1194,76 @@ test("renders the public landing page for anonymous root visitors", async ({ pag
   await page.goto("/");
 
   await expect(page).toHaveURL(/\/$/);
-  await expect(page.getByRole("heading", { name: /A decentralised platform for/ })).toBeVisible();
-  await expect(page.getByRole("link", { name: "Worlds" }).first()).toBeVisible();
+  await expect(page.getByRole("region", { name: "Worlds", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Gallery" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "One by one" })).toBeVisible();
+  for (const label of ["Worlds", "Studio"]) {
+    await expect(
+      page
+        .getByRole("navigation", { name: "Primary" })
+        .getByRole("link", { name: label, exact: true }),
+    ).toBeVisible();
+  }
+  await expect(page.getByRole("contentinfo")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Login with MetaMask" }).first()).toBeVisible();
+  await page.locator("html").evaluate((root) => root.setAttribute("data-theme", "light"));
+  await expect(page.getByRole("region", { name: "Worlds", exact: true })).toHaveCSS(
+    "color",
+    "rgb(255, 255, 255)",
+  );
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.getByRole("region", { name: "Worlds", exact: true })).toBeVisible();
   assertNoPageErrors();
 });
 
-const protectedRouteCases = ["/studio", "/network", "/account", "/create"];
+test("keeps the footer navigation on documentation pages", async ({ page }) => {
+  const assertNoPageErrors = collectPageErrors(page);
+
+  await page.goto("/about");
+
+  const footerNavigation = page.getByRole("navigation", { name: "Footer navigation" });
+  for (const label of [
+    "Worlds",
+    "Studio",
+    "About",
+    "SDK",
+    "MCP",
+    "API reference",
+    "API status",
+    "Roadmap",
+  ]) {
+    await expect(footerNavigation.getByRole("link", { name: label, exact: true })).toHaveCount(1);
+  }
+  await expect(footerNavigation.getByRole("link")).toHaveCount(8);
+  await expect(page.getByRole("contentinfo").getByRole("link")).toHaveCount(8);
+  assertNoPageErrors();
+});
+
+test("redirects the old Network page to public Studio", async ({ page }) => {
+  const assertNoPageErrors = collectPageErrors(page);
+  await stubRemoteApis(page);
+
+  await page.goto("/network");
+  await expect(page).toHaveURL(/\/studio$/);
+  await expect(page.getByRole("application", { name: "Flow canvas" })).toBeVisible();
+  await expect(page.getByPlaceholder("Search published operations or an address")).toBeVisible();
+  await expect(
+    page.getByRole("listitem").filter({ hasText: "profile_connector" }).first(),
+  ).toBeVisible();
+  await page
+    .getByPlaceholder("Search published operations or an address")
+    .fill("missing_connector");
+  await expect(page.getByText("No matching connectors.")).toBeVisible();
+  await page
+    .getByPlaceholder("Search published operations or an address")
+    .fill("profile_connector");
+  await expect(
+    page.getByRole("listitem").filter({ hasText: "profile_connector" }).first(),
+  ).toBeVisible();
+  assertNoPageErrors();
+});
+
+const protectedRouteCases = ["/account"];
 
 protectedRouteCases.forEach((path) => {
   test(`gates anonymous ${path} visitors behind MetaMask login`, async ({ page }) => {
@@ -1180,19 +1272,9 @@ protectedRouteCases.forEach((path) => {
 
     await page.goto(path);
 
-    if (path === "/create") {
-      await expect(page).toHaveURL(/\/studio$/);
-    } else {
-      await expect(page).toHaveURL(new RegExp(`${path.replace("/", "\\/")}$`));
-    }
+    await expect(page).toHaveURL(new RegExp(`${path.replace("/", "\\/")}$`));
     await expect(page.getByText("Login with MetaMask to continue.")).toBeVisible();
     await expect(page.getByRole("button", { name: "Login with MetaMask" }).first()).toBeVisible();
-    if (path === "/studio") {
-      await expect(page.getByRole("application", { name: "Flow canvas" })).toHaveCount(0);
-    }
-    if (path === "/network") {
-      await expect(page.getByRole("region", { name: "Activity feed" })).toHaveCount(0);
-    }
     assertNoPageErrors();
   });
 });
@@ -1203,7 +1285,7 @@ test("redirects anonymous login visitors to the landing page", async ({ page }) 
   await page.goto("/login");
 
   await expect(page).toHaveURL(/\/$/);
-  await expect(page.getByRole("heading", { name: /A decentralised platform for/ })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Worlds", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Login with MetaMask" }).first()).toBeVisible();
   assertNoPageErrors();
 });
@@ -1214,7 +1296,7 @@ test("keeps old /app world links working through redirects", async ({ page }) =>
   await page.goto("/app/worlds");
 
   await expect(page).toHaveURL(/\/worlds$/);
-  await expect(page.locator('section[aria-label="Available worlds"]')).toBeVisible();
+  await expect(page.getByRole("region", { name: "Worlds", exact: true })).toBeVisible();
   assertNoPageErrors();
 });
 
@@ -1225,41 +1307,31 @@ test("renders backend worlds in the public Worlds surface", async ({ page }) => 
 
   await page.goto("/worlds");
 
-  await expect(page.locator('section[aria-label="Available worlds"]')).toBeVisible();
-  const backendWorldCard = page.locator(".world-card").filter({ hasText: "Backend E2E World" });
-  await expect(backendWorldCard).toBeVisible({ timeout: 15_000 });
-  await expect(backendWorldCard).toContainText("Backend Studio smoke world.");
+  await expect(page.getByRole("button", { name: "Open Backend E2E World" })).toBeVisible({
+    timeout: 15_000,
+  });
+  await page.getByRole("button", { name: "Open Backend E2E World" }).click();
 
-  await backendWorldCard.click();
-
-  await expect(page).toHaveURL(/\/worlds\/backend-e2e-world$/);
-  await expect(page.getByRole("heading", { name: "Backend E2E World" })).toBeVisible();
-  await expect(page.getByText("Source: Backend world")).toBeVisible();
-  await expect(page.getByText("Version: 1.0.0")).toBeVisible();
-  await expect(page.getByText("Status: active")).toBeVisible();
-  await expect(page.locator(".world-renderer-panel iframe")).toHaveAttribute(
+  await expect(page).toHaveURL(/\/worlds\?world=world-backend-e2e$/);
+  await expect(page.getByRole("dialog", { name: "Backend E2E World" })).toBeVisible();
+  await expect(page.locator(".world-dialog iframe")).toHaveAttribute(
     "src",
-    /\/world-assets\/world-backend-e2e\/index\.html.*dcnWorldChannel=/,
+    /\/world-assets\/world-backend-e2e\/index\.html.*worldChannel=/,
   );
-
-  await expect(page.locator('section[aria-label="Declared connector sets"]')).toHaveCount(0);
-  const compatibleConnectors = page.locator('section[aria-label="Compatible connectors"]');
-  await expect(compatibleConnectors).toBeVisible();
-  await expect(compatibleConnectors.getByRole("link", { name: "duration" })).toBeVisible();
-  await expect(compatibleConnectors.getByRole("link", { name: "melody_root" })).toBeVisible();
-  await expect(compatibleConnectors.getByRole("link", { name: "velocity" })).toBeVisible();
+  await page.getByRole("button", { name: "Close World" }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
   assertNoPageErrors();
 });
 
-test("redirects authenticated login visitors to Network", async ({ page }) => {
+test("redirects authenticated login visitors to Studio", async ({ page }) => {
   const assertNoPageErrors = collectPageErrors(page);
   await stubRemoteApis(page);
   await authenticateFixtureSession(page);
 
   await page.goto("/login");
 
-  await expect(page).toHaveURL(/\/network$/);
-  await expect(page.getByRole("region", { name: "Activity feed" })).toBeVisible();
+  await expect(page).toHaveURL(/\/studio$/);
+  await expect(page.getByRole("application", { name: "Flow canvas" })).toBeVisible();
   assertNoPageErrors();
 });
 
@@ -1519,7 +1591,7 @@ test("attaches backend connector-set worlds to matching Studio connectors", asyn
   await expect(backendWorldNode).toContainText("0 streams | 0 values | backend world");
   await expect(backendWorldNode.locator("iframe")).toHaveAttribute(
     "src",
-    /\/world-assets\/world-backend-e2e\/index\.html.*dcnWorldChannel=/,
+    /\/world-assets\/world-backend-e2e\/index\.html.*worldChannel=/,
   );
   await expect(
     page.locator('.svelte-flow__edge[data-id^="edge-plugin-world:world-backend-e2e"]'),
@@ -1559,63 +1631,6 @@ test("does not expose the removed Templates source in Studio", async ({ page }) 
   await expect(page.getByRole("button", { name: "Templates", exact: true })).toHaveCount(0);
   await expect(page.locator(".templates-panel")).toHaveCount(0);
   assertNoPageErrors();
-});
-
-test("renders the Network shell", async ({ page }) => {
-  const assertNoPageErrors = collectPageErrors(page);
-  const remoteApis = await stubRemoteApis(page);
-  await authenticateFixtureSession(page);
-
-  await page.goto("/network");
-
-  await expect(page.getByRole("region", { name: "Activity feed" })).toBeVisible();
-  await expect(page.getByRole("link", { name: "profile_connector" })).toBeVisible({
-    timeout: 15_000,
-  });
-  expect(remoteApis.chainFeedRequests.some((url) => url.includes("/chain/feed"))).toBe(true);
-  expect(
-    remoteApis.chainAccountRequests.every(
-      (url) => new URL(url).pathname === `/chain/account/${fixtureAddress}`,
-    ),
-  ).toBe(true);
-  assertNoPageErrors();
-});
-
-test("smoke: renders authenticated Network feed through the chain stream without app console errors", async ({
-  page,
-}) => {
-  const assertNoPageErrors = collectPageErrors(page);
-  const assertNoConsoleErrors = collectAppConsoleErrors(page);
-  const remoteApis = await stubRemoteApis(page);
-  await authenticateFixtureSession(page);
-
-  await page.goto("/network");
-
-  await expect(page.getByRole("region", { name: "Activity feed" })).toBeVisible();
-  await expect(page.getByRole("link", { name: "profile_connector" })).toBeVisible({
-    timeout: 15_000,
-  });
-  await expect(page.locator(".social-dependency-flow").first()).toBeVisible();
-  await expect
-    .poll(
-      () => remoteApis.chainFeedRequests.some((url) => new URL(url).pathname === "/chain/feed"),
-      { timeout: 15_000 },
-    )
-    .toBe(true);
-  await expect
-    .poll(
-      () =>
-        remoteApis.chainFeedRequests.some((url) => new URL(url).pathname === "/chain/feed/stream"),
-      { timeout: 15_000 },
-    )
-    .toBe(true);
-  expect(
-    remoteApis.chainAccountRequests.every(
-      (url) => new URL(url).pathname === `/chain/account/${fixtureAddress}`,
-    ),
-  ).toBe(true);
-  assertNoPageErrors();
-  assertNoConsoleErrors();
 });
 
 test("opens and adds a Studio Network connector discovered from the feed", async ({ page }) => {
@@ -1700,8 +1715,8 @@ test("keeps restored Studio connector trees when plugin overlays are present", a
   await expect(restoredConnector).toBeVisible();
   await expect(restoredPlugin).toBeVisible();
 
-  await page.goto("/network");
-  await expect(page.getByRole("region", { name: "Activity feed" })).toBeVisible();
+  await page.goto("/worlds");
+  await expect(page.getByRole("region", { name: "Worlds", exact: true })).toBeVisible();
 
   await page.goto("/studio");
   await expect(networkConnectorCard).toBeVisible({ timeout: 15_000 });
@@ -1871,22 +1886,20 @@ test("uses fresh current profile data for the logged-in user's public page", asy
   assertNoPageErrors();
 });
 
-test("opens an unlisted chain address from Network search without social counters", async ({
+test("opens an unlisted chain address from Studio search without social counters", async ({
   page,
 }) => {
   const assertNoPageErrors = collectPageErrors(page);
   await stubRemoteApis(page);
   await authenticateFixtureSession(page);
 
-  await page.goto("/network");
+  await page.goto("/studio");
 
   await page
-    .getByPlaceholder("Search users, connectors, transformations, conditions")
+    .getByPlaceholder("Search published operations or an address")
     .fill(unlistedChainAddress);
 
-  const addressResult = page.getByRole("listitem").filter({ hasText: unlistedChainAddress });
-  await expect(addressResult).toBeVisible();
-  await addressResult.getByRole("link", { name: unlistedChainAddress }).click();
+  await page.getByRole("link", { name: "Open address profile" }).click();
 
   await expect(page).toHaveURL(new RegExp(`/u/${unlistedChainAddress}$`));
   await expect(page.locator(".profile-main input").first()).toHaveValue(unlistedChainAddress);

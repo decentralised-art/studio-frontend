@@ -1,18 +1,10 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { resolve } from "$app/paths";
+  import { docsNavLinks, primaryNavLinks } from "$lib/site/navigation";
 
   const currentYear = new Date().getFullYear();
   const footerColors = ["#67d6ff", "#f7c86a", "#ff9b7a", "#8de58f"] as const;
-  const links = [
-    { href: "/", label: "Home" },
-    { href: "/worlds", label: "Worlds" },
-    { href: "/tutorial", label: "Tutorial" },
-    { href: "/documentation", label: "API Documentation" },
-    { href: "/api-status", label: "API Status" },
-    { href: "/roadmap", label: "Roadmap" },
-  ] as const;
-
   let footerBackground = $state("#000000");
 
   onMount(() => {
@@ -28,11 +20,23 @@
     </div>
 
     <div class="site-footer-links-wrap">
-      <p class="site-footer-label">Explore</p>
-      <nav class="site-footer-links" aria-label="Footer links">
-        {#each links as link (link.href)}
-          <a href={resolve(link.href)}>{link.label}</a>
-        {/each}
+      <nav class="site-footer-links" aria-label="Footer navigation">
+        <div class="site-footer-link-group">
+          <p class="site-footer-label">Explore</p>
+          <div class="site-footer-link-list">
+            {#each primaryNavLinks as link (link.href)}
+              <a href={resolve(link.href)}>{link.label}</a>
+            {/each}
+          </div>
+        </div>
+        <div class="site-footer-link-group">
+          <p class="site-footer-label">Docs</p>
+          <div class="site-footer-link-list">
+            {#each docsNavLinks as link (link.href)}
+              <a href={resolve(link.href)}>{link.label}</a>
+            {/each}
+          </div>
+        </div>
       </nav>
     </div>
   </div>
@@ -93,23 +97,36 @@
 
   .site-footer-links-wrap {
     display: flex;
-    flex-direction: column;
-    gap: 0.52rem;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: 1.4rem;
   }
 
   .site-footer-links {
     display: flex;
     flex-wrap: wrap;
-    gap: 0.45rem 0.8rem;
+    gap: 1.4rem;
   }
 
-  .site-footer-links a {
+  .site-footer-link-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.52rem;
+  }
+
+  .site-footer-link-list {
+    display: grid;
+    justify-items: start;
+    gap: 0.35rem;
+  }
+
+  .site-footer-link-list a {
     color: rgba(255, 255, 255, 0.9);
     font-size: 0.86rem;
     text-decoration: none;
   }
 
-  .site-footer-links a:hover {
+  .site-footer-link-list a:hover {
     color: #ffffff;
     text-decoration: underline;
     text-underline-offset: 3px;
@@ -127,6 +144,10 @@
       display: flex;
       align-items: flex-start;
       justify-content: space-between;
+    }
+
+    .site-footer-links-wrap {
+      justify-content: flex-end;
     }
   }
 
@@ -149,10 +170,10 @@
     }
 
     .site-footer-links {
-      gap: 0.35rem 0.65rem;
+      gap: 1rem;
     }
 
-    .site-footer-links a {
+    .site-footer-link-list a {
       font-size: 0.82rem;
     }
   }

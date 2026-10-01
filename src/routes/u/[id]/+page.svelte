@@ -83,9 +83,26 @@
     return (Object.keys(nested).length > 0 ? nested : root) as ServicesUserRecord;
   };
 
+  // Only a single user object counts as a direct match; anything else falls back to the list.
+  const isServicesUserPayload = (payload: unknown): boolean => {
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
+    const record = payload as Record<string, unknown>;
+    const user =
+      record.user && typeof record.user === "object" && !Array.isArray(record.user)
+        ? (record.user as Record<string, unknown>)
+        : record;
+    return typeof user.id === "string";
+  };
+
   const resolveServicesUserPayloadByAddress = async (address: string): Promise<unknown | null> => {
     const normalizedAddress = normalizeAddressForKey(address);
     if (!normalizedAddress) return null;
+    try {
+      const payload = await getUserById(normalizedAddress);
+      if (isServicesUserPayload(payload)) return payload;
+    } catch {
+      // A publishing address can also be an alias of a services account.
+    }
     try {
       const servicesUsers = await listServicesUsers();
       const matchingUser = servicesUsers.find((entry) =>

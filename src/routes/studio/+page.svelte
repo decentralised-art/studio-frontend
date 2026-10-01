@@ -135,7 +135,6 @@
     compileTransformationDraftCode as compileTransformationCode,
   } from "$lib/studio/solidityDraftRuntime";
   import {
-    buildStudioChainSyncSources,
     isInvalidChainTokenError,
     mergeFetchedChainParticleIntoStudioState,
     mergeChainSyncSnapshotIntoStudioState,
@@ -209,14 +208,12 @@
   import { fromProtocolConnectorPayload } from "$lib/chain/connectorContractAdapter";
   import {
     getCachedCurrentUserToolboxLibrary,
-    getCurrentUserProfileState,
     getCurrentUserToolboxLibrary,
     getMe,
     getBrowserEthereumProvider,
     listServicesUsers,
     chainTokenIdentityForWalletAddress,
     loginWithBrowserWalletChainAccount,
-    resolveCurrentUserChainSourceAddresses,
     saveCurrentUserToolboxLibrary,
   } from "$lib/auth/api";
   import { clearChainToken, getChainToken, getChainTokenUserId, getToken } from "$lib/auth/session";
@@ -236,10 +233,7 @@
   import { createEphemeralDeployName, isReservedCoreCollectionName } from "$lib/chain/deployNaming";
   import { type LibraryItem } from "$lib/data/studioLibrary";
   import type { User } from "$lib/data/users";
-  import {
-    buildStudioUsersById,
-    mapServicesUserToStudioAuthor,
-  } from "$lib/studio/studioAuthorUsers";
+  import { buildStudioAuthorIndex, buildStudioUsersById } from "$lib/studio/studioAuthorUsers";
   import type {
     StudioConnectorDef,
     StudioRunningInstanceRef,
@@ -482,6 +476,7 @@
   type ExplorerSource = "network" | "local" | "toolbox" | "plugins";
   let explorerSource = $state<ExplorerSource>("network");
   let libraryTab = $state<"connectors" | "transformations" | "conditions">("connectors");
+  let librarySearch = $state("");
   let tooltipX = $state(0);
   let tooltipY = $state(0);
   let leftTabsEl = $state<HTMLDivElement | null>(null);
@@ -2238,14 +2233,7 @@
   const loadStudioAuthorUsers = async () => {
     try {
       const users = await listServicesUsers();
-      const nextUsersById: Record<string, User> = {};
-      users.forEach((user) => {
-        const author = mapServicesUserToStudioAuthor(user);
-        if (!author) return;
-        nextUsersById[author.address] = author;
-        if (user.id.trim()) nextUsersById[user.id.trim()] = author;
-      });
-      servicesAuthorUsersById = nextUsersById;
+      servicesAuthorUsersById = buildStudioAuthorIndex(users);
     } catch (error) {
       console.warn("[Studio] Failed to load services author labels.", error);
     }
@@ -2384,7 +2372,7 @@
         tabsSessionRestoreReady = true;
       });
       void loadToolboxLibraryFromProfile();
-      if (nextServicesToken && explorerSource === "network") {
+      if (explorerSource === "network") {
         void ensureStudioNetworkLibraryLoaded();
       }
     };
@@ -3993,31 +3981,8 @@
     };
   };
 
-  const buildStudioEventFeedSyncSummary = (
-    discovery: StudioEventFeedLibraryDiscovery,
-    sourceCount: number,
-  ): string =>
-    `Loaded ${discovery.discoveredItemCount} network library entries from chain feed across ${sourceCount} source(s): ${discovery.library.features.length} connectors, ${discovery.library.transformations.length} transformations, ${discovery.library.conditions.length} conditions.`;
-
-  const resolveStudioChainSyncSources = async (): Promise<
-    Array<{ address: string; authorId: string; label: string }>
-  > => {
-    const profileState = await getCurrentUserProfileState({
-      preferCached: true,
-    });
-    const resolvedCurrentSources = resolveCurrentUserChainSourceAddresses(profileState.me);
-    const sources = buildStudioChainSyncSources({
-      currentUserChainSourceAddresses: resolvedCurrentSources,
-      followedUserAddresses: profileState.social.followedUserAddresses,
-    });
-    if (import.meta.env.DEV) {
-      console.info("[Studio sync] Source derivation", {
-        profileSources: resolvedCurrentSources,
-        mergedSources: sources.map((source) => source.address),
-      });
-    }
-    return sources;
-  };
+  const buildStudioEventFeedSyncSummary = (discovery: StudioEventFeedLibraryDiscovery): string =>
+    `Loaded ${discovery.discoveredItemCount} network library entries from chain feed: ${discovery.library.features.length} connectors, ${discovery.library.transformations.length} transformations, ${discovery.library.conditions.length} conditions.`;
 
   type StudioChainAuthContext = {
     servicesUserId: string;
@@ -4104,6 +4069,9 @@
   let chainTokenUserId = getChainTokenUserId() ?? "";
   let chainAuthPromise: Promise<void> | null = null;
   const ensureChainAuthForStudio = async (forceRefresh = false) => {
+    if (!getToken()) {
+      throw new Error("Login with MetaMask to create, simulate, or publish in Studio.");
+    }
     if (chainAuthPromise && !forceRefresh) return chainAuthPromise;
 
     const authContext = await resolveCurrentStudioChainAuthContext();
@@ -4330,21 +4298,11 @@
 
     const loadPromise = (async () => {
       chainSyncError = null;
-      chainSyncStatus = "Loading Studio network library from chain feed...";
+      chainSyncStatus = "Loading published operations...";
       chainSyncBusy = true;
-      const sources = await resolveStudioChainSyncSources();
-      if (sources.length === 0) {
-        networkFeedLibraryIds = createEmptyNetworkFeedLibraryIds();
-        studioNetworkLibraryLoaded = false;
-        chainSyncStatus = null;
-        chainSyncError =
-          "Unable to resolve Studio network sources from your profile. Check connection and retry.";
-        return;
-      }
-
-      chainSyncStatus = `Loading chain feed for ${sources.length} source(s)...`;
       const discovery = await loadStudioNetworkLibraryFromEventFeed({
-        sourceAddresses: sources.map((source) => source.address),
+        sourceAddresses: [],
+        includeAllOwners: true,
         pageLimit: 256,
         maxPages: 8,
         targetItems: 240,
@@ -4353,7 +4311,7 @@
       applyStudioNetworkFeedLibraryDiscovery(discovery);
       refreshConnectorTreeTabs();
       studioNetworkLibraryLoaded = true;
-      chainSyncStatus = buildStudioEventFeedSyncSummary(discovery, sources.length);
+      chainSyncStatus = buildStudioEventFeedSyncSummary(discovery);
       chainSyncError = null;
     })();
 
@@ -6957,7 +6915,13 @@
     }
 
     if (explorerSource === "network") {
-      return publishedSource;
+      const query = librarySearch.trim().toLowerCase();
+      if (!query) return publishedSource;
+      return publishedSource.filter((item) =>
+        `${item.name} ${item.id} ${item.summary} ${item.authorId} ${studioUsersById[item.authorId]?.nickname ?? ""}`
+          .toLowerCase()
+          .includes(query),
+      );
     }
 
     return source;
@@ -8458,7 +8422,7 @@
               void ensureStudioNetworkLibraryLoaded();
             }}
           >
-            Network
+            Published
           </button>
           <button
             type="button"
@@ -8526,6 +8490,19 @@
             {#if localLibraryError}<span>{localLibraryError}</span>{/if}
           </div>
         {/if}
+        {#if explorerSource === "network"}
+          <div class="library-search">
+            <input
+              type="search"
+              bind:value={librarySearch}
+              placeholder="Search published operations or an address"
+              aria-label="Search published operations or an address"
+            />
+            {#if /^0x[0-9a-f]{40}$/i.test(librarySearch.trim())}
+              <a href={resolve("/u/[id]", { id: librarySearch.trim() })}>Open address profile →</a>
+            {/if}
+          </div>
+        {/if}
         {#if explorerSource === "network" || explorerSource === "toolbox" || explorerSource === "local"}
           <div class="left-tabs">
             <button
@@ -8587,6 +8564,11 @@
           {#if libraryTab === "connectors"}
             <StudioLibraryList
               title="Connectors"
+              emptyMessage={explorerSource !== "network"
+                ? "No entries yet."
+                : librarySearch
+                  ? "No matching connectors."
+                  : "No connectors published yet."}
               items={libraryItems}
               toolboxIds={savedToolboxIdsForLibraryTab}
               loading={(explorerSource === "local" && localLibraryBusy) ||
@@ -8619,6 +8601,11 @@
             </div>
             <StudioLibraryList
               title="Transformations"
+              emptyMessage={explorerSource !== "network"
+                ? "No entries yet."
+                : librarySearch
+                  ? "No matching transformations."
+                  : "No transformations published yet."}
               items={libraryItems}
               toolboxIds={savedToolboxIdsForLibraryTab}
               loading={(explorerSource === "local" && localLibraryBusy) ||
@@ -8650,6 +8637,11 @@
             </div>
             <StudioLibraryList
               title="Conditions"
+              emptyMessage={explorerSource !== "network"
+                ? "No entries yet."
+                : librarySearch
+                  ? "No matching conditions."
+                  : "No conditions published yet."}
               items={libraryItems}
               toolboxIds={savedToolboxIdsForLibraryTab}
               loading={(explorerSource === "local" && localLibraryBusy) ||
@@ -10716,6 +10708,33 @@
 
   .source-tab.is-active {
     @apply text-white border-white/20 bg-black/80;
+  }
+
+  .library-search {
+    display: grid;
+    gap: 0.35rem;
+  }
+
+  .library-search input {
+    width: 100%;
+    min-width: 0;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 0.4rem;
+    padding: 0.5rem 0.6rem;
+    background: rgba(0, 0, 0, 0.42);
+    color: #fff;
+    font-size: 0.7rem;
+  }
+
+  .library-search input::placeholder {
+    color: rgba(255, 255, 255, 0.5);
+  }
+
+  .library-search a {
+    color: #b3f0ff;
+    font-size: 0.68rem;
+    text-decoration: underline;
+    text-underline-offset: 2px;
   }
 
   .left-tabs {

@@ -35,6 +35,7 @@ const backendWorldFixture = {
     },
   },
   preview: "preview.png",
+  previewUrn: "/world-assets/world-123/preview.png",
   ownerId: "user-1",
   bundleHash: "a".repeat(64),
   manifestHash: "b".repeat(64),
@@ -107,6 +108,7 @@ describe("world backend contract", () => {
     expect(frontendDescriptor.permissions).toEqual(descriptor.permissions);
     expect(frontendDescriptor.acceptedConnectorSets).toEqual(descriptor.acceptedConnectorSets);
     expect(frontendDescriptor.backend?.manifestHash).toBe("b".repeat(64));
+    expect(frontendDescriptor.backend?.previewUrn).toBe("/world-assets/world-123/preview.png");
     expect(frontendDescriptor.valueLimits?.scalarValues?.["/pitch:0"]).toEqual({
       min: 0,
       max: 127,
@@ -122,13 +124,14 @@ describe("world backend contract", () => {
     ).toThrow(WorldContractError);
   });
 
-  it("requires a connector compatibility contract", () => {
-    expect(() =>
-      normalizeBackendWorldDescriptor({
-        ...backendWorldFixture,
-        acceptedFormatHashes: [],
-        acceptedConnectorSets: [],
-      }),
-    ).toThrow(/acceptedFormatHashes or acceptedConnectorSets/);
+  it("accepts Worlds without connector compatibility metadata", () => {
+    const world = normalizeBackendWorldDescriptor({
+      ...backendWorldFixture,
+      acceptedFormatHashes: [],
+      acceptedConnectorSets: [],
+      permissions: [],
+    });
+    expect(world.acceptedConnectorSets).toEqual([]);
+    expect(world.permissions).toEqual([]);
   });
 });

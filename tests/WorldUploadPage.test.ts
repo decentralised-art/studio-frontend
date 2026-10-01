@@ -42,12 +42,13 @@ const validateResponse = {
     surfaces: ["world-page", "studio-plugin"] as const,
     permissions: ["dcn.execute"] as const,
     description: "A validated uploaded world.",
+    preview: "assets/preview.png",
     acceptedFormatHashes: [],
     acceptedConnectorSets: [{ connectors: ["pitch"], optionalConnectors: [] }],
   },
   bundleHash: "a".repeat(64),
   manifestHash: "b".repeat(64),
-  warnings: ["Preview asset not declared."],
+  warnings: [],
 };
 
 const uploadedWorld = {
@@ -108,7 +109,7 @@ describe("world upload page", () => {
       expect(screen.getByRole("heading", { name: "Uploaded World" })).toBeInTheDocument();
     });
     expect(apiMock.validateWorldBundle).toHaveBeenCalledWith(file);
-    expect(screen.getByText("Preview asset not declared.")).toBeInTheDocument();
+    expect(screen.getByText("assets/preview.png")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Upload" })).toBeDisabled();
   });
 
@@ -130,9 +131,9 @@ describe("world upload page", () => {
       expect(screen.getByText("Uploaded")).toBeInTheDocument();
     });
     expect(apiMock.uploadWorldBundle).toHaveBeenCalledWith(file);
-    expect(screen.getByRole("link", { name: "Open world" })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: "View in gallery" })).toHaveAttribute(
       "href",
-      "/worlds/uploaded-world",
+      "/?world=world-uploaded-1",
     );
   });
 

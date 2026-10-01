@@ -100,7 +100,9 @@
   <section class="upload-header">
     <a class="back-link" href={resolve("/worlds")}>Worlds</a>
     <h1>Upload World</h1>
-    <p>Validate a ZIP bundle, then publish it into the backend world registry.</p>
+    <p>
+      Publish a World from a ZIP bundle. Include its HTML entry and a preview image for the gallery.
+    </p>
   </section>
 
   <section class="upload-shell" aria-label="World bundle upload">
@@ -141,7 +143,10 @@
           <span>Uploaded</span>
           <h2>{uploadedWorld.name}</h2>
           <p>{uploadedWorld.description}</p>
-          <a href={resolve("/worlds/[slug]", { slug: uploadedWorld.slug })}>Open world</a>
+          <!-- eslint-disable-next-line svelte/no-navigation-without-resolve -->
+          <a href={`${resolve("/")}?world=${encodeURIComponent(uploadedWorld.id)}`}
+            >View in gallery</a
+          >
         </div>
       {:else if validateResult}
         <div class="manifest-preview">
@@ -160,6 +165,10 @@
             <div>
               <dt>Surfaces</dt>
               <dd>{validateResult.descriptor.surfaces.join(", ")}</dd>
+            </div>
+            <div>
+              <dt>Gallery image</dt>
+              <dd>{validateResult.descriptor.preview ?? ""}</dd>
             </div>
             <div>
               <dt>Permissions</dt>
@@ -209,12 +218,10 @@
         <div class="empty-preview">
           <span>Bundle Contract</span>
           <p>
-            The ZIP must contain a root <code>world-manifest.json</code> and the iframe entry file
-            referenced by that manifest. SDK execute returns
-            <code>{`{block_number, block_hash, runner, particles}`}</code>; read
-            <code>result.particles</code> for the output streams. SDK simulate returns local output
-            streams and remains a separate operation under
-            <code>dcn.execute</code> permission.
+            The ZIP must contain <code>world-manifest.json</code>, the World’s HTML entry, and a
+            PNG, JPEG, or WebP gallery image named by <code>preview</code> in the manifest. Worlds can
+            run independently; SDK permissions are only needed for the platform operations a World chooses
+            to use.
           </p>
         </div>
       {/if}

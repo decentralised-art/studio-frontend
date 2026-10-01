@@ -21,7 +21,6 @@ const auditedFiles = [
   "src/routes/account/+page.svelte",
   "src/routes/c/[id]/+page.svelte",
   "src/routes/f/[slug]/+page.svelte",
-  "src/routes/network/+page.svelte",
   "src/lib/network/networkGraph.ts",
   "src/routes/p/[id]/+page.svelte",
   "src/routes/studio/+page.svelte",

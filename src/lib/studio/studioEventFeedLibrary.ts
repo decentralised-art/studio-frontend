@@ -9,6 +9,7 @@ import type { DeployedLibrary } from "$lib/studio/studioRegistryState";
 
 export type StudioEventFeedLibraryOptions = {
   sourceAddresses: readonly string[];
+  includeAllOwners?: boolean;
   pageLimit?: number;
   maxPages?: number;
   targetItems?: number;
@@ -93,11 +94,12 @@ const compareEntityNewestFirst = (a: StudioFeedEntity, b: StudioFeedEntity): num
 const processFeedItem = (
   item: ChainFeedItem,
   sourceSet: ReadonlySet<string>,
+  includeAllOwners: boolean,
   seenKeys: Set<string>,
   entities: Map<string, StudioFeedEntity>,
 ) => {
   const owner = normalizeFeedSourceAddress(item.payload.owner);
-  if (!owner || !sourceSet.has(owner)) return;
+  if (!owner || (!includeAllOwners && !sourceSet.has(owner))) return;
 
   const kind = resolveStudioFeedEntityKind(item);
   if (!kind) return;
@@ -136,7 +138,7 @@ export const loadStudioNetworkLibraryFromEventFeed = async (
   let hasMore = false;
   let nextBefore: string | null = null;
 
-  if (sourceAddresses.length === 0) {
+  if (sourceAddresses.length === 0 && !options.includeAllOwners) {
     return {
       sourceAddresses,
       library: { features: [], transformations: [], conditions: [] },
@@ -157,7 +159,9 @@ export const loadStudioNetworkLibraryFromEventFeed = async (
     pageCount += 1;
     rawItemCount += page.items.length;
 
-    page.items.forEach((item) => processFeedItem(item, sourceSet, seenKeys, entities));
+    page.items.forEach((item) =>
+      processFeedItem(item, sourceSet, Boolean(options.includeAllOwners), seenKeys, entities),
+    );
 
     hasMore = page.hasMore;
     nextBefore = page.nextBefore;
