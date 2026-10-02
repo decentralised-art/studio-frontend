@@ -172,16 +172,16 @@ while True:
 ];
 
 export const feed = [
-  js(`// Newest first. Finalized items only unless includeUnfinalized is true.
-const page = await sdk.feed({ limit: 20, type: "connector_added", includeUnfinalized: true });
+  js(`// Newest first. includeUnfinalized: false returns finalized items only.
+const page = await sdk.feed({ limit: 20, type: "connector_added", includeUnfinalized: false });
 for (const item of page.items) {
   console.log(item.status, item.payload.type, item.payload.name, item.payload.owner);
 }
 
 // Older items: pass the cursor back.
 const older = await sdk.feed({ limit: 20, before: page.cursor.next_before ?? undefined });`),
-  py(`# Newest first. Finalized items only unless include_unfinalized is True.
-page = sdk.feed(limit=20, event_type="connector_added", include_unfinalized=True)
+  py(`# Newest first. include_unfinalized=False returns finalized items only.
+page = sdk.feed(limit=20, event_type="connector_added", include_unfinalized=False)
 for item in page.items:
     print(item.status, item.payload.name, item.payload.owner)
 

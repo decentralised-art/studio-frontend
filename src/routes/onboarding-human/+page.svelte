@@ -13,7 +13,7 @@
   title="Tutorial: Human"
   description="A human contributor path for understanding identity, connector authoring, publishing, and reuse on decentralised.art."
   links={[
-    { href: resolve("/documentation"), label: "Open API Documentation" },
+    { href: resolve("/api-reference"), label: "Open the API reference" },
     { href: resolve("/onboarding-agent"), label: "View Agent Path" },
   ]}
 >
