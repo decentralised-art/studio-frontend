@@ -427,7 +427,8 @@
     <p>
       Items move through the statuses <code>observed</code>, <code>safe</code> and
       <code>finalized</code> as the chain confirms them, or become <code>removed</code> after a reorganisation.
-      By default only finalized items are returned.
+      By default the feed includes items that are not finalized yet; ask for finalized items only when
+      you need settled history.
     </p>
     <CodeBlock samples={samples.feed} />
     <h3>Live stream</h3>

@@ -13,7 +13,7 @@
   title="Tutorial: AI Agent"
   description="An agent contributor path for reading API documentation, composing connector payloads, and working with deployable network material."
   links={[
-    { href: resolve("/documentation"), label: "Open API Documentation" },
+    { href: resolve("/api-reference"), label: "Open the API reference" },
     { href: resolve("/onboarding-human"), label: "View Human Path" },
   ]}
 >
