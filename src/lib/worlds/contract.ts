@@ -275,9 +275,15 @@ export const normalizeBackendWorldDescriptor = (value: unknown): BackendWorldDes
   const record = asRecord(value, "world");
   const acceptedFormatHashes = stringArray(record, "acceptedFormatHashes", "world");
   const acceptedConnectorSets = normalizeAcceptedConnectorSets(record, "world");
+  const id = requiredString(record, "id", "world");
+  const preview = optionalString(record, "preview", "world");
+  // Deployed services can return the bundled path without a resolved preview URN.
+  const previewUrn =
+    optionalString(record, "previewUrn", "world") ??
+    (preview ? `/world-assets/${encodeURIComponent(id)}/${preview}` : undefined);
 
   return {
-    id: requiredString(record, "id", "world"),
+    id,
     slug: requiredString(record, "slug", "world"),
     name: requiredString(record, "name", "world"),
     version: requiredString(record, "version", "world"),
@@ -292,8 +298,8 @@ export const normalizeBackendWorldDescriptor = (value: unknown): BackendWorldDes
     acceptedFormatHashes,
     acceptedConnectorSets,
     valueLimits: normalizeBackendWorldValueLimits(record.valueLimits),
-    preview: optionalString(record, "preview", "world"),
-    previewUrn: optionalString(record, "previewUrn", "world"),
+    preview,
+    previewUrn,
     ownerId: requiredString(record, "ownerId", "world"),
     bundleHash: requiredString(record, "bundleHash", "world"),
     manifestHash: requiredString(record, "manifestHash", "world"),
