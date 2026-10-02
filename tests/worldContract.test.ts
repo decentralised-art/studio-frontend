@@ -72,6 +72,39 @@ describe("world backend contract", () => {
     expect(normalizeBackendWorldDescriptorList([backendWorldFixture])).toHaveLength(1);
   });
 
+  it("resolves a bundled preview when services omit previewUrn", () => {
+    const descriptor = normalizeBackendWorldDescriptor({
+      ...backendWorldFixture,
+      id: "ab64c998-d4e7-4e92-9baf-98d8e693d796",
+      preview: "assets/preview.png",
+      previewUrn: undefined,
+    });
+
+    expect(descriptor.previewUrn).toBe(
+      "/world-assets/ab64c998-d4e7-4e92-9baf-98d8e693d796/assets/preview.png",
+    );
+    expect(backendWorldToFrontendDescriptor(descriptor).backend?.previewUrn).toBe(
+      descriptor.previewUrn,
+    );
+  });
+
+  it("preserves an explicit previewUrn", () => {
+    const descriptor = normalizeBackendWorldDescriptor({
+      ...backendWorldFixture,
+      previewUrn: "https://assets.example.test/world-cover.png",
+    });
+    expect(descriptor.previewUrn).toBe("https://assets.example.test/world-cover.png");
+  });
+
+  it("leaves Worlds without a preview image unchanged", () => {
+    const descriptor = normalizeBackendWorldDescriptor({
+      ...backendWorldFixture,
+      preview: undefined,
+      previewUrn: undefined,
+    });
+    expect(descriptor.previewUrn).toBeUndefined();
+  });
+
   it("normalizes validate responses without requiring persisted descriptor fields", () => {
     const response = normalizeBackendWorldValidateResponse({
       descriptor: {
