@@ -32,4 +32,12 @@ describe("docs highlight", () => {
     expect(html).toContain('<span class="tok-comment"># step</span>');
     expect(html).toContain('<span class="tok-literal">None</span>');
   });
+
+  it("highlights TOML tables, strings and comments", () => {
+    const html = highlight('[mcp_servers.dcn]\ncommand = "python" # local\nenabled = true', "toml");
+    expect(html).toContain('<span class="tok-keyword">[mcp_servers.dcn]</span>');
+    expect(html).toContain('<span class="tok-string">"python"</span>');
+    expect(html).toContain('<span class="tok-comment"># local</span>');
+    expect(html).toContain('<span class="tok-literal">true</span>');
+  });
 });

@@ -1,7 +1,7 @@
 // A deliberately small syntax highlighter for documentation code samples. It escapes the source
 // and wraps comments, strings, numbers and keywords in spans; it does not parse the language.
 
-export type CodeLanguage = "ts" | "python" | "bash" | "json" | "html";
+export type CodeLanguage = "ts" | "python" | "bash" | "json" | "html" | "toml";
 
 type Rules = {
   comment: RegExp;
@@ -99,12 +99,18 @@ const RULES: Record<CodeLanguage, Rules> = {
     keywords: new Set(),
     literals: new Set(),
   },
+  toml: {
+    comment: /#[^\n]*/y,
+    keywords: new Set(),
+    literals: new Set(["true", "false"]),
+  },
 };
 
 const STRING = /`(?:\\[\s\S]|[^`\\])*`|"(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*'/y;
 const NUMBER = /\b(?:0x[0-9a-fA-F]+|\d[\d_]*(?:\.\d+)?n?)\b/y;
 const WORD = /[A-Za-z_$][\w$]*/y;
 const TAG = /<\/?[A-Za-z][\w-]*|\/?>/y;
+const TOML_TABLE = /(?<=^|\n)\[[^\]\n]+\]/y;
 
 const escapeHtml = (value: string) =>
   value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -134,6 +140,15 @@ export const highlight = (source: string, language: CodeLanguage): string => {
       html += span("comment", comment);
       index += comment.length;
       continue;
+    }
+    if (language === "toml") {
+      const table = matchAt(TOML_TABLE, source, index);
+      if (table) {
+        flush();
+        html += span("keyword", table);
+        index += table.length;
+        continue;
+      }
     }
     if (language === "html") {
       const tag = matchAt(TAG, source, index);

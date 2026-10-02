@@ -111,12 +111,18 @@
 
   .code-tabs {
     display: flex;
+    flex: 1;
     align-self: stretch;
     gap: 0.25rem;
+    min-width: 0;
+    overflow-x: auto;
+    scrollbar-width: none;
   }
 
   .code-tab {
     position: relative;
+    flex: none;
+    white-space: nowrap;
     padding: 0 0.6rem;
     border: 0;
     background: transparent;
@@ -149,6 +155,7 @@
   }
 
   .code-copy {
+    flex: none;
     padding: 0.2rem 0.55rem;
     border: 1px solid var(--border-subtle);
     border-radius: 0.4rem;
