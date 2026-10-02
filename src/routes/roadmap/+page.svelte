@@ -1,52 +1,28 @@
 <script lang="ts">
-  import { resolve } from "$app/paths";
-
+  import RoadmapTimeline from "$lib/site/about/RoadmapTimeline.svelte";
   import SiteContentPage from "$lib/site/SiteContentPage.svelte";
+
+  const description =
+    "decentralised.art is live as an MVP and being tested on the Sepolia test network. Here is where it goes next.";
 </script>
 
 <svelte:head>
-  <title>decentralised.art Ecosystem Roadmap</title>
+  <title>Roadmap · decentralised.art</title>
+  <meta name="description" content={description} />
+  <link rel="canonical" href="https://decentralised.art/roadmap" />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=VT323&display=swap" />
 </svelte:head>
 
-<SiteContentPage
-  eyebrow="Roadmap"
-  title="decentralised.art Ecosystem Roadmap"
-  description="decentralised.art is currently pre-MVP. The roadmap is focused on stabilising the app, opening World creation, testing on Sepolia, and preparing the path to Ethereum Mainnet and Base."
-  links={[
-    { href: resolve("/about"), label: "About" },
-    { href: resolve("/api-reference"), label: "API reference" },
-  ]}
->
-  <div class="info-grid">
-    <article class="info-card">
-      <h3>Now: pre-MVP stabilisation</h3>
-      <p>
-        decentralised.art is still pre-MVP. The current work is to stabilise MetaMask
-        authentication, route access, world loading, connector discovery, and the Studio execution
-        loop.
-      </p>
-    </article>
-    <article class="info-card">
-      <h3>Next: user-created Worlds</h3>
-      <p>
-        Add user-created Worlds in the app, including authoring, registration, compatibility
-        metadata, and a proper simulation system for testing how connectors behave inside a World
-        before they are relied on.
-      </p>
-    </article>
-    <article class="info-card">
-      <h3>Testnet: Sepolia validation</h3>
-      <p>
-        Test the protocol, app flows, connector deployment, execution, indexing, and World
-        simulation on Sepolia before moving to production Ethereum networks.
-      </p>
-    </article>
-    <article class="info-card">
-      <h3>Production networks</h3>
-      <p>
-        After Sepolia validation, migrate toward Ethereum Mainnet and Base, with production-ready
-        deployment, indexing, documentation, and operational safeguards.
-      </p>
-    </article>
-  </div>
+<SiteContentPage eyebrow="Roadmap" title="Where decentralised.art is going" {description}>
+  <section class="roadmap-section" aria-label="Roadmap timeline">
+    <RoadmapTimeline />
+  </section>
 </SiteContentPage>
+
+<style lang="postcss">
+  @reference "$lib/styles/style.css";
+
+  .roadmap-section {
+    @apply grid gap-4;
+  }
+</style>
