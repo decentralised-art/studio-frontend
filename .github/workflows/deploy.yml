@@ -6,6 +6,12 @@ on:
     types:
       - completed
 
+# The repository's default token permissions are read-only for contents and
+# packages, so the artifact list and download need actions: read.
+permissions:
+  actions: read
+  contents: read
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
