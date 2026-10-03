@@ -37,6 +37,8 @@
   import { inferArgsCountFromSnippet } from "$lib/components/solidity-editor/templates/inferArgsCount";
   import type { ExploreParticle } from "$lib/data/exploreParticles";
   import type { PtOutputFeature } from "$lib/particles/ptMidiAdapter";
+  import Seo from "$lib/seo/Seo.svelte";
+  import { STUDIO_DESCRIPTION } from "$lib/seo/site";
   import {
     buildExecutePlanConnectorRegistry,
     buildExecuteRequestBody,
@@ -8227,6 +8229,8 @@
     apiEditorStatus = null;
   });
 </script>
+
+<Seo title="Studio" description={STUDIO_DESCRIPTION} path="/studio" />
 
 <div
   class="studio"

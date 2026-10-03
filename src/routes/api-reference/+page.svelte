@@ -12,6 +12,8 @@
     type FieldRow,
   } from "$lib/site/docs/apiReference";
   import { servicesGroups, servicesSchemas } from "$lib/site/docs/servicesApiReference";
+  import Seo from "$lib/seo/Seo.svelte";
+  import { techArticleJsonLd } from "$lib/seo/site";
 
   const description =
     "Reference for the decentralised.art HTTP APIs: the chain API for operations, simulation, publication and execution, and the services API for sign-in, profiles and Worlds.";
@@ -54,11 +56,13 @@ curl -X POST ${CHAIN_BASE}/execute \\
   const chainError = `{ "message": "Connector not found" }`;
 </script>
 
-<svelte:head>
-  <title>API reference · decentralised.art</title>
-  <meta name="description" content={description} />
-  <link rel="canonical" href="https://decentralised.art/api-reference" />
-</svelte:head>
+<Seo
+  title="API reference"
+  {description}
+  path="/api-reference"
+  type="article"
+  jsonLd={[techArticleJsonLd("/api-reference", "API reference", description)]}
+/>
 
 {#snippet fieldTable(fields: FieldRow[])}
   <div class="table-wrap">

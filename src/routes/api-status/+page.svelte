@@ -2,6 +2,10 @@
   import { onMount } from "svelte";
 
   import SiteContentPage from "$lib/site/SiteContentPage.svelte";
+  import Seo from "$lib/seo/Seo.svelte";
+
+  const description =
+    "Live checks for representative endpoints on https://api.decentralised.art/chain. Reachability does not guarantee full end-to-end behaviour.";
 
   type Probe = {
     key: string;
@@ -107,9 +111,7 @@
   });
 </script>
 
-<svelte:head>
-  <title>decentralised.art API Status</title>
-</svelte:head>
+<Seo title="API status" {description} path="/api-status" />
 
 <SiteContentPage
   eyebrow="API"

@@ -22,6 +22,8 @@
   let mode = $state<BrowseMode>("gallery");
   let pageNumber = 0;
   let loading = $state(false);
+  // False until the first page request settles, including in the prerendered HTML.
+  let hasLoadedOnce = $state(false);
   let hasMore = $state(true);
   let loadError = $state("");
   let selectedWorld = $state<BackendWorldDescriptor | null>(null);
@@ -53,6 +55,7 @@
       loadError = error instanceof Error ? error.message : "Could not load Worlds.";
     } finally {
       loading = false;
+      hasLoadedOnce = true;
     }
   };
 
@@ -244,7 +247,7 @@
         {/each}
       </div>
     {/if}
-  {:else if !loading && !loadError}
+  {:else if hasLoadedOnce && !loading && !loadError}
     <p class="browser-status">No Worlds have been published yet.</p>
   {/if}
 
@@ -256,7 +259,7 @@
       <button type="button" onclick={() => void loadNext()}>Try again</button>
     </div>
   {/if}
-  {#if loading}
+  {#if loading || !hasLoadedOnce}
     <p class="browser-status" role="status">Loading Worlds…</p>
   {/if}
   <div class="load-sentinel" bind:this={loadSentinel}></div>
