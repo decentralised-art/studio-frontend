@@ -218,6 +218,14 @@
       feeds. If you are writing code rather than working with an agent, use the
       <a href={resolve("/sdk")}>SDK</a>; both reach the same API.
     </p>
+    <p>
+      Your agent can also read this documentation directly:
+      <a href={resolve("/llms.txt")} data-sveltekit-reload>llms.txt</a> lists every docs page in
+      markdown (add <code>.md</code> to a page's address, as in
+      <a href={resolve("/[page=markdownPage].md", { page: "mcp" })} data-sveltekit-reload>/mcp.md</a
+      >), and <a href={resolve("/llms-full.txt")} data-sveltekit-reload>llms-full.txt</a> contains all
+      of it in one file.
+    </p>
   </section>
 
   <section>

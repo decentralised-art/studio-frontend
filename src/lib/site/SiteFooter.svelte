@@ -37,6 +37,12 @@
             {/each}
           </div>
         </div>
+        <div class="site-footer-link-group">
+          <p class="site-footer-label">For AI agents</p>
+          <div class="site-footer-link-list">
+            <a href={resolve("/llms.txt")} data-sveltekit-reload>llms.txt</a>
+          </div>
+        </div>
       </nav>
     </div>
   </div>

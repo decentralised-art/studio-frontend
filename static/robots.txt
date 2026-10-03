@@ -3,3 +3,5 @@ User-agent: *
 Disallow:
 
 Sitemap: https://decentralised.art/sitemap.xml
+
+# AI agents: an index of the documentation in markdown is at https://decentralised.art/llms.txt

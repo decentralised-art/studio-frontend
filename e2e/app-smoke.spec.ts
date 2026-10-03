@@ -1231,11 +1231,12 @@ test("keeps the footer navigation on documentation pages", async ({ page }) => {
     "API reference",
     "API status",
     "Roadmap",
+    "llms.txt",
   ]) {
     await expect(footerNavigation.getByRole("link", { name: label, exact: true })).toHaveCount(1);
   }
-  await expect(footerNavigation.getByRole("link")).toHaveCount(8);
-  await expect(page.getByRole("contentinfo").getByRole("link")).toHaveCount(8);
+  await expect(footerNavigation.getByRole("link")).toHaveCount(9);
+  await expect(page.getByRole("contentinfo").getByRole("link")).toHaveCount(9);
   assertNoPageErrors();
 });
 
