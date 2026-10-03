@@ -22,7 +22,14 @@
     const wanted = languagePreference.value;
     return allSamples.find((sample) => sample.label === wanted) ?? allSamples[0];
   });
-  const html = $derived(highlight(active.code.replace(/\n$/, ""), active.lang));
+  // Every sample is rendered and the inactive ones are hidden, so the HTML (and the markdown
+  // generated from it) carries all languages.
+  const highlighted = $derived(
+    allSamples.map((sample) => ({
+      ...sample,
+      html: highlight(sample.code.replace(/\n$/, ""), sample.lang),
+    })),
+  );
 
   let copied = $state(false);
   let copiedTimer: ReturnType<typeof setTimeout> | undefined;
@@ -41,8 +48,8 @@
   };
 </script>
 
-<div class="code-block">
-  <div class="code-bar">
+<div class="code-block" data-code-block data-code-caption={hasTabs ? undefined : caption}>
+  <div class="code-bar" data-markdown-skip>
     {#if hasTabs}
       <div class="code-tabs" role="tablist" aria-label="Code language">
         {#each allSamples as sample (sample.label)}
@@ -64,8 +71,14 @@
       {copied ? "Copied" : "Copy"}
     </button>
   </div>
-  <!-- eslint-disable-next-line svelte/no-at-html-tags -- highlight() escapes the source first -->
-  <pre><code>{@html html}</code></pre>
+  <!-- eslint-disable svelte/no-at-html-tags -- highlight() escapes the source first -->
+  {#each highlighted as sample (sample.label)}
+    <pre
+      hidden={sample.label !== active.label}
+      data-code-label={hasTabs ? sample.label : undefined}
+      data-code-lang={sample.lang}><code>{@html sample.html}</code></pre>
+  {/each}
+  <!-- eslint-enable svelte/no-at-html-tags -->
 </div>
 
 <style lang="postcss">
@@ -178,6 +191,10 @@
     border: 0 !important;
     border-radius: 0;
     background: transparent !important;
+  }
+
+  .code-block pre[hidden] {
+    display: none;
   }
 
   .code-block pre {

@@ -183,6 +183,7 @@
   title="MCP"
   {description}
   path="/mcp"
+  markdownPath="/mcp.md"
   type="article"
   jsonLd={[techArticleJsonLd("/mcp", "MCP", description)]}
 />

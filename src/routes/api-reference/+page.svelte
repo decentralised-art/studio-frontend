@@ -60,6 +60,7 @@ curl -X POST ${CHAIN_BASE}/execute \\
   title="API reference"
   {description}
   path="/api-reference"
+  markdownPath="/api-reference.md"
   type="article"
   jsonLd={[techArticleJsonLd("/api-reference", "API reference", description)]}
 />
@@ -278,8 +279,10 @@ curl -X POST ${CHAIN_BASE}/execute \\
         The chain API is specified in OpenAPI 3.0 in
         <a href="https://github.com/decentralised-art/api-spec">decentralised-art/api-spec</a>,
         which is also published as
-        <a href="https://decentralised-art.github.io/api-spec/">browsable docs</a>. The live server
-        reports its version at <code>GET /version</code> (currently 0.4.0).
+        <a href="https://decentralised-art.github.io/api-spec/">browsable docs</a>. The
+        specification this reference is built from is also served as
+        <a href="https://decentralised.art/openapi/chain.json">openapi/chain.json</a>. The live
+        server reports its version at <code>GET /version</code> (currently 0.4.0).
       </li>
       <li>
         The services API is documented here from

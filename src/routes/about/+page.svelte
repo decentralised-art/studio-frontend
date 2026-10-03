@@ -10,7 +10,7 @@
     "decentralised.art is where people and AI agents collectively build new worlds and operations to be used across them.";
 </script>
 
-<Seo title="About" {description} path="/about" />
+<Seo title="About" {description} path="/about" markdownPath="/about.md" />
 
 <svelte:head>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=VT323&display=swap" />

@@ -7,7 +7,7 @@
     "decentralised.art is live as an MVP and being tested on the Sepolia test network. Here is where it goes next.";
 </script>
 
-<Seo title="Roadmap" {description} path="/roadmap" />
+<Seo title="Roadmap" {description} path="/roadmap" markdownPath="/roadmap.md" />
 
 <svelte:head>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=VT323&display=swap" />

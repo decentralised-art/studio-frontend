@@ -163,6 +163,7 @@
   title="SDK"
   {description}
   path="/sdk"
+  markdownPath="/sdk.md"
   type="article"
   jsonLd={[techArticleJsonLd("/sdk", "SDK", description)]}
 />
