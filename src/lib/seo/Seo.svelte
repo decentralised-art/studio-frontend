@@ -18,6 +18,8 @@
     type?: "website" | "article";
     image?: SeoImage;
     jsonLd?: Record<string, unknown>[];
+    /** Path of the page's markdown version for AI agents, e.g. "/sdk.md". */
+    markdownPath?: string;
   };
 
   const {
@@ -27,6 +29,7 @@
     type = "website",
     image = DEFAULT_OG_IMAGE,
     jsonLd = [],
+    markdownPath,
   }: Props = $props();
 
   // Browser-only pages arrive with fallback tags from hooks.server.ts; this
@@ -54,6 +57,9 @@
   <title>{fullTitle}</title>
   <meta name="description" content={description} />
   <link rel="canonical" href={url} />
+  {#if markdownPath}
+    <link rel="alternate" type="text/markdown" href={absoluteUrl(markdownPath)} />
+  {/if}
   <meta property="og:type" content={type} />
   <meta property="og:site_name" content={SITE_NAME} />
   <meta property="og:locale" content="en_US" />

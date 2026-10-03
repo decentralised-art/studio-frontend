@@ -66,3 +66,47 @@ test("redirects legacy URLs on the server", async ({ request }) => {
     expect(response.headers()["location"]).toBe(to);
   }
 });
+
+test("publishes llms.txt linking the markdown docs and the OpenAPI specification", async ({
+  request,
+}) => {
+  const llms = await request.get("/llms.txt");
+  expect(llms.status()).toBe(200);
+  const body = await llms.text();
+
+  expect(body).toMatch(/^# decentralised\.art\n\n> /);
+  for (const path of ["/mcp.md", "/sdk.md", "/api-reference.md", "/about.md", "/roadmap.md"]) {
+    expect(body).toContain(`](https://decentralised.art${path}): `);
+  }
+  expect(body).toContain("https://decentralised.art/openapi/chain.json");
+  expect(body).toContain("https://decentralised.art/llms-full.txt");
+});
+
+test("serves docs pages as markdown with every code language", async ({ request }) => {
+  const response = await request.get("/sdk.md");
+  expect(response.headers()["content-type"]).toContain("text/markdown");
+  const markdown = await response.text();
+
+  expect(markdown).toMatch(/^# SDK\n/);
+  expect(markdown).toContain("JavaScript:\n\n```ts");
+  expect(markdown).toContain("Python:\n\n```python");
+  expect(markdown).not.toContain("On this page");
+  expect((await request.get("/studio.md")).status()).toBe(404);
+
+  const full = await (await request.get("/llms-full.txt")).text();
+  expect(full).toContain("# MCP");
+  expect(full).toContain("# API reference");
+});
+
+test("links each docs page to its markdown version", async ({ request }) => {
+  const html = await (await request.get("/mcp")).text();
+  expect(html).toContain(
+    '<link rel="alternate" type="text/markdown" href="https://decentralised.art/mcp.md"',
+  );
+});
+
+test("serves the chain API OpenAPI specification", async ({ request }) => {
+  const spec = await (await request.get("/openapi/chain.json")).json();
+  expect(spec.openapi).toMatch(/^3\./);
+  expect(Object.keys(spec.paths).length).toBeGreaterThan(0);
+});

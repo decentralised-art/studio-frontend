@@ -23,9 +23,9 @@
   }: Props = $props();
 </script>
 
-<main class="site-content-page">
+<main class="site-content-page" data-markdown-root>
   <section class="site-content-hero">
-    <p class:is-brand={eyebrow === "decentralised.art"}>{eyebrow}</p>
+    <p class:is-brand={eyebrow === "decentralised.art"} data-markdown-skip>{eyebrow}</p>
     <h1>{title}</h1>
     <span>{description}</span>
     {#if links.length > 0}

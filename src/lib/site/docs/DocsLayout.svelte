@@ -49,15 +49,15 @@
   });
 </script>
 
-<main class="docs-page">
+<main class="docs-page" data-markdown-root>
   <header class="docs-hero">
-    <p class="docs-eyebrow">{eyebrow}</p>
+    <p class="docs-eyebrow" data-markdown-skip>{eyebrow}</p>
     <h1>{title}</h1>
     <p class="docs-intro">{description}</p>
   </header>
 
   <div class="docs-body">
-    <nav class="docs-toc" aria-label="On this page">
+    <nav class="docs-toc" aria-label="On this page" data-markdown-skip>
       <details bind:open={tocOpen}>
         <summary>On this page</summary>
         {#each groups as group (group.label)}
