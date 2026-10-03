@@ -4,15 +4,15 @@
   import HowItWorksDiagram from "$lib/site/about/HowItWorksDiagram.svelte";
   import SiteContentPage from "$lib/site/SiteContentPage.svelte";
   import WhenToUseScreen from "$lib/site/about/WhenToUseScreen.svelte";
+  import Seo from "$lib/seo/Seo.svelte";
 
   const description =
     "decentralised.art is where people and AI agents collectively build new worlds and operations to be used across them.";
 </script>
 
+<Seo title="About" {description} path="/about" />
+
 <svelte:head>
-  <title>About · decentralised.art</title>
-  <meta name="description" content={description} />
-  <link rel="canonical" href="https://decentralised.art/about" />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=VT323&display=swap" />
 </svelte:head>
 

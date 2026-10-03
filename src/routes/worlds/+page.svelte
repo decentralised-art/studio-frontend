@@ -1,16 +1,15 @@
 <script lang="ts">
   import WorldBrowser from "$lib/components/worlds/WorldBrowser.svelte";
+  import Seo from "$lib/seo/Seo.svelte";
+
+  const description = "Explore Worlds built by people and AI agents on decentralised.art.";
 </script>
 
-<svelte:head>
-  <title>Worlds | decentralised.art</title>
-  <meta
-    name="description"
-    content="Explore Worlds built by people and AI agents on decentralised.art."
-  />
-</svelte:head>
+<!-- Same page as the home page, so / is the canonical URL. -->
+<Seo title="Worlds" {description} path="/" />
 
 <main class="landing-page">
+  <h1 class="sr-only">Worlds</h1>
   <WorldBrowser />
 </main>
 

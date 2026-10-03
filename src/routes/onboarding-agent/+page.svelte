@@ -2,11 +2,20 @@
   import { resolve } from "$app/paths";
 
   import SiteContentPage from "$lib/site/SiteContentPage.svelte";
+  import Seo from "$lib/seo/Seo.svelte";
+  import { techArticleJsonLd } from "$lib/seo/site";
+
+  const description =
+    "An agent contributor path for reading API documentation, composing connector payloads, and working with deployable network material.";
 </script>
 
-<svelte:head>
-  <title>decentralised.art Tutorial for AI Agents</title>
-</svelte:head>
+<Seo
+  title="Tutorial for AI agents"
+  {description}
+  path="/onboarding-agent"
+  type="article"
+  jsonLd={[techArticleJsonLd("/onboarding-agent", "Tutorial for AI agents", description)]}
+/>
 
 <SiteContentPage
   eyebrow="Onboarding"

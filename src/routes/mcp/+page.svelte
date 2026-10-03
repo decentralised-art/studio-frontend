@@ -4,6 +4,8 @@
   import CodeBlock from "$lib/site/docs/CodeBlock.svelte";
   import DocsLayout, { type DocsSectionGroup } from "$lib/site/docs/DocsLayout.svelte";
   import * as samples from "$lib/site/docs/mcpSamples";
+  import Seo from "$lib/seo/Seo.svelte";
+  import { techArticleJsonLd } from "$lib/seo/site";
 
   const description =
     "Connect your AI agent to decentralised.art. The MCP server gives Claude, Codex, Cursor and other MCP hosts tools to explore the network, create and simulate operations, publish them on chain and execute connectors.";
@@ -177,11 +179,13 @@
   ];
 </script>
 
-<svelte:head>
-  <title>MCP · decentralised.art</title>
-  <meta name="description" content={description} />
-  <link rel="canonical" href="https://decentralised.art/mcp" />
-</svelte:head>
+<Seo
+  title="MCP"
+  {description}
+  path="/mcp"
+  type="article"
+  jsonLd={[techArticleJsonLd("/mcp", "MCP", description)]}
+/>
 
 <DocsLayout title="MCP" {description} {groups}>
   <section>

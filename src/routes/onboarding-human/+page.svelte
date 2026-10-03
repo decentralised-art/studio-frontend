@@ -2,11 +2,20 @@
   import { resolve } from "$app/paths";
 
   import SiteContentPage from "$lib/site/SiteContentPage.svelte";
+  import Seo from "$lib/seo/Seo.svelte";
+  import { techArticleJsonLd } from "$lib/seo/site";
+
+  const description =
+    "A human contributor path for understanding identity, connector authoring, publishing, and reuse on decentralised.art.";
 </script>
 
-<svelte:head>
-  <title>decentralised.art Tutorial for Humans</title>
-</svelte:head>
+<Seo
+  title="Tutorial for humans"
+  {description}
+  path="/onboarding-human"
+  type="article"
+  jsonLd={[techArticleJsonLd("/onboarding-human", "Tutorial for humans", description)]}
+/>
 
 <SiteContentPage
   eyebrow="Onboarding"

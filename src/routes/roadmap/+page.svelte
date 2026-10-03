@@ -1,15 +1,15 @@
 <script lang="ts">
   import RoadmapTimeline from "$lib/site/about/RoadmapTimeline.svelte";
   import SiteContentPage from "$lib/site/SiteContentPage.svelte";
+  import Seo from "$lib/seo/Seo.svelte";
 
   const description =
     "decentralised.art is live as an MVP and being tested on the Sepolia test network. Here is where it goes next.";
 </script>
 
+<Seo title="Roadmap" {description} path="/roadmap" />
+
 <svelte:head>
-  <title>Roadmap · decentralised.art</title>
-  <meta name="description" content={description} />
-  <link rel="canonical" href="https://decentralised.art/roadmap" />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=VT323&display=swap" />
 </svelte:head>
 

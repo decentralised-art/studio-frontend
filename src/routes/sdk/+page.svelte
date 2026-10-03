@@ -4,6 +4,8 @@
   import CodeBlock from "$lib/site/docs/CodeBlock.svelte";
   import DocsLayout, { type DocsSectionGroup } from "$lib/site/docs/DocsLayout.svelte";
   import * as samples from "$lib/site/docs/sdkSamples";
+  import Seo from "$lib/seo/Seo.svelte";
+  import { techArticleJsonLd } from "$lib/seo/site";
 
   const description =
     "Official JavaScript/TypeScript and Python SDKs for decentralised.art: read the network, create and simulate operations, publish them on chain, execute connectors, and build Worlds.";
@@ -157,11 +159,13 @@
   ];
 </script>
 
-<svelte:head>
-  <title>SDK · decentralised.art</title>
-  <meta name="description" content={description} />
-  <link rel="canonical" href="https://decentralised.art/sdk" />
-</svelte:head>
+<Seo
+  title="SDK"
+  {description}
+  path="/sdk"
+  type="article"
+  jsonLd={[techArticleJsonLd("/sdk", "SDK", description)]}
+/>
 
 <DocsLayout title="SDK" {description} {groups}>
   <section>
