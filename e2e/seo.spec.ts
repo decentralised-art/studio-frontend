@@ -50,9 +50,27 @@ test("publishes robots.txt and sitemap.xml", async ({ request }) => {
   const robots = await (await request.get("/robots.txt")).text();
   expect(robots).toContain("Sitemap: https://decentralised.art/sitemap.xml");
 
+  expect(robots).toContain("https://decentralised.art/llms.txt");
+
   const sitemap = await request.get("/sitemap.xml");
   expect(sitemap.headers()["content-type"]).toContain("xml");
-  expect(await sitemap.text()).toContain("<loc>https://decentralised.art/sdk</loc>");
+  const urls = await sitemap.text();
+  expect(urls).toContain("<loc>https://decentralised.art/sdk</loc>");
+  expect(urls).toContain("<loc>https://decentralised.art/llms.txt</loc>");
+  expect(urls).not.toContain(".md</loc>");
+});
+
+test("links the agent docs from the footer and the MCP and API reference pages", async ({
+  request,
+}) => {
+  for (const path of ["/about", "/mcp", "/api-reference"]) {
+    const html = await (await request.get(path)).text();
+    // Prerendered links are relative ("./llms.txt").
+    expect(html).toMatch(/<a href="\.?\/llms\.txt"[^>]*>llms\.txt<\/a>/);
+  }
+  expect(await (await request.get("/mcp.md")).text()).toContain(
+    "[llms.txt](https://decentralised.art/llms.txt)",
+  );
 });
 
 test("redirects legacy URLs on the server", async ({ request }) => {

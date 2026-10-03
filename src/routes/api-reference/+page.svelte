@@ -291,6 +291,17 @@ curl -X POST ${CHAIN_BASE}/execute \\
       <li>
         Live availability of both APIs is on <a href={resolve("/api-status")}>API status</a>.
       </li>
+      <li>
+        For AI agents, <a href={resolve("/llms.txt")} data-sveltekit-reload>llms.txt</a> lists the
+        documentation in markdown and
+        <a href={resolve("/llms-full.txt")} data-sveltekit-reload>llms-full.txt</a> contains all of
+        it in one file. Every docs page has a markdown version at the same address with
+        <code>.md</code> added, for example
+        <a
+          href={resolve("/[page=markdownPage].md", { page: "api-reference" })}
+          data-sveltekit-reload>/api-reference.md</a
+        >.
+      </li>
     </ul>
   </section>
 </DocsLayout>

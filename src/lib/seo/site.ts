@@ -57,7 +57,8 @@ export const techArticleJsonLd = (path: string, headline: string, description: s
 
 /**
  * Pages listed in sitemap.xml. /worlds is omitted because it is the same page
- * as / and declares / as its canonical URL.
+ * as / and declares / as its canonical URL. llms.txt is listed so crawlers find
+ * the agent docs; the .md pages are not, to avoid duplicates of the HTML pages.
  */
 export const SITEMAP_PATHS = [
   "/",
@@ -70,6 +71,7 @@ export const SITEMAP_PATHS = [
   "/roadmap",
   "/onboarding-agent",
   "/onboarding-human",
+  "/llms.txt",
 ] as const;
 
 export const STUDIO_DESCRIPTION =
