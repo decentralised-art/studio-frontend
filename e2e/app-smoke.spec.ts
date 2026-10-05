@@ -1236,7 +1236,18 @@ test("keeps the footer navigation on documentation pages", async ({ page }) => {
     await expect(footerNavigation.getByRole("link", { name: label, exact: true })).toHaveCount(1);
   }
   await expect(footerNavigation.getByRole("link")).toHaveCount(9);
-  await expect(page.getByRole("contentinfo").getByRole("link")).toHaveCount(9);
+  const footer = page.getByRole("contentinfo");
+  const discordLink = footer.getByRole("link", {
+    name: "Open decentralised.art on Discord (opens in a new tab)",
+    exact: true,
+  });
+  await expect(discordLink).toBeVisible();
+  await expect(discordLink).toHaveAttribute(
+    "href",
+    "https://discord.com/channels/1555735738870407190/1555735743828066396",
+  );
+  await expect(discordLink).toHaveAttribute("target", "_blank");
+  await expect(footer.getByRole("link")).toHaveCount(10);
   assertNoPageErrors();
 });
 
