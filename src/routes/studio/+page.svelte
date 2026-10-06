@@ -18,6 +18,10 @@
   import "@xyflow/svelte/dist/style.css";
 
   import Button from "$lib/components/ui/Button.svelte";
+  import StudioTutorialGuide from "$lib/studio/tutorial/StudioTutorialGuide.svelte";
+  import StudioWorkshopGuide, {
+    type WorkshopLesson,
+  } from "$lib/studio/tutorial/StudioWorkshopGuide.svelte";
   import DockPanel from "$lib/components/ui/DockPanel.svelte";
   import FlowInstanceBridge from "$lib/components/studio/FlowInstanceBridge.svelte";
   import StudioDimensionNode from "$lib/components/studio/StudioDimensionNode.svelte";
@@ -287,6 +291,7 @@
   let rightMode = $state<RightPanelMode>("hidden");
   let inspectorTab = $state<InspectorTab>("node");
   let inspectorAuto = $state(true);
+  let tutorialLesson = $state<"first-run" | "starting-value" | WorkshopLesson | null>(null);
   let topMode = $state<PanelMode>("open");
   let bottomMode = $state<PanelMode>("open");
   let viewportWidthPx = $state(1280);
@@ -2267,6 +2272,18 @@
   };
 
   onMount(() => {
+    const lesson = new URLSearchParams(window.location.search).get("lesson");
+    if (
+      lesson === "first-run" ||
+      lesson === "starting-value" ||
+      lesson === "draft" ||
+      lesson === "selection" ||
+      lesson === "formats" ||
+      lesson === "publish" ||
+      lesson === "conditions" ||
+      lesson === "custom-elements"
+    )
+      tutorialLesson = lesson;
     viewportWidthPx = window.innerWidth;
     applyResponsivePanelWidths();
     loadAssistantSettingsFromStorage();
@@ -2548,6 +2565,76 @@
       ),
   );
   const activeRootCanSimulate = $derived(activeRootIsLocal || activeRootIsPublished);
+  const tutorialRoot = $derived(
+    nodes.find((node) => isConnectorKind(node.data.kind) && node.data.tabRoot),
+  );
+  const tutorialWorkshopState = $derived.by(() => {
+    const root = tutorialRoot;
+    const dimension = root ? getSortedConnectorDimensions(root.id)[0] : undefined;
+    const referenceEdge = root
+      ? edges.find(
+          (edge) =>
+            (edge.source === root.id &&
+              edge.sourceHandle === "dim-0" &&
+              isConnectorKind(nodesById[edge.target]?.data.kind)) ||
+            (edge.source === dimension?.id && edge.sourceHandle === "out"),
+        )
+      : undefined;
+    const pitch = referenceEdge ? nodesById[referenceEdge.target] : undefined;
+    const conditionNode = root ? getAttachedConditionNodeForConnector(root.id) : null;
+    const conditionEdge = root ? getConditionEdgeForConnector(root.id) : null;
+    return {
+      tabId: activeTabId,
+      rootId: root?.id ?? "",
+      rootName: activeRootName,
+      pitchId: pitch?.id ?? "",
+      selectedId: selectedNodeId,
+      panel: rightMode,
+      inspectorTab,
+      apiView: apiJsonView,
+      rootStart: toInt(root?.data.riStart) ?? 0,
+      rootShift: toInt(root?.data.riShift) ?? 0,
+      pitchStart: toInt(pitch?.data.riStart) ?? 0,
+      pitchShift: toInt(pitch?.data.riShift) ?? 0,
+      pitchLocked: Boolean(pitch?.data.riLocked),
+      addArgs: dimension?.data.transformations?.find((item) => item.name === "add")?.args ?? null,
+      dimensionCount: root?.data.dimensions ?? 0,
+      linked: Boolean(pitch && resolveNodeName(pitch) === "pitch"),
+      signedIn: /^0x[0-9a-f]{40}$/i.test(currentStudioAuthorId),
+      local: activeRootIsLocal,
+      published: activeRootIsPublished,
+      ready: tabsSessionRestoreReady && !chainSyncBusy,
+      busy:
+        chainDeployBusy ||
+        chainRunBusy ||
+        transformationEditorDeployBusy ||
+        conditionEditorDeployBusy,
+      samples: runSamplesCount,
+      values:
+        activeRunOutput?.find((stream) => stream.feature_path.endsWith("/pitch:0"))?.data ?? [],
+      resultAt: activeRunTimestamp,
+      runMode: runModeByTab[activeTabId] ?? null,
+      explorerSource,
+      libraryTab,
+      error: chainDeployError ?? chainSyncError ?? transformationDraftError ?? conditionDraftError,
+      transformationEditorOpen,
+      transformationEditorDimension: transformationEditorDimensionId === dimension?.id,
+      transformationCode: transformationDraftCode,
+      transformationName: transformationDraftName,
+      customTransformationAttached: Boolean(
+        dimension?.data.transformations?.some(
+          (item) => item.name === transformationDraftName && item.args.length === 0,
+        ) && deployedRegistry.transformations[transformationDraftName]?.argc === 0,
+      ),
+      conditionEditorOpen,
+      conditionEditorRoot: conditionEditorTargetConnectorId === root?.id,
+      conditionCode: conditionDraftCode,
+      conditionDraftName,
+      attachedConditionName: conditionNode ? resolveNodeName(conditionNode) : "",
+      attachedConditionArgs: parseConditionArgsFromStudioEdge(conditionEdge),
+      attachedConditionArgc: getConditionExpectedArgCount(conditionNode),
+    };
+  });
   const selectedNode = $derived.by(() => nodes.find((node) => node.id === selectedNodeId) ?? null);
   const selectedEdge = $derived.by(() => edges.find((edge) => edge.id === selectedEdgeId) ?? null);
   const inspectorNode = $derived.by(() => {
@@ -5926,10 +6013,21 @@
     const hiddenNodeIds = new SvelteSet(
       projectedNodes.filter((node) => node.hidden).map((node) => node.id),
     );
+    const conditionNodeIds = new SvelteSet(
+      projectedNodes.filter((node) => node.data.kind === "condition").map((node) => node.id),
+    );
     const projectedEdges: Edge[] = model.edges
-      .filter((edge) => !hiddenNodeIds.has(edge.source) && !hiddenNodeIds.has(edge.target))
+      .filter(
+        (edge) =>
+          conditionNodeIds.has(edge.source) ||
+          (!hiddenNodeIds.has(edge.source) && !hiddenNodeIds.has(edge.target)),
+      )
       .map((edge) => ({
         ...edge,
+        // The Inspector and runtime still need an attachment to a hidden condition.
+        ...(hiddenNodeIds.has(edge.source) || hiddenNodeIds.has(edge.target)
+          ? { hidden: true }
+          : {}),
       }));
     return { nodes: projectedNodes, edges: projectedEdges };
   };
@@ -8230,6 +8328,43 @@
 
 <Seo title="Studio" description={STUDIO_DESCRIPTION} path="/studio" />
 
+{#if tutorialLesson === "first-run" || tutorialLesson === "starting-value"}
+  <StudioTutorialGuide
+    lesson={tutorialLesson}
+    rootId={tutorialRoot?.id ?? ""}
+    ready={activeRootName === "pitch" && activeRootIsPublished && !chainSyncBusy}
+    selected={selectedNodeId === tutorialRoot?.id}
+    start={toInt(tutorialRoot?.data.riStart) ?? 0}
+    shift={toInt(tutorialRoot?.data.riShift) ?? 0}
+    samples={runSamplesCount}
+    panel={rightMode}
+    busy={chainRunBusy}
+    values={activeRunOutput?.find((stream) => stream.feature_path === "/pitch:0")?.data ?? []}
+    resultAt={activeRunTimestamp}
+    runMode={runModeByTab[activeTabId] ?? null}
+    error={chainDeployError ?? chainSyncError}
+    onclose={() => {
+      tutorialLesson = null;
+      const url = new URL(window.location.href);
+      url.searchParams.delete("lesson");
+      window.history.replaceState({}, "", url.pathname + url.search + url.hash);
+    }}
+  />
+{/if}
+
+{#if tutorialLesson && tutorialLesson !== "first-run" && tutorialLesson !== "starting-value"}
+  <StudioWorkshopGuide
+    lesson={tutorialLesson}
+    snapshot={tutorialWorkshopState}
+    onclose={() => {
+      tutorialLesson = null;
+      const url = new URL(window.location.href);
+      url.searchParams.delete("lesson");
+      window.history.replaceState({}, "", url.pathname + url.search + url.hash);
+    }}
+  />
+{/if}
+
 <div
   class="studio"
   style={`--left-size:${leftSize}; --right-size:${rightSize}; --top-size:${topSize}; --bottom-size:${bottomSize};`}
@@ -9201,6 +9336,7 @@
                 type="button"
                 class="runner-action"
                 disabled={chainDeployBusy || chainSyncBusy || chainRunBusy || activeTabReadOnly}
+                data-tutorial="create"
                 onclick={deployActiveGraph}
               >
                 {chainDeployBusy ? "Creating..." : "Create locally"}
@@ -9209,6 +9345,7 @@
                 type="button"
                 class="runner-action"
                 disabled={chainRunBusy || chainDeployBusy || !activeRootCanSimulate}
+                data-tutorial="simulate"
                 title="Simulate a created draft or published connector on the server without gas."
                 onclick={() => executeActiveGraph("simulate")}
               >
@@ -9221,12 +9358,14 @@
                 class="runner-action"
                 disabled={chainDeployBusy || chainRunBusy || !activeRootIsLocal}
                 title="Publish local dependencies and this connector to the network. Your wallet pays gas."
+                data-tutorial="publish"
                 onclick={publishActiveGraph}>Publish to the Network</button
               >
               <button
                 type="button"
                 class="runner-action"
                 disabled={chainRunBusy || chainDeployBusy || !activeRootIsPublished}
+                data-tutorial="execute"
                 title="Read the published connector on the network at a recorded block."
                 onclick={() => executeActiveGraph("execute")}
               >
@@ -9372,6 +9511,7 @@
               <button
                 type="button"
                 role="tab"
+                data-tutorial="inspector-api"
                 aria-selected={inspectorTab === "api"}
                 class={`inspector-tab ${inspectorTab === "api" ? "is-active" : ""}`}
                 onclick={() => {
@@ -9469,7 +9609,7 @@
                   {@const connectorRiLocked = selectedNode.data.riLocked ?? false}
                   {@const connectorRiMutability = getConnectorRiMutability(selectedNode)}
                   {@const connectorRiToggleDisabled = isConnectorRiLockToggleDisabled(selectedNode)}
-                  <div class="inspector-section">
+                  <div class="inspector-section" data-tutorial="running-settings">
                     <div class="inspector-section-title">Running instance</div>
                     <div class="inspector-inline">
                       <label class="inspector-inline-label" for="connector-ri-start">Start</label>
@@ -9548,7 +9688,7 @@
                   {@const conditionArgsValue = formatConditionArgsInput(attachedConditionEdge)}
                   {@const conditionArgsCount =
                     parseConditionArgsFromStudioEdge(attachedConditionEdge).length}
-                  <div class="inspector-section">
+                  <div class="inspector-section" data-tutorial="condition-settings">
                     <div class="inspector-section-title">Condition arguments</div>
                     {#if attachedConditionNode && attachedConditionEdge}
                       <div class="inspector-row">
@@ -9613,7 +9753,7 @@
                       </div>
                     {/if}
                   </div>
-                  <div class="inspector-section">
+                  <div class="inspector-section" data-tutorial="dimension-settings">
                     <div class="inspector-section-title">Connector dimensions</div>
                     {#if getSortedConnectorDimensions(selectedNode.id).length === 0}
                       <div class="inspector-hint">No dimensions configured yet.</div>
@@ -9941,7 +10081,9 @@
             {/if}
           {:else}
             <div class="inspector-section">
-              <div class="inspector-section-title">Connector JSON views</div>
+              <div class="inspector-section-title" data-tutorial="json-views">
+                Connector JSON views
+              </div>
               <div class="inspector-json-view-tabs" role="tablist" aria-label="JSON view mode">
                 <button
                   type="button"
@@ -9956,6 +10098,7 @@
                   type="button"
                   class={`inspector-tab ${apiJsonView === "protocol" ? "is-active" : ""}`}
                   role="tab"
+                  data-tutorial="protocol-json"
                   aria-selected={apiJsonView === "protocol"}
                   onclick={() => (apiJsonView = "protocol")}
                 >
@@ -10266,7 +10409,7 @@
 
   {#if transformationEditorOpen}
     <div class="confirm-overlay" role="dialog" aria-modal="true">
-      <div class="editor-modal">
+      <div class="editor-modal" data-tutorial="transformation-editor">
         <div class="editor-header">
           <div class="editor-title">Create transformation</div>
           <div class="editor-header-actions">
@@ -10401,7 +10544,7 @@
 
   {#if conditionEditorOpen}
     <div class="confirm-overlay" role="dialog" aria-modal="true">
-      <div class="editor-modal">
+      <div class="editor-modal" data-tutorial="condition-editor">
         <div class="editor-header">
           <div class="editor-title">Create condition</div>
           <div class="editor-header-actions">

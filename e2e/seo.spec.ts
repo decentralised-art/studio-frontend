@@ -7,6 +7,7 @@ const pages = [
   { path: "/", title: "decentralised.art · Collective performative intelligence", canonical: "/" },
   { path: "/worlds", title: "Worlds · decentralised.art", canonical: "/" },
   { path: "/about", title: "About · decentralised.art", canonical: "/about" },
+  { path: "/tutorial", title: "Tutorial · decentralised.art", canonical: "/tutorial" },
   { path: "/sdk", title: "SDK · decentralised.art", canonical: "/sdk" },
   { path: "/mcp", title: "MCP · decentralised.art", canonical: "/mcp" },
   {
@@ -56,6 +57,7 @@ test("publishes robots.txt and sitemap.xml", async ({ request }) => {
   expect(sitemap.headers()["content-type"]).toContain("xml");
   const urls = await sitemap.text();
   expect(urls).toContain("<loc>https://decentralised.art/sdk</loc>");
+  expect(urls).toContain("<loc>https://decentralised.art/tutorial</loc>");
   expect(urls).toContain("<loc>https://decentralised.art/llms.txt</loc>");
   expect(urls).not.toContain(".md</loc>");
 });
@@ -76,7 +78,7 @@ test("links the agent docs from the footer and the MCP and API reference pages",
 test("redirects legacy URLs on the server", async ({ request }) => {
   for (const [from, to] of [
     ["/documentation", "/api-reference"],
-    ["/tutorial", "/about"],
+    ["/tutorial/intro", "/tutorial"],
     ["/network", "/studio"],
   ]) {
     const response = await request.get(from, { maxRedirects: 0 });
@@ -93,7 +95,14 @@ test("publishes llms.txt linking the markdown docs and the OpenAPI specification
   const body = await llms.text();
 
   expect(body).toMatch(/^# decentralised\.art\n\n> /);
-  for (const path of ["/mcp.md", "/sdk.md", "/api-reference.md", "/about.md", "/roadmap.md"]) {
+  for (const path of [
+    "/mcp.md",
+    "/sdk.md",
+    "/api-reference.md",
+    "/about.md",
+    "/tutorial.md",
+    "/roadmap.md",
+  ]) {
     expect(body).toContain(`](https://decentralised.art${path}): `);
   }
   expect(body).toContain("https://decentralised.art/openapi/chain.json");
@@ -114,6 +123,54 @@ test("serves docs pages as markdown with every code language", async ({ request 
   const full = await (await request.get("/llms-full.txt")).text();
   expect(full).toContain("# MCP");
   expect(full).toContain("# API reference");
+  expect(full).toContain("# Tutorial");
+});
+
+test("serves the tutorial as readable HTML and markdown without JavaScript", async ({
+  request,
+}) => {
+  const html = await (await request.get("/tutorial")).text();
+  expect(html).toMatch(/<h1[^>]*>\s*Tutorial\s*<\/h1>/);
+  expect(html).toContain(
+    '<link rel="alternate" type="text/markdown" href="https://decentralised.art/tutorial.md"',
+  );
+
+  const response = await request.get("/tutorial.md");
+  expect(response.status()).toBe(200);
+  expect(response.headers()["content-type"]).toContain("text/markdown");
+  const markdown = await response.text();
+  expect(markdown).toMatch(/^# Tutorial\n/);
+  expect(markdown).toMatch(/palette/i);
+  expect(markdown).toMatch(/condition/i);
+  expect(markdown).toContain("https://decentralised.art/mcp");
+  expect(markdown).not.toContain("On this page");
+
+  // Every route must be available to agents, including the tabs hidden in the UI.
+  for (const heading of [
+    "### Run four values in Studio",
+    "### Run four values with your agent",
+    "### Run four values with API calls",
+    "### Run four values with the SDK",
+    "## Create your own transformations and conditions",
+    "## Practise on Sepolia. What changes on Mainnet?",
+    "## How makers shape an economy",
+  ]) {
+    expect(markdown).toContain(heading);
+  }
+  expect(markdown).toContain("JavaScript:\n\n```ts");
+  expect(markdown).toContain("Python:\n\n```python");
+  expect(markdown).toContain("tutorial_threshold_pass_v1");
+  expect(markdown).toContain("tutorial_threshold_fail_v1");
+  expect(markdown).toContain("tutorial_divisible_pass_v1");
+  expect(markdown).toContain("tutorial_divisible_fail_v1");
+  expect(markdown).toContain("Execution rejected: Condition not met");
+  expect(markdown).toContain("return (x + 1) % 4;");
+  expect(markdown).toContain("https://decentralised.art/sdk#worlds");
+
+  const full = await request.get("/llms-full.txt");
+  expect(full.status()).toBe(200);
+  // Check the complete export, rather than only finding its title in the bundle.
+  expect(await full.text()).toContain(markdown.trim());
 });
 
 test("links each docs page to its markdown version", async ({ request }) => {

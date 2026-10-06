@@ -9,16 +9,17 @@ import type { RequestHandler } from "./$types";
 export const prerender = true;
 
 export const GET: RequestHandler = async ({ fetch }) => {
-  const pages = await Promise.all(
-    MARKDOWN_PAGES.map(async ({ slug, section }) => {
-      const path = `/${slug}`;
-      const page = htmlToMarkdownPage(await (await fetch(path)).text(), path);
-      return {
-        section,
-        line: `- [${page.title}](${absoluteUrl(markdownPath(slug))}): ${page.description}`,
-      };
-    }),
-  );
+  const pages: { section: string; line: string }[] = [];
+  // Internal fetches share SvelteKit's prerender request state. Read them in order
+  // to avoid overlapping reroute state; clones preserve cached dependency bodies.
+  for (const { slug, section } of MARKDOWN_PAGES) {
+    const path = `/${slug}`;
+    const page = htmlToMarkdownPage(await (await fetch(path)).clone().text(), path);
+    pages.push({
+      section,
+      line: `- [${page.title}](${absoluteUrl(markdownPath(slug))}): ${page.description}`,
+    });
+  }
   const sections = [...new Set(pages.map((page) => page.section))].map(
     (section) =>
       `## ${section}\n\n${pages

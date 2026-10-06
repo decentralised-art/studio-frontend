@@ -3,6 +3,7 @@
  * into /llms-full.txt in this order.
  */
 export const MARKDOWN_PAGES = [
+  { slug: "tutorial", section: "Docs" },
   { slug: "mcp", section: "Docs" },
   { slug: "sdk", section: "Docs" },
   { slug: "api-reference", section: "Docs" },

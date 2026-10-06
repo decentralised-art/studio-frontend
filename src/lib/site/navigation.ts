@@ -5,6 +5,7 @@ export const primaryNavLinks = [
 
 export const docsNavLinks = [
   { href: "/about", label: "About" },
+  { href: "/tutorial", label: "Tutorial" },
   { href: "/sdk", label: "SDK" },
   { href: "/mcp", label: "MCP" },
   { href: "/api-reference", label: "API reference" },

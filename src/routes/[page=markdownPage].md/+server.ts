@@ -14,6 +14,6 @@ export const GET: RequestHandler = async ({ params, fetch }) => {
   const path = `/${params.page}`;
   const response = await fetch(path);
   if (!response.ok) error(response.status, `Could not render ${path}`);
-  const { markdown } = htmlToMarkdownPage(await response.text(), path);
+  const { markdown } = htmlToMarkdownPage(await response.clone().text(), path);
   return new Response(markdown, { headers: { "Content-Type": "text/markdown; charset=utf-8" } });
 };

@@ -13,7 +13,7 @@
   type Props = {
     eyebrow?: string;
     title: string;
-    description: string;
+    description?: string;
     groups: DocsSectionGroup[];
     children: Snippet;
   };
@@ -53,7 +53,7 @@
   <header class="docs-hero">
     <p class="docs-eyebrow" data-markdown-skip>{eyebrow}</p>
     <h1>{title}</h1>
-    <p class="docs-intro">{description}</p>
+    {#if description}<p class="docs-intro">{description}</p>{/if}
   </header>
 
   <div class="docs-body">
