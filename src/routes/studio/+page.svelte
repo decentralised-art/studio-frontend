@@ -178,7 +178,7 @@
     publicationAddressUrl,
     publicationTransactionUrl,
   } from "$lib/studio/publicationExplorer";
-  import type { EntityKind } from "dcn";
+  import type { EntityKind } from "decentralised-art";
   import { buildStudioDeployPlan, type StudioDeployPlan } from "$lib/studio/studioDeployPlan";
   import {
     clampPanelWidth,
@@ -5526,6 +5526,7 @@
               block_number: result.body.block_number,
               block_hash: result.body.block_hash,
               runner: result.body.runner,
+              registry: result.body.registry,
             },
       };
       output = measureStudioRunStep(timings, "normalize", () =>

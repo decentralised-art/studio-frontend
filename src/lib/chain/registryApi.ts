@@ -4,7 +4,7 @@ import {
   isDcnApiError,
 } from "$lib/chain/dcnClient";
 import { normalizeChainExecutePayload } from "$lib/chain/executePayloadContract";
-import type { ConfirmRequest, EntityKind } from "dcn";
+import type { ConfirmRequest, EntityKind } from "decentralised-art";
 
 type DcnClientInstance = ReturnType<typeof createDcnClient>;
 
@@ -107,6 +107,7 @@ export type RawChainTransformationResponse = {
   owner?: string;
   sol_src?: string;
   args_count?: number;
+  runtime_code?: string | null;
   address?: string;
 };
 
@@ -117,6 +118,7 @@ export type RawChainConditionResponse = {
   owner?: string;
   sol_src?: string;
   args_count?: number;
+  runtime_code?: string | null;
   address?: string;
 };
 
@@ -147,6 +149,7 @@ export type ChainExecutionProvenance = {
   block_number: number;
   block_hash: string;
   runner: string;
+  registry: string;
 };
 
 export type RawChainExecuteResponse = ChainExecutionProvenance & {
@@ -352,16 +355,19 @@ export const normalizeChainExecuteResponse = (
     typeof payload.block_hash !== "string" ||
     !/^0x[0-9a-f]{64}$/i.test(payload.block_hash) ||
     typeof payload.runner !== "string" ||
-    !/^0x[0-9a-f]{40}$/i.test(payload.runner)
+    !/^0x[0-9a-f]{40}$/i.test(payload.runner) ||
+    typeof payload.registry !== "string" ||
+    !/^0x[0-9a-f]{40}$/i.test(payload.registry)
   ) {
     throw new Error(
-      "Invalid execute response: expected block_number, block_hash, runner and particles. Use simulate for local drafts.",
+      "Invalid execute response: expected block_number, block_hash, runner, registry and particles. Use simulate for local drafts.",
     );
   }
   return {
     block_number: payload.block_number,
     block_hash: payload.block_hash,
     runner: payload.runner,
+    registry: payload.registry,
     particles: normalizeChainSimulateResponse(payload.particles),
   };
 };

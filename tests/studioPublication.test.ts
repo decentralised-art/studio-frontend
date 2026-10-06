@@ -1,4 +1,4 @@
-import type { PreparedPublication } from "dcn";
+import type { PreparedPublication } from "decentralised-art";
 import { describe, expect, it, vi } from "vitest";
 import type { BrowserEthereumProvider } from "../src/lib/auth/api";
 import {

@@ -12,7 +12,9 @@ vi.mock("$lib/chain/dcnClient", () => ({
   }),
   isDcnApiError: (error: unknown) =>
     Boolean(
-      error && typeof error === "object" && (error as { name?: string }).name === "DcnApiError",
+      error &&
+      typeof error === "object" &&
+      (error as { name?: string }).name === "DecentralisedArtApiError",
     ),
 }));
 
@@ -202,7 +204,7 @@ describe("eventFeedApi", () => {
 
   it("surfaces non-json chain feed errors with the shared request error shape", async () => {
     feedMock.mockRejectedValue({
-      name: "DcnApiError",
+      name: "DecentralisedArtApiError",
       status: 502,
       body: "<html><body>502 Bad Gateway</body></html>",
     });
@@ -319,7 +321,7 @@ describe("eventFeedApi", () => {
   it("surfaces SDK feed stream startup errors", async () => {
     const errors: Error[] = [];
     feedStreamMock.mockRejectedValue({
-      name: "DcnApiError",
+      name: "DecentralisedArtApiError",
       status: 504,
       body: "<html><body>504 Gateway Timeout</body></html>",
     });

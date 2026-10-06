@@ -16,7 +16,9 @@ vi.mock("$lib/chain/dcnClient", () => ({
   }),
   isDcnApiError: (error: unknown) =>
     Boolean(
-      error && typeof error === "object" && (error as { name?: string }).name === "DcnApiError",
+      error &&
+      typeof error === "object" &&
+      (error as { name?: string }).name === "DecentralisedArtApiError",
     ),
 }));
 
@@ -39,6 +41,7 @@ describe("registryApi execute payload contract", () => {
         block_number: 42,
         block_hash: `0x${"ab".repeat(32)}`,
         runner: `0x${"12".repeat(20)}`,
+        registry: `0x${"34".repeat(20)}`,
         particles: [
           {
             path: "pitch:0",
@@ -69,6 +72,7 @@ describe("registryApi execute payload contract", () => {
     expect(result.body.block_number).toBe(42);
     expect(result.body.block_hash).toBe(`0x${"ab".repeat(32)}`);
     expect(result.body.runner).toBe(`0x${"12".repeat(20)}`);
+    expect(result.body.registry).toBe(`0x${"34".repeat(20)}`);
     expect(result.body.particles[0]).toEqual({
       path: "pitch:0",
       data: [60, 61, 62],
@@ -90,17 +94,38 @@ describe("registryApi execute payload contract", () => {
   it.each([
     [],
     {
-      block_number: -1,
+      block_number: 1,
       block_hash: `0x${"ab".repeat(32)}`,
       runner: `0x${"12".repeat(20)}`,
       particles: [],
     },
-    { block_number: 1, block_hash: "0xwrong", runner: `0x${"12".repeat(20)}`, particles: [] },
+    {
+      block_number: 1,
+      block_hash: `0x${"ab".repeat(32)}`,
+      runner: `0x${"12".repeat(20)}`,
+      registry: "0x0",
+      particles: [],
+    },
+    {
+      block_number: -1,
+      block_hash: `0x${"ab".repeat(32)}`,
+      runner: `0x${"12".repeat(20)}`,
+      registry: `0x${"34".repeat(20)}`,
+      particles: [],
+    },
+    {
+      block_number: 1,
+      block_hash: "0xwrong",
+      runner: `0x${"12".repeat(20)}`,
+      registry: `0x${"34".repeat(20)}`,
+      particles: [],
+    },
     { block_number: 1, block_hash: `0x${"ab".repeat(32)}`, runner: "0x0", particles: [] },
     {
       block_number: 1,
       block_hash: `0x${"ab".repeat(32)}`,
       runner: `0x${"12".repeat(20)}`,
+      registry: `0x${"34".repeat(20)}`,
       particles: [{ path: "a", data: [NaN] }],
     },
   ])("rejects legacy/malformed chain results: %j", async (body) => {
@@ -127,7 +152,7 @@ describe("registryApi execute payload contract", () => {
 
   it("surfaces backend execute errors as ChainApiRequestError", async () => {
     executeMock.mockRejectedValue({
-      name: "DcnApiError",
+      name: "DecentralisedArtApiError",
       status: 400,
       body: { message: "Failed to execute connector." },
     });

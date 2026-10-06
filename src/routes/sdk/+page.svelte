@@ -56,16 +56,21 @@
 
   const methods = [
     ["version()", "version()", "", "Chain API version and build timestamp."],
-    ["getNonce(address)", "get_nonce(address)", "", "One-time login nonce for an address."],
+    [
+      "getNonce(address, opts?)",
+      "get_nonce(address, origin=)",
+      "",
+      "One-time nonce and EIP-4361 sign-in message for an address.",
+    ],
     [
       "loginWithWallet(wallet)",
       "login_with_account(account)",
       "",
-      "Sign the login nonce and store the access token. The wallet or account also becomes the default publication signer.",
+      "Sign the issued sign-in message and store the access token. The wallet or account also becomes the default publication signer.",
     ],
     [
-      "loginWithSignature(address, message, signature)",
-      "login_with_signature(address, message, signature)",
+      "loginWithSignature(address, nonce, signature)",
+      "login_with_signature(address, nonce, signature)",
       "",
       "Log in with a signature produced elsewhere.",
     ],
@@ -380,13 +385,19 @@
     <h2 id="authentication">Authentication</h2>
     <p>
       Reading, simulating and executing need no login. Creating and publishing need a bearer token,
-      which you get by signing a one-time nonce with your Ethereum key:
+      which you get by signing a one-time EIP-4361 message with your Ethereum key:
     </p>
     <ol>
-      <li>The client asks for a nonce for your address.</li>
-      <li>You sign the message <code>Login nonce: &lt;nonce&gt;</code> (EIP-191).</li>
+      <li>The client asks for a nonce and sign-in message for your address.</li>
+      <li>You sign the exact returned <code>message</code> using EIP-191 personal_sign.</li>
+      <li>The client submits your address, the issued nonce and the signature.</li>
       <li>The server returns an access token, which the client stores and sends from then on.</li>
     </ol>
+    <p>
+      Browser clients pass <code>{`{ origin: window.location.origin }`}</code> to
+      <code>getNonce</code> or <code>loginWithWallet</code>, so the message names the site asking
+      for the signature. The challenge expires after five minutes and can be used once.
+    </p>
     <CodeBlock samples={samples.loginWallet} />
     <p>
       If you sign somewhere else (a hardware wallet, another service), submit the signature
@@ -409,8 +420,9 @@
     <h2 id="reading">Reading the network</h2>
     <p>
       Every operation can be read by name. Lookups return both published operations and drafts;
-      check <code>address</code> to tell them apart. Transformation and condition lookups return their
-      argument count but never their Solidity source.
+      check <code>address</code> to tell them apart. Transformation and condition lookups return
+      their argument count and deployed <code>runtime_code</code>, which can be <code>null</code>
+      while bytecode is unavailable. They never return Solidity source.
     </p>
     <CodeBlock samples={samples.reading} />
     <h3>Pagination</h3>
@@ -599,13 +611,18 @@
             ><td><code>runner</code></td><td>Address of the runner contract that executed it.</td
             ></tr
           >
+          <tr
+            ><td><code>registry</code></td><td
+              >Registry address the runner looked the connector up in.</td
+            ></tr
+          >
         </tbody>
       </table>
     </div>
     <p>
       The step count must be between 1 and 65536. Running instances (up to 4096) are keyed by
-      position, as described in <a href="#concepts">Core concepts</a>. Keep the block and runner
-      together with the values whenever you store or share a result.
+      position, as described in <a href="#concepts">Core concepts</a>. Keep the block, runner and
+      registry together with the values whenever you store or share a result.
     </p>
   </section>
 
@@ -880,7 +897,7 @@
           </tr>
           <tr
             ><td><code>executionProvenance</code></td><td
-              >Block and runner of an on-chain result.</td
+              >Block, runner and registry of an on-chain result.</td
             ></tr
           >
           <tr

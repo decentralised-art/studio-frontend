@@ -1,22 +1,56 @@
 {
   "openapi": "3.0.3",
-  "info": { "title": "decentralised.art Chain API", "version": "0.4.0" },
-  "servers": [{ "url": "https://api.decentralised.art/chain" }],
+  "info": {
+    "title": "decentralised.art Chain API",
+    "version": "0.4.0"
+  },
+  "servers": [
+    {
+      "url": "https://api.decentralised.art/chain"
+    }
+  ],
   "security": [],
   "tags": [
-    { "name": "account", "description": "Operations related to account.\n" },
-    { "name": "auth", "description": "Operations related to authentication.\n" },
-    { "name": "condition", "description": "Condition creation and inspection." },
-    { "name": "connector", "description": "Connector creation and inspection endpoints." },
-    { "name": "core", "description": "Operations related to core server information.\n" },
-    { "name": "feed", "description": "Chain event feed paging and streaming endpoints." },
-    { "name": "format", "description": "Format hash and connector membership endpoints." },
+    {
+      "name": "account",
+      "description": "Operations related to account.\n"
+    },
+    {
+      "name": "auth",
+      "description": "Operations related to authentication.\n"
+    },
+    {
+      "name": "condition",
+      "description": "Condition creation and inspection."
+    },
+    {
+      "name": "connector",
+      "description": "Connector creation and inspection endpoints."
+    },
+    {
+      "name": "core",
+      "description": "Operations related to core server information.\n"
+    },
+    {
+      "name": "feed",
+      "description": "Chain event feed paging and streaming endpoints."
+    },
+    {
+      "name": "format",
+      "description": "Format hash and connector membership endpoints."
+    },
     {
       "name": "publish",
       "description": "On-chain publication of transformations, conditions and connectors."
     },
-    { "name": "runner", "description": "Operations related to connector execution.\n" },
-    { "name": "transformation", "description": "Transformation creation and inspection." }
+    {
+      "name": "runner",
+      "description": "Operations related to connector execution.\n"
+    },
+    {
+      "name": "transformation",
+      "description": "Transformation creation and inspection."
+    }
   ],
   "paths": {
     "/account/{address}": {
@@ -25,13 +59,15 @@
           "name": "address",
           "in": "path",
           "required": true,
-          "schema": { "$ref": "#/components/schemas/Address" },
-          "description": "<TODO>"
+          "schema": {
+            "$ref": "#/components/schemas/Address"
+          },
+          "description": "Account address."
         }
       ],
       "get": {
         "tags": ["account"],
-        "operationId": "GET_account",
+        "operationId": "GET_accountInfo",
         "summary": "Get account",
         "description": "Get owned connectors/transformations/conditions for an address.",
         "parameters": [
@@ -39,28 +75,38 @@
             "name": "limit",
             "in": "query",
             "required": true,
-            "schema": { "type": "integer", "minimum": 1, "maximum": 256 },
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 256
+            },
             "description": "Page size for each ownership list."
           },
           {
             "name": "after_connectors",
             "in": "query",
             "required": false,
-            "schema": { "type": "string" },
+            "schema": {
+              "type": "string"
+            },
             "description": "Cursor for owned connectors."
           },
           {
             "name": "after_transformations",
             "in": "query",
             "required": false,
-            "schema": { "type": "string" },
+            "schema": {
+              "type": "string"
+            },
             "description": "Cursor for owned transformations."
           },
           {
             "name": "after_conditions",
             "in": "query",
             "required": false,
-            "schema": { "type": "string" },
+            "schema": {
+              "type": "string"
+            },
             "description": "Cursor for owned conditions."
           }
         ],
@@ -69,14 +115,20 @@
             "description": "Account info",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/AccountInfoResponse" }
+                "schema": {
+                  "$ref": "#/components/schemas/AccountInfoResponse"
+                }
               }
             }
           },
           "400": {
             "description": "Invalid address, limit, or cursor",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
             }
           }
         }
@@ -93,20 +145,31 @@
             "name": "limit",
             "in": "query",
             "required": true,
-            "schema": { "type": "integer", "minimum": 1, "maximum": 256 },
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 256
+            },
             "description": "Page size."
           },
           {
             "name": "after",
             "in": "query",
             "required": false,
-            "schema": { "type": "string", "pattern": "^(0x)?[a-fA-F0-9]{40}$" },
+            "schema": {
+              "type": "string",
+              "pattern": "^(0x)?[a-fA-F0-9]{40}$"
+            },
             "description": "Account cursor from a previous response `cursor.next_after`."
           }
         ],
         "responses": {
-          "200": { "description": "Query is valid." },
-          "400": { "description": "Invalid query." }
+          "200": {
+            "description": "Query is valid."
+          },
+          "400": {
+            "description": "Invalid query."
+          }
         }
       },
       "get": {
@@ -119,14 +182,21 @@
             "name": "limit",
             "in": "query",
             "required": true,
-            "schema": { "type": "integer", "minimum": 1, "maximum": 256 },
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 256
+            },
             "description": "Page size."
           },
           {
             "name": "after",
             "in": "query",
             "required": false,
-            "schema": { "type": "string", "pattern": "^(0x)?[a-fA-F0-9]{40}$" },
+            "schema": {
+              "type": "string",
+              "pattern": "^(0x)?[a-fA-F0-9]{40}$"
+            },
             "description": "Account cursor from a previous response `cursor.next_after`."
           }
         ],
@@ -135,14 +205,20 @@
             "description": "Account page",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/AccountListResponse" }
+                "schema": {
+                  "$ref": "#/components/schemas/AccountListResponse"
+                }
               }
             }
           },
           "400": {
             "description": "Invalid query",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
             }
           }
         }
@@ -153,30 +229,36 @@
         "tags": ["auth"],
         "operationId": "POST_auth",
         "summary": "Authenticate",
-        "description": "Authenticate using an address, the signed login message, and its signature.",
+        "description": "Authenticate using an address, the nonce `/nonce` issued to it, and the wallet's `personal_sign` signature of the message issued with that nonce. The server checks the signature against the message it issued.\n",
         "requestBody": {
           "required": true,
           "content": {
-            "application/json": { "schema": { "$ref": "#/components/schemas/AuthRequest" } }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AuthRequest"
+              }
+            }
           }
         },
         "responses": {
           "200": {
-            "description": "Authentication successful",
-            "headers": {
-              "Authorization": {
-                "description": "Bearer token for protected chain endpoints.",
-                "schema": { "type": "string", "example": "Bearer <access_token>" }
-              }
-            },
+            "description": "Authentication successful. Send `access_token` as `Authorization: Bearer <access_token>` to protected chain endpoints; it expires five minutes after it is issued.\n",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/AuthResponse" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthResponse"
+                }
+              }
             }
           },
           "400": {
-            "description": "Invalid address, nonce, message, or signature.",
+            "description": "Invalid request body, address, or signature; or a nonce that `/nonce` did not issue to this address, has expired, or was already redeemed.\n",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
             }
           }
         }
@@ -188,7 +270,9 @@
           "name": "address",
           "in": "path",
           "required": true,
-          "schema": { "$ref": "#/components/schemas/Address" },
+          "schema": {
+            "$ref": "#/components/schemas/Address"
+          },
           "description": "Address to get nonce for"
         }
       ],
@@ -196,18 +280,38 @@
         "tags": ["auth"],
         "operationId": "GET_nonce",
         "summary": "Get nonce",
-        "description": "Get a one-time nonce for an address. Sign `Login nonce: <nonce>` and submit it to `/auth`.\n",
+        "description": "Issue a one-time [EIP-4361](https://eips.ethereum.org/EIPS/eip-4361) sign-in message for an address. Have the wallet sign `message` with `personal_sign`, then submit the `nonce` and the signature to `/auth` within five minutes. Each nonce can be redeemed once; requesting another one does not invalidate those already issued. Issuing a nonce stores nothing on the server: the nonce itself carries its issue time and origin under the server's signature.\n\nThe message names the site the user signs in through: the `origin` query parameter when given; otherwise the request's `Origin` header when it is one the server is configured with; otherwise the server's first configured origin. Wallets that support EIP-4361 reject or warn when the message names a different site from the one asking for the signature, so a page should pass its own origin.\n",
+        "parameters": [
+          {
+            "name": "origin",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "example": "https://decentralised.art"
+            },
+            "description": "Origin of the page signing in, as `window.location.origin` gives it, percent-encoded or not. Browsers send no `Origin` header on a same-origin GET, so this is how a page served from a secondary configured origin gets a message naming it. A value that is not a configured origin is refused with 400.\n"
+          }
+        ],
         "responses": {
           "200": {
-            "description": "Nonce returned",
+            "description": "Sign-in message issued",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/NonceResponse" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NonceResponse"
+                }
+              }
             }
           },
           "400": {
-            "description": "Bad request",
+            "description": "Invalid address, or an `origin` that is not a configured sign-in origin.",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
             }
           }
         }
@@ -219,12 +323,18 @@
         "operationId": "POST_condition",
         "summary": "Create condition",
         "description": "Compile and deploy a condition locally for simulation. The name must not be reserved on chain. Publish it on chain through /publish/condition.\n",
-        "security": [{ "BearerAuth": [] }],
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
-              "schema": { "$ref": "#/components/schemas/CreateConditionRequest" }
+              "schema": {
+                "$ref": "#/components/schemas/CreateConditionRequest"
+              }
             }
           }
         },
@@ -233,32 +343,50 @@
             "description": "Created.",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/CreateConditionResponse" }
+                "schema": {
+                  "$ref": "#/components/schemas/CreateConditionResponse"
+                }
               }
             }
           },
           "400": {
             "description": "Invalid request.",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
             }
           },
           "401": {
             "description": "Unauthorized.",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
             }
           },
           "409": {
             "description": "Name is reserved on chain.",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
             }
           },
           "503": {
             "description": "Live on-chain name check is unavailable.",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
             }
           }
         }
@@ -270,7 +398,9 @@
           "name": "name",
           "in": "path",
           "required": true,
-          "schema": { "type": "string" },
+          "schema": {
+            "type": "string"
+          },
           "description": "Condition name."
         }
       ],
@@ -278,7 +408,14 @@
         "tags": ["condition"],
         "operationId": "HEAD_condition",
         "summary": "Check condition existence",
-        "responses": { "200": { "description": "Exists." }, "404": { "description": "Not found." } }
+        "responses": {
+          "200": {
+            "description": "Exists."
+          },
+          "404": {
+            "description": "Not found."
+          }
+        }
       },
       "get": {
         "tags": ["condition"],
@@ -289,26 +426,40 @@
             "description": "Condition info.",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/ConditionInfoResponse" }
+                "schema": {
+                  "$ref": "#/components/schemas/ConditionInfoResponse"
+                }
               }
             }
           },
           "400": {
             "description": "Invalid request.",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
             }
           },
           "404": {
             "description": "Not found.",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
             }
           },
           "500": {
             "description": "Internal condition serialization error.",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
             }
           }
         }
@@ -320,12 +471,18 @@
         "operationId": "POST_connector",
         "summary": "Create connector",
         "description": "Compile and deploy a connector locally for simulation. The name must not be reserved on chain. Publish it on chain through /publish/connector.\n",
-        "security": [{ "BearerAuth": [] }],
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
-              "schema": { "$ref": "#/components/schemas/CreateConnectorRequest" }
+              "schema": {
+                "$ref": "#/components/schemas/CreateConnectorRequest"
+              }
             }
           }
         },
@@ -334,38 +491,60 @@
             "description": "Created.",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/CreateConnectorResponse" }
+                "schema": {
+                  "$ref": "#/components/schemas/CreateConnectorResponse"
+                }
               }
             }
           },
           "400": {
             "description": "Invalid payload.",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
             }
           },
           "401": {
             "description": "Unauthorized.",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
             }
           },
           "409": {
             "description": "Name is reserved on chain.",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
             }
           },
           "500": {
             "description": "Internal connector format lookup error.",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
             }
           },
           "503": {
             "description": "Live on-chain name check is unavailable.",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
             }
           }
         }
@@ -377,7 +556,9 @@
           "name": "name",
           "in": "path",
           "required": true,
-          "schema": { "type": "string" },
+          "schema": {
+            "type": "string"
+          },
           "description": "Connector name."
         }
       ],
@@ -386,7 +567,14 @@
         "operationId": "HEAD_connector",
         "summary": "Check connector existence",
         "description": "Returns 200 if connector exists.",
-        "responses": { "200": { "description": "Exists." }, "404": { "description": "Not found." } }
+        "responses": {
+          "200": {
+            "description": "Exists."
+          },
+          "404": {
+            "description": "Not found."
+          }
+        }
       },
       "get": {
         "tags": ["connector"],
@@ -398,26 +586,40 @@
             "description": "Connector info.",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/ConnectorInfoResponse" }
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectorInfoResponse"
+                }
               }
             }
           },
           "400": {
             "description": "Invalid connector name.",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
             }
           },
           "404": {
             "description": "Connector not found.",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
             }
           },
           "500": {
             "description": "Internal connector serialization or format lookup error.",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
             }
           }
         }
@@ -433,7 +635,11 @@
           "200": {
             "description": "Version info",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/VersionResponse" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VersionResponse"
+                }
+              }
             }
           }
         }
@@ -450,42 +656,61 @@
             "name": "limit",
             "in": "query",
             "required": true,
-            "schema": { "type": "integer", "minimum": 1, "maximum": 256 },
-            "description": "Page size. The current server requires this parameter."
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 256
+            },
+            "description": "Page size."
           },
           {
             "name": "before",
             "in": "query",
             "required": false,
-            "schema": { "type": "string" },
+            "schema": {
+              "type": "string"
+            },
             "description": "History cursor from a previous response `cursor.next_before`."
           },
           {
             "name": "type",
             "in": "query",
             "required": false,
-            "schema": { "$ref": "#/components/schemas/FeedEventType" },
+            "schema": {
+              "$ref": "#/components/schemas/FeedEventType"
+            },
             "description": "Optional event type filter."
           },
           {
             "name": "include_unfinalized",
             "in": "query",
             "required": false,
-            "schema": { "type": "integer", "enum": [0, 1] },
-            "description": "Set to `1` to include observed and safe events. Set to `0` to return only finalized events. When omitted, the current server includes unfinalized events.\n"
+            "schema": {
+              "type": "integer",
+              "enum": [0, 1]
+            },
+            "description": "Set to `1` to include observed and safe events. Set to `0` to return only finalized events. When omitted, unfinalized events are included.\n"
           }
         ],
         "responses": {
           "200": {
             "description": "Feed page.",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/FeedPage" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeedPage"
+                }
+              }
             }
           },
           "400": {
             "description": "Invalid query.",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
             }
           }
         }
@@ -502,14 +727,24 @@
             "name": "since_seq",
             "in": "query",
             "required": false,
-            "schema": { "type": "integer", "format": "int64", "minimum": 0, "default": 0 },
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0,
+              "default": 0
+            },
             "description": "Replay stream deltas with `stream_seq` greater than this value."
           },
           {
             "name": "limit",
             "in": "query",
             "required": false,
-            "schema": { "type": "integer", "minimum": 1, "maximum": 2048, "default": 200 },
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 2048,
+              "default": 200
+            },
             "description": "Maximum number of replay deltas returned before live tailing."
           }
         ],
@@ -518,7 +753,9 @@
             "description": "Server-Sent Events stream.",
             "content": {
               "text/event-stream": {
-                "schema": { "type": "string" },
+                "schema": {
+                  "type": "string"
+                },
                 "example": ": min_available_seq=1\n\nid: 42\nevent: connector_added\ndata: {\"stream_seq\":42,\"event_type\":\"connector_added\",\"status\":\"finalized\",\"feed_id\":\"eth:1:connector_added:demo\",\"history_cursor\":\"c1710000000000:10:0:eth:1:connector_added:demo\",\"created_at_ms\":1710000000000,\"payload\":{\"type\":\"connector\",\"name\":\"demo\",\"owner\":\"0x0000000000000000000000000000000000000000\"}}\n\nevent: stream_meta\ndata: {\"has_more\":false,\"last_seq\":42,\"requested_since_seq\":0,\"min_available_seq\":1,\"replay_floor_seq\":1,\"stale_since_seq\":false}\n"
               }
             }
@@ -526,7 +763,11 @@
           "400": {
             "description": "Invalid query.",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
             }
           }
         }
@@ -538,7 +779,9 @@
           "name": "hash",
           "in": "path",
           "required": true,
-          "schema": { "$ref": "#/components/schemas/FormatHash" },
+          "schema": {
+            "$ref": "#/components/schemas/FormatHash"
+          },
           "description": "Connector format hash."
         }
       ],
@@ -552,14 +795,20 @@
             "name": "limit",
             "in": "query",
             "required": true,
-            "schema": { "type": "integer", "minimum": 1, "maximum": 256 },
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 256
+            },
             "description": "Page size for connector names."
           },
           {
             "name": "after",
             "in": "query",
             "required": false,
-            "schema": { "type": "string" },
+            "schema": {
+              "type": "string"
+            },
             "description": "Connector name cursor from a previous response `cursor.next_after`."
           }
         ],
@@ -568,14 +817,20 @@
             "description": "Format membership.",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/FormatInfoResponse" }
+                "schema": {
+                  "$ref": "#/components/schemas/FormatInfoResponse"
+                }
               }
             }
           },
           "400": {
             "description": "Invalid format hash, limit, or cursor.",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
             }
           }
         }
@@ -592,20 +847,31 @@
             "name": "limit",
             "in": "query",
             "required": true,
-            "schema": { "type": "integer", "minimum": 1, "maximum": 256 },
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 256
+            },
             "description": "Page size."
           },
           {
             "name": "after",
             "in": "query",
             "required": false,
-            "schema": { "type": "string", "pattern": "^(0x)?[a-fA-F0-9]{64}$" },
+            "schema": {
+              "type": "string",
+              "pattern": "^(0x)?[a-fA-F0-9]{64}$"
+            },
             "description": "Format hash cursor from a previous response `cursor.next_after`."
           }
         ],
         "responses": {
-          "200": { "description": "Query is valid." },
-          "400": { "description": "Invalid query." }
+          "200": {
+            "description": "Query is valid."
+          },
+          "400": {
+            "description": "Invalid query."
+          }
         }
       },
       "get": {
@@ -618,14 +884,21 @@
             "name": "limit",
             "in": "query",
             "required": true,
-            "schema": { "type": "integer", "minimum": 1, "maximum": 256 },
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 256
+            },
             "description": "Page size."
           },
           {
             "name": "after",
             "in": "query",
             "required": false,
-            "schema": { "type": "string", "pattern": "^(0x)?[a-fA-F0-9]{64}$" },
+            "schema": {
+              "type": "string",
+              "pattern": "^(0x)?[a-fA-F0-9]{64}$"
+            },
             "description": "Format hash cursor from a previous response `cursor.next_after`."
           }
         ],
@@ -634,14 +907,20 @@
             "description": "Format hash page.",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/FormatListResponse" }
+                "schema": {
+                  "$ref": "#/components/schemas/FormatListResponse"
+                }
               }
             }
           },
           "400": {
             "description": "Invalid query.",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
             }
           }
         }
@@ -653,7 +932,9 @@
           "name": "kind",
           "in": "path",
           "required": true,
-          "schema": { "$ref": "#/components/schemas/EntityKind" },
+          "schema": {
+            "$ref": "#/components/schemas/EntityKind"
+          },
           "description": "Kind of entity to publish. Any other value is 404."
         }
       ],
@@ -662,60 +943,90 @@
         "operationId": "POST_publishConfirm",
         "summary": "Confirm publication",
         "description": "Look the transaction receipt up once. Repeat the request while it answers 202; that is the status check. The registry projection of the event, not this response, is what the read endpoints serve.\n",
-        "security": [{ "BearerAuth": [] }],
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
-            "application/json": { "schema": { "$ref": "#/components/schemas/ConfirmRequest" } }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfirmRequest"
+              }
+            }
           }
         },
         "responses": {
           "201": {
             "description": "Mined and matched.",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/ConfirmResponse" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfirmResponse"
+                }
+              }
             }
           },
           "202": {
             "description": "Transaction not mined yet (`status` is `pending`).",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/PublishError" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishError"
+                }
+              }
             }
           },
           "400": {
             "description": "Invalid request, the transaction reverted, or it registered something else.",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/PublishError" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishError"
+                }
+              }
             }
           },
           "401": {
             "description": "Unauthorized.",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/PublishError" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishError"
+                }
+              }
             }
           },
           "403": {
             "description": "Publication is disabled on this server.",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/PublishError" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishError"
+                }
+              }
             }
           },
           "404": {
             "description": "Unknown kind.",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/PublishError" } }
-            }
-          },
-          "409": {
-            "description": "The registry holds something else under this name.",
-            "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/PublishError" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishError"
+                }
+              }
             }
           },
           "503": {
             "description": "Chain provider failure.",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/PublishError" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishError"
+                }
+              }
             }
           }
         }
@@ -727,7 +1038,9 @@
           "name": "kind",
           "in": "path",
           "required": true,
-          "schema": { "$ref": "#/components/schemas/EntityKind" },
+          "schema": {
+            "$ref": "#/components/schemas/EntityKind"
+          },
           "description": "Kind of entity to publish. Any other value is 404."
         }
       ],
@@ -736,54 +1049,90 @@
         "operationId": "POST_publishPrepare",
         "summary": "Prepare publication",
         "description": "Rebuild the entity from the definition retained when it was created, store its artifact durably, and return the unsigned registry transaction. The caller must own the entity. A connector's dependencies must already be registered with the artifacts it was built against; they are never published recursively. Deterministic reverts (name taken, stale nonce, identity mismatch) are reported here, before the owner pays.\n",
-        "security": [{ "BearerAuth": [] }],
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
-            "application/json": { "schema": { "$ref": "#/components/schemas/PrepareRequest" } }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PrepareRequest"
+              }
+            }
           }
         },
         "responses": {
           "200": {
             "description": "Prepared transaction, or the existing identical publication.",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/PrepareResponse" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrepareResponse"
+                }
+              }
             }
           },
           "400": {
             "description": "Invalid request, the entity cannot be rebuilt, or the transaction would revert.",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/PublishError" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishError"
+                }
+              }
             }
           },
           "401": {
             "description": "Unauthorized.",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/PublishError" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishError"
+                }
+              }
             }
           },
           "403": {
             "description": "Publication is disabled on this server, or the caller does not own the entity.",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/PublishError" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishError"
+                }
+              }
             }
           },
           "404": {
             "description": "Unknown kind, or no local definition of this entity exists.",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/PublishError" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishError"
+                }
+              }
             }
           },
           "409": {
             "description": "The registry holds different content under this name, or connector dependencies are `missing` or `mismatched`.\n",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/PublishError" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishError"
+                }
+              }
             }
           },
           "503": {
             "description": "Chain provider or durable artifact storage failure.",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/PublishError" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishError"
+                }
+              }
             }
           }
         }
@@ -795,7 +1144,9 @@
           "name": "kind",
           "in": "path",
           "required": true,
-          "schema": { "$ref": "#/components/schemas/EntityKind" },
+          "schema": {
+            "$ref": "#/components/schemas/EntityKind"
+          },
           "description": "Kind of entity to publish. Any other value is 404."
         }
       ],
@@ -804,54 +1155,90 @@
         "operationId": "POST_publishSend",
         "summary": "Relay publication",
         "description": "Broadcast a publication transaction the owner signed offline, through the server's own chain provider, so the owner needs no RPC endpoint. The owner still pays for it. The server forwards it only when the caller signed it, it calls the configured registry on its chain with no value, it publishes exactly the named entity with this content hash, and a dry run succeeds within its gas limit. Confirm it with POST /publish/{kind}.\n",
-        "security": [{ "BearerAuth": [] }],
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
-            "application/json": { "schema": { "$ref": "#/components/schemas/SendRequest" } }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SendRequest"
+              }
+            }
           }
         },
         "responses": {
           "202": {
             "description": "Broadcast, or already held by the provider.",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/SendResponse" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SendResponse"
+                }
+              }
             }
           },
           "400": {
             "description": "Invalid request or transaction, a transaction other than this publication, a dry-run revert, too little gas, or insufficient funds.\n",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/PublishError" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishError"
+                }
+              }
             }
           },
           "401": {
             "description": "Unauthorized.",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/PublishError" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishError"
+                }
+              }
             }
           },
           "403": {
             "description": "Publication is disabled on this server, or another account signed the transaction.",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/PublishError" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishError"
+                }
+              }
             }
           },
           "404": {
             "description": "Unknown kind.",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/PublishError" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishError"
+                }
+              }
             }
           },
           "409": {
             "description": "The account nonce is already used, or another transaction with it is pending. Prepare again.",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/PublishError" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishError"
+                }
+              }
             }
           },
           "503": {
             "description": "Chain provider failure.",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/PublishError" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishError"
+                }
+              }
             }
           }
         }
@@ -866,44 +1253,72 @@
         "requestBody": {
           "required": true,
           "content": {
-            "application/json": { "schema": { "$ref": "#/components/schemas/ExecuteRequest" } }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExecuteRequest"
+              }
+            }
           }
         },
         "responses": {
           "200": {
             "description": "Executed",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/ExecuteResponse" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExecuteResponse"
+                }
+              }
             }
           },
           "400": {
             "description": "Bad request, or execution rejected by the runner.",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
             }
           },
           "404": {
             "description": "Connector not found in the runner's registry.",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
             }
           },
           "500": {
             "description": "Response decoding error.",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
             }
           },
           "502": {
             "description": "Chain returned a malformed result.",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
             }
           },
           "503": {
             "description": "On-chain execution is not configured, or the chain endpoint is unavailable.",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
             }
           }
         }
@@ -914,11 +1329,15 @@
         "tags": ["runner"],
         "operationId": "POST_simulate",
         "summary": "Simulate locally",
-        "description": "Execute a connector held by this server in its local simulation EVM. Covers entities created through the create endpoints before they are published on chain. No login is required.\n",
+        "description": "Execute a registered connector in this server's local simulation EVM: entities created through the create endpoints before they are published, and connectors published on chain. A connector that exists only on chain is first deployed locally together with its dependencies, from their verified artifacts. No login is required, and the result carries no chain provenance.\n",
         "requestBody": {
           "required": true,
           "content": {
-            "application/json": { "schema": { "$ref": "#/components/schemas/ExecuteRequest" } }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExecuteRequest"
+              }
+            }
           }
         },
         "responses": {
@@ -930,7 +1349,9 @@
                   "title": "SimulateResponse",
                   "type": "array",
                   "description": "Execution result list.",
-                  "items": { "$ref": "#/components/schemas/ParticlesResultItem" }
+                  "items": {
+                    "$ref": "#/components/schemas/ParticlesResultItem"
+                  }
                 }
               }
             }
@@ -938,19 +1359,41 @@
           "400": {
             "description": "Bad request, or execution rejected by the runner.",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
             }
           },
           "404": {
-            "description": "Connector not found locally.",
+            "description": "Connector not found.",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
             }
           },
           "500": {
             "description": "Internal deployment, execution or response decoding error.",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The connector exists only on chain and cannot be simulated yet: the verified artifacts of it or its dependencies are not available.\n",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
             }
           }
         }
@@ -962,12 +1405,18 @@
         "operationId": "POST_transformation",
         "summary": "Create transformation",
         "description": "Compile and deploy a transformation locally for simulation. The name must not be reserved on chain. Publish it on chain through /publish/transformation.\n",
-        "security": [{ "BearerAuth": [] }],
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
-              "schema": { "$ref": "#/components/schemas/CreateTransformationRequest" }
+              "schema": {
+                "$ref": "#/components/schemas/CreateTransformationRequest"
+              }
             }
           }
         },
@@ -976,32 +1425,50 @@
             "description": "Created.",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/CreateTransformationResponse" }
+                "schema": {
+                  "$ref": "#/components/schemas/CreateTransformationResponse"
+                }
               }
             }
           },
           "400": {
             "description": "Invalid request.",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
             }
           },
           "401": {
             "description": "Unauthorized.",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
             }
           },
           "409": {
             "description": "Name is reserved on chain.",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
             }
           },
           "503": {
             "description": "Live on-chain name check is unavailable.",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
             }
           }
         }
@@ -1013,7 +1480,9 @@
           "name": "name",
           "in": "path",
           "required": true,
-          "schema": { "type": "string" },
+          "schema": {
+            "type": "string"
+          },
           "description": "Transformation name."
         }
       ],
@@ -1021,7 +1490,14 @@
         "tags": ["transformation"],
         "operationId": "HEAD_transformation",
         "summary": "Check transformation existence",
-        "responses": { "200": { "description": "Exists." }, "404": { "description": "Not found." } }
+        "responses": {
+          "200": {
+            "description": "Exists."
+          },
+          "404": {
+            "description": "Not found."
+          }
+        }
       },
       "get": {
         "tags": ["transformation"],
@@ -1032,26 +1508,40 @@
             "description": "Transformation info.",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/TransformationInfoResponse" }
+                "schema": {
+                  "$ref": "#/components/schemas/TransformationInfoResponse"
+                }
               }
             }
           },
           "400": {
             "description": "Invalid request.",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
             }
           },
           "404": {
             "description": "Not found.",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
             }
           },
           "500": {
             "description": "Internal transformation serialization error.",
             "content": {
-              "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } }
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
             }
           }
         }
@@ -1095,7 +1585,9 @@
         ],
         "description": "Cursor-based account ownership response.",
         "properties": {
-          "address": { "$ref": "#/components/schemas/Address" },
+          "address": {
+            "$ref": "#/components/schemas/Address"
+          },
           "limit": {
             "type": "integer",
             "minimum": 1,
@@ -1104,22 +1596,34 @@
           },
           "owned_connectors": {
             "type": "array",
-            "items": { "type": "string" },
+            "items": {
+              "type": "string"
+            },
             "description": "Owned connector names."
           },
           "owned_transformations": {
             "type": "array",
-            "items": { "type": "string" },
+            "items": {
+              "type": "string"
+            },
             "description": "Owned transformation names."
           },
           "owned_conditions": {
             "type": "array",
-            "items": { "type": "string" },
+            "items": {
+              "type": "string"
+            },
             "description": "Owned condition names."
           },
-          "cursor_connectors": { "$ref": "#/components/schemas/NameCursorState" },
-          "cursor_transformations": { "$ref": "#/components/schemas/NameCursorState" },
-          "cursor_conditions": { "$ref": "#/components/schemas/NameCursorState" }
+          "cursor_connectors": {
+            "$ref": "#/components/schemas/NameCursorState"
+          },
+          "cursor_transformations": {
+            "$ref": "#/components/schemas/NameCursorState"
+          },
+          "cursor_conditions": {
+            "$ref": "#/components/schemas/NameCursorState"
+          }
         }
       },
       "AccountListResponse": {
@@ -1140,10 +1644,14 @@
             "minimum": 0,
             "description": "Total number of known accounts."
           },
-          "cursor": { "$ref": "#/components/schemas/AccountAddressCursorState" },
+          "cursor": {
+            "$ref": "#/components/schemas/AccountAddressCursorState"
+          },
           "accounts": {
             "type": "array",
-            "items": { "$ref": "#/components/schemas/Address" },
+            "items": {
+              "$ref": "#/components/schemas/Address"
+            },
             "description": "Account addresses in ascending cursor order."
           }
         }
@@ -1161,27 +1669,46 @@
         "required": ["status", "kind", "name", "address", "owner", "content_hash"],
         "description": "The registry already holds this exact publication; nothing to send.",
         "properties": {
-          "status": { "type": "string", "enum": ["published"] },
-          "kind": { "$ref": "#/components/schemas/EntityKind" },
-          "name": { "$ref": "#/components/schemas/EntityName" },
-          "address": { "$ref": "#/components/schemas/Address" },
-          "owner": { "$ref": "#/components/schemas/Address" },
-          "content_hash": { "$ref": "#/components/schemas/Hash32" }
+          "status": {
+            "type": "string",
+            "enum": ["published"]
+          },
+          "kind": {
+            "$ref": "#/components/schemas/EntityKind"
+          },
+          "name": {
+            "$ref": "#/components/schemas/EntityName"
+          },
+          "address": {
+            "$ref": "#/components/schemas/Address"
+          },
+          "owner": {
+            "$ref": "#/components/schemas/Address"
+          },
+          "content_hash": {
+            "$ref": "#/components/schemas/Hash32"
+          }
         }
       },
       "AuthRequest": {
         "title": "AuthRequest",
         "type": "object",
         "additionalProperties": false,
-        "required": ["address", "message", "signature"],
+        "required": ["address", "nonce", "signature"],
         "description": "Auth request.",
         "properties": {
-          "address": { "$ref": "#/components/schemas/Address" },
-          "message": {
-            "type": "string",
-            "description": "Login message signed by the account owner. Must be `Login nonce: <nonce>`.\n"
+          "address": {
+            "$ref": "#/components/schemas/Address"
           },
-          "signature": { "type": "string", "description": "Wallet signature of the login message." }
+          "nonce": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{66}$",
+            "description": "The nonce `/nonce` issued to `address`."
+          },
+          "signature": {
+            "type": "string",
+            "description": "The wallet's `personal_sign` (EIP-191) signature of the `message` issued with `nonce`, as 65-byte hex.\n"
+          }
         }
       },
       "AuthResponse": {
@@ -1201,17 +1728,28 @@
         "title": "ConditionInfoResponse",
         "type": "object",
         "additionalProperties": false,
-        "required": ["name", "args_count", "owner", "address"],
+        "required": ["name", "args_count", "runtime_code", "owner", "address"],
         "description": "Condition information. The Solidity source is an execution input kept in local storage or a verified artifact and is never served.\n",
         "properties": {
-          "name": { "type": "string", "description": "Condition name." },
+          "name": {
+            "type": "string",
+            "description": "Condition name."
+          },
           "args_count": {
             "type": "integer",
             "minimum": 0,
             "maximum": 4294967295,
             "description": "Number of arguments (uint32), derived from the source and registered on chain."
           },
-          "owner": { "$ref": "#/components/schemas/Address" },
+          "runtime_code": {
+            "type": "string",
+            "nullable": true,
+            "pattern": "^0x[0-9a-f]*$",
+            "description": "Deployed runtime bytecode as 0x-prefixed hex, or null while the registry does not hold it."
+          },
+          "owner": {
+            "$ref": "#/components/schemas/Address"
+          },
           "address": {
             "type": "string",
             "description": "On-chain address once published; \"0x0\" for a local simulation entity."
@@ -1224,10 +1762,15 @@
         "required": ["name", "content_hash", "tx_hash"],
         "description": "Confirm a publication transaction the owner's wallet sent.",
         "properties": {
-          "name": { "$ref": "#/components/schemas/EntityName" },
-          "content_hash": { "$ref": "#/components/schemas/Hash32" },
+          "name": {
+            "$ref": "#/components/schemas/EntityName"
+          },
+          "content_hash": {
+            "$ref": "#/components/schemas/Hash32"
+          },
           "tx_hash": {
             "type": "string",
+            "pattern": "^(0x)?[a-fA-F0-9]{64}$",
             "description": "Hash of the sent publication transaction."
           }
         }
@@ -1248,14 +1791,33 @@
         ],
         "description": "The transaction was mined with status 1 and carries exactly one matching registry event naming the entity, owner, content and metadata hashes.\n",
         "properties": {
-          "status": { "type": "string", "enum": ["mined"] },
-          "kind": { "$ref": "#/components/schemas/EntityKind" },
-          "name": { "$ref": "#/components/schemas/EntityName" },
-          "tx_hash": { "type": "string" },
-          "block_number": { "type": "integer", "format": "int64", "minimum": 0 },
-          "address": { "$ref": "#/components/schemas/Address" },
-          "owner": { "$ref": "#/components/schemas/Address" },
-          "content_hash": { "$ref": "#/components/schemas/Hash32" }
+          "status": {
+            "type": "string",
+            "enum": ["mined"]
+          },
+          "kind": {
+            "$ref": "#/components/schemas/EntityKind"
+          },
+          "name": {
+            "$ref": "#/components/schemas/EntityName"
+          },
+          "tx_hash": {
+            "type": "string"
+          },
+          "block_number": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "address": {
+            "$ref": "#/components/schemas/Address"
+          },
+          "owner": {
+            "$ref": "#/components/schemas/Address"
+          },
+          "content_hash": {
+            "$ref": "#/components/schemas/Hash32"
+          }
         }
       },
       "ConnectorDimension": {
@@ -1267,7 +1829,9 @@
         "properties": {
           "transformations": {
             "type": "array",
-            "items": { "$ref": "#/components/schemas/TransformationCallDef" },
+            "items": {
+              "$ref": "#/components/schemas/TransformationCallDef"
+            },
             "description": "Ordered transformation calls for this dimension."
           },
           "composite": {
@@ -1276,7 +1840,9 @@
           },
           "bindings": {
             "type": "object",
-            "additionalProperties": { "type": "string" },
+            "additionalProperties": {
+              "type": "string"
+            },
             "description": "Slot bindings map for composite connectors. Omitted means no bindings. Keys are canonical decimal slot ids and values are connector names.\n"
           }
         }
@@ -1297,10 +1863,15 @@
         ],
         "description": "Connector definition payload returned by GET /connector/{name}.",
         "properties": {
-          "name": { "type": "string", "description": "Connector name." },
+          "name": {
+            "type": "string",
+            "description": "Connector name."
+          },
           "dimensions": {
             "type": "array",
-            "items": { "$ref": "#/components/schemas/ConnectorDimension" },
+            "items": {
+              "$ref": "#/components/schemas/ConnectorDimension"
+            },
             "description": "Ordered dimension definitions."
           },
           "condition_name": {
@@ -1309,15 +1880,22 @@
           },
           "condition_args": {
             "type": "array",
-            "items": { "type": "integer" },
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            },
             "description": "Condition arguments."
           },
           "static_ri": {
             "type": "object",
-            "additionalProperties": { "$ref": "#/components/schemas/RunningInstance" },
+            "additionalProperties": {
+              "$ref": "#/components/schemas/RunningInstance"
+            },
             "description": "Static running-instance map keyed by decimal position; empty object when none."
           },
-          "owner": { "$ref": "#/components/schemas/Address" },
+          "owner": {
+            "$ref": "#/components/schemas/Address"
+          },
           "address": {
             "type": "string",
             "description": "On-chain address once published; \"0x0\" for a local simulation entity."
@@ -1335,8 +1913,13 @@
         "required": ["name", "sol_src"],
         "description": "Create condition request",
         "properties": {
-          "name": { "$ref": "#/components/schemas/EntityName" },
-          "sol_src": { "type": "string", "description": "Solidity source code" }
+          "name": {
+            "$ref": "#/components/schemas/EntityName"
+          },
+          "sol_src": {
+            "type": "string",
+            "description": "Solidity source code"
+          }
         }
       },
       "CreateConditionResponse": {
@@ -1346,8 +1929,13 @@
         "required": ["name", "owner", "address", "args_count"],
         "description": "Create condition response",
         "properties": {
-          "name": { "type": "string", "description": "Name of the created condition" },
-          "owner": { "$ref": "#/components/schemas/Address" },
+          "name": {
+            "type": "string",
+            "description": "Name of the created condition"
+          },
+          "owner": {
+            "$ref": "#/components/schemas/Address"
+          },
           "address": {
             "type": "string",
             "description": "Always \"0x0\"; the entity is local until published through /publish/condition."
@@ -1367,11 +1955,15 @@
         "required": ["name", "dimensions"],
         "description": "Connector create request payload.",
         "properties": {
-          "name": { "$ref": "#/components/schemas/EntityName" },
+          "name": {
+            "$ref": "#/components/schemas/EntityName"
+          },
           "dimensions": {
             "type": "array",
             "minItems": 1,
-            "items": { "$ref": "#/components/schemas/ConnectorDimension" },
+            "items": {
+              "$ref": "#/components/schemas/ConnectorDimension"
+            },
             "description": "Ordered dimension definitions."
           },
           "condition_name": {
@@ -1380,12 +1972,17 @@
           },
           "condition_args": {
             "type": "array",
-            "items": { "type": "integer" },
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            },
             "description": "Condition arguments. Omitted means no condition arguments."
           },
           "static_ri": {
             "type": "object",
-            "additionalProperties": { "$ref": "#/components/schemas/RunningInstance" },
+            "additionalProperties": {
+              "$ref": "#/components/schemas/RunningInstance"
+            },
             "description": "Optional static running-instance map. Keys are canonical decimal positions (for example \"0\", \"3\", \"5\").\n"
           }
         }
@@ -1397,8 +1994,13 @@
         "required": ["name", "owner", "address", "format_hash"],
         "description": "Connector create response payload.",
         "properties": {
-          "name": { "type": "string", "description": "Connector name." },
-          "owner": { "$ref": "#/components/schemas/Address" },
+          "name": {
+            "type": "string",
+            "description": "Connector name."
+          },
+          "owner": {
+            "$ref": "#/components/schemas/Address"
+          },
           "address": {
             "type": "string",
             "description": "Always \"0x0\"; the entity is local until published through /publish/connector."
@@ -1416,8 +2018,13 @@
         "required": ["name", "sol_src"],
         "description": "Create transformation request",
         "properties": {
-          "name": { "$ref": "#/components/schemas/EntityName" },
-          "sol_src": { "type": "string", "description": "Solidity source code" }
+          "name": {
+            "$ref": "#/components/schemas/EntityName"
+          },
+          "sol_src": {
+            "type": "string",
+            "description": "Solidity source code"
+          }
         }
       },
       "CreateTransformationResponse": {
@@ -1427,8 +2034,13 @@
         "required": ["name", "owner", "address", "args_count"],
         "description": "Create transformation response",
         "properties": {
-          "name": { "type": "string", "description": "Name of the created transformation" },
-          "owner": { "$ref": "#/components/schemas/Address" },
+          "name": {
+            "type": "string",
+            "description": "Name of the created transformation"
+          },
+          "owner": {
+            "$ref": "#/components/schemas/Address"
+          },
           "address": {
             "type": "string",
             "description": "Always \"0x0\"; the entity is local until published through /publish/transformation."
@@ -1460,7 +2072,12 @@
         "type": "object",
         "required": ["message"],
         "description": "Error response",
-        "properties": { "message": { "type": "string", "description": "Human-readable message." } }
+        "properties": {
+          "message": {
+            "type": "string",
+            "description": "Human-readable message."
+          }
+        }
       },
       "ExecuteRequest": {
         "title": "ExecuteRequest",
@@ -1469,17 +2086,29 @@
         "required": ["connector_name", "particles_count"],
         "description": "Execute request payload.",
         "properties": {
-          "connector_name": { "type": "string", "description": "Connector name to execute." },
+          "connector_name": {
+            "type": "string",
+            "description": "Connector name to execute."
+          },
           "particles_count": {
             "oneOf": [
-              { "type": "integer", "minimum": 1, "maximum": 65536 },
-              { "type": "string", "pattern": "^[1-9][0-9]*$" }
+              {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 65536
+              },
+              {
+                "type": "string",
+                "pattern": "^[1-9][0-9]*$"
+              }
             ],
             "description": "Number of particles to generate. The backend accepts protobuf JSON uint32 values between 1 and 65536.\n"
           },
           "dynamic_ri": {
             "type": "object",
-            "additionalProperties": { "$ref": "#/components/schemas/RunningInstance" },
+            "additionalProperties": {
+              "$ref": "#/components/schemas/RunningInstance"
+            },
             "description": "Dynamic running-instance overrides keyed by canonical decimal RI position. Omitted means no overrides. At most 4096 entries.\n"
           }
         }
@@ -1488,7 +2117,7 @@
         "title": "ExecuteResponse",
         "type": "object",
         "additionalProperties": false,
-        "required": ["block_number", "block_hash", "runner", "particles"],
+        "required": ["block_number", "block_hash", "runner", "registry", "particles"],
         "description": "On-chain execution result. Anyone can check it by calling the runner at the same block.\n",
         "properties": {
           "block_number": {
@@ -1497,14 +2126,23 @@
             "minimum": 0,
             "description": "Block the call was pinned to."
           },
-          "block_hash": { "type": "string", "description": "Hash of that block." },
+          "block_hash": {
+            "type": "string",
+            "description": "Hash of that block."
+          },
           "runner": {
             "type": "string",
             "description": "Runner contract address that executed the call."
           },
+          "registry": {
+            "type": "string",
+            "description": "Registry contract address the runner looked the connector up in."
+          },
           "particles": {
             "type": "array",
-            "items": { "$ref": "#/components/schemas/ParticlesResultItem" },
+            "items": {
+              "$ref": "#/components/schemas/ParticlesResultItem"
+            },
             "description": "Execution result list."
           }
         }
@@ -1539,8 +2177,13 @@
             "enum": ["connector", "transformation", "condition"],
             "description": "Entity kind represented by the feed item."
           },
-          "name": { "type": "string", "description": "Entity name." },
-          "owner": { "$ref": "#/components/schemas/Address" }
+          "name": {
+            "type": "string",
+            "description": "Entity name."
+          },
+          "owner": {
+            "$ref": "#/components/schemas/Address"
+          }
         }
       },
       "FeedEventStatus": {
@@ -1580,13 +2223,20 @@
             "type": "string",
             "description": "Stable feed identity for this logical entity event."
           },
-          "event_type": { "$ref": "#/components/schemas/FeedEventType" },
-          "status": { "$ref": "#/components/schemas/FeedEventStatus" },
+          "event_type": {
+            "$ref": "#/components/schemas/FeedEventType"
+          },
+          "status": {
+            "$ref": "#/components/schemas/FeedEventStatus"
+          },
           "visible": {
             "type": "boolean",
             "description": "False when the item should be hidden, for example after removal."
           },
-          "tx_hash": { "type": "string", "description": "Source transaction hash." },
+          "tx_hash": {
+            "type": "string",
+            "description": "Source transaction hash."
+          },
           "block_number": {
             "type": "integer",
             "format": "int64",
@@ -1626,7 +2276,9 @@
             "minimum": 1,
             "description": "Feed projector version that produced this item."
           },
-          "payload": { "$ref": "#/components/schemas/FeedEventPayload" }
+          "payload": {
+            "$ref": "#/components/schemas/FeedEventPayload"
+          }
         }
       },
       "FeedPage": {
@@ -1642,10 +2294,14 @@
             "maximum": 256,
             "description": "Page size used for this response."
           },
-          "cursor": { "$ref": "#/components/schemas/FeedCursor" },
+          "cursor": {
+            "$ref": "#/components/schemas/FeedCursor"
+          },
           "items": {
             "type": "array",
-            "items": { "$ref": "#/components/schemas/FeedItem" },
+            "items": {
+              "$ref": "#/components/schemas/FeedItem"
+            },
             "description": "Feed items in newest-first order."
           }
         }
@@ -1682,7 +2338,9 @@
         "required": ["format_hash", "limit", "total_connectors", "cursor", "scalars", "connectors"],
         "description": "Connector membership and scalar labels for one format hash.",
         "properties": {
-          "format_hash": { "$ref": "#/components/schemas/FormatHash" },
+          "format_hash": {
+            "$ref": "#/components/schemas/FormatHash"
+          },
           "limit": {
             "type": "integer",
             "minimum": 1,
@@ -1694,15 +2352,21 @@
             "minimum": 0,
             "description": "Total number of connectors using this format hash."
           },
-          "cursor": { "$ref": "#/components/schemas/FormatNameCursorState" },
+          "cursor": {
+            "$ref": "#/components/schemas/FormatNameCursorState"
+          },
           "scalars": {
             "type": "array",
-            "items": { "type": "string" },
+            "items": {
+              "type": "string"
+            },
             "description": "Scalar labels encoded as `scalar:tail_id` entries."
           },
           "connectors": {
             "type": "array",
-            "items": { "type": "string" },
+            "items": {
+              "type": "string"
+            },
             "description": "Connector names using this format hash."
           }
         }
@@ -1725,10 +2389,14 @@
             "minimum": 0,
             "description": "Total number of known format hashes."
           },
-          "cursor": { "$ref": "#/components/schemas/FormatHashCursorState" },
+          "cursor": {
+            "$ref": "#/components/schemas/FormatHashCursorState"
+          },
           "formats": {
             "type": "array",
-            "items": { "$ref": "#/components/schemas/FormatHash" },
+            "items": {
+              "$ref": "#/components/schemas/FormatHash"
+            },
             "description": "Format hashes in ascending cursor order."
           }
         }
@@ -1779,12 +2447,18 @@
         "title": "NonceResponse",
         "type": "object",
         "additionalProperties": false,
-        "required": ["nonce"],
+        "required": ["nonce", "message"],
         "description": "Nonce response.",
         "properties": {
           "nonce": {
             "type": "string",
-            "description": "One-time nonce to be signed by the account owner."
+            "pattern": "^[0-9a-f]{66}$",
+            "description": "One-time nonce identifying `message`; submit it to `/auth`."
+          },
+          "message": {
+            "type": "string",
+            "description": "EIP-4361 sign-in message for the wallet to sign with `personal_sign`. It names the site with its scheme, the checksummed address, the chain ID, the nonce, and when it was issued and expires.\n",
+            "example": "https://decentralised.art wants you to sign in with your Ethereum account:\n0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266\n\nSign in to decentralised.art.\n\nURI: https://decentralised.art\nVersion: 1\nChain ID: 11155111\nNonce: 000000006ac23fc0003f9c1d27a84be6526b0d8e4c13f7a9e5d2b8c06f41e93a7d\nIssued At: 2026-10-04T12:00:00Z\nExpiration Time: 2026-10-04T12:05:00Z"
           }
         }
       },
@@ -1795,11 +2469,18 @@
         "required": ["path", "data"],
         "description": "One returned scalar stream for an execution path.",
         "properties": {
-          "path": { "type": "string", "description": "Fully-qualified execution path." },
+          "path": {
+            "type": "string",
+            "description": "Fully-qualified execution path."
+          },
           "data": {
             "type": "array",
-            "items": { "type": "integer" },
-            "description": "Output particle values for this path."
+            "items": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 4294967295
+            },
+            "description": "Output particle values for this path (uint32)."
           }
         }
       },
@@ -1809,7 +2490,9 @@
         "required": ["name"],
         "description": "Prepare the publication of an entity the caller created on this server.",
         "properties": {
-          "name": { "$ref": "#/components/schemas/EntityName" },
+          "name": {
+            "$ref": "#/components/schemas/EntityName"
+          },
           "relay": {
             "type": "boolean",
             "default": false,
@@ -1821,8 +2504,12 @@
         "title": "PrepareResponse",
         "description": "Either the transaction the owner's wallet must send, or, when the registry already holds this exact publication, the existing registration.\n",
         "oneOf": [
-          { "$ref": "#/components/schemas/PreparedPublication" },
-          { "$ref": "#/components/schemas/AlreadyPublished" }
+          {
+            "$ref": "#/components/schemas/PreparedPublication"
+          },
+          {
+            "$ref": "#/components/schemas/AlreadyPublished"
+          }
         ],
         "discriminator": {
           "propertyName": "status",
@@ -1848,12 +2535,25 @@
         ],
         "description": "The transaction the owner's wallet must send to publish the entity.",
         "properties": {
-          "status": { "type": "string", "enum": ["prepared"] },
-          "kind": { "$ref": "#/components/schemas/EntityKind" },
-          "name": { "$ref": "#/components/schemas/EntityName" },
-          "transaction": { "$ref": "#/components/schemas/UnsignedTransaction" },
-          "address": { "$ref": "#/components/schemas/Address" },
-          "content_hash": { "$ref": "#/components/schemas/Hash32" },
+          "status": {
+            "type": "string",
+            "enum": ["prepared"]
+          },
+          "kind": {
+            "$ref": "#/components/schemas/EntityKind"
+          },
+          "name": {
+            "$ref": "#/components/schemas/EntityName"
+          },
+          "transaction": {
+            "$ref": "#/components/schemas/UnsignedTransaction"
+          },
+          "address": {
+            "$ref": "#/components/schemas/Address"
+          },
+          "content_hash": {
+            "$ref": "#/components/schemas/Hash32"
+          },
           "publication_nonce": {
             "type": "integer",
             "format": "int64",
@@ -1866,7 +2566,9 @@
             "minimum": 0,
             "description": "Unix seconds after which the registry refuses the transaction."
           },
-          "signing": { "$ref": "#/components/schemas/SigningFields" }
+          "signing": {
+            "$ref": "#/components/schemas/SigningFields"
+          }
         }
       },
       "PublishError": {
@@ -1875,21 +2577,31 @@
         "required": ["message"],
         "description": "Publication error. Optional fields appear only when relevant.",
         "properties": {
-          "message": { "type": "string", "description": "Human-readable message." },
+          "message": {
+            "type": "string",
+            "description": "Human-readable message."
+          },
           "status": {
             "type": "string",
             "enum": ["pending"],
             "description": "Present on 202 while the transaction is not mined yet."
           },
-          "tx_hash": { "type": "string", "description": "Transaction the error refers to." },
+          "tx_hash": {
+            "type": "string",
+            "description": "Transaction the error refers to."
+          },
           "missing": {
             "type": "array",
-            "items": { "type": "string" },
+            "items": {
+              "type": "string"
+            },
             "description": "Connector dependencies absent from the target registry."
           },
           "mismatched": {
             "type": "array",
-            "items": { "type": "string" },
+            "items": {
+              "type": "string"
+            },
             "description": "Connector dependencies registered with a different artifact."
           }
         }
@@ -1921,8 +2633,12 @@
         "required": ["name", "content_hash", "raw_tx"],
         "description": "Broadcast a publication transaction the owner signed offline.",
         "properties": {
-          "name": { "$ref": "#/components/schemas/EntityName" },
-          "content_hash": { "$ref": "#/components/schemas/Hash32" },
+          "name": {
+            "$ref": "#/components/schemas/EntityName"
+          },
+          "content_hash": {
+            "$ref": "#/components/schemas/Hash32"
+          },
           "raw_tx": {
             "type": "string",
             "pattern": "^0x02[0-9a-fA-F]+$",
@@ -1937,8 +2653,14 @@
         "required": ["status", "tx_hash"],
         "description": "The provider accepted the transaction, or already held it. Confirm it with POST /publish/{kind}.\n",
         "properties": {
-          "status": { "type": "string", "enum": ["pending"] },
-          "tx_hash": { "type": "string", "description": "Hash of the broadcast transaction." }
+          "status": {
+            "type": "string",
+            "enum": ["pending"]
+          },
+          "tx_hash": {
+            "type": "string",
+            "description": "Hash of the broadcast transaction."
+          }
         }
       },
       "SigningFields": {
@@ -1948,15 +2670,27 @@
         "required": ["type", "nonce", "maxFeePerGas", "maxPriorityFeePerGas", "value"],
         "description": "Present only when the request set `relay`. Merged into `transaction`, these complete an EIP-1559 transaction an owner can sign offline. Quantities are hex.\n",
         "properties": {
-          "type": { "type": "string", "enum": ["0x2"] },
+          "type": {
+            "type": "string",
+            "enum": ["0x2"]
+          },
           "nonce": {
             "type": "string",
             "pattern": "^0x[0-9a-f]+$",
             "description": "The owner's pending account nonce."
           },
-          "maxFeePerGas": { "type": "string", "pattern": "^0x[0-9a-f]+$" },
-          "maxPriorityFeePerGas": { "type": "string", "pattern": "^0x[0-9a-f]+$" },
-          "value": { "type": "string", "enum": ["0x0"] }
+          "maxFeePerGas": {
+            "type": "string",
+            "pattern": "^0x[0-9a-f]+$"
+          },
+          "maxPriorityFeePerGas": {
+            "type": "string",
+            "pattern": "^0x[0-9a-f]+$"
+          },
+          "value": {
+            "type": "string",
+            "enum": ["0x0"]
+          }
         }
       },
       "TransformationCallDef": {
@@ -1966,10 +2700,16 @@
         "required": ["name"],
         "description": "Transformation invocation in a connector dimension.",
         "properties": {
-          "name": { "type": "string", "description": "Transformation name" },
+          "name": {
+            "type": "string",
+            "description": "Transformation name"
+          },
           "args": {
             "type": "array",
-            "items": { "type": "integer" },
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            },
             "description": "Transformation arguments. Omitted means no arguments."
           }
         }
@@ -1978,17 +2718,28 @@
         "title": "TransformationInfoResponse",
         "type": "object",
         "additionalProperties": false,
-        "required": ["name", "args_count", "owner", "address"],
+        "required": ["name", "args_count", "runtime_code", "owner", "address"],
         "description": "Transformation information. The Solidity source is an execution input kept in local storage or a verified artifact and is never served.\n",
         "properties": {
-          "name": { "type": "string", "description": "Transformation name." },
+          "name": {
+            "type": "string",
+            "description": "Transformation name."
+          },
           "args_count": {
             "type": "integer",
             "minimum": 0,
             "maximum": 4294967295,
             "description": "Number of arguments (uint32), derived from the source and registered on chain."
           },
-          "owner": { "$ref": "#/components/schemas/Address" },
+          "runtime_code": {
+            "type": "string",
+            "nullable": true,
+            "pattern": "^0x[0-9a-f]*$",
+            "description": "Deployed runtime bytecode as 0x-prefixed hex, or null while the registry does not hold it."
+          },
+          "owner": {
+            "$ref": "#/components/schemas/Address"
+          },
           "address": {
             "type": "string",
             "description": "On-chain address once published; \"0x0\" for a local simulation entity."
@@ -2002,9 +2753,16 @@
         "required": ["from", "to", "data", "chainId", "gas"],
         "description": "Registry call ready for eth_sendTransaction; quantities are hex, as wallets expect. The calldata carries an empty owner signature, which the registry accepts because the owner is the sender.\n",
         "properties": {
-          "from": { "$ref": "#/components/schemas/Address" },
-          "to": { "$ref": "#/components/schemas/Address" },
-          "data": { "type": "string", "description": "Hex-encoded calldata." },
+          "from": {
+            "$ref": "#/components/schemas/Address"
+          },
+          "to": {
+            "$ref": "#/components/schemas/Address"
+          },
+          "data": {
+            "type": "string",
+            "description": "Hex-encoded calldata."
+          },
           "chainId": {
             "type": "string",
             "pattern": "^0x[0-9a-f]+$",

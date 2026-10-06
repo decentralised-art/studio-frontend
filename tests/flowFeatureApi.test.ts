@@ -12,7 +12,9 @@ vi.mock("$lib/chain/dcnClient", () => ({
   }),
   isDcnApiError: (error: unknown) =>
     Boolean(
-      error && typeof error === "object" && (error as { name?: string }).name === "DcnApiError",
+      error &&
+      typeof error === "object" &&
+      (error as { name?: string }).name === "DecentralisedArtApiError",
     ),
 }));
 
@@ -103,7 +105,7 @@ describe("flowFeatureApi", () => {
 
   it("returns null for missing connector features", async () => {
     connectorGetMock.mockRejectedValue({
-      name: "DcnApiError",
+      name: "DecentralisedArtApiError",
       status: 404,
       body: { error: "not_found" },
     });

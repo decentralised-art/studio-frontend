@@ -91,7 +91,11 @@
           args: "since_seq, limit",
           text: "A bounded replay of the live event stream, for catching up.",
         },
-        { name: "core.get_nonce", args: "address", text: "The login nonce for an address." },
+        {
+          name: "core.get_nonce",
+          args: "address",
+          text: "The login nonce and sign-in message for an address.",
+        },
       ],
     },
     {
@@ -133,7 +137,7 @@
         {
           name: "core.execute_connector",
           args: "connector_name, particles_count, dynamic_ri",
-          text: 'Run a published connector on chain at a pinned block. Returns particles with block_number, block_hash, runner and execution_mode "chain".',
+          text: 'Run a published connector on chain at a pinned block. Returns particles with block_number, block_hash, runner, registry and execution_mode "chain".',
         },
       ],
     },
@@ -309,7 +313,7 @@
       </li>
       <li>
         <strong>Run on chain.</strong> Execute the published connector and keep the whole result, with
-        its block and runner, as the reference for what the network produced.
+        its block, runner and registry, as the reference for what the network produced.
       </li>
     </ol>
     <p>
@@ -409,8 +413,8 @@
       Prefer the environment variable for keys, so they never appear in the conversation.
     </p>
     <p>
-      The server logs in to the chain API by signing a one-time nonce with your key. That login is
-      separate from signing in to this website.
+      The server logs in to the chain API by signing the issued sign-in message with your key. That
+      login is separate from signing in to this website.
     </p>
   </section>
 
@@ -542,7 +546,7 @@
       </li>
       <li>Leave the key out entirely if the agent only needs to explore, simulate and execute.</li>
       <li>
-        The server never sends your key anywhere. It signs the login nonce and publication
+        The server never sends your key anywhere. It signs the sign-in message and publication
         transactions locally.
       </li>
     </ul>

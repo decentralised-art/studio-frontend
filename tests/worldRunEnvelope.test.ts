@@ -5,6 +5,7 @@ const { envelope } = vi.hoisted(() => ({
     block_number: 123,
     block_hash: `0x${"ab".repeat(32)}`,
     runner: `0x${"12".repeat(20)}`,
+    registry: `0x${"34".repeat(20)}`,
     particles: [
       "pitch",
       "time",
@@ -46,6 +47,7 @@ describe("built-in Worlds with block-stamped execute results", () => {
         block_number: 123,
         block_hash: envelope.block_hash,
         runner: envelope.runner,
+        registry: envelope.registry,
       });
     },
   );

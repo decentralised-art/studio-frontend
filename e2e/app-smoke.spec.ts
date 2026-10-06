@@ -1459,6 +1459,7 @@ test("Studio simulates a draft, publishes with its wallet once, then preserves c
           block_number: 77,
           block_hash: `0x${"ef".repeat(32)}`,
           runner: fixtureAddress,
+          registry: fixtureAddress,
           particles,
         };
       else body = { name, owner: fixtureAddress, address: "0x0" };

@@ -121,6 +121,7 @@ export const executeToneWorldRun = async (input: {
         block_number: result.body.block_number,
         block_hash: result.body.block_hash,
         runner: result.body.runner,
+        registry: result.body.registry,
       },
       statsText,
     }),

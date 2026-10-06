@@ -5,7 +5,7 @@ import type {
   EntityKind,
   PrepareResponse,
   PublishError,
-} from "dcn";
+} from "decentralised-art";
 
 export type PublicationRecord = {
   fingerprint: string;

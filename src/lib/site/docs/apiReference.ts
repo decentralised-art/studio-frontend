@@ -1,8 +1,6 @@
 // View models for the API reference page. The chain API part is read from the bundled
 // OpenAPI document in chain-openapi.json, generated from decentralised-art/api-spec with the
-// SDK's bundler:
-//   node sdk/js/scripts/bundle-openapi.mjs --spec-root api-spec --output chain-openapi.json
-// (then minified). Regenerate it whenever api-spec changes.
+// SDK's bundler through npm run docs:generate:chain. Regenerate it whenever the pinned spec changes.
 import spec from "$lib/site/docs/chain-openapi.json";
 
 export type Auth = "none" | "chain" | "session" | "session-owner";
@@ -15,7 +13,7 @@ export type FieldRow = {
   required: boolean;
   description: string;
   depth: number;
-  location?: "path" | "query";
+  location?: "path" | "query" | "header";
 };
 
 export type ApiResponse = { status: string; description: string; type?: string; ref?: string };
@@ -199,7 +197,7 @@ const chainOperation = (
     description:
       clean(parameter.description) + constraints(parameter.schema, clean(parameter.description)),
     depth: 0,
-    location: parameter.in as "path" | "query",
+    location: parameter.in as "path" | "query" | "header",
   }));
   const bodySchema = operation.requestBody?.content["application/json"]?.schema;
   const responses: ApiResponse[] = Object.entries(operation.responses).map(([status, response]) => {
@@ -242,6 +240,18 @@ const OWNER = "fa71ff2394596f824d69961293d095a50d322e4e";
 const FORMAT = "4e5aa46feeb2db48b7df17d424f29bfdee2ccbfdf2433a99da6be58d3c9e3101";
 const HASH = "0x5d3f…c41a";
 const TX = "0x8b21…77e0";
+const LOGIN_NONCE = "ab".repeat(33);
+const LOGIN_MESSAGE = `https://decentralised.art wants you to sign in with your Ethereum account:
+0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266
+
+Sign in to decentralised.art.
+
+URI: https://decentralised.art
+Version: 1
+Chain ID: 11155111
+Nonce: ${LOGIN_NONCE}
+Issued At: 2026-10-04T12:00:00Z
+Expiration Time: 2026-10-04T12:05:00Z`;
 
 export const chainGroups: EndpointGroup[] = [
   {
@@ -261,12 +271,12 @@ export const chainGroups: EndpointGroup[] = [
     id: "chain-auth",
     title: "Authentication",
     intro:
-      "Creating and publishing need a bearer token. Ask for a nonce, sign the message Login nonce: <nonce> with the account (EIP-191 personal_sign) and exchange the signature for an access token. Tokens are valid for five minutes.",
+      "Creating and publishing need a bearer token. Request a sign-in challenge, sign its exact EIP-4361 message with personal_sign, and submit the address, nonce and signature to /auth. Challenges and access tokens are valid for five minutes. Browser clients pass their origin when requesting a challenge.",
     endpoints: [
       chainOperation("GET", "/nonce/{address}", {
         example: {
-          request: curlGet("/nonce/0xYourAddress"),
-          response: json({ nonce: "827334" }),
+          request: curlGet("/nonce/0xYourAddress?origin=https%3A%2F%2Fdecentralised.art"),
+          response: json({ nonce: LOGIN_NONCE, message: LOGIN_MESSAGE }),
           illustrative: true,
         },
       }),
@@ -274,7 +284,7 @@ export const chainGroups: EndpointGroup[] = [
         example: {
           request: curlPost("/auth", {
             address: "0xYourAddress",
-            message: "Login nonce: 827334",
+            nonce: LOGIN_NONCE,
             signature: "0x…",
           }),
           response: json({ access_token: "eyJhbGciOiJIUzI1NiIs…" }),
@@ -384,9 +394,11 @@ export const chainGroups: EndpointGroup[] = [
           response: json({
             name: "add",
             args_count: 1,
+            runtime_code: "0x…",
             owner: OWNER,
             address: "0xa112a62768ec809c50a66a6efc16cb9dd9545d03",
           }),
+          illustrative: true,
         },
       }),
       chainOperation("POST", "/transformation", {
@@ -417,7 +429,13 @@ export const chainGroups: EndpointGroup[] = [
         also: "HEAD /condition/{name} answers 200 or 404 without a body.",
         example: {
           request: curlGet("/condition/positive_only"),
-          response: json({ name: "positive_only", args_count: 1, owner: OWNER, address: "0x…" }),
+          response: json({
+            name: "positive_only",
+            args_count: 1,
+            runtime_code: null,
+            owner: OWNER,
+            address: "0x…",
+          }),
           illustrative: true,
         },
       }),
@@ -584,6 +602,7 @@ data: {…}`,
             block_number: 11825489,
             block_hash: "0x1c4b37dc907b055ffd53e0d32536a408a2d93e9bedfa7ed167cba14991729cfa",
             runner: "0xe0e70f522b64a6c8d2301697cd7133be33eae77f",
+            registry: "0x7648cc2a6db6152a60615ebbba4b9e1f900e26fa",
             particles: [{ path: "/pitch:0", data: [12, 13, 14, 15] }],
           }),
         },

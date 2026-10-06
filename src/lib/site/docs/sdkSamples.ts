@@ -92,7 +92,7 @@ await sdk.loginWithWallet(wallet);
 
 // Browser: any ethers signer works for login.
 // const signer = await new BrowserProvider(window.ethereum).getSigner();
-// await sdk.loginWithWallet(signer);
+// await sdk.loginWithWallet(signer, { origin: window.location.origin });
 
 console.log(sdk.accessToken);`),
   py(`import os
@@ -107,16 +107,15 @@ print(sdk.access_token)`),
 ];
 
 export const loginSignature = [
-  js(`const { nonce } = await sdk.getNonce(address);
-const message = \`Login nonce: \${nonce}\`;
+  js(`const { nonce, message } = await sdk.getNonce(address);
+// Browser clients pass { origin: window.location.origin } to getNonce.
 const signature = await signMessageSomehow(message); // EIP-191 personal_sign
 
-await sdk.loginWithSignature(address, message, signature);`),
-  py(`nonce = sdk.get_nonce(address).nonce
-message = f"Login nonce: {nonce}"
-signature = sign_message_somehow(message)  # EIP-191 personal_sign
+await sdk.loginWithSignature(address, nonce, signature);`),
+  py(`challenge = sdk.get_nonce(address)
+signature = sign_message_somehow(challenge.message)  # EIP-191 personal_sign
 
-sdk.login_with_signature(address, message, signature)`),
+sdk.login_with_signature(address, challenge.nonce, signature)`),
 ];
 
 export const reading = [
@@ -407,7 +406,7 @@ export const execute = [
   "0": { start_point: 12, transformation_shift: 0 },
 });
 
-console.log(result.block_number, result.block_hash, result.runner);
+console.log(result.block_number, result.block_hash, result.runner, result.registry);
 console.log(result.particles);
 // [{ path: "/pitch:0", data: [12, 13, 14, 15, 16, 17, 18, 19] }]`),
   py(`result = sdk.execute(
@@ -417,7 +416,7 @@ console.log(result.particles);
     {"0": {"start_point": 12, "transformation_shift": 0}},
 )
 
-print(result.block_number, result.block_hash, result.runner)
+print(result.block_number, result.block_hash, result.runner, result.registry)
 print(result.particles[0].path, result.particles[0].data)
 # /pitch:0 [12, 13, 14, 15, 16, 17, 18, 19]`),
 ];
