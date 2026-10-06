@@ -2278,6 +2278,7 @@
       lesson === "starting-value" ||
       lesson === "draft" ||
       lesson === "selection" ||
+      lesson === "dimensions" ||
       lesson === "formats" ||
       lesson === "publish" ||
       lesson === "conditions" ||
@@ -2571,6 +2572,7 @@
   const tutorialWorkshopState = $derived.by(() => {
     const root = tutorialRoot;
     const dimension = root ? getSortedConnectorDimensions(root.id)[0] : undefined;
+    const secondDimension = root ? getSortedConnectorDimensions(root.id)[1] : undefined;
     const referenceEdge = root
       ? edges.find(
           (edge) =>
@@ -2599,6 +2601,16 @@
       pitchLocked: Boolean(pitch?.data.riLocked),
       addArgs: dimension?.data.transformations?.find((item) => item.name === "add")?.args ?? null,
       dimensionCount: root?.data.dimensions ?? 0,
+      secondTransformations: secondDimension?.data.transformations ?? [],
+      secondLinked: Boolean(
+        root &&
+        edges.some(
+          (edge) =>
+            ((edge.source === root.id && edge.sourceHandle === "dim-1") ||
+              (edge.source === secondDimension?.id && edge.sourceHandle === "out")) &&
+            isConnectorKind(nodesById[edge.target]?.data.kind),
+        ),
+      ),
       linked: Boolean(pitch && resolveNodeName(pitch) === "pitch"),
       signedIn: /^0x[0-9a-f]{40}$/i.test(currentStudioAuthorId),
       local: activeRootIsLocal,
@@ -2612,6 +2624,8 @@
       samples: runSamplesCount,
       values:
         activeRunOutput?.find((stream) => stream.feature_path.endsWith("/pitch:0"))?.data ?? [],
+      streams:
+        activeRunOutput?.map((stream) => ({ path: stream.feature_path, data: stream.data })) ?? [],
       resultAt: activeRunTimestamp,
       runMode: runModeByTab[activeTabId] ?? null,
       explorerSource,

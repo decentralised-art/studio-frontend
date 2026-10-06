@@ -14,6 +14,7 @@
   import EconomyDiagram from "$lib/site/tutorial/EconomyDiagram.svelte";
   import EditorIntegrationDiagram from "$lib/site/tutorial/EditorIntegrationDiagram.svelte";
   import LifecycleDiagram from "$lib/site/tutorial/LifecycleDiagram.svelte";
+  import MultidimensionalPath from "$lib/site/tutorial/MultidimensionalPath.svelte";
   import PaletteDiagram from "$lib/site/tutorial/PaletteDiagram.svelte";
   import RunningInstanceDiagram from "$lib/site/tutorial/RunningInstanceDiagram.svelte";
   import StudioGuidePreview from "$lib/site/tutorial/StudioGuidePreview.svelte";
@@ -37,6 +38,7 @@
       label: "When you’re ready for more",
       sections: [
         { id: "formats", label: "Use values in a World" },
+        { id: "multidimensional", label: "Combine dimensions" },
         { id: "publish", label: "Publish your contribution" },
         { id: "world-editors", label: "Build your own World" },
         { id: "conditions", label: "Financial and algorithmic conditions" },
@@ -205,9 +207,10 @@
     </p>
     <p>
       A <strong>transformation</strong> is a rule that changes a number. For example,
-      <strong>add</strong> with argument 2 adds 2 at each step. A <strong>dimension</strong> is one stream
-      in a connector. When that dimension references another connector, its numbers choose indexes in
-      the referenced sequence: 0, 2, 4, 6 chooses every second position.
+      <strong>add</strong> with argument 2 adds 2 at each step. A <strong>dimension</strong> has its own
+      sequence of transformations. Without a reference, its numbers are output values. When it references
+      another connector, its numbers choose indexes in the referenced sequence: 0, 2, 4, 6 chooses every
+      second position.
     </p>
     <p>
       Try a different tab or selection below. The moving links show the choice travelling from your
@@ -386,14 +389,48 @@
       <h2 id="formats">Give your values a place in a World</h2>
     </div>
     <p>
-      A note needs more than a pitch; a colour needs more than red. For a complete object, a World
-      may combine several streams. Try the examples below to see what each stream contributes.
+      So far, our connector has had one dimension. You can give a connector several dimensions, each
+      with its own rules and references. This is a <strong>multidimensional connector</strong>: one
+      definition can supply several properties together. For example, a musical contribution could
+      supply pitch, time, duration and velocity; a painting contribution could supply red, green and
+      blue. The World interprets the values that the connector produces.
     </p>
     <WorldInterpretationDiagram />
+    <h3 id="multidimensional">Put two dimensions in one connector</h3>
     <p>
-      <strong>Before contributing to a World, check its instructions:</strong> which properties it reads,
-      what the numbers mean, and how it groups them. Our pitch-only draft is a useful selection, but the
-      MIDI World also needs time, duration and velocity to make a complete note.
+      Let’s keep our earlier pitch selection and add another dimension. In the new connector,
+      <strong>D1</strong> selects 60, 62, 64, 66 from pitch. <strong>D2</strong> is a
+      <strong>scalar dimension</strong>: it uses add with argument 1 to produce 0, 1, 2, 3 directly.
+      You’ll save one draft and simulate both dimensions in one run. A World you build could read D2
+      as start times for the pitches in D1.
+    </p>
+    {@render routeTabs("Choose how to combine dimensions")}
+    {#each learningRoutes as route (route.id)}
+      <div class="follow-panel" hidden={learningRoute !== route.id}>
+        <MultidimensionalPath route={route.id} />
+      </div>
+    {/each}
+    <p class="checkpoint">
+      <strong>Check both output paths:</strong> <code>/your_name:0/pitch:0</code> contains 60, 62,
+      64, 66, and <code>/your_name:1</code> contains 0, 1, 2, 3. Replace
+      <code>your_name</code> with your draft’s name. Studio labels dimensions D1 and D2; output paths
+      count them from 0. Adding D2 leaves D1’s selection unchanged.
+    </p>
+    <details class="technical-detail">
+      <summary>Why is the fixed running instance still at position 2?</summary>
+      <p>
+        The referenced pitch still uses fixed running instance <code>"2"</code>: root 0, selecting
+        D1 at 1, pitch’s scalar dimension at 2. D2 comes after that branch, at position 3, and keeps
+        its default Start 0, Shift 0. These are positions in the reference tree, distinct from the
+        dimension numbers in the output paths.
+      </p>
+    </details>
+    <p>
+      <strong>Before contributing to a World, check its instructions:</strong> which properties it
+      reads, what the numbers mean, and how it groups them. Our two-dimensional draft demonstrates
+      how to combine properties; it is not yet a complete contribution for the MIDI World. That
+      World needs streams labelled pitch, time, duration and velocity. D2 here is a scalar of your
+      own connector, so its label is <code>your_name:1</code>, not <code>time:0</code>.
     </p>
     {@render routeTabs("Choose how to check a World’s inputs")}
     {#each learningRoutes as route (route.id)}
@@ -412,6 +449,11 @@
         The format doesn’t validate units, ranges or grouping. The World defines those conventions.
         Network values are unsigned whole numbers; negative or fractional quantities need an
         encoding.
+      </p>
+      <p>
+        A dimension can reference a multidimensional connector too. Its selecting indexes then
+        choose positions across that connector’s output streams. A connector can therefore contain
+        both direct scalar dimensions and references that supply several streams.
       </p>
     </details>
   </section>

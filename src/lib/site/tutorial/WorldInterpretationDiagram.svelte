@@ -87,10 +87,11 @@
 >
   <figcaption class="intro">
     <span class="eyeline">From a selection to something you can use</span>
-    <strong>Several streams. One note or brush mark.</strong>
+    <strong>One connector. Several dimensions.</strong>
     <p>
-      Earlier, we chose four values from one stream. A World can put several streams together: value
-      1 from each describes the first object, value 2 the next, and so on.
+      Earlier, we chose four values from one dimension. A connector can define several dimensions
+      together and return their streams in one run. In these examples, the first value from each
+      describes the first note or brush mark; the second values describe the next one.
     </p>
   </figcaption>
   <div class="example-tabs" role="tablist" aria-label="Examples of several streams">
@@ -125,28 +126,39 @@
         ? "Pitch alone tells us which note. Time, duration and velocity tell us when it starts, how long it lasts and how strongly it is played."
         : "A colour needs three values: red, green and blue (RGB). A red stream alone cannot specify it. This painting combines one value from each channel for every brush mark."}
     </p>
-    <div class="stream-table-wrap">
-      <table
-        aria-label={example === "music"
-          ? "Four streams make four notes"
-          : "Three streams make four brush marks"}
-      >
-        <thead
-          ><tr
-            ><th scope="col">Stream</th>{#each [0, 1, 2, 3] as i (i)}<th
-                scope="col"
-                class:selected={selected === i}>{example === "music" ? "Note" : "Mark"} {i + 1}</th
-              >{/each}</tr
-          ></thead
+    <div class="connector-output">
+      <div class="connector-label">
+        <strong
+          >{example === "music"
+            ? "A four-dimensional connector"
+            : "A three-dimensional connector"}</strong
         >
-        <tbody
-          >{#each rows as row (row.name)}<tr
-              ><th scope="row">{row.name}</th>{#each row.values as value, i (i)}<td
-                  class:selected={selected === i}>{value}</td
+        <span>One run → the streams below → the World’s picture</span>
+      </div>
+      <div class="stream-table-wrap">
+        <table
+          aria-label={example === "music"
+            ? "Four streams make four notes"
+            : "Three streams make four brush marks"}
+        >
+          <thead
+            ><tr
+              ><th scope="col">Dimension</th>{#each [0, 1, 2, 3] as i (i)}<th
+                  scope="col"
+                  class:selected={selected === i}
+                  >{example === "music" ? "Note" : "Mark"} {i + 1}</th
                 >{/each}</tr
-            >{/each}</tbody
-        >
-      </table>
+            ></thead
+          >
+          <tbody
+            >{#each rows as row, dimensionIndex (row.name)}<tr
+                ><th scope="row">D{dimensionIndex + 1} · {row.name}</th
+                >{#each row.values as value, i (i)}<td class:selected={selected === i}>{value}</td
+                  >{/each}</tr
+              >{/each}</tbody
+          >
+        </table>
+      </div>
     </div>
     <div
       class="object-picker"
@@ -292,16 +304,19 @@
     </p>
   </div>
   <div class="world-contract">
-    <strong>Who decides how the streams fit together? The World.</strong>
+    <strong>The connector supplies the dimensions. The World gives them meaning.</strong>
     <p>
-      These local examples group values by their position in each stream. The score uses beats and
-      MIDI pitch numbers; the painting uses RGB channels from 0 to 255 and fixes the marks’
-      positions and shapes. A real World documents its own units, ranges and grouping.
+      The connector’s creator defines its dimensions, rules and references. Here, the World reads
+      values at the same position across the returned streams as one object. The score uses beats
+      and MIDI pitch numbers; the painting uses RGB channels from 0 to 255 and fixes the marks’
+      positions and shapes. A World documents its units, ranges and grouping; it can also combine
+      results from separate connectors when useful.
     </p>
     <p>
-      To generate these examples, you would select a stream for each property. Referencing pitch
-      alone still gives a pitch stream; it does not automatically add the other properties. These
-      previews don’t save definitions or run network requests.
+      Each dimension can generate values directly or select them from another connector. Referencing
+      pitch alone supplies only pitch; add dimensions for the other properties. These illustrations
+      are local examples, not saved definitions or network runs. Try the two-dimensional exercise
+      below to build the relationship in the real system.
     </p>
   </div>
 </figure>
@@ -377,6 +392,24 @@
   .stream-table-wrap {
     min-width: 0;
     overflow-x: auto;
+  }
+  .connector-output {
+    min-width: 0;
+    padding: 1rem;
+    border: 1px solid var(--art-accent);
+    border-radius: 0.8rem;
+    background: #071c2480;
+  }
+  .connector-label {
+    display: grid;
+    gap: 0.4rem;
+    margin-bottom: 1rem;
+    color: var(--art-ink) !important;
+    font-size: 0.85rem;
+  }
+  .connector-label span {
+    color: var(--art-muted) !important;
+    font-size: 0.75rem;
   }
   .interpretation-artboard table {
     width: 100%;
