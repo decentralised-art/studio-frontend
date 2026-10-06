@@ -40,6 +40,15 @@
       tags: ["Studio", "SDK", "MCP"],
     },
     {
+      id: "ipfs",
+      status: "Now",
+      tone: "green",
+      phase: "now",
+      title: "IPFS hosting for Worlds",
+      text: "We are working on IPFS-based hosting for the platform's Worlds, making their code and assets available through a distributed, content-addressed network.",
+      tags: ["IPFS", "Worlds", "Decentralised hosting"],
+    },
+    {
       id: "programmes",
       status: "Next",
       tone: "magenta",
@@ -123,6 +132,14 @@
                   rx="2.5"
                   style={`--l: ${line}`}
                 ></rect>
+              {/each}
+            {:else if stage.id === "ipfs"}
+              <!-- World bundles are shared across a distributed network. -->
+              <path class="wire" d="M100 60 40 28M100 60 160 28M100 60 40 92M100 60 160 92"></path>
+              <circle class="probe" cx="100" cy="60" r="27"></circle>
+              <circle class="world-core" cx="100" cy="60" r="13"></circle>
+              {#each [[26, 14], [146, 14], [26, 78], [146, 78]] as [x, y], b (b)}
+                <rect class="block" {x} {y} width="28" height="28" rx="6"></rect>
               {/each}
             {:else if stage.id === "programmes"}
               <!-- People (circles) and agents (squares) gather around a growing World. -->
