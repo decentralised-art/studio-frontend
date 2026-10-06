@@ -9500,6 +9500,7 @@
               <button
                 type="button"
                 role="tab"
+                data-tutorial="inspector-node"
                 aria-selected={inspectorTab === "node"}
                 class={`inspector-tab ${inspectorTab === "node" ? "is-active" : ""}`}
                 onclick={() => {

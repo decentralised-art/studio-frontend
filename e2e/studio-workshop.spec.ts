@@ -323,19 +323,94 @@ async function build(page: Page, guide: ReturnType<Page["getByRole"]>, stride: n
       .locator(".connector-row")
       .first(),
   );
+  // Pitch can still be selected when the guide asks for the selector's argument.
+  await node(page, "pitch").locator(".connector-title").click();
+  await inspector(page);
+  await expect(page.locator("#node-name")).toHaveValue("pitch");
   await next.click();
+  await expect(
+    guide.getByRole("heading", { name: "Select your new connector", exact: true }),
+  ).toBeVisible();
+  await expect(guide).toContainText("tutorial_step" + stride);
+  await expect(next).toBeDisabled();
+  await expect(
+    page.locator('[data-tutorial="dimension-settings"] .inspector-transform-args'),
+  ).toHaveText("args: 1");
+  await expect
+    .poll(async () => {
+      const rootBox = await node(page, "tutorial_step" + stride).boundingBox();
+      const highlight = await page.locator(".guide-highlight").boundingBox();
+      return rootBox && highlight
+        ? Math.abs(highlight.x - (rootBox.x - 4)) + Math.abs(highlight.width - (rootBox.width + 8))
+        : Infinity;
+    })
+    .toBeLessThan(1);
   await node(page, "tutorial_step" + stride)
     .locator(".connector-title")
     .click();
-  await inspector(page);
+  await page.getByRole("tab", { name: "API", exact: true }).click();
+  await expect(
+    guide.getByRole("heading", { name: "Open its Node Inspector", exact: true }),
+  ).toBeVisible();
+  await page.getByRole("tab", { name: "Node", exact: true }).click();
+  await expect(
+    guide.getByRole("heading", {
+      name: stride === 2 ? "Choose every second value" : "Choose every twelfth value",
+      exact: true,
+    }),
+  ).toBeVisible();
+  await expect(page.locator("#node-name")).toHaveValue("tutorial_step" + stride);
+  await expect
+    .poll(async () => {
+      const dimensions = await page.locator('[data-tutorial="dimension-settings"]').boundingBox();
+      const highlight = await page.locator(".guide-highlight").boundingBox();
+      return dimensions && highlight
+        ? Math.abs(highlight.x - (dimensions.x - 4)) +
+            Math.abs(highlight.width - (dimensions.width + 8))
+        : Infinity;
+    })
+    .toBeLessThan(1);
   await page.locator(".inspector-transform-args-input").fill(String(stride));
   await next.click();
-  await node(page, "pitch").locator(".connector-title").click();
+  await expect(
+    guide.getByRole("heading", { name: "Select the referenced pitch connector", exact: true }),
+  ).toBeVisible();
+  // Recover the reported blocker: Start 60/static was applied to the new root.
   await page.locator("#connector-ri-start").fill("60");
   await page
     .locator('[data-tutorial="running-settings"]')
     .getByRole("button", { name: "open", exact: true })
     .click();
+  await expect(
+    guide.getByRole("heading", { name: "Reset your selection’s starting point", exact: true }),
+  ).toBeVisible();
+  await expect(guide.getByRole("status")).toContainText("Restore Start 0 and Shift 0");
+  await expect(next).toBeDisabled();
+  await page
+    .locator('[data-tutorial="running-settings"]')
+    .getByRole("button", { name: "static", exact: true })
+    .click();
+  await page.locator("#connector-ri-start").fill("0");
+  await expect(
+    guide.getByRole("heading", { name: "Select the referenced pitch connector", exact: true }),
+  ).toBeVisible();
+  await node(page, "pitch").locator(".connector-title").click();
+  await page.locator("#connector-ri-start").fill("60");
+  await expect(next).toBeDisabled();
+  await expect(guide.getByRole("status")).toContainText(
+    "Start 60 and Shift 0 are set. Click the open button so it changes to static.",
+  );
+  await page
+    .locator('[data-tutorial="running-settings"]')
+    .getByRole("button", { name: "open", exact: true })
+    .click();
+  await expect(
+    page
+      .locator('[data-tutorial="running-settings"]')
+      .getByRole("button", { name: "static", exact: true }),
+  ).toBeVisible();
+  await expect(guide.locator(".guide-notice")).toHaveCount(0);
+  await expect(next).toBeEnabled();
   await next.click();
   await expect(guide.getByRole("heading", { name: "Save four values to test" })).toBeVisible();
 }
@@ -406,6 +481,9 @@ for (const stride of [2, 12]) {
     expect(state.creates[0]).toMatchObject({
       dimensions: [{ composite: "pitch", transformations: [{ name: "add", args: [stride] }] }],
       static_ri: { "2": { start_point: 60, transformation_shift: 0 } },
+    });
+    expect(state.creates[0].static_ri).toEqual({
+      "2": { start_point: 60, transformation_shift: 0 },
     });
     await next.click();
     state.setWrong(true);

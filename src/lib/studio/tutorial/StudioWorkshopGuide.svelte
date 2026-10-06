@@ -69,6 +69,19 @@
       snapshot.panel === "inspector" &&
       snapshot.inspectorTab === "node",
   );
+  const pitchSelected = $derived(
+    snapshot.selectedId === snapshot.pitchId &&
+      snapshot.panel === "inspector" &&
+      snapshot.inspectorTab === "node",
+  );
+  const rootStartNeedsReset = $derived(snapshot.rootStart !== 0 || snapshot.rootShift !== 0);
+  function inspectorTarget(connector: "root" | "pitch", section: string) {
+    const id = connector === "root" ? snapshot.rootId : snapshot.pitchId;
+    if (snapshot.selectedId !== id) return connector;
+    if (snapshot.panel !== "inspector") return '[aria-label="Toggle inspector panel"]';
+    if (snapshot.inspectorTab !== "node") return '[data-tutorial="inspector-node"]';
+    return section;
+  }
   const settingsOK = $derived(
     snapshot.dimensionCount === 1 &&
       snapshot.linked &&
@@ -258,29 +271,38 @@
             },
             {
               title: "Connect your selection to pitch",
-              text: "Choose Published → Connectors in Add element. Find pitch and click Add to flow. Draw a connection from your root’s bottom D1 outlet to pitch’s top inlet. The guide advances only once D1 really references pitch.",
+              text: "In Add element, choose Published → Connectors. Find the connector named pitch and click Add to flow. Draw a connection from your new connector’s bottom D1 outlet to pitch’s top inlet. This connects your selection to the values supplied by pitch.",
               target: ".left-panel",
               done: snapshot.linked && snapshot.dimensionCount === 1,
             },
             {
               title: "Add a selecting rule",
-              text: "In Published → Transformations, find add. Drag its card onto D1 inside your new root. Add belongs on your selector, not on the shared pitch connector.",
+              text: "In Add element, choose Published → Transformations. Find the transformation named add and drag its card onto D1 inside your new connector. This transformation generates the indexes used to choose values from pitch.",
               target: ".left-panel",
               done: !!snapshot.addArgs,
             },
             {
-              title: "Choose every " + (stride === 2 ? "second" : "twelfth") + " value",
-              text:
-                "Select your root, then open Inspector → Node. Under Connector dimensions, change add’s argument to " +
-                stride +
-                ". Keep your root at Start 0, Shift 0. Its indexes will be 0, " +
-                stride +
-                ", " +
-                stride * 2 +
-                ", " +
-                stride * 3 +
-                ".",
-              target: '[data-tutorial="dimension-settings"]',
+              title: rootSelected
+                ? "Choose every " + (stride === 2 ? "second" : "twelfth") + " value"
+                : snapshot.selectedId !== snapshot.rootId
+                  ? "Select your new connector"
+                  : "Open its Node Inspector",
+              text: rootSelected
+                ? "In the Inspector for “" +
+                  snapshot.rootName +
+                  "”, under Connector dimensions, change the add transformation’s argument to " +
+                  stride +
+                  ". Keep this connector at Start 0, Shift 0. Its indexes will be 0, " +
+                  stride +
+                  ", " +
+                  stride * 2 +
+                  ", " +
+                  stride * 3 +
+                  "."
+                : "Click your newly created connector, “" +
+                  snapshot.rootName +
+                  "”, on the canvas. This is what we mean by the root connector. Open the Inspector with the information button and choose its Node tab to edit the selecting rule.",
+              target: inspectorTarget("root", '[data-tutorial="dimension-settings"]'),
               done:
                 rootSelected &&
                 snapshot.addArgs?.length === 1 &&
@@ -289,13 +311,27 @@
                 snapshot.rootShift === 0,
             },
             {
-              title: "Fix the referenced starting point",
-              text: "Select the referenced pitch and open Inspector → Node. In Running instance, set Start 60 and Shift 0, then click open to make the pair static. Your new definition will remember this pair; published pitch stays unchanged.",
-              target: '[data-tutorial="running-settings"]',
-              done:
-                snapshot.selectedId === snapshot.pitchId &&
-                snapshot.panel === "inspector" &&
-                settingsOK,
+              title: rootStartNeedsReset
+                ? "Reset your selection’s starting point"
+                : pitchSelected
+                  ? "Fix pitch’s starting point"
+                  : "Select the referenced pitch connector",
+              text: rootStartNeedsReset
+                ? "Your connector, “" +
+                  snapshot.rootName +
+                  "”, must choose indexes starting at 0. Select it and open Inspector → Node. In Running instance, click static to unlock the fields if needed, then set Start 0 and Shift 0. Leave it open. We’ll set the referenced pitch to 60 next."
+                : pitchSelected
+                  ? "In pitch’s Running instance, set Start to 60 and Shift to 0. Then click open so it changes to static. This fixes the starting point of the pitch reference in “" +
+                    snapshot.rootName +
+                    "”; the published pitch definition stays unchanged."
+                  : "Click the connector named pitch below “" +
+                    snapshot.rootName +
+                    "” on the canvas, then open Inspector → Node. Pitch is the shared source whose values your new connector selects. We’ll set this reference’s starting point to 60.",
+              target: inspectorTarget(
+                rootStartNeedsReset ? "root" : "pitch",
+                '[data-tutorial="running-settings"]',
+              ),
+              done: pitchSelected && settingsOK,
             },
             {
               title: "Save four values to test",
@@ -449,11 +485,14 @@
               ],
   );
   const current = $derived(steps[step]);
+  const targetSelector = $derived(current.target);
   function target() {
     if (compact) return null;
-    if (current.target === "root")
+    if (current.target === "root" || current.target === "pitch")
       return document.querySelector(
-        '.svelte-flow__node[data-id="' + CSS.escape(snapshot.rootId) + '"]',
+        '.svelte-flow__node[data-id="' +
+          CSS.escape(current.target === "root" ? snapshot.rootId : snapshot.pitchId) +
+          '"]',
       );
     return (
       document.querySelector(current.target) ??
@@ -509,6 +548,14 @@
     locate();
     heading?.focus({ preventScroll: true });
   }
+  $effect(() => {
+    const selector = targetSelector;
+    void tick().then(() => {
+      if (selector !== targetSelector) return;
+      target()?.scrollIntoView({ block: "nearest", inline: "nearest" });
+      locate();
+    });
+  });
   onMount(() => {
     initialTab = snapshot.tabId;
     baseline = snapshot.resultAt;
@@ -580,6 +627,28 @@
     {:else if snapshot.error}
       <p class="guide-notice" role="status">
         {snapshot.error} Read the panel’s message before retrying.
+      </p>
+    {:else if (lesson === "draft" || lesson === "selection") && step === 6 && !current.done}
+      <p class="guide-notice" role="status">
+        {#if !snapshot.linked}
+          Connect your new connector’s D1 outlet to pitch before fixing its starting point.
+        {:else if rootStartNeedsReset}
+          “{snapshot.rootName}” is currently at Start {snapshot.rootStart}, Shift {snapshot.rootShift}.
+          Restore Start 0 and Shift 0 on this connector.
+        {:else if !pitchSelected}
+          This edit belongs to the referenced pitch connector. Select pitch and open Inspector →
+          Node.
+        {:else if snapshot.pitchStart !== 60 || snapshot.pitchShift !== 0}
+          Referenced pitch is currently at Start {snapshot.pitchStart}, Shift {snapshot.pitchShift}.
+          Set it to Start 60, Shift 0.
+        {:else if !snapshot.pitchLocked}
+          Start 60 and Shift 0 are set. Click the open button so it changes to static.
+        {:else if !settingsOK}
+          Pitch’s settings are fixed. Check your new connector: one dimension, add with argument
+          {stride}, Start 0 and Shift 0.
+        {:else}
+          The settings are ready. Select the referenced pitch and open Inspector → Node to continue.
+        {/if}
       </p>
     {:else if (lesson === "draft" || lesson === "selection") && step === 8 && snapshot.resultAt !== baseline && !matched}
       <p class="guide-notice" role="status">
