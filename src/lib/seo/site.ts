@@ -63,6 +63,7 @@ export const techArticleJsonLd = (path: string, headline: string, description: s
 export const SITEMAP_PATHS = [
   "/",
   "/about",
+  "/tutorial",
   "/studio",
   "/sdk",
   "/mcp",

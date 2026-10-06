@@ -1226,6 +1226,7 @@ test("keeps the footer navigation on documentation pages", async ({ page }) => {
     "Worlds",
     "Studio",
     "About",
+    "Tutorial",
     "SDK",
     "MCP",
     "API reference",
@@ -1235,7 +1236,7 @@ test("keeps the footer navigation on documentation pages", async ({ page }) => {
   ]) {
     await expect(footerNavigation.getByRole("link", { name: label, exact: true })).toHaveCount(1);
   }
-  await expect(footerNavigation.getByRole("link")).toHaveCount(9);
+  await expect(footerNavigation.getByRole("link")).toHaveCount(10);
   const footer = page.getByRole("contentinfo");
   const discordLink = footer.getByRole("link", {
     name: "Open decentralised.art on Discord (opens in a new tab)",
@@ -1247,7 +1248,7 @@ test("keeps the footer navigation on documentation pages", async ({ page }) => {
     "https://discord.com/channels/1555735738870407190/1555735743828066396",
   );
   await expect(discordLink).toHaveAttribute("target", "_blank");
-  await expect(footer.getByRole("link")).toHaveCount(10);
+  await expect(footer.getByRole("link")).toHaveCount(11);
   assertNoPageErrors();
 });
 
