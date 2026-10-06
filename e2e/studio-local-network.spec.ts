@@ -14,7 +14,11 @@ type Entity = {
   args_count?: number;
 };
 
-async function setup(page: Page, mixed = false) {
+async function setup(
+  page: Page,
+  mixed = false,
+  session: "authenticated" | "services-only" | "anonymous" = "authenticated",
+) {
   let owner = ownerA;
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
@@ -37,6 +41,13 @@ async function setup(page: Page, mixed = false) {
       address: chainAddress,
       dimensions: [{ transformations: [] }],
     },
+    pitch: {
+      name: "pitch",
+      owner: ownerB,
+      address: chainAddress,
+      dimensions: [{ transformations: [{ name: "add", args: [1] }] }],
+    },
+    add: { name: "add", owner: ownerB, address: chainAddress, args_count: 1 },
     LocalTransform: { name: "LocalTransform", owner: ownerA, address: "0x0", args_count: 0 },
     LocalCondition: { name: "LocalCondition", owner: ownerA, address: "0x0", args_count: 0 },
     NetworkTransform: {
@@ -54,6 +65,8 @@ async function setup(page: Page, mixed = false) {
   };
   const creates: Array<{ name: string; dimensions?: Entity["dimensions"] }> = [];
   const runs: string[] = [];
+  const runRequests: Array<{ path: string; body: Record<string, unknown> }> = [];
+  const chainAuthRequests: string[] = [];
   const publications: string[] = [];
   const publishedNames: string[] = [];
   const user = () => ({
@@ -67,7 +80,11 @@ async function setup(page: Page, mixed = false) {
     const url = new URL(req.url());
     const path = url.pathname;
     let body: unknown = [];
-    if (path.endsWith("/auth/me")) body = { user: user() };
+    if (path.includes("/chain/nonce/") || path.endsWith("/chain/auth")) {
+      chainAuthRequests.push(path);
+      // Public runs must work even when the auth service returns an incompatible challenge.
+      body = { nonce: "393930" };
+    } else if (path.endsWith("/auth/me")) body = { user: user() };
     else if (path.includes("/services/users/")) body = { user: user() };
     else if (path.endsWith("/services/users")) body = [user()];
     else if (path.includes("/chain/account/"))
@@ -83,8 +100,12 @@ async function setup(page: Page, mixed = false) {
       body = {
         limit: 100,
         cursor: { has_more: false },
-        items: ["NetworkChild", "NetworkTransform", "NetworkCondition"].map((name, i) => {
-          const kind = i === 0 ? "connector" : i === 1 ? "transformation" : "condition";
+        items: ["NetworkChild", "pitch", "NetworkTransform", "NetworkCondition"].map((name, i) => {
+          const kind = entities[name].dimensions
+            ? "connector"
+            : name.includes("Transform")
+              ? "transformation"
+              : "condition";
           return {
             feed_id: name,
             event_type: `${kind}_added`,
@@ -119,8 +140,18 @@ async function setup(page: Page, mixed = false) {
       if (!body) return route.fulfill({ status: 404, json: { message: "Not found" } });
     } else if (path.endsWith("/simulate") || path.endsWith("/execute")) {
       runs.push(path);
-      const name = req.postDataJSON().connector_name;
-      const particles = [{ path: `/${name}:0`, data: [0, 1, 2] }];
+      const input = req.postDataJSON();
+      runRequests.push({ path, body: input });
+      const name = input.connector_name;
+      const particles = [
+        {
+          path: `/${name}:0`,
+          data:
+            name === "pitch"
+              ? Array.from({ length: Number(input.particles_count) }, (_, i) => i)
+              : [0, 1, 2],
+        },
+      ];
       body = path.endsWith("/simulate")
         ? particles
         : {
@@ -169,23 +200,31 @@ async function setup(page: Page, mixed = false) {
     await route.fulfill({ status: 200, json: body });
   });
   await page.addInitScript(
-    ({ ownerA, mixed }) => {
-      localStorage.setItem("hypermusic_token", "local-test-services");
-      localStorage.setItem("hypermusic_chain_token", "local-test-chain");
-      localStorage.setItem("hypermusic_chain_token_user_id", `wallet:${ownerA}`);
+    ({ ownerA, mixed, session }) => {
+      if (session !== "anonymous") localStorage.setItem("hypermusic_token", "local-test-services");
+      if (session === "authenticated") {
+        localStorage.setItem("hypermusic_chain_token", "local-test-chain");
+        localStorage.setItem("hypermusic_chain_token_user_id", `wallet:${ownerA}`);
+      }
       Object.assign(window, {
         walletSends: 0,
-        ethereum: {
-          request: async ({ method }: { method: string }) => {
-            if (method === "eth_accounts" || method === "eth_requestAccounts") return [ownerA];
-            if (method === "eth_chainId") return "0xaa36a7";
-            if (method === "eth_sendTransaction") {
-              (window as unknown as { walletSends: number }).walletSends++;
-              return `0x${"ab".repeat(32)}`;
-            }
-            throw new Error(`Unexpected wallet call ${method}`);
-          },
-        },
+        walletCalls: [] as string[],
+        ethereum:
+          session === "anonymous"
+            ? undefined
+            : {
+                request: async ({ method }: { method: string }) => {
+                  (window as unknown as { walletCalls: string[] }).walletCalls.push(method);
+                  if (method === "eth_accounts" || method === "eth_requestAccounts")
+                    return [ownerA];
+                  if (method === "eth_chainId") return "0xaa36a7";
+                  if (method === "eth_sendTransaction") {
+                    (window as unknown as { walletSends: number }).walletSends++;
+                    return `0x${"ab".repeat(32)}`;
+                  }
+                  throw new Error(`Unexpected wallet call ${method}`);
+                },
+              },
       });
       const connector = (name: string, root = false) => ({
         id: name,
@@ -232,13 +271,18 @@ async function setup(page: Page, mixed = false) {
         }),
       );
     },
-    { ownerA, mixed },
+    { ownerA, mixed, session },
   );
-  await page.goto("/studio");
-  await expect(page.getByRole("tab", { name: /StudioRoot/ })).toBeVisible();
+  const openPublished = session !== "authenticated";
+  await page.goto(openPublished ? "/studio?network_kind=connector&network_id=pitch" : "/studio");
+  await expect(
+    page.getByRole("tab", { name: openPublished ? /pitch/ : /StudioRoot/ }),
+  ).toBeVisible();
   return {
     creates,
     runs,
+    runRequests,
+    chainAuthRequests,
     publications,
     publishedNames,
     errors,
@@ -258,6 +302,55 @@ const card = (page: Page, name: string) =>
   page
     .locator(".library-card")
     .filter({ has: page.locator(".item-name", { hasText: new RegExp(`^${name}$`) }) });
+
+for (const session of ["anonymous", "services-only"] as const) {
+  test(`published pitch supports simulation and execution without chain sign-in (${session})`, async ({
+    page,
+  }) => {
+    const state = await setup(page, false, session);
+    await page.getByRole("button", { name: "Toggle run panel", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Create locally", exact: true })).toBeDisabled();
+    await expect(
+      page.getByRole("button", { name: "Publish to the Network", exact: true }),
+    ).toBeDisabled();
+    const simulate = page.getByRole("button", { name: "Simulate", exact: true });
+    const execute = page.getByRole("button", { name: "Execute on the Network", exact: true });
+    await expect(simulate).toBeEnabled();
+    await expect(execute).toBeEnabled();
+    await page.locator("#run-samples-panel").fill("4");
+    await simulate.click();
+    const output = page.locator(".runner-output");
+    await expect(output).toContainText("/pitch:0");
+    await expect(page.locator(".runner-status.is-success")).toContainText("Simulation completed");
+    expect(JSON.parse(await output.innerText())).toEqual([
+      { path: "/pitch:0", data: [0, 1, 2, 3] },
+    ]);
+    await expect(output).not.toContainText("block_number");
+    await execute.click();
+    await expect(output).toContainText('"block_number": 10');
+    expect(JSON.parse(await output.innerText()).particles).toEqual([
+      { path: "/pitch:0", data: [0, 1, 2, 3] },
+    ]);
+    // Switching back must discard the chain provenance from the previous execution.
+    await simulate.click();
+    await expect(page.locator(".runner-status.is-success")).toContainText("Simulation completed");
+    await expect(output).not.toContainText("block_number");
+    expect(state.runs).toEqual(["/chain/simulate", "/chain/execute", "/chain/simulate"]);
+    for (const request of state.runRequests) {
+      expect(request.body.connector_name).toBe("pitch");
+      expect(Number(request.body.particles_count)).toBe(4);
+    }
+    expect(state.chainAuthRequests).toEqual([]);
+    expect(state.creates).toEqual([]);
+    expect(state.publications).toEqual([]);
+    const walletCalls = await page.evaluate(
+      () => (window as unknown as { walletCalls: string[] }).walletCalls,
+    );
+    expect(walletCalls).not.toContain("personal_sign");
+    expect(walletCalls).not.toContain("eth_sendTransaction");
+    expect(state.errors).toEqual([]);
+  });
+}
 
 test("Local lists only owned server entities and Network lists only published entities", async ({
   page,

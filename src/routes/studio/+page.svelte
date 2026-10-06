@@ -2547,6 +2547,7 @@
           record.kind === "connector" && record.name === activeRootName && record.stage === "mined",
       ),
   );
+  const activeRootCanSimulate = $derived(activeRootIsLocal || activeRootIsPublished);
   const selectedNode = $derived.by(() => nodes.find((node) => node.id === selectedNodeId) ?? null);
   const selectedEdge = $derived.by(() => edges.find((edge) => edge.id === selectedEdgeId) ?? null);
   const inspectorNode = $derived.by(() => {
@@ -4072,7 +4073,7 @@
   let chainAuthPromise: Promise<void> | null = null;
   const ensureChainAuthForStudio = async (forceRefresh = false) => {
     if (!getToken()) {
-      throw new Error("Login with MetaMask to create, simulate, or publish in Studio.");
+      throw new Error("Login with MetaMask to create or publish in Studio.");
     }
     if (chainAuthPromise && !forceRefresh) return chainAuthPromise;
 
@@ -5392,7 +5393,6 @@
   type StudioRunTimings = {
     save: number;
     prepare: number;
-    auth: number;
     execute: number;
     normalize: number;
     jsonStringify: number;
@@ -5403,7 +5403,6 @@
   const emptyStudioRunTimings = (): StudioRunTimings => ({
     save: 0,
     prepare: 0,
-    auth: 0,
     execute: 0,
     normalize: 0,
     jsonStringify: 0,
@@ -5421,7 +5420,7 @@
     console.info(
       `[Studio run timing] ${status} · save ${formatTimingMs(timings.save)} · prepare ${formatTimingMs(
         timings.prepare,
-      )} · auth ${formatTimingMs(timings.auth)} · execute ${formatTimingMs(
+      )} · execute ${formatTimingMs(
         timings.execute,
       )} · normalize ${formatTimingMs(timings.normalize)} · jsonStringify ${formatTimingMs(
         timings.jsonStringify,
@@ -5471,8 +5470,10 @@
 
     try {
       measureStudioRunStep(timings, "save", () => saveActiveGraph());
-      if (mode === "simulate" && !activeRootIsLocal)
-        throw new Error("Create this connector locally before simulating it.");
+      if (mode === "simulate" && !activeRootCanSimulate)
+        throw new Error(
+          "Create this connector locally or open a published connector to simulate it.",
+        );
       if (mode === "execute" && !activeRootIsPublished)
         throw new Error("Publish this connector on the network before executing it.");
       const requestPreview = measureStudioRunStep(timings, "prepare", () =>
@@ -5504,18 +5505,14 @@
         return;
       }
 
-      chainDeployStatus = "Authenticating with chain...";
-      await measureAsyncStudioRunStep(timings, "auth", () => ensureChainAuthForStudio());
       chainDeployStatus =
         mode === "simulate"
-          ? "Simulating local drafts (no chain transaction)..."
+          ? "Simulating connector on the server (no chain transaction)..."
           : "Executing published connector on chain...";
-      const result = await measureAsyncStudioRunStep(timings, "execute", () =>
-        withChainAuthRetry(async () =>
-          mode === "simulate"
-            ? postChainSimulateDetailed(requestPreview.requestBody)
-            : postChainExecuteDetailed(requestPreview.requestBody),
-        ),
+      const result = await measureAsyncStudioRunStep(timings, "execute", async () =>
+        mode === "simulate"
+          ? postChainSimulateDetailed(requestPreview.requestBody)
+          : postChainExecuteDetailed(requestPreview.requestBody),
       );
       runModeByTab = { ...runModeByTab, [runTabId]: mode };
       runProvenanceByTab = {
@@ -5546,7 +5543,7 @@
       chainRunTimestampByTab = { ...chainRunTimestampByTab, [runTabId]: Date.now() };
       chainDeployStatus =
         mode === "simulate"
-          ? "Local simulation completed. Publish to make this connector available on chain."
+          ? "Simulation completed on the server (no chain transaction)."
           : `Chain execution completed at block ${!Array.isArray(result.body) ? result.body.block_number : ""}.`;
     } catch (error) {
       runStatus = "failed";
@@ -9211,8 +9208,8 @@
               <button
                 type="button"
                 class="runner-action"
-                disabled={chainRunBusy || chainDeployBusy || !activeRootIsLocal}
-                title="Run the created Local connector and its local/network dependencies on the server without gas."
+                disabled={chainRunBusy || chainDeployBusy || !activeRootCanSimulate}
+                title="Simulate a created draft or published connector on the server without gas."
                 onclick={() => executeActiveGraph("simulate")}
               >
                 Simulate
