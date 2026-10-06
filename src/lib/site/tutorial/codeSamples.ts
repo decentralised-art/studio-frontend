@@ -192,6 +192,64 @@ export const sdkRunDraft = [
   { label: "Python", lang: "bash", code: "python draft.py" },
 ] satisfies Sample[];
 
+export const apiCreateDimensions = `DCN_API="${CHAIN_BASE}"
+DCN_DRAFT="tutorial_pair_$(date +%s)_$RANDOM"
+curl --silent --show-error --fail-with-body "$DCN_API/connector" \\
+  -H "Authorization: Bearer \${DCN_TOKEN:?Sign in first}" \\
+  -H 'Content-Type: application/json' \\
+  --data @- <<JSON
+{
+  "name": "$DCN_DRAFT",
+  "dimensions": [
+    {"composite": "pitch", "transformations": [{"name": "add", "args": [2]}]},
+    {"transformations": [{"name": "add", "args": [1]}]}
+  ],
+  "static_ri": {"2": {"start_point": 60, "transformation_shift": 0}}
+}
+JSON`;
+
+export const sdkDimensions = [
+  js(`import { randomUUID } from "node:crypto";
+import { Wallet } from "ethers";
+import { DecentralisedArtClient } from "decentralised-art";
+
+const sdk = new DecentralisedArtClient({ baseUrl: "${CHAIN_BASE}" });
+await sdk.loginWithWallet(new Wallet(process.env.DCN_OWNER_KEY));
+const name = "tutorial_pair_" + randomUUID().replaceAll("-", "");
+
+await sdk.connectorPost({
+  name,
+  dimensions: [
+    { composite: "pitch", transformations: [{ name: "add", args: [2] }] },
+    { transformations: [{ name: "add", args: [1] }] },
+  ],
+  static_ri: { "2": { start_point: 60, transformation_shift: 0 } },
+});
+console.log("Draft:", name);
+for (const stream of await sdk.simulate(name, 4)) {
+  console.log(stream.path, stream.data);
+}`),
+  py(`import os
+from uuid import uuid4
+from eth_account import Account
+from decentralised_art import Client
+
+with Client(base_url="${CHAIN_BASE}") as sdk:
+    sdk.login_with_account(Account.from_key(os.environ["DCN_OWNER_KEY"]))
+    name = "tutorial_pair_" + uuid4().hex
+    sdk.connector_post({
+        "name": name,
+        "dimensions": [
+            {"composite": "pitch", "transformations": [{"name": "add", "args": [2]}]},
+            {"transformations": [{"name": "add", "args": [1]}]},
+        ],
+        "static_ri": {"2": {"start_point": 60, "transformation_shift": 0}},
+    })
+    print("Draft:", name)
+    for stream in sdk.simulate(name, 4):
+        print(stream.path, stream.data)`),
+];
+
 export const apiFormat = `DCN_API="${CHAIN_BASE}"
 DCN_FORMAT="$(curl --silent --show-error --fail-with-body "$DCN_API/connector/pitch" | python3 -c 'import json,sys; print(json.load(sys.stdin)["format_hash"])')"
 curl --silent --show-error --fail-with-body "$DCN_API/format/$DCN_FORMAT?limit=50"`;

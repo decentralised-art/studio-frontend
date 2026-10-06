@@ -59,6 +59,7 @@ async function setup(page: Page, lesson: string, signedIn = false, saved = false
   const protectedRequests: string[] = [];
   const errors: string[] = [];
   let wrong = false;
+  let wrongSecondary = false;
   let rejected = false;
   page.on("pageerror", (error) => errors.push(error.message));
   await page.addInitScript(
@@ -219,6 +220,14 @@ async function setup(page: Page, lesson: string, signedIn = false, saved = false
           ),
         },
       ];
+      if (lesson === "dimensions" && definition?.dimensions?.length === 2)
+        particles.push({
+          path: `/${input.connector_name}:1`,
+          data: Array.from(
+            { length: input.particles_count },
+            (_, i) => i + (wrongSecondary ? 1 : 0),
+          ),
+        });
       body = path.endsWith("/simulate")
         ? particles
         : { block_number: 10, block_hash: hash, runner: address, registry: address, particles };
@@ -276,6 +285,9 @@ async function setup(page: Page, lesson: string, signedIn = false, saved = false
     errors,
     setWrong: (v: boolean) => {
       wrong = v;
+    },
+    setWrongSecondary: (v: boolean) => {
+      wrongSecondary = v;
     },
     setRejected: (v: boolean) => {
       rejected = v;
@@ -502,6 +514,100 @@ for (const stride of [2, 12]) {
     expect(state.errors).toEqual([]);
   });
 }
+
+test("the dimensions guide saves one two-dimensional definition and checks both output paths", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const state = await setup(page, "dimensions", true);
+  const next = state.guide.getByRole("button", { name: "Next", exact: true });
+  await next.click();
+  await page.getByRole("button", { name: "Create new connector tab" }).click();
+  await next.click();
+  const root = page
+    .locator(".svelte-flow__node")
+    .filter({ has: page.locator(".connector-title", { hasText: /^Untitled/ }) });
+  await root.locator(".connector-title").click();
+  await inspector(page);
+  await page.locator("#node-name").fill("tutorial_pair");
+  await page.locator("#node-name").press("Enter");
+  await next.click();
+  await expect(state.guide.getByRole("heading", { name: "Give it two dimensions" })).toBeVisible();
+  await expect(next).toBeDisabled();
+  await page.locator("#node-dimensions").fill("2");
+  await page.locator("#node-dimensions").press("Tab");
+  await expect(node(page, "tutorial_pair").locator(".connector-row")).toHaveCount(2);
+  await next.click();
+  await page.getByRole("button", { name: "Published", exact: true }).click();
+  await page.getByRole("button", { name: "Connectors", exact: true }).click();
+  await card(page, "pitch").getByRole("button", { name: "Add to flow" }).click();
+  await node(page, "tutorial_pair")
+    .locator('[data-handleid="dim-0"]')
+    .dragTo(node(page, "pitch").locator('[data-handleid="in"]'));
+  await next.click();
+  await page.getByRole("button", { name: "Transformations", exact: true }).click();
+  await card(page, "add").dragTo(node(page, "tutorial_pair").locator(".connector-row").nth(0));
+  await next.click();
+  await node(page, "tutorial_pair").locator(".connector-title").click();
+  await inspector(page);
+  await page.locator(".inspector-transform-args-input").fill("2");
+  await next.click();
+  await expect(
+    state.guide.getByRole("heading", { name: "Select the referenced pitch connector" }),
+  ).toBeVisible();
+  await node(page, "pitch").locator(".connector-title").click();
+  await page.locator("#connector-ri-start").fill("60");
+  await expect(next).toBeDisabled();
+  await page
+    .locator('[data-tutorial="running-settings"]')
+    .getByRole("button", { name: "open", exact: true })
+    .click();
+  await next.click();
+  await expect(state.guide.getByRole("heading", { name: "Give D2 its own rule" })).toBeVisible();
+  await expect(next).toBeDisabled();
+  await card(page, "add").dragTo(node(page, "tutorial_pair").locator(".connector-row").nth(1));
+  await node(page, "tutorial_pair").locator(".connector-title").click();
+  await inspector(page);
+  await expect(page.locator(".inspector-transform-args-input").nth(0)).toHaveValue("2");
+  await expect(next).toBeDisabled();
+  await page.locator(".inspector-transform-args-input").nth(1).fill("1");
+  await expect(page.locator(".inspector-transform-args-input").nth(1)).toHaveValue("1");
+  await next.click();
+  await page.getByRole("button", { name: "Toggle run panel", exact: true }).click();
+  await page.locator("#run-samples-panel").fill("4");
+  await page.locator('[data-tutorial="create"]').click();
+  await expect(next).toBeEnabled();
+  expect(state.creates).toHaveLength(1);
+  expect(state.creates[0]).toMatchObject({
+    name: "tutorial_pair",
+    dimensions: [
+      { composite: "pitch", transformations: [{ name: "add", args: [2] }] },
+      { transformations: [{ name: "add", args: [1] }] },
+    ],
+    static_ri: { "2": { start_point: 60, transformation_shift: 0 } },
+  });
+  await next.click();
+  state.setWrongSecondary(true);
+  await page.locator('[data-tutorial="simulate"]').click();
+  await expect(state.guide).toContainText("Both streams must match");
+  await expect(next).toBeDisabled();
+  state.setWrongSecondary(false);
+  await page.locator('[data-tutorial="simulate"]').click();
+  await next.click();
+  await expect(
+    state.guide.getByRole("heading", { name: "Two dimensions, one connector" }),
+  ).toBeVisible();
+  const output = JSON.parse(await page.locator(".runner-output").innerText());
+  expect(output).toEqual([
+    { path: "/tutorial_pair:0/pitch:0", data: [60, 62, 64, 66] },
+    { path: "/tutorial_pair:1", data: [0, 1, 2, 3] },
+  ]);
+  expect(state.reads).toHaveLength(2);
+  expect(state.publications).toEqual([]);
+  expect(state.errors).toEqual([]);
+  await state.guide.getByRole("button", { name: "Finish walkthrough" }).click();
+  await expect(state.guide).toBeHidden();
+});
 
 test("saving lessons explain the account prerequisite before making a draft", async ({ page }) => {
   const state = await setup(page, "draft");

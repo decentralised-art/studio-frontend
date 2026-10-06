@@ -6,6 +6,7 @@
     | "starting-value"
     | "draft"
     | "selection"
+    | "dimensions"
     | "formats"
     | "publish"
     | "conditions"
@@ -39,6 +40,13 @@
       description: "Make a new draft with add 12 and compare its four values.",
       alt: "Studio screenshot: a tutorial popup explains how to select every twelfth value.",
       label: "Try add 12 in Studio ↗",
+    },
+    dimensions: {
+      title: "Two dimensions, with a guide",
+      height: 640,
+      description: "Keep your pitch selection, add a direct stream, then test both in one run.",
+      alt: "Studio screenshot: the multidimensional walkthrough shows D1 referencing pitch and D2 using add directly in the same connector.",
+      label: "Build a two-dimensional connector in Studio ↗",
     },
     formats: {
       title: "See what a connector supplies",
@@ -92,6 +100,7 @@
       href={resolve(
         lesson === "draft" ||
           lesson === "selection" ||
+          lesson === "dimensions" ||
           lesson === "publish" ||
           lesson === "custom-elements"
           ? `/studio?lesson=${lesson}`

@@ -4,6 +4,7 @@
   export type WorkshopLesson =
     | "draft"
     | "selection"
+    | "dimensions"
     | "formats"
     | "publish"
     | "conditions"
@@ -24,6 +25,8 @@
     pitchLocked: boolean;
     addArgs: number[] | null;
     dimensionCount: number;
+    secondTransformations: { name: string; args: number[] }[];
+    secondLinked: boolean;
     linked: boolean;
     signedIn: boolean;
     local: boolean;
@@ -32,6 +35,7 @@
     busy: boolean;
     samples: number;
     values: unknown[];
+    streams: { path: string; data: unknown[] }[];
     resultAt: number | null;
     runMode: string | null;
     explorerSource: string;
@@ -93,6 +97,43 @@
       snapshot.pitchShift === 0 &&
       snapshot.pitchLocked,
   );
+  const dimensionSettingsOK = $derived(
+    snapshot.dimensionCount === 2 &&
+      snapshot.linked &&
+      snapshot.addArgs?.length === 1 &&
+      snapshot.addArgs[0] === 2 &&
+      snapshot.rootStart === 0 &&
+      snapshot.rootShift === 0 &&
+      snapshot.pitchStart === 60 &&
+      snapshot.pitchShift === 0 &&
+      snapshot.pitchLocked,
+  );
+  const secondDimensionOK = $derived(
+    !snapshot.secondLinked &&
+      snapshot.secondTransformations.length === 1 &&
+      snapshot.secondTransformations[0].name === "add" &&
+      snapshot.secondTransformations[0].args.length === 1 &&
+      snapshot.secondTransformations[0].args[0] === 1,
+  );
+  const dimensionsMatched = $derived(
+    snapshot.resultAt !== null &&
+      snapshot.resultAt !== baseline &&
+      !snapshot.busy &&
+      snapshot.runMode === "simulate" &&
+      snapshot.streams.length === 2 &&
+      snapshot.streams.some(
+        (stream) =>
+          stream.path === "/" + snapshot.rootName + ":0/pitch:0" &&
+          stream.data.length === 4 &&
+          stream.data.every((value, index) => String(value) === String([60, 62, 64, 66][index])),
+      ) &&
+      snapshot.streams.some(
+        (stream) =>
+          stream.path === "/" + snapshot.rootName + ":1" &&
+          stream.data.length === 4 &&
+          stream.data.every((value, index) => String(value) === String(index)),
+      ),
+  );
   const matched = $derived(
     snapshot.resultAt !== null &&
       snapshot.resultAt !== baseline &&
@@ -139,7 +180,123 @@
           : "";
     }
   });
-  const steps = $derived(
+  const dimensionSteps = $derived([
+    {
+      title: "Sign in to save both dimensions",
+      text: "Use Login with MetaMask, then Proceed to login. Use the account from your earlier draft. This exercise saves a local definition and spends no gas.",
+      target: ".wallet-auth",
+      done: snapshot.signedIn,
+    },
+    {
+      title: "Start a new connector",
+      text: "Click + in the connector tab strip. We’ll recreate your pitch selection and add a second dimension in this new connector.",
+      target: '[aria-label="Create new connector tab"]',
+      done:
+        snapshot.tabId !== initialTab &&
+        !!snapshot.rootId &&
+        !snapshot.local &&
+        !snapshot.published,
+    },
+    {
+      title: "Name your two-dimensional connector",
+      text: "Select the new connector on the canvas. Open Inspector → Node. Set Name to a unique name such as tutorial_yourname_pair and press Enter.",
+      target: inspectorTarget("root", "#node-name"),
+      done: rootSelected && validName,
+    },
+    {
+      title: "Give it two dimensions",
+      text:
+        "In the Node Inspector for “" +
+        snapshot.rootName +
+        "”, change Dimensions to 2, then click outside the field. Look for D1 and D2 on that same canvas connector. Keep Start 0 and Shift 0.",
+      target: inspectorTarget("root", "#node-dimensions"),
+      done: rootSelected && snapshot.dimensionCount === 2 && !rootStartNeedsReset,
+    },
+    {
+      title: "Let D1 reference pitch",
+      text:
+        "In Add element, choose Published → Connectors. Find pitch and click Add to flow. Connect “" +
+        snapshot.rootName +
+        "”’s D1 outlet to pitch’s top inlet. Leave D2 unconnected: it will produce numbers directly.",
+      target: ".left-panel",
+      done: snapshot.linked && !snapshot.secondLinked,
+    },
+    {
+      title: "Put a selecting rule on D1",
+      text:
+        "Choose Published → Transformations in Add element. Find add and drag its card onto D1 inside “" +
+        snapshot.rootName +
+        "”.",
+      target: ".left-panel",
+      done: !!snapshot.addArgs,
+    },
+    {
+      title: rootSelected ? "Set D1 to choose every second value" : "Select your new connector",
+      text:
+        "Select “" +
+        snapshot.rootName +
+        "” and open Inspector → Node. Under Connector dimensions, set the add argument for #1 to 2. Keep this connector at Start 0, Shift 0.",
+      target: inspectorTarget("root", '[data-tutorial="dimension-settings"]'),
+      done:
+        rootSelected &&
+        snapshot.addArgs?.length === 1 &&
+        snapshot.addArgs[0] === 2 &&
+        !rootStartNeedsReset,
+    },
+    {
+      title: rootStartNeedsReset
+        ? "Reset your selection’s starting point"
+        : pitchSelected
+          ? "Fix pitch’s starting point"
+          : "Select the referenced pitch connector",
+      text: rootStartNeedsReset
+        ? "Select “" +
+          snapshot.rootName +
+          "” in Inspector → Node. Click static to unlock the fields if needed, restore Start 0 and Shift 0, and leave it open. Start 60 belongs to the pitch reference."
+        : "Select the referenced pitch connector and open Inspector → Node. Set Start 60 and Shift 0. Click open so it becomes static. D1 will now select 60, 62, 64, 66; published pitch stays unchanged.",
+      target: inspectorTarget(
+        rootStartNeedsReset ? "root" : "pitch",
+        '[data-tutorial="running-settings"]',
+      ),
+      done: pitchSelected && dimensionSettingsOK,
+    },
+    {
+      title: "Give D2 its own rule",
+      text:
+        "In Published → Transformations, drag add onto D2 inside “" +
+        snapshot.rootName +
+        "”. Then select that connector and open Inspector → Node. Under Connector dimensions, set add’s argument under #2 to 1. Leave D2 unconnected. It generates 0, 1, 2, 3 directly.",
+      target: snapshot.secondTransformations.some((item) => item.name === "add")
+        ? inspectorTarget("root", '[data-tutorial="dimension-settings"]')
+        : "second-dimension",
+      done: rootSelected && dimensionSettingsOK && secondDimensionOK,
+    },
+    {
+      title: "Save one definition with two dimensions",
+      text: "Open Run + Publish (play button), set N to 4 and click Create locally. Wait for Created locally. Both dimensions are saved under your one connector name.",
+      target: '[data-tutorial="create"]',
+      done:
+        snapshot.local && snapshot.samples === 4 && snapshot.panel === "runner" && !snapshot.busy,
+    },
+    {
+      title: "Simulate both dimensions together",
+      text:
+        "Click Simulate once. Look for /" +
+        snapshot.rootName +
+        ":0/pitch:0 with 60, 62, 64, 66 and /" +
+        snapshot.rootName +
+        ":1 with 0, 1, 2, 3. The guide checks both paths and all eight values.",
+      target: '[data-tutorial="simulate"]',
+      done: dimensionsMatched,
+    },
+    {
+      title: "Two dimensions, one connector",
+      text: "Your saved connector returns both streams in one run. Its D1 selects from pitch; its D2 generates values directly. A World could interpret each pitch with the corresponding value from D2 as its start time. Return to the Tutorial to check which labels a particular World needs.",
+      target: ".runner-output",
+      done: dimensionsMatched,
+    },
+  ]);
+  const standardSteps = $derived(
     lesson === "custom-elements"
       ? [
           {
@@ -484,10 +641,17 @@
                 },
               ],
   );
+  const steps = $derived(lesson === "dimensions" ? dimensionSteps : standardSteps);
   const current = $derived(steps[step]);
   const targetSelector = $derived(current.target);
   function target() {
     if (compact) return null;
+    if (current.target === "second-dimension")
+      return (
+        document
+          .querySelector('.svelte-flow__node[data-id="' + CSS.escape(snapshot.rootId) + '"]')
+          ?.querySelectorAll(".connector-row")[1] ?? null
+      );
     if (current.target === "root" || current.target === "pitch")
       return document.querySelector(
         '.svelte-flow__node[data-id="' +
@@ -532,7 +696,10 @@
     if (lesson === "publish" && next === 2) publicationValues = [...snapshot.values];
     step = next;
     if (
-      (lesson === "draft" || lesson === "selection" || lesson === "custom-elements") &&
+      (lesson === "draft" ||
+        lesson === "selection" ||
+        lesson === "dimensions" ||
+        lesson === "custom-elements") &&
       next === 1
     )
       initialTab = snapshot.tabId;
@@ -540,6 +707,7 @@
       (lesson === "publish" && (next === 1 || next === 3)) ||
       (lesson === "conditions" && next === 3) ||
       ((lesson === "draft" || lesson === "selection") && next === 8) ||
+      (lesson === "dimensions" && next === 10) ||
       (lesson === "custom-elements" && next === 11)
     )
       baseline = snapshot.resultAt;
@@ -628,7 +796,7 @@
       <p class="guide-notice" role="status">
         {snapshot.error} Read the panel’s message before retrying.
       </p>
-    {:else if (lesson === "draft" || lesson === "selection") && step === 6 && !current.done}
+    {:else if (((lesson === "draft" || lesson === "selection") && step === 6) || (lesson === "dimensions" && step === 7)) && !current.done}
       <p class="guide-notice" role="status">
         {#if !snapshot.linked}
           Connect your new connector’s D1 outlet to pitch before fixing its starting point.
@@ -643,8 +811,10 @@
           Set it to Start 60, Shift 0.
         {:else if !snapshot.pitchLocked}
           Start 60 and Shift 0 are set. Click the open button so it changes to static.
-        {:else if !settingsOK}
-          Pitch’s settings are fixed. Check your new connector: one dimension, add with argument
+        {:else if !(lesson === "dimensions" ? dimensionSettingsOK : settingsOK)}
+          Pitch’s settings are fixed. Check your new connector: {lesson === "dimensions"
+            ? "two dimensions"
+            : "one dimension"}, D1 add with argument
           {stride}, Start 0 and Shift 0.
         {:else}
           The settings are ready. Select the referenced pitch and open Inspector → Node to continue.
@@ -654,6 +824,12 @@
       <p class="guide-notice" role="status">
         The output hasn’t matched yet. Check N 4 and your saved settings. If creation saved the
         wrong definition, start a corrected draft with a new name.
+      </p>
+    {:else if lesson === "dimensions" && step === 10 && snapshot.resultAt !== baseline && !dimensionsMatched}
+      <p class="guide-notice" role="status">
+        Both streams must match: D1 returns 60, 62, 64, 66 and D2 returns 0, 1, 2, 3. Check the
+        saved definition’s two dimensions, their add arguments, and N 4. A corrected saved draft
+        needs a new name.
       </p>
     {:else if lesson === "custom-elements" && step === 11 && snapshot.resultAt !== baseline && !customMatched}
       <p class="guide-notice" role="status">

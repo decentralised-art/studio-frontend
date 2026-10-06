@@ -104,12 +104,13 @@ test("the first exercise switches between Studio instructions and an agent promp
   await expect(agent).toBeHidden();
   const contents = page.getByRole("navigation", { name: "On this page" });
   await expect(contents).toBeVisible();
-  await expect(contents.getByRole("link")).toHaveCount(11);
+  await expect(contents.getByRole("link")).toHaveCount(12);
   for (const id of [
     "first-run",
     "palettes",
     "running-settings",
     "formats",
+    "multidimensional",
     "create-draft",
     "publish",
     "world-editors",
@@ -140,7 +141,7 @@ test("all four learning routes continue through the starting-value and draft exe
 }) => {
   await openTutorial(page);
   const routes = page.locator(".learning-route");
-  await expect(routes).toHaveCount(9);
+  await expect(routes).toHaveCount(10);
   for (const group of await routes.all()) {
     await expect(group.getByRole("button")).toHaveCount(4);
   }
@@ -148,7 +149,9 @@ test("all four learning routes continue through the starting-value and draft exe
     .getByRole("group", { name: "Choose how to change the starting value" })
     .getByRole("button", { name: "Use API calls", exact: true })
     .click();
-  await expect(routes.getByRole("button", { name: "Use API calls", pressed: true })).toHaveCount(9);
+  await expect(routes.getByRole("button", { name: "Use API calls", pressed: true })).toHaveCount(
+    10,
+  );
   for (const name of [
     "Run four values with API calls",
     "Change Start with an API call",
@@ -161,7 +164,7 @@ test("all four learning routes continue through the starting-value and draft exe
     .getByRole("group", { name: "Choose how to create a draft" })
     .getByRole("button", { name: "Use the SDK", exact: true })
     .click();
-  await expect(routes.getByRole("button", { name: "Use the SDK", pressed: true })).toHaveCount(9);
+  await expect(routes.getByRole("button", { name: "Use the SDK", pressed: true })).toHaveCount(10);
   for (const name of [
     "Run four values with the SDK",
     "Change Start in your code",
@@ -186,7 +189,7 @@ test("all four learning routes continue through the starting-value and draft exe
     .getByRole("group", { name: "Choose how to publish a contribution" })
     .getByRole("button", { name: "Use Studio", exact: true })
     .click();
-  await expect(routes.getByRole("button", { name: "Use Studio", pressed: true })).toHaveCount(9);
+  await expect(routes.getByRole("button", { name: "Use Studio", pressed: true })).toHaveCount(10);
   await expect(page.getByRole("heading", { name: "Run four values in Studio" })).toBeVisible();
   await expect(page.getByRole("link", { name: "Build your World" })).toHaveAttribute(
     "href",
@@ -428,6 +431,7 @@ test("musical and painting examples combine streams by object and change only th
     name: "Several streams describe each note or brush mark",
   });
   await expect(art.locator("tbody tr")).toHaveCount(4);
+  await expect(art.locator(".connector-label")).toContainText("A four-dimensional connector");
   await expect(art.locator("output")).toContainText("C4 · beat 0 · 1 beat long · strength 80");
   await art.getByRole("button", { name: "Note 2", exact: true }).click();
   const pitch = art.locator("ellipse.note").nth(1);
@@ -439,6 +443,7 @@ test("musical and painting examples combine streams by object and change only th
   await expect(art.locator("output")).toContainText("C5 · beat 1 · 4 beats long · strength 96");
   await art.getByRole("tab", { name: "Painting · RGB" }).click();
   await expect(art.locator("tbody tr")).toHaveCount(3);
+  await expect(art.locator(".connector-label")).toContainText("A three-dimensional connector");
   await expect(art.locator("output")).toHaveText("Mark 2: red 62 + green 120 + blue 180");
   await art.getByRole("slider", { name: "Red" }).press("End");
   await expect(art.locator("output")).toHaveText("Mark 2: red 255 + green 120 + blue 180");
@@ -728,7 +733,7 @@ test("the four paths and concrete exercises continue through every later section
       .click();
     await expect(
       page.locator(".learning-route").getByRole("button", { name: path.button, pressed: true }),
-    ).toHaveCount(9);
+    ).toHaveCount(10);
     for (const name of path.headings)
       await expect(page.getByRole("heading", { name, exact: true })).toBeVisible();
   }
@@ -739,6 +744,7 @@ test("the four paths and concrete exercises continue through every later section
   for (const lesson of [
     "draft",
     "selection",
+    "dimensions",
     "formats",
     "publish",
     "conditions",
@@ -752,6 +758,63 @@ test("the four paths and concrete exercises continue through every later section
     await expect
       .poll(() => preview.locator("img").evaluate((img) => (img as HTMLImageElement).naturalWidth))
       .toBeGreaterThan(0);
+  }
+});
+
+test("multidimensional authoring offers all four synchronized paths with one two-dimension definition", async ({
+  page,
+}) => {
+  await openTutorial(page);
+  const section = page.locator('section[aria-labelledby="formats"]');
+  const tabs = section.getByRole("group", { name: "Choose how to combine dimensions" });
+  await expect(
+    section.getByRole("link", { name: "Build a two-dimensional connector in Studio" }),
+  ).toHaveAttribute("href", "/studio?lesson=dimensions");
+  await tabs.getByRole("button", { name: "Use an AI agent", exact: true }).click();
+  await expect(
+    section.getByRole("button", { name: "Copy multidimensional connector prompt" }),
+  ).toBeVisible();
+  await expect(section.locator("blockquote").first()).toContainText("D2 is a direct scalar");
+  await expect(section.locator("blockquote").first()).toContainText(
+    "simulate four values in one request",
+  );
+  await tabs.getByRole("button", { name: "Use API calls", exact: true }).click();
+  const command = await section
+    .locator('[data-code-caption="Save one two-dimensional draft"] pre')
+    .innerText();
+  const payload = JSON.parse(command.split("<<JSON\n")[1].split("\nJSON")[0]);
+  expect(payload.dimensions).toEqual([
+    { composite: "pitch", transformations: [{ name: "add", args: [2] }] },
+    { transformations: [{ name: "add", args: [1] }] },
+  ]);
+  expect(payload.static_ri).toEqual({ "2": { start_point: 60, transformation_shift: 0 } });
+  await tabs.getByRole("button", { name: "Use the SDK", exact: true }).click();
+  await expect(
+    section.getByRole("heading", { name: "Create both dimensions in your code" }),
+  ).toBeVisible();
+  await expect(section.locator(".follow-panel:not([hidden])").first()).toContainText(
+    "sdk.simulate(name, 4)",
+  );
+  await expect(
+    page
+      .getByRole("group", { name: "Follow the tutorial with" })
+      .getByRole("button", { name: "Use the SDK", exact: true }),
+  ).toHaveAttribute("aria-pressed", "true");
+});
+
+test("agent-readable docs include the multidimensional explanation and both SDK languages", async ({
+  request,
+}) => {
+  for (const path of ["/tutorial.md", "/llms-full.txt"]) {
+    const response = await request.get(path);
+    expect(response.ok()).toBe(true);
+    const text = await response.text();
+    expect(text).toContain("Put two dimensions in one connector");
+    expect(text).toContain("The connector supplies the dimensions. The World gives them meaning.");
+    expect(text).toContain("/your_name:0/pitch:0");
+    expect(text).toContain("/your_name:1");
+    expect(text).toContain("sdk.simulate(name, 4)");
+    expect(text).toContain("sdk.connector_post");
   }
 });
 
@@ -770,7 +833,7 @@ test("custom Solidity exercises stay synchronized with every learning route", as
     await expect(section.getByRole("heading", { name: heading, exact: true })).toBeVisible();
     await expect(
       page.locator(".learning-route").getByRole("button", { name: button, pressed: true }),
-    ).toHaveCount(9);
+    ).toHaveCount(10);
   }
   await section.getByRole("tab", { name: "Python", exact: true }).click();
   await expect(
