@@ -142,6 +142,7 @@ export const toolResult = `{
     "block_number": 11825265,
     "block_hash": "0xfa8ee7fe85e17439d69d98aef0418556a9d9a0d5794d5568fd32de300853acc5",
     "runner": "0xe0e70f522b64a6c8d2301697cd7133be33eae77f",
+    "registry": "0x7648cc2a6db6152a60615ebbba4b9e1f900e26fa",
     "particles": [{ "path": "/pitch:0", "data": [0, 1, 2, 3] }],
     "execution_mode": "chain"
   }

@@ -1,6 +1,6 @@
 import { getChainToken } from "$lib/auth/session";
 import { buildChainApiUrl } from "$lib/url/url";
-import { DcnClient } from "dcn";
+import { DecentralisedArtClient } from "decentralised-art";
 
 export type DcnApiErrorLike = {
   status: number;
@@ -50,8 +50,8 @@ const resolveAccessToken = (options: DcnClientFactoryOptions): string | null =>
     ? (options.accessToken ?? null)
     : getChainToken();
 
-export const createDcnClient = (options: DcnClientFactoryOptions = {}): DcnClient =>
-  new DcnClient({
+export const createDcnClient = (options: DcnClientFactoryOptions = {}): DecentralisedArtClient =>
+  new DecentralisedArtClient({
     baseUrl: getChainApiBaseUrl(),
     accessToken: resolveAccessToken(options),
     fetch: withChainFetchDefaults(options.fetch ?? globalThis.fetch.bind(globalThis)),
@@ -79,7 +79,7 @@ export const isDcnApiError = (error: unknown): error is DcnApiErrorLike => {
   if (!error || typeof error !== "object") return false;
   const record = error as Record<string, unknown>;
   return (
-    record.name === "DcnApiError" &&
+    record.name === "DecentralisedArtApiError" &&
     typeof record.status === "number" &&
     Object.prototype.hasOwnProperty.call(record, "body")
   );

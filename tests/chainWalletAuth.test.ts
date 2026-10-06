@@ -10,7 +10,9 @@ vi.mock("$lib/chain/dcnClient", () => ({
   createDcnClient: createDcnClientMock,
   isDcnApiError: (error: unknown) =>
     Boolean(
-      error && typeof error === "object" && (error as { name?: string }).name === "DcnApiError",
+      error &&
+      typeof error === "object" &&
+      (error as { name?: string }).name === "DecentralisedArtApiError",
     ),
 }));
 
@@ -51,7 +53,9 @@ describe("browser wallet chain auth", () => {
         throw new Error(`Unexpected provider method ${method}`);
       }),
     };
-    getNonceMock.mockResolvedValue({ nonce: "nonce-1" });
+    const nonce = "ab".repeat(33);
+    const message = `https://decentralised.art wants you to sign in with your Ethereum account:\n${address}\n\nNonce: ${nonce}\n`;
+    getNonceMock.mockResolvedValue({ nonce, message });
     loginWithSignatureMock.mockResolvedValue({ access_token: "chain-token" });
 
     const { loginWithBrowserWalletChainAccount } = await import("../src/lib/auth/api");
@@ -64,18 +68,36 @@ describe("browser wallet chain auth", () => {
     expect(provider.request).toHaveBeenCalledWith({ method: "eth_requestAccounts" });
     expect(provider.request).toHaveBeenCalledWith({
       method: "personal_sign",
-      params: ["Login nonce: nonce-1", normalizedAddress],
+      params: [message, normalizedAddress],
     });
-    expect(getNonceMock).toHaveBeenCalledWith(normalizedAddress);
-    expect(loginWithSignatureMock).toHaveBeenCalledWith(
-      normalizedAddress,
-      "Login nonce: nonce-1",
-      "abc123",
-    );
+    expect(result).toMatchObject({ nonce, message });
+    expect(getNonceMock).toHaveBeenCalledWith(normalizedAddress, {
+      origin: window.location.origin,
+    });
+    expect(loginWithSignatureMock).toHaveBeenCalledWith(normalizedAddress, nonce, "abc123");
     expect(window.localStorage.getItem("hypermusic_chain_token")).toBe("chain-token");
     expect(window.localStorage.getItem("hypermusic_chain_token_user_id")).toBe(
       `wallet:${normalizedAddress}`,
     );
+  });
+
+  it.each([
+    { nonce: "ab".repeat(33) },
+    { nonce: "ab".repeat(33), message: "   " },
+    { nonce: "42", message: "Sign in" },
+  ])("rejects a malformed challenge before asking the wallet to sign: %j", async (challenge) => {
+    getNonceMock.mockResolvedValue(challenge);
+    const provider = {
+      request: vi.fn(async () => [`0x${"12".repeat(20)}`]),
+    };
+    const { authenticateBrowserWalletInChain } = await import("../src/lib/auth/api");
+    type LoginOptions = NonNullable<Parameters<typeof authenticateBrowserWalletInChain>[0]>;
+    await expect(
+      authenticateBrowserWalletInChain({ provider: provider as LoginOptions["provider"] }),
+    ).rejects.toThrow(/Chain nonce response/);
+    expect(provider.request).toHaveBeenCalledOnce();
+    expect(loginWithSignatureMock).not.toHaveBeenCalled();
+    expect(window.localStorage.getItem("hypermusic_chain_token")).toBeNull();
   });
 });
 

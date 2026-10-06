@@ -123,7 +123,13 @@ async function setup(page: Page, mixed = false) {
       const particles = [{ path: `/${name}:0`, data: [0, 1, 2] }];
       body = path.endsWith("/simulate")
         ? particles
-        : { block_number: 10, block_hash: `0x${"ef".repeat(32)}`, runner: chainAddress, particles };
+        : {
+            block_number: 10,
+            block_hash: `0x${"ef".repeat(32)}`,
+            runner: chainAddress,
+            registry: chainAddress,
+            particles,
+          };
     } else if (path.includes("/publish/")) {
       publications.push(path);
       const input = req.postDataJSON();

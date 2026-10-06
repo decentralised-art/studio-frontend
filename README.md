@@ -4,7 +4,7 @@ Frontend for decentralised.art, including Studio, Worlds, tutorials, and the Net
 
 ## Developing
 
-Use Node `22.12.0` as pinned in `.nvmrc`:
+Use Node `22.13.0` as pinned in `.nvmrc`:
 
 ```sh
 nvm use
@@ -13,7 +13,7 @@ nvm use
 If your shell does not auto-load `nvm`, use the installed local runtime explicitly:
 
 ```sh
-PATH="$HOME/.nvm/versions/node/v22.12.0/bin:$PATH" npm run check
+PATH="$HOME/.nvm/versions/node/v22.13.0/bin:$PATH" npm run check
 ```
 
 Once dependencies are installed with `npm install`, start a development server:
@@ -80,20 +80,20 @@ You can preview the production build with `npm run preview`.
 
 ## Current chain lifecycle
 
-The SDK is pinned to `1cc7924` (API specification `8761ecb`). Studio has two entity libraries:
+The SDK is pinned to `b2d6e9e` (API specification `a6d9127`). Studio has two entity libraries:
 
 - **Network** lists published Sepolia connectors, transformations and conditions, discovered through chain events or verified nonzero chain addresses.
 - **Local** lists the signed-in wallet's entities created on the simulation server, including creations made through the API outside this browser. Account discovery is filtered by both owner and the unpublished address `0x0`. Local entries are not added to public Toolbox profiles. Browser graphs and publication records are scoped by API URL and wallet.
 
 **Create locally** creates an immutable entity on the server without a blockchain transaction. Transformation and condition editors use this action too. **Simulate** runs a created Local connector with its Local and Network dependencies on the server without gas. Published dependencies require their verified artifacts to be available on that server.
 
-**Publish to the Network** separately publishes the owner's local dependencies before their parent, using wallet-approved transactions and Sepolia ETH for gas. **Execute on the Network** reads a published connector at a pinned block using `eth_call`; it does not send a paid wallet transaction. Its output retains `{block_number, block_hash, runner, particles}`. Simulation returns particles without chain provenance.
+**Publish to the Network** separately publishes the owner's local dependencies before their parent, using wallet-approved transactions and Sepolia ETH for gas. **Execute on the Network** reads a published connector at a pinned block using `eth_call`; it does not send a paid wallet transaction. Its output retains `{block_number, block_hash, runner, registry, particles}`. Simulation returns particles without chain provenance.
 
 Pending receipts and interrupted sends survive reloads in localStorage, scoped by API URL and wallet. Confirmed publications show their transaction hash, explorer link and contract address in Studio. The recovery field accepts a transaction hash from wallet activity. Web Locks serialize publication for the same API and owner. A mined receipt can precede safe-block execution and indexing: retry execution or confirmation without sending another publication. Publishing requires HTTPS or localhost and a browser supporting Web Locks.
 
 Created definitions remain immutable. Runtime argument metadata uses `args_count`; public GET responses do not return editable Solidity source. Local visibility is scoped in Studio; the current server's GET endpoints remain public, so this is not a server-side confidentiality boundary.
 
-Uploaded Worlds use the current SDK directly: `sdk.execute` returns `{block_number, block_hash, runner, particles}`, and Worlds read `result.particles` for the output streams. `sdk.simulate` returns local output streams and remains a separate operation using the SDK's `dcn.execute` permission. The services backend and frontend use the same pinned SDK.
+Uploaded Worlds use the current SDK directly: `sdk.execute` returns `{block_number, block_hash, runner, registry, particles}`, and Worlds read `result.particles` for the output streams. `sdk.simulate` returns local output streams and remains a separate operation using the SDK's `decentralised.art.execute` permission. The services backend and frontend use the same pinned SDK.
 
 Verification is offline by default. The optional live smoke test requires an explicitly supplied token and published connector fixtures; unit tests mock the server and wallet and send no transactions.
 
@@ -104,3 +104,5 @@ PLAYWRIGHT_CHROMIUM_CHANNEL=chrome PLAYWRIGHT_VIDEO=off npm run test:e2e -- e2e/
 ```
 
 These selected browser tests intercept services/chain traffic and inject a mock wallet; they create no live entities or transactions.
+
+Regenerate the API reference from the pinned SDK specification with `npm run docs:generate:chain`. Chain sign-in requests an EIP-4361 message for the browser origin, signs it exactly, and submits `{address, nonce, signature}`.

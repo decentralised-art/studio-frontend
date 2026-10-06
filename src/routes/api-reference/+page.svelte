@@ -140,8 +140,9 @@ curl -X POST ${CHAIN_BASE}/execute \\
           <tr>
             <td>Steps</td>
             <td>
-              <code>GET /nonce/&#123;address&#125;</code>, sign
-              <code>Login nonce: &lt;nonce&gt;</code>, then <code>POST /auth</code>
+              <code>GET /nonce/&#123;address&#125;</code>, sign the returned <code>message</code>,
+              then <code>POST /auth</code> with
+              <code>{`{ address, nonce, signature }`}</code>
             </td>
             <td>
               <code>POST /auth/siwe/challenge</code>, sign the message, then
@@ -149,7 +150,7 @@ curl -X POST ${CHAIN_BASE}/execute \\
             </td>
           </tr>
           <tr
-            ><td>Signature</td><td>EIP-191 personal_sign</td><td
+            ><td>Signature</td><td>Sign-In with Ethereum (EIP-4361), signed with EIP-191</td><td
               >Sign-In with Ethereum (EIP-4361), signed with EIP-191</td
             ></tr
           >

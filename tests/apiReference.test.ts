@@ -1,3 +1,7 @@
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { chainGroups, chainSchemas, schemaFields } from "../src/lib/site/docs/apiReference";
@@ -11,6 +15,23 @@ const documented = new Set(
 );
 
 describe("API reference", () => {
+  it("matches the specification pinned by the frontend SDK", () => {
+    const directory = mkdtempSync(resolve(tmpdir(), "frontend-chain-docs-"));
+    const output = resolve(directory, "openapi.json");
+    try {
+      execFileSync(process.execPath, [
+        "submodules/sdk/js/scripts/bundle-openapi.mjs",
+        "--spec-root",
+        "submodules/sdk/submodules/api-spec",
+        "--output",
+        output,
+      ]);
+      expect(spec).toEqual(JSON.parse(readFileSync(output, "utf8")));
+    } finally {
+      rmSync(directory, { recursive: true });
+    }
+  });
+
   it("documents every chain operation in the specification", () => {
     const operations = Object.entries(
       spec.paths as Record<string, Record<string, unknown>>,

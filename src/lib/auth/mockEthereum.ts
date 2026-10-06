@@ -9,7 +9,7 @@ export type MockEthereumAccount = {
 export type ChainAuthRequest = {
   address: string;
   signature: string;
-  message: string;
+  nonce: string;
 };
 
 const MOCK_ACCOUNTS_STORAGE_KEY = "hypermusic_mock_ethereum_accounts";
@@ -550,23 +550,14 @@ export const signMessageWithKeccak256 = (privateKey: string, message: string): s
   return toHex(signature);
 };
 
-export const buildNonceLoginMessage = (nonce: string): string => {
-  const normalizedNonce = nonce.trim();
-  if (!normalizedNonce) {
-    throw new Error("Nonce is empty.");
-  }
-  return `Login nonce: ${normalizedNonce}`;
-};
-
 export const createChainAuthRequest = (
   account: MockEthereumAccount,
-  nonce: string,
+  challenge: { nonce: string; message: string },
 ): ChainAuthRequest => {
-  const message = buildNonceLoginMessage(nonce);
-  const signature = signMessageWithKeccak256(account.privateKey, message);
+  const signature = signMessageWithKeccak256(account.privateKey, challenge.message);
   return {
     address: account.address,
     signature: stripHexPrefix(signature),
-    message,
+    nonce: challenge.nonce,
   };
 };

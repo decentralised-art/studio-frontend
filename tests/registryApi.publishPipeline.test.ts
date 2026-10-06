@@ -20,7 +20,9 @@ vi.mock("$lib/chain/dcnClient", () => ({
   }),
   isDcnApiError: (error: unknown) =>
     Boolean(
-      error && typeof error === "object" && (error as { name?: string }).name === "DcnApiError",
+      error &&
+      typeof error === "object" &&
+      (error as { name?: string }).name === "DecentralisedArtApiError",
     ),
 }));
 
@@ -89,7 +91,7 @@ describe("registryApi publish pipeline contract", () => {
 
   it("surfaces connector publish errors as ChainApiRequestError", async () => {
     connectorPostMock.mockRejectedValue({
-      name: "DcnApiError",
+      name: "DecentralisedArtApiError",
       status: 400,
       body: { message: "Connector name already exists." },
     });

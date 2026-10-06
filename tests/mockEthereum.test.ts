@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  buildNonceLoginMessage,
   createChainAuthRequest,
   createMockEthereumAccountFromPrivateKey,
   keccak256Hex,
@@ -28,17 +27,22 @@ describe("mockEthereum", () => {
     expect(account.address).toBe("0x7e5f4552091a69125d5dfcb7b8c2659029395bdf");
   });
 
-  it("builds nonce login message and chain auth payload", () => {
+  it("signs the issued message and submits its nonce in the chain auth payload", () => {
     const account = createMockEthereumAccountFromPrivateKey(privateKeyOne);
-    const authRequest = createChainAuthRequest(account, " 42 ");
+    const challenge = { nonce: "ab".repeat(33), message: `Sign in with ${account.address}\n` };
+    const authRequest = createChainAuthRequest(account, challenge);
 
     expect(authRequest.address).toBe(account.address);
-    expect(authRequest.message).toBe("Login nonce: 42");
+    expect(authRequest.nonce).toBe(challenge.nonce);
+    expect(authRequest).not.toHaveProperty("message");
+    expect(authRequest.signature).toBe(
+      signMessageWithKeccak256(account.privateKey, challenge.message).slice(2),
+    );
     expect(authRequest.signature).toMatch(/^[0-9a-f]{130}$/);
   });
 
   it("produces deterministic signatures with recovery byte 27/28", () => {
-    const message = "Login nonce: 99";
+    const message = "Sign in to decentralised.art.";
     const signatureA = signMessageWithKeccak256(privateKeyOne, message);
     const signatureB = signMessageWithKeccak256(privateKeyOne, message);
 
@@ -46,9 +50,5 @@ describe("mockEthereum", () => {
 
     const recovery = Number.parseInt(signatureA.slice(-2), 16);
     expect([27, 28]).toContain(recovery);
-  });
-
-  it("rejects empty nonce messages", () => {
-    expect(() => buildNonceLoginMessage("   ")).toThrowError("Nonce is empty.");
   });
 });
