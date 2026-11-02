@@ -158,6 +158,110 @@ describe("Studio chain sync helpers", () => {
     expect(merged.state.particles[0].id).toBe("pitch");
   });
 
+  it("fills missing dependency placeholders without replacing authoritative runtime metadata", () => {
+    const state = emptyState();
+    const transformation = { argc: 0, run: (x: number) => x + 100 };
+    const condition = { argc: 0, check: () => false };
+    state.registry.transformations.add = transformation;
+    state.registry.conditions.gate = condition;
+    const result = mergeFetchedChainParticleIntoStudioState(
+      state,
+      {
+        registry: {
+          connector: {
+            name: "score",
+            chainAddress: `0x${"ab".repeat(20)}`,
+            dimensions: [
+              {
+                transformations: [
+                  { name: "add", args: [1, 2, 3] },
+                  { name: "missing", args: [1, 2] },
+                ],
+                bindings: {},
+              },
+            ],
+            conditionName: "gate",
+            conditionArgs: [1, 2],
+          },
+        },
+      },
+      "owner",
+    );
+    expect(result.state.registry.transformations.add).toBe(transformation);
+    expect(result.state.registry.conditions.gate).toBe(condition);
+    expect(result.state.registry.transformations.add.argc).toBe(0);
+    expect(result.state.registry.transformations.add.run(1, [])).toBe(101);
+    expect(result.state.registry.conditions.gate.check([])).toBe(false);
+    expect(result.state.registry.transformations.missing.argc).toBe(2);
+  });
+
+  it("refreshes local connector catalog provenance after the same definition is published", () => {
+    const owner = `0x${"12".repeat(20)}`;
+    const address = `0x${"ab".repeat(20)}`;
+    const connector = {
+      name: "score_study_v2",
+      ownerAddress: owner,
+      chainAddress: "0x0",
+      dimensions: [{ transformations: [], bindings: {} }],
+    };
+    const local = mergeFetchedChainParticleIntoStudioState(
+      emptyState(),
+      { registry: { connector } },
+      owner,
+    );
+    const published = mergeFetchedChainParticleIntoStudioState(
+      local.state,
+      {
+        registry: { connector: { ...connector, chainAddress: address } },
+        particleMeta: { ...particleMeta(connector.name), authorId: owner },
+      },
+      owner,
+    );
+    expect(published.state.library.features).toEqual([
+      expect.objectContaining({
+        name: connector.name,
+        chainAddress: address,
+        ownerAddress: owner,
+        summary: "Fetched from chain on demand.",
+      }),
+    ]);
+    expect(local.state.library.features[0].chainAddress).toBe("0x0");
+    expect(published.state.registry.connectors[connector.name].chainAddress).toBe(address);
+    expect(published.state.particles.map((item) => item.id)).toEqual([connector.name]);
+  });
+
+  it.each(["transformation", "condition"] as const)(
+    "refreshes %s library provenance and argument metadata after publication",
+    (kind) => {
+      const owner = `0x${"12".repeat(20)}`;
+      const address = `0x${"ab".repeat(20)}`;
+      const local = mergeToolboxRuntimePayloadsIntoStudioState(
+        emptyState(),
+        kind,
+        [["step", { name: "step", address: "0x0", owner, args_count: 2, sol_src: "return true;" }]],
+        owner,
+      );
+      const published = mergeToolboxRuntimePayloadsIntoStudioState(
+        local,
+        kind,
+        [["step", { name: "step", address, owner, args_count: 0 }]],
+        owner,
+      );
+      const key = kind === "transformation" ? "transformations" : "conditions";
+      expect(published.library[key]).toEqual([
+        expect.objectContaining({
+          name: "step",
+          chainAddress: address,
+          ownerAddress: owner,
+          summary: "Published on chain.",
+          runtimeSnippet: undefined,
+        }),
+      ]);
+      expect(published.registry[key].step.argc).toBe(0);
+      expect(local.library[key][0].chainAddress).toBe("0x0");
+    },
+  );
+
   it("uses authoritative args_count without source and over legacy source inference", () => {
     const state = mergeToolboxRuntimePayloadsIntoStudioState(
       emptyState(),

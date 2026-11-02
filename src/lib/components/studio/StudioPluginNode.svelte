@@ -757,6 +757,11 @@
     filter: saturate(0.55);
   }
 
+  /* Selected-node resize controls must leave the connection port clickable. */
+  .plugin-node :global(.svelte-flow__handle.source) {
+    z-index: 31;
+  }
+
   :global(.plugin-resize-handle) {
     width: 9px;
     height: 9px;

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { toProtocolConnectorPayload } from "../src/lib/chain/connectorContractAdapter";
-import { buildStudioRuntime } from "../src/lib/studio/studioRuntime";
+import { buildStudioRuntime, type StudioGraph } from "../src/lib/studio/studioRuntime";
 
 describe("studioRuntime connector payload preparation", () => {
   it("starts without bundled connectors, transformations, or conditions", () => {
@@ -229,5 +229,58 @@ describe("studioRuntime connector payload preparation", () => {
     expect(runtime.warnings).toContain(
       "Connector root dimension 1 references missing composite missing_child.",
     );
+  });
+});
+
+describe("Studio runtime root node selection", () => {
+  const graph: StudioGraph = {
+    nodes: [
+      { id: "large", data: { kind: "connector", label: "large", dimensions: 1 } },
+      { id: "child", data: { kind: "connector", label: "child", dimensions: 1 } },
+      {
+        id: "selected",
+        data: { kind: "connector", label: "selected", dimensions: 2, tabRoot: true },
+      },
+    ],
+    edges: [{ source: "large", sourceHandle: "dim-0", target: "child", targetHandle: "in" }],
+  };
+
+  it("uses an explicit physical root before outgoing-degree heuristics and tab markers", () => {
+    const runtime = buildStudioRuntime(graph, {
+      rootLabel: "Project",
+      rootConnectorId: "child",
+      rootNodeId: "child",
+    });
+    expect(runtime.rootConnector).toBe("child");
+    expect(runtime.registry.connectors.child.dimensions[0].composite).toBeUndefined();
+    expect(runtime.registry.connectors.large.dimensions[0].composite).toBe("child");
+  });
+
+  it("uses the unique marked root when no physical root is requested", () => {
+    const runtime = buildStudioRuntime(graph, {
+      rootLabel: "Project",
+      rootConnectorId: "selected",
+    });
+    expect(runtime.registry.connectors.selected.dimensions).toHaveLength(2);
+    expect(runtime.registry.connectors.large.dimensions[0].composite).toBe("child");
+  });
+
+  it("falls back to the valid marker when a removed root node is requested", () => {
+    const runtime = buildStudioRuntime(graph, {
+      rootLabel: "Project",
+      rootConnectorId: "selected",
+      rootNodeId: "removed",
+    });
+    expect(runtime.registry.connectors.selected.dimensions).toHaveLength(2);
+  });
+
+  it("retains rootConnectorId as the registry name independently of the physical node id", () => {
+    const runtime = buildStudioRuntime(graph, {
+      rootLabel: "Project",
+      rootConnectorId: "new_definition",
+      rootNodeId: "selected",
+    });
+    expect(runtime.rootConnector).toBe("new_definition");
+    expect(runtime.registry.connectors.new_definition.dimensions).toHaveLength(2);
   });
 });

@@ -66,6 +66,7 @@ describe("particlePostData event feed sync", () => {
         return jsonResponse({
           name: "connector-alpha",
           owner: OWNER,
+          address: OWNER,
           format_hash: FORMAT_HASH,
           dimensions: [
             {
@@ -83,6 +84,7 @@ describe("particlePostData event feed sync", () => {
         return jsonResponse({
           name: "add",
           owner: OWNER,
+          address: OWNER,
           sol_src: "return x + args[1];",
         });
       }
@@ -401,12 +403,10 @@ describe("particlePostData event feed sync", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const mod = await import("../src/lib/feed/particlePostData");
-    await expect(
-      mod.syncParticlePostDataFromChain({
-        force: true,
-        sourceAddresses: [OWNER],
-      }),
-    ).rejects.toThrow(/Unable to hydrate chain feed detail/);
+    await mod.syncParticlePostDataFromChain({
+      force: true,
+      sourceAddresses: [OWNER],
+    });
     expect(mod.listNetworkFeedEvents()).toEqual([]);
     expect(mod.listParticleSearchEntities()).toEqual({
       connectors: [],
@@ -497,6 +497,7 @@ const connectorResponse = (name: string, owner: string, formatHash: string) =>
   jsonResponse({
     name,
     owner,
+    address: owner,
     format_hash: formatHash,
     dimensions: [
       {

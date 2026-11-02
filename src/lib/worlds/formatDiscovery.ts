@@ -6,6 +6,7 @@ import {
 } from "$lib/chain/registryApi";
 import { hydrateChainEventDetail } from "$lib/feed/chainEventHydration";
 import type { ConnectorPostEvent } from "$lib/feed/particlePostData";
+import { isPublishedChainAddress } from "$lib/studio/studioEntityOrigin";
 import type { WorldRequiredScalarSet } from "$lib/worlds/types";
 
 const FORMAT_DISCOVERY_PAGE_LIMIT = 48;
@@ -60,7 +61,7 @@ const buildConnectorPostEvent = (
   detail: Awaited<ReturnType<typeof hydrateChainEventDetail>>,
   fallbackFormatHash: string,
 ): ConnectorPostEvent | null => {
-  if (detail.type !== "connector") return null;
+  if (detail.type !== "connector" || !isPublishedChainAddress(detail.raw.address)) return null;
   return {
     type: "connector",
     id: `world-format-candidate-${detail.name}`,

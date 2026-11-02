@@ -24,14 +24,11 @@ describe("Studio left panel templates removal", () => {
     );
   });
 
-  it("keeps plugins available from the installed plugin registry", () => {
+  it("lists the authoritative World catalog without legacy built-ins", () => {
     const source = readStudioSource();
 
-    expect(source).toContain(
-      "const allStudioPlugins = $derived.by<StudioPluginDescriptor[]>(() => [",
-    );
-    expect(source).toContain("...listStudioPlugins(),");
-    expect(source).toContain("...listStudioWorldPlugins(studioBackendWorlds),");
+    expect(source).toContain("listStudioPlugins(studioBackendWorlds)");
+    expect(source).not.toContain("...listStudioPlugins(),");
     expect(source).toContain("const result = await loadWorldRegistry({");
     expect(source).toContain('surface: "studio-plugin"');
     expect(source).toContain("includeFirstParty: false");

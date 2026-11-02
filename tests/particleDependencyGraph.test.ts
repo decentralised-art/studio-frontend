@@ -34,6 +34,7 @@ describe("particle dependency graph", () => {
           return jsonResponse({
             name: "root",
             owner: OWNER,
+            address: OWNER,
             dimensions: [
               {
                 composite: "child",
@@ -54,6 +55,7 @@ describe("particle dependency graph", () => {
           return jsonResponse({
             name: "child",
             owner: OWNER,
+            address: OWNER,
             dimensions: [{ transformations: [{ name: "add", args: [3] }] }],
           });
         }
@@ -61,6 +63,7 @@ describe("particle dependency graph", () => {
           return jsonResponse({
             name: "static_leaf",
             owner: OWNER,
+            address: OWNER,
             dimensions: [{ transformations: [{ name: "add", args: [4] }] }],
           });
         }

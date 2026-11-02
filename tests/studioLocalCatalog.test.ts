@@ -77,6 +77,82 @@ describe("Studio Local catalog", () => {
     ).rejects.toThrow(/different content/);
   });
 
+  it("removes stale browser-local records after authoritative publication in another session", () => {
+    const records = [
+      record(connector("score")),
+      record(transformation("step"), "pending"),
+      record({ kind: "condition", name: "gate", body: { name: "gate", sol_src: "return true;" } }),
+      record(connector("still-local")),
+    ];
+    const address = `0x${"ab".repeat(20)}`;
+    const verified = {
+      features: [
+        {
+          id: "feature-score",
+          name: "score",
+          kind: "feature" as const,
+          authorId: "owner-a",
+          chainAddress: address,
+        },
+      ],
+      transformations: [
+        {
+          id: "transform-step",
+          name: "step",
+          kind: "transformation" as const,
+          authorId: "owner-a",
+          chainAddress: address,
+        },
+      ],
+      conditions: [
+        {
+          id: "condition-gate",
+          name: "gate",
+          kind: "condition" as const,
+          authorId: "owner-a",
+          chainAddress: address,
+        },
+      ],
+    };
+    const library = buildStudioLocalLibrary(records, "owner-a", verified);
+    expect(library.features.map((item) => item.name)).toEqual(["still-local"]);
+    expect(library.transformations).toEqual([]);
+    expect(library.conditions).toEqual([]);
+    expect(records.map((item) => item.stage)).toEqual(["draft", "pending", "draft", "draft"]);
+  });
+
+  it("keeps local and unverified entries and distinguishes equal names of different kinds", () => {
+    const records = [
+      record(connector("same")),
+      record(transformation("same")),
+      record(connector("local")),
+    ];
+    const library = buildStudioLocalLibrary(records, "owner-a", {
+      features: [
+        {
+          id: "feature-same",
+          name: "same",
+          kind: "feature",
+          authorId: "owner-a",
+          chainAddress: `0x${"ab".repeat(20)}`,
+        },
+        {
+          id: "feature-local",
+          name: "local",
+          kind: "feature",
+          authorId: "owner-a",
+          chainAddress: "0x0",
+        },
+      ],
+      transformations: [
+        { id: "transform-same", name: "same", kind: "transformation", authorId: "owner-a" },
+      ],
+      conditions: [],
+    });
+    expect(library.features.map((item) => item.name)).toEqual(["local"]);
+    expect(library.transformations.map((item) => item.name)).toEqual(["same"]);
+  });
+
   it("lists created and pending entities under the current owner, excluding mined records", () => {
     const records = [
       record(connector("melody")),

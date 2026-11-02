@@ -1,5 +1,4 @@
 import { normalizeFormatHash } from "$lib/chain/registryApi";
-import { MUSIC_SCORE_PLUGIN_ID, MUSIC_SCORE_PLUGIN_NAME } from "$lib/score/codebook";
 import type { WorldAcceptedConnectorSet, WorldDescriptor } from "$lib/worlds/types";
 
 export type StudioPluginDescriptor = {
@@ -20,35 +19,6 @@ export const MIDI_QUAD_FORMAT_HASH = normalizeFormatHash(
 );
 export const MUSIC_SCORE_FORMAT_HASHES: string[] = [].map((hash) => normalizeFormatHash(hash));
 export const MUSIC_SCORE_PLUGIN_FORMAT_HASHES = MUSIC_SCORE_FORMAT_HASHES;
-
-const BUILTIN_STUDIO_PLUGINS: StudioPluginDescriptor[] = [
-  {
-    id: MIDI_CLIP_PLUGIN_ID,
-    name: "MIDI Clip Export",
-    summary:
-      "Generates MIDI clips from pitch/time/duration/velocity connector streams and supports file export.",
-    supportedFormatHashes: [MIDI_QUAD_FORMAT_HASH],
-    status: "alpha",
-    source: "builtin",
-  },
-  {
-    id: MUSIC_SCORE_PLUGIN_ID,
-    name: MUSIC_SCORE_PLUGIN_NAME,
-    summary:
-      "Renders compatible connector/RIs output as MusicXML 4.0 notation in a sandboxed world.",
-    supportedFormatHashes: MUSIC_SCORE_PLUGIN_FORMAT_HASHES,
-    status: "alpha",
-    source: "builtin",
-  },
-  {
-    id: TONE_WORLD_PLUGIN_ID,
-    name: "Tone World",
-    summary: "Runs compatible connector/RIs output inside the Tone World audiovisual runtime.",
-    supportedFormatHashes: [],
-    status: "alpha",
-    source: "builtin",
-  },
-];
 
 export const BACKEND_WORLD_PLUGIN_ID_PREFIX = "world:";
 
@@ -84,14 +54,18 @@ export const listStudioWorldPlugins = (
   worlds: readonly WorldDescriptor[],
 ): StudioPluginDescriptor[] =>
   worlds
-    .filter((world) => world.source === "backend")
+    .filter((world) => world.source === "backend" && world.backend?.status === "active")
     .filter((world) => world.surfaces.includes("studio-plugin"))
     .map(studioPluginFromWorldDescriptor);
 
-export const listStudioPlugins = (): StudioPluginDescriptor[] => [...BUILTIN_STUDIO_PLUGINS];
+/** The Services registry is the catalog; bundled runtimes only support restored legacy flows. */
+export const listStudioPlugins = (
+  worlds: readonly WorldDescriptor[] = [],
+): StudioPluginDescriptor[] => listStudioWorldPlugins(worlds);
 
 export const listCompatibleStudioPlugins = (
   formatHash: string | null | undefined,
+  worlds: readonly WorldDescriptor[] = [],
 ): StudioPluginDescriptor[] => {
   if (!formatHash) return [];
   let normalized = "";
@@ -100,7 +74,7 @@ export const listCompatibleStudioPlugins = (
   } catch {
     return [];
   }
-  return BUILTIN_STUDIO_PLUGINS.filter((plugin) =>
+  return listStudioPlugins(worlds).filter((plugin) =>
     plugin.supportedFormatHashes.includes(normalized),
   );
 };

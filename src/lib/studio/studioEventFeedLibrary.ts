@@ -3,8 +3,14 @@ import {
   type ChainFeedEventType,
   type ChainFeedItem,
 } from "$lib/chain/eventFeedApi";
+import {
+  getChainCondition,
+  getChainConnector,
+  getChainTransformation,
+} from "$lib/chain/registryApi";
 import type { LibraryItem } from "$lib/data/studioLibrary";
 import { normalizeFeedSourceAddress } from "$lib/feed/feedSources";
+import { isPublishedChainAddress } from "$lib/studio/studioEntityOrigin";
 import type { DeployedLibrary } from "$lib/studio/studioRegistryState";
 
 export type StudioEventFeedLibraryOptions = {
@@ -33,6 +39,7 @@ type StudioFeedEntity = {
   name: string;
   owner: string;
   createdAt: number;
+  chainAddress?: string;
 };
 
 const EVENT_KIND_BY_TYPE: Record<ChainFeedEventType, StudioFeedEntityKind> = {
@@ -44,6 +51,7 @@ const EVENT_KIND_BY_TYPE: Record<ChainFeedEventType, StudioFeedEntityKind> = {
 const DEFAULT_PAGE_LIMIT = 256;
 const DEFAULT_MAX_PAGES = 8;
 const DEFAULT_TARGET_ITEMS = 240;
+const REGISTRY_LOOKUP_CONCURRENCY = 8;
 
 const normalizePositiveInteger = (
   value: number | undefined,
@@ -82,7 +90,9 @@ const mapEntityToLibraryItem = (entity: StudioFeedEntity): LibraryItem => ({
   name: entity.name,
   kind: entity.kind,
   authorId: entity.owner,
-  summary: "Discovered from chain feed.",
+  chainAddress: entity.chainAddress,
+  ownerAddress: entity.owner,
+  summary: "Published on chain.",
 });
 
 const compareEntityNewestFirst = (a: StudioFeedEntity, b: StudioFeedEntity): number => {
@@ -119,6 +129,40 @@ const processFeedItem = (
     owner,
     createdAt: item.createdAtMs,
   });
+};
+
+const resolvePublishedFeedEntities = async (
+  candidates: StudioFeedEntity[],
+  sourceSet: ReadonlySet<string>,
+  includeAllOwners: boolean,
+): Promise<StudioFeedEntity[]> => {
+  const published: StudioFeedEntity[] = [];
+  let nextIndex = 0;
+
+  // Local simulation events share the feed with chain events. Publication is
+  // determined by the registry's deployed address, not feed visibility/finality.
+  await Promise.all(
+    Array.from({ length: Math.min(REGISTRY_LOOKUP_CONCURRENCY, candidates.length) }, async () => {
+      while (nextIndex < candidates.length) {
+        const candidate = candidates[nextIndex++];
+        try {
+          const payload =
+            candidate.kind === "feature"
+              ? await getChainConnector(candidate.name)
+              : candidate.kind === "transformation"
+                ? await getChainTransformation(candidate.name)
+                : await getChainCondition(candidate.name);
+          if (!isPublishedChainAddress(payload.address)) continue;
+          const owner = normalizeFeedSourceAddress(payload.owner ?? "");
+          if (!owner || (!includeAllOwners && !sourceSet.has(owner))) continue;
+          published.push({ ...candidate, owner, chainAddress: payload.address.trim() });
+        } catch {
+          // Missing or unavailable registry entries cannot establish publication.
+        }
+      }
+    }),
+  );
+  return published;
 };
 
 export const loadStudioNetworkLibraryFromEventFeed = async (
@@ -159,9 +203,16 @@ export const loadStudioNetworkLibraryFromEventFeed = async (
     pageCount += 1;
     rawItemCount += page.items.length;
 
+    const candidates = new Map<string, StudioFeedEntity>();
     page.items.forEach((item) =>
-      processFeedItem(item, sourceSet, Boolean(options.includeAllOwners), seenKeys, entities),
+      processFeedItem(item, sourceSet, Boolean(options.includeAllOwners), seenKeys, candidates),
     );
+    const published = await resolvePublishedFeedEntities(
+      Array.from(candidates.values()),
+      sourceSet,
+      Boolean(options.includeAllOwners),
+    );
+    published.forEach((entity) => entities.set(entityKey(entity.kind, entity.name), entity));
 
     hasMore = page.hasMore;
     nextBefore = page.nextBefore;

@@ -31,6 +31,7 @@ import {
   listChainSyncSourcesForApp,
 } from "$lib/studio/chainStudioAdapter";
 import type { StudioConnectorDef } from "$lib/studio/domain/connectorModel";
+import { isPublishedChainAddress } from "$lib/studio/studioEntityOrigin";
 
 export type ConnectorPostEvent = {
   type: "connector";
@@ -119,6 +120,7 @@ const emptyCache = (): ParticlePostCache => ({
 let cache: ParticlePostCache = emptyCache();
 let loadPromise: Promise<ParticlePostCache> | null = null;
 let loadPromiseKey = "";
+let cacheGeneration = 0;
 let cachedMaxOwnedPerSource: number | null = null;
 let cachedMaxSources: number | null = null;
 let cachedIncludesRuntimeCode = false;
@@ -626,7 +628,9 @@ const hydratedDetailMatchesScope = (
   detail: HydratedChainEventDetail | null,
   scope: EventFeedScope,
 ): boolean => {
-  if (!event) return false;
+  // Activity feeds and search expose published operations. Server-local creates
+  // are discovered separately in the signed-in owner's Studio Local catalog.
+  if (!event || !detail || !isPublishedChainAddress(detail.raw.address)) return false;
   if (feedOwnerMatchesScope(event.authorId, scope)) return true;
   if (
     event.type === "connector" &&
@@ -760,14 +764,7 @@ const hydrateVisibleFeedDetails = async (
 
   const detailsByFeedId = new Map<string, HydratedChainEventDetail>();
   for (const result of settled) {
-    if (result.status === "rejected") {
-      const reason = result.reason;
-      throw new Error(
-        reason instanceof Error
-          ? `Unable to hydrate chain feed detail: ${reason.message}`
-          : "Unable to hydrate chain feed detail.",
-      );
-    }
+    if (result.status === "rejected") continue;
     if (result.value.detail) {
       detailsByFeedId.set(result.value.feedId, result.value.detail);
     }
@@ -1006,6 +1003,7 @@ export const syncParticlePostDataFromChain = async (options?: {
   if (cacheSatisfiesRequest && !options?.force) return cache;
 
   if (!loadPromise || options?.force || loadPromiseKey !== requestKey) {
+    const generation = ++cacheGeneration;
     loadPromiseKey = requestKey;
     loadPromise = loadEventFeedParticlePostCache({
       includeRuntimeCode: requestedIncludesRuntimeCode,
@@ -1016,6 +1014,7 @@ export const syncParticlePostDataFromChain = async (options?: {
       feedPageLimit: requestedFeedPageLimit,
     })
       .then((next) => {
+        if (generation !== cacheGeneration) return next;
         cache = next;
         cachedSourceAddresses = hasExplicitSourceAddresses ? [...requestedSourceAddresses] : null;
         cachedFollowedFormatHashes = [...requestedFollowedFormatHashes];
@@ -1030,8 +1029,10 @@ export const syncParticlePostDataFromChain = async (options?: {
         return cache;
       })
       .catch((error) => {
-        loadPromise = null;
-        loadPromiseKey = "";
+        if (generation === cacheGeneration) {
+          loadPromise = null;
+          loadPromiseKey = "";
+        }
         throw error;
       });
   }
@@ -1047,7 +1048,13 @@ export const loadMoreParticlePostDataFromChain = async (options?: {
 }) => {
   const requestedScope = createEventFeedScope(options);
   const requestedFeedPageLimit = normalizeFeedPageLimit(options?.feedPageLimit);
-  if (!cache.loaded) {
+  if (
+    !cache.loaded ||
+    !doesParticlePostCacheMatchFeedScope(
+      requestedScope.sourceAddresses,
+      requestedScope.followedFormatHashes,
+    )
+  ) {
     return syncParticlePostDataFromChain({
       force: true,
       includeRuntimeCode: requestedScope.includeRuntimeCode,
@@ -1062,6 +1069,7 @@ export const loadMoreParticlePostDataFromChain = async (options?: {
   }
   if (!cache.pagination.hasMore || !cache.pagination.nextBefore) return cache;
 
+  const generation = cacheGeneration;
   const nextPage = await loadEventFeedParticlePostCache({
     includeRuntimeCode: requestedScope.includeRuntimeCode,
     ...(requestedScope.sourceAddresses.length > 0
@@ -1073,6 +1081,7 @@ export const loadMoreParticlePostDataFromChain = async (options?: {
     feedPageLimit: requestedFeedPageLimit,
     before: cache.pagination.nextBefore,
   });
+  if (generation !== cacheGeneration) return cache;
   cache = mergeParticlePostCaches(cache, nextPage);
   cachedSourceAddresses =
     requestedScope.sourceAddresses.length > 0 ? [...requestedScope.sourceAddresses] : null;
@@ -1123,7 +1132,9 @@ const applyStreamMetaToCache = (meta: ChainFeedStreamMeta) => {
 const applyStreamDeltaToCache = async (
   delta: ChainFeedStreamDelta,
   scope: EventFeedScope,
+  isClosed: () => boolean,
 ): Promise<boolean> => {
+  const generation = cacheGeneration;
   if (!feedDeltaMatchesPreHydrationScope(delta, scope)) return false;
 
   const eventFeedCache = createChainEventFeedCache();
@@ -1141,6 +1152,15 @@ const applyStreamDeltaToCache = async (
       `feed delta detail ${delta.feedId}`,
     );
   }
+
+  if (isClosed() || generation !== cacheGeneration) return false;
+  const current = cache.feedRecordsById.get(record.feedId);
+  if (
+    current?.streamSeq !== null &&
+    current?.streamSeq !== undefined &&
+    current.streamSeq > delta.streamSeq
+  )
+    return false;
 
   let event = record.event;
   const nextParticlesById = new Map<string, ParticleRecord>();
@@ -1214,11 +1234,13 @@ export const createParticlePostDataStream = (options?: {
   onError?: (error: Error) => void;
 }): ChainFeedStreamSubscription => {
   const scope = createEventFeedScope(options);
-  return createChainFeedStream({
+  let closed = false;
+  const subscription = createChainFeedStream({
     sinceSeq: cache.stream.lastSeq ?? 0,
     limit: normalizeFeedPageLimit(options?.feedPageLimit),
     onDelta: (delta) => {
-      void applyStreamDeltaToCache(delta, scope)
+      if (closed) return;
+      void applyStreamDeltaToCache(delta, scope, () => closed)
         .then((changed) => {
           if (changed) options?.onUpdate?.();
         })
@@ -1229,12 +1251,24 @@ export const createParticlePostDataStream = (options?: {
         });
     },
     onMeta: (meta) => {
+      if (closed) return;
       applyStreamMetaToCache(meta);
       options?.onMeta?.({ ...cache.stream });
       if (meta.staleSinceSeq) options?.onStale?.();
     },
-    onError: (error) => options?.onError?.(error),
+    onError: (error) => {
+      if (!closed) options?.onError?.(error);
+    },
   });
+  return {
+    get url() {
+      return subscription.url;
+    },
+    close: () => {
+      closed = true;
+      subscription.close();
+    },
+  };
 };
 
 export const getParticlePostFeedState = () => ({
@@ -1410,6 +1444,7 @@ export const doesParticlePostCacheMatchFeedScope = (
 };
 
 export const resetParticlePostDataCacheForDebug = () => {
+  cacheGeneration += 1;
   cache = emptyCache();
   loadPromise = null;
   loadPromiseKey = "";

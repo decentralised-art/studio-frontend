@@ -6,9 +6,8 @@ import {
   listStudioWorldPlugins,
   studioPluginFromWorldDescriptor,
   studioPluginIdForWorld,
-  TONE_WORLD_PLUGIN_ID,
 } from "../src/lib/studio/plugins/registry";
-import { FIRST_PARTY_WORLDS, MIDI_CLIP_WORLD_ID, TONE_WORLD } from "../src/lib/worlds/registry";
+import { TONE_WORLD } from "../src/lib/worlds/registry";
 import type { WorldDescriptor } from "../src/lib/worlds/types";
 
 const midiQuadFormatHash = "0xfb01a34414c7cfd27fe4658f53b5b39361da407b46848efac553fd2d8ad9b411";
@@ -42,29 +41,31 @@ const backendWorld: WorldDescriptor = {
 };
 
 describe("studio plugin registry", () => {
-  it("keeps the midi plugin available as an in-app Studio plugin", () => {
-    expect(listStudioPlugins().map((plugin) => plugin.id)).toContain("midi-clip-export-v1");
-    expect(listStudioPlugins().map((plugin) => plugin.id)).toContain("music-score-v1");
-    expect(listStudioPlugins().map((plugin) => plugin.id)).toContain(TONE_WORLD_PLUGIN_ID);
-    expect(FIRST_PARTY_WORLDS.map((world) => world.id)).toContain(MIDI_CLIP_WORLD_ID);
-    expect(TONE_WORLD.acceptedPluginIds).toContain(TONE_WORLD_PLUGIN_ID);
+  it("lists only current API Worlds and keeps retired built-ins out of the catalog", () => {
+    expect(listStudioPlugins()).toEqual([]);
+    expect(listStudioPlugins([backendWorld, TONE_WORLD]).map((plugin) => plugin.id)).toEqual([
+      "world:backend-world-1",
+    ]);
   });
 
-  it("matches music plugins by normalized format hash", () => {
+  it("matches the API World's normalized format hash", () => {
     expect(
-      listCompatibleStudioPlugins(midiQuadFormatHash.toUpperCase()).map((plugin) => plugin.id),
-    ).toEqual(["midi-clip-export-v1"]);
+      listCompatibleStudioPlugins(midiQuadFormatHash.toUpperCase(), [backendWorld]).map(
+        (plugin) => plugin.id,
+      ),
+    ).toEqual(["world:backend-world-1"]);
+    expect(listCompatibleStudioPlugins(fullScoreFormatHash, [backendWorld])).toEqual([]);
+    expect(listCompatibleStudioPlugins("0x1234", [backendWorld])).toEqual([]);
+    expect(listCompatibleStudioPlugins(null, [backendWorld])).toEqual([]);
   });
 
-  it("does not match old layered score template hashes for the Music Score plugin", () => {
-    expect(
-      listCompatibleStudioPlugins(fullScoreFormatHash.toUpperCase()).map((plugin) => plugin.id),
-    ).toEqual([]);
-  });
-
-  it("does not expose the midi plugin for unknown formats", () => {
-    expect(listCompatibleStudioPlugins("0x1234")).toEqual([]);
-    expect(listCompatibleStudioPlugins(null)).toEqual([]);
+  it("does not advertise deleted Worlds or Worlds without a Studio surface", () => {
+    const deleted = {
+      ...backendWorld,
+      backend: { ...backendWorld.backend!, status: "deleted" as const },
+    };
+    const galleryOnly = { ...backendWorld, surfaces: ["world-page" as const] };
+    expect(listStudioPlugins([deleted, galleryOnly])).toEqual([]);
   });
 
   it("adapts backend world descriptors into Studio plugin entries", () => {

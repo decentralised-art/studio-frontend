@@ -3,7 +3,7 @@
   import { afterNavigate, replaceState } from "$app/navigation";
   import { page } from "$app/state";
   import { resolve } from "$app/paths";
-  import { onMount, tick } from "svelte";
+  import { onMount, tick, untrack } from "svelte";
   import { loadWorldStudioStarter } from "$lib/worlds/studioStarter";
   import { SvelteMap, SvelteSet } from "svelte/reactivity";
 
@@ -214,6 +214,13 @@
   } from "$lib/studio/chainStudioAdapter";
   import { isPublishedChainAddress, isOwnedLocalEntity } from "$lib/studio/studioEntityOrigin";
   import { buildStudioLocalLibrary } from "$lib/studio/studioLocalCatalog";
+  import {
+    resolveStudioWorkspaceRoot,
+    resolveStudioWorkspaceCapabilities,
+    canRemoveStudioWorkspaceNode,
+    collectStudioWorkspaceRemovalIds,
+    collectStudioWorkspaceRootGraph,
+  } from "$lib/studio/workspaceState";
   import { fromProtocolConnectorPayload } from "$lib/chain/connectorContractAdapter";
   import {
     getCachedCurrentUserToolboxLibrary,
@@ -253,12 +260,13 @@
   } from "$lib/studio/plugins/runtime";
   import {
     listStudioPlugins,
-    listStudioWorldPlugins,
     studioPluginFromWorldDescriptor,
     type StudioPluginDescriptor,
   } from "$lib/studio/plugins/registry";
   import {
     describeStudioWorldPluginCompatibility,
+    isStudioWorldPluginAddable,
+    isStudioWorldPluginAutoAttachable,
     resolveStudioWorldConnectorSetMatch,
     studioWorldConnectorSetSelectionFromMatch,
     summarizeStudioWorldConnectorSets,
@@ -677,6 +685,8 @@
     label: string;
     particleId?: string;
     worldId?: string;
+    worldStarter?: boolean;
+    runRootId?: string;
   };
 
   type ConnectorTreeModel = {
@@ -688,6 +698,7 @@
   const tabGraphs = new SvelteMap<string, { nodes: StudioNode[]; edges: Edge[] }>();
   const connectorTreeModelsByTab = new SvelteMap<string, ConnectorTreeModel>();
   const tabViewports = new SvelteMap<string, Viewport>();
+  const initializedDraftTabs = new SvelteSet<string>();
 
   type QuickNodeKind =
     | "feature"
@@ -766,9 +777,8 @@
   let activeTabId = $state<string>(initialTab.id);
   let flowViewport = $state<Viewport>(normalizeStudioViewport(tabViewports.get(initialTab.id)));
   const activeTab = $derived.by(() => tabs.find((tab) => tab.id === activeTabId) ?? null);
-  const activeTabReadOnly = $derived.by(
-    () => Boolean(activeTab?.particleId) || Boolean(connectorTreeModelsByTab.get(activeTabId)),
-  );
+  // Workspace instances are editable; saved node definitions retain their own locks.
+  const activeTabReadOnly = $derived(!activeTab);
   const assistantKeyConfigured = $derived.by(() => assistantApiKey.trim().length > 0);
   const assistantActiveConversation = $derived.by(
     () =>
@@ -852,6 +862,7 @@
     });
 
     tabs = restored.tabs;
+    restored.tabs.forEach((tab) => initializedDraftTabs.add(tab.id));
     activeTabId = restored.activeTabId;
     loadTabGraph(activeTabId);
     return true;
@@ -1656,7 +1667,8 @@
         can_edit_flow: !activeTabReadOnly,
         can_add_connectors: !activeTabReadOnly,
         can_run: !chainRunBusy && !chainDeployBusy,
-        can_create: !activeTabReadOnly && !chainRunBusy && !chainDeployBusy && !chainSyncBusy,
+        can_create:
+          activeRootCapabilities.canCreate && !chainRunBusy && !chainDeployBusy && !chainSyncBusy,
         can_publish: activeRootIsLocal && !chainRunBusy && !chainDeployBusy,
         high_risk_tools_require_confirmation: [
           "publish_connector",
@@ -1666,11 +1678,7 @@
       },
       local_connector_catalog: localLibrary.feature.map((item) => item.name),
       network_connector_catalog: networkLibrary.feature
-        .filter(
-          (item) =>
-            isPublishedChainAddress(item.chainAddress) ||
-            networkFeedLibraryIds.feature.includes(item.id),
-        )
+        .filter((item) => isPublishedChainAddress(item.chainAddress))
         .map((item) => getLibraryRegistryName(item) || item.name)
         .filter((name, index, all) => name && all.indexOf(name) === index)
         .slice(0, 200),
@@ -1879,6 +1887,11 @@
         throw new Error("No connector links matched the disconnect request.");
       }
 
+      if (edgesToRemove.some((edge) => !canDeleteEdgeByPolicy(edge))) {
+        throw new Error(
+          "Saved connector definitions are immutable. Remove the instance or create a new connector to change its links.",
+        );
+      }
       const removeIds = new SvelteSet(edgesToRemove.map((edge) => edge.id));
       edges = edges.filter((edge) => !removeIds.has(edge.id));
       const affectedSources = new SvelteSet(edgesToRemove.map((edge) => edge.source));
@@ -2297,7 +2310,10 @@
         new URL(window.location.href).searchParams.get("world")?.trim() !== id
       )
         return;
-      if (!descriptor.surfaces.includes("studio-plugin")) {
+      if (
+        descriptor.backend?.status !== "active" ||
+        !descriptor.surfaces.includes("studio-plugin")
+      ) {
         throw new Error("This World is not available in Studio.");
       }
       const plugin = studioPluginFromWorldDescriptor(descriptor);
@@ -2314,7 +2330,7 @@
           !tab.particleId &&
           !isConnectorTreeTab(tab.id) &&
           (starter
-            ? tab.worldId === id
+            ? tab.worldId === id && tab.worldStarter !== false
             : tabGraphs
                 .get(tab.id)
                 ?.nodes.some(
@@ -2354,8 +2370,10 @@
         }
         const tab = {
           ...createStudioTab(descriptor.name),
-          ...(starter ? { worldId: descriptor.id } : {}),
+          worldId: descriptor.id,
+          worldStarter: Boolean(starter),
         };
+        initializedDraftTabs.add(tab.id);
         if (starter) {
           const graph = buildConnectorTreeGraph(
             starter.connector,
@@ -2407,7 +2425,7 @@
       saveActiveGraph();
       // World starters keep their URL so restored drafts can refresh their simulation.
       // Their persisted graph is reused, including user deletions and RI edits.
-      if (persistStudioTabsSession() && !activeTab?.worldId) {
+      if (persistStudioTabsSession() && !starter) {
         const url = new URL(window.location.href);
         url.searchParams.delete("world");
         // eslint-disable-next-line svelte/no-navigation-without-resolve -- This is the current Studio URL with only its launch parameter removed.
@@ -2693,7 +2711,11 @@
     }),
   );
   const localLibrary = $derived.by((): NetworkLibrary => {
-    const saved = buildStudioLocalLibrary(publicationRecords, currentStudioAuthorId);
+    const saved = buildStudioLocalLibrary(
+      publicationRecords,
+      currentStudioAuthorId,
+      deployedLibrary,
+    );
     const localItems = (kind: NetworkLibraryKind, fallback: LibraryItem[]) => {
       const mined = new Set(
         publicationRecords
@@ -2717,20 +2739,108 @@
       condition: localItems("condition", saved.conditions),
     };
   });
-  const activeRootName = $derived.by(() => resolveActiveExecuteConnectorName(nodes).trim());
-  const activeRootIsLocal = $derived.by(() =>
-    localLibrary.feature.some((item) => item.name === activeRootName),
+  const workspaceRoot = $derived.by(() =>
+    resolveStudioWorkspaceRoot({
+      nodes,
+      edges,
+      requestedRootId: activeTab?.runRootId,
+    }),
   );
-  const activeRootIsPublished = $derived.by(
-    () =>
-      isPublishedChainAddress(deployedRegistry.connectors[activeRootName]?.chainAddress) ||
-      networkFeedLibraryIds.feature.includes(`feature-${activeRootName}`) ||
-      publicationRecords.some(
-        (record) =>
-          record.kind === "connector" && record.name === activeRootName && record.stage === "mined",
-      ),
+  const activeRootNode = $derived(workspaceRoot.root);
+  const activeRootName = $derived.by(() =>
+    activeRootNode ? resolveNodeName(activeRootNode).trim() : "",
   );
-  const activeRootCanSimulate = $derived(activeRootIsLocal || activeRootIsPublished);
+  const activeRootCapabilities = $derived.by(() =>
+    resolveStudioWorkspaceCapabilities({
+      root: activeRootNode,
+      connector: deployedRegistry.connectors[activeRootName],
+      currentOwner: currentStudioAuthorId,
+    }),
+  );
+  const activeRootIsLocal = $derived(activeRootCapabilities.canPublish);
+  const activeRootIsPublished = $derived(activeRootCapabilities.canExecute);
+  const activeRootCanSimulate = $derived(activeRootCapabilities.canSimulate);
+
+  const chooseWorkspaceRoot = async (nodeId: string) => {
+    tabs = tabs.map((tab) =>
+      tab.id === activeTabId ? { ...tab, runRootId: nodeId || undefined } : tab,
+    );
+    ensureActiveDraftTabRootConnector();
+    const root = nodes.find((node) => node.id === nodeId);
+    if (root?.data.fromNetwork) await hydrateWorkspaceRoot(resolveNodeName(root));
+  };
+  const requestedWorkspaceRoots = new SvelteSet<string>();
+  const hydrateWorkspaceRoot = async (name: string) => {
+    const tabId = activeTabId;
+    const owner = getCurrentStudioAuthorId();
+    try {
+      await syncSingleChainParticle(name);
+      const result = await syncConnectorTreeFromChain(name);
+      if (owner !== getCurrentStudioAuthorId() || tabId !== activeTabId || activeRootName !== name)
+        return;
+      if (result.missing.includes(name))
+        chainSyncError = `Connector ${name} is unavailable. Open a published connector or one of your saved drafts.`;
+    } catch (error) {
+      if (owner === getCurrentStudioAuthorId() && tabId === activeTabId && activeRootName === name)
+        chainSyncError = error instanceof Error ? error.message : `Could not load ${name}.`;
+    }
+  };
+  $effect(() => {
+    const root = activeRootNode;
+    const owner = currentStudioAuthorId;
+    const tabId = activeTabId;
+    const name = activeRootName;
+    if (!root?.data.fromNetwork || deployedRegistry.connectors[name]) return;
+    untrack(() => {
+      const key = `${owner}:${tabId}:${root.id}:${name}`;
+      if (requestedWorkspaceRoots.has(key)) return;
+      requestedWorkspaceRoots.add(key);
+      void hydrateWorkspaceRoot(name);
+    });
+  });
+  const lastWorkspaceRoots = new SvelteMap<string, string>();
+  $effect(() => {
+    const key = `${activeRootNode?.id ?? ""}:${activeRootName}`;
+    if (key === lastWorkspaceRoots.get(activeTabId)) return;
+    const previous = lastWorkspaceRoots.get(activeTabId);
+    lastWorkspaceRoots.set(activeTabId, key);
+    if (previous === undefined) return;
+    untrack(() => {
+      runOutputByTab = { ...runOutputByTab, [activeTabId]: [] };
+      runWarningsByTab = { ...runWarningsByTab, [activeTabId]: [] };
+      runProvenanceByTab = { ...runProvenanceByTab, [activeTabId]: undefined };
+      chainRunMessageByTab = { ...chainRunMessageByTab, [activeTabId]: "" };
+      const omitActiveTab = <T,>(record: Record<string, T>) =>
+        Object.fromEntries(Object.entries(record).filter(([id]) => id !== activeTabId));
+      runModeByTab = omitActiveTab(runModeByTab);
+      runTimestampByTab = omitActiveTab(runTimestampByTab);
+      chainRunTimestampByTab = omitActiveTab(chainRunTimestampByTab);
+      if (!chainRunBusy && !chainDeployBusy) {
+        chainDeployError = null;
+        chainDeployStatus = null;
+      }
+      refreshPluginOutputs([]);
+    });
+  });
+  const getWorkspaceRootGraph = (graphNodes: StudioNode[] = nodes, graphEdges: Edge[] = edges) =>
+    collectStudioWorkspaceRootGraph({
+      nodes: graphNodes,
+      edges: graphEdges,
+      requestedRootId: activeTab?.runRootId,
+    });
+  const getWorkspaceRuntimeOptions = (
+    graphNodes: StudioNode[] = nodes,
+    graphEdges: Edge[] = edges,
+  ) => {
+    const selected = resolveStudioWorkspaceRoot({
+      nodes: graphNodes,
+      edges: graphEdges,
+      requestedRootId: activeTab?.runRootId,
+    }).root;
+    const name = selected ? resolveNodeName(selected) : (activeTab?.label ?? "Connector");
+    return { rootLabel: name, rootConnectorId: name, rootNodeId: selected?.id };
+  };
+
   const tutorialRoot = $derived(
     nodes.find((node) => isConnectorKind(node.data.kind) && node.data.tabRoot),
   );
@@ -2922,7 +3032,7 @@
     const nodeCount = nodes.length;
     const currentTab = activeTab;
     touchDeps(activeTabId, currentTab?.label, currentTab?.particleId, nodeCount);
-    if (!currentTab || currentTab.particleId || isConnectorTreeTab(activeTabId)) return;
+    if (!currentTab) return;
     ensureActiveDraftTabRootConnector();
   });
 
@@ -2974,6 +3084,10 @@
     if (tabRenameId !== tab.id) return;
     const next = tabRenameValue.trim();
     if (next) {
+      const root = nodes.find(
+        (node) => isConnectorKind(node.data.kind) && node.data.tabRoot && !node.data.fromNetwork,
+      );
+      if (root && tab.id === activeTabId) updateNodeData(root.id, { label: next });
       tabs = tabs.map((item) => (item.id === tab.id ? { ...item, label: next } : item));
       if (tab.id === activeTabId && !tab.particleId) {
         ensureActiveDraftTabRootConnector();
@@ -3727,7 +3841,7 @@
       const compiled = compileDraftTransformations(nodes);
       const runtime = buildStudioRuntime(
         { nodes, edges },
-        { rootLabel: activeTab?.label ?? "connector", rootParticleId: activeTab?.particleId },
+        getWorkspaceRuntimeOptions(),
         buildRuntimeOverrides(compiled.registry),
       );
       return runtime.registry.connectors[trimmed] ?? null;
@@ -4032,11 +4146,12 @@
       clearConfirmOpen = false;
       return;
     }
+    detachWorkspaceTreeModel();
+    initializedDraftTabs.add(activeTabId);
     nodes = [];
     edges = [];
     selectedNodeId = null;
     tabGraphs.set(activeTabId, { nodes: [], edges: [] });
-    ensureActiveDraftTabRootConnector();
     clearConfirmOpen = false;
   };
 
@@ -4382,9 +4497,11 @@
   }
 
   const syncSingleChainParticle = async (particleName: string) => {
+    const owner = getCurrentStudioAuthorId();
     const fetched = await fetchChainParticleForStudio(particleName, {
-      localOwnerAddress: getCurrentStudioAuthorId(),
+      localOwnerAddress: owner,
     });
+    if (owner !== getCurrentStudioAuthorId()) return false;
     const merged = mergeFetchedChainParticleIntoStudioState(
       getDeployedStudioState(),
       fetched,
@@ -4460,7 +4577,10 @@
     const name = connectorName.trim();
     if (!name) return;
     try {
-      const result = await withChainAuthRetry(() => syncConnectorTreeFromChain(name));
+      const result = await withChainAuthRetry(async () => {
+        await syncSingleChainParticle(name);
+        return syncConnectorTreeFromChain(name);
+      });
       if (
         !result.missing.includes(name) &&
         isPublishedChainAddress(deployedRegistry.connectors[name]?.chainAddress)
@@ -4480,11 +4600,13 @@
   ) => {
     const trimmedName = name.trim();
     if (!trimmedName) return false;
+    const owner = getCurrentStudioAuthorId();
     try {
       const payload =
         kind === "transformation"
           ? await getChainTransformation(trimmedName)
           : await getChainCondition(trimmedName);
+      if (owner !== getCurrentStudioAuthorId()) return false;
       applyDeployedStudioState(
         mergeToolboxRuntimePayloadsIntoStudioState(
           getDeployedStudioState(),
@@ -4578,6 +4700,8 @@
         includeUnfinalized: true,
       });
       applyStudioNetworkFeedLibraryDiscovery(discovery);
+      if (options.force && activeRootNode?.data.fromNetwork)
+        await hydrateWorkspaceRoot(activeRootName);
       refreshConnectorTreeTabs();
       studioNetworkLibraryLoaded = true;
       chainSyncStatus = buildStudioEventFeedSyncSummary(discovery);
@@ -4618,8 +4742,10 @@
         }
       });
     });
+    const referencedNames = collectReferencedTransformationNames(graphNodes);
     standaloneDraftTransformations.forEach((tx) => {
       const name = tx.name.trim();
+      if (!referencedNames.has(name)) return;
       if (!name) return;
       if (!sources.has(name)) {
         sources.set(name, { code: tx.code });
@@ -4655,11 +4781,12 @@
     if (!rootConnectorName)
       return { positionByNodeId, targetPositionByNodeId, staticByPosition, warnings };
 
+    const scopedGraph = getWorkspaceRootGraph(graphNodes, graphEdges);
     let runtime: ReturnType<typeof buildStudioRuntime>;
     try {
       runtime = buildStudioRuntime(
-        { nodes: graphNodes, edges: graphEdges },
-        { rootLabel: activeTab?.label ?? "Connector", rootParticleId: activeTab?.particleId },
+        scopedGraph,
+        getWorkspaceRuntimeOptions(scopedGraph.nodes, scopedGraph.edges),
       );
     } catch {
       return { positionByNodeId, targetPositionByNodeId, staticByPosition, warnings };
@@ -4676,7 +4803,7 @@
       return { positionByNodeId, targetPositionByNodeId, staticByPosition, warnings };
     }
 
-    const connectorNodes = graphNodes.filter((node) => isConnectorKind(node.data.kind));
+    const connectorNodes = scopedGraph.nodes.filter((node) => isConnectorKind(node.data.kind));
     if (!connectorNodes.length)
       return { positionByNodeId, targetPositionByNodeId, staticByPosition, warnings };
 
@@ -4689,7 +4816,7 @@
         connectorName: resolveNodeName(node),
         tabRoot: Boolean(node.data.tabRoot),
       })),
-      graphEdges: graphEdges.map((edge) => ({
+      graphEdges: scopedGraph.edges.map((edge) => ({
         source: edge.source ?? "",
         target: edge.target ?? "",
         sourceHandle: edge.sourceHandle ?? "",
@@ -5051,6 +5178,15 @@
     };
   };
 
+  const collectReferencedTransformationNames = (graphNodes: StudioNode[]) =>
+    new Set(
+      graphNodes.flatMap((node) =>
+        node.data.kind === "dimension"
+          ? (node.data.transformations ?? []).map((transformation) => transformation.name.trim())
+          : [],
+      ),
+    );
+
   const collectDraftTransformations = (graphNodes: StudioNode[]) => {
     const draft: TransformationInstance[] = [];
     graphNodes.forEach((node) => {
@@ -5059,7 +5195,9 @@
         if (transformation.status === "draft") draft.push(transformation);
       });
     });
+    const referencedNames = collectReferencedTransformationNames(graphNodes);
     standaloneDraftTransformations.forEach((tx) => {
+      if (!referencedNames.has(tx.name.trim())) return;
       draft.push({
         id: tx.id,
         name: tx.name,
@@ -5152,41 +5290,16 @@
   };
 
   const resolveActiveExecuteConnectorName = (graphNodes: StudioNode[] = nodes): string => {
-    if (!activeTab) return "";
-    if (isConnectorTreeTab(activeTabId)) {
-      const treeRoot = connectorTreeModelsByTab.get(activeTabId)?.rootConnectorName?.trim();
-      if (treeRoot) return treeRoot;
-    }
-
-    const fromTab = activeTab.particleId?.trim();
-    if (fromTab) return fromTab;
-
-    const rootNode =
-      graphNodes.find(
-        (node) => isConnectorKind(node.data.kind) && node.data.definitionRole === "root",
-      ) ??
-      graphNodes.find((node) => isConnectorKind(node.data.kind) && Boolean(node.data.tabRoot)) ??
-      graphNodes.find((node) => isConnectorKind(node.data.kind));
-    return rootNode ? resolveNodeName(rootNode).trim() : "";
+    const selection = resolveStudioWorkspaceRoot({
+      nodes: graphNodes,
+      edges,
+      requestedRootId: activeTab?.runRootId,
+    });
+    return selection.root ? resolveNodeName(selection.root).trim() : "";
   };
 
-  const resolveActiveTabRootConnectorName = (graphNodes: StudioNode[] = nodes): string => {
-    if (!activeTab) return "";
-    if (isConnectorTreeTab(activeTabId)) {
-      const treeRoot = connectorTreeModelsByTab.get(activeTabId)?.rootConnectorName?.trim();
-      if (treeRoot) return treeRoot;
-    }
-
-    // Plugin discovery is strictly tab-root based: no fallback to arbitrary connector nodes.
-    const rootNode =
-      graphNodes.find(
-        (node) => isConnectorKind(node.data.kind) && node.data.definitionRole === "root",
-      ) ?? graphNodes.find((node) => isConnectorKind(node.data.kind) && Boolean(node.data.tabRoot));
-    const rootName = rootNode ? resolveNodeName(rootNode).trim() : "";
-    if (rootName) return rootName;
-
-    return activeTab.particleId?.trim() ?? "";
-  };
+  const resolveActiveTabRootConnectorName = (graphNodes: StudioNode[] = nodes): string =>
+    resolveActiveExecuteConnectorName(graphNodes);
 
   const buildEmptyExecuteRequestBody = (particlesCount: number): ChainExecutePayload => ({
     connector_name: "",
@@ -5213,13 +5326,11 @@
     }
 
     try {
+      const scopedGraph = getWorkspaceRootGraph(graphNodes, graphEdges);
       const runtime = buildStudioRuntime(
-        { nodes: graphNodes, edges: graphEdges },
-        {
-          rootLabel: activeTab?.label ?? "Connector",
-          rootParticleId: activeTab?.particleId ?? connectorName,
-        },
-        buildRuntimeOverrides({}, graphNodes),
+        scopedGraph,
+        getWorkspaceRuntimeOptions(scopedGraph.nodes, scopedGraph.edges),
+        buildRuntimeOverrides({}, scopedGraph.nodes),
       );
 
       const planConnectors = buildExecutePlanConnectorRegistry({
@@ -5240,7 +5351,7 @@
       }
 
       const projectionPlan = buildExecuteRiPlan(planConnectors, connectorName, {});
-      const connectorNodes = graphNodes.filter((node) => isConnectorKind(node.data.kind));
+      const connectorNodes = scopedGraph.nodes.filter((node) => isConnectorKind(node.data.kind));
       const projection = connectorNodes.length
         ? projectRiPositionsToConnectorNodes({
             rootConnectorName: connectorName,
@@ -5251,7 +5362,7 @@
               connectorName: resolveNodeName(node),
               tabRoot: Boolean(node.data.tabRoot),
             })),
-            graphEdges: graphEdges.map((edge) => ({
+            graphEdges: scopedGraph.edges.map((edge) => ({
               source: edge.source ?? "",
               target: edge.target ?? "",
               sourceHandle: edge.sourceHandle ?? "",
@@ -5266,7 +5377,10 @@
         projection.positionByNodeId,
         projection.targetPositionByNodeId,
       );
-      const dynamicOverrides = collectExecuteNodeOverrides(positionedNodes);
+      const scopedNodeIds = new Set(scopedGraph.nodes.map((node) => node.id));
+      const dynamicOverrides = collectExecuteNodeOverrides(
+        positionedNodes.filter((node) => scopedNodeIds.has(node.id)),
+      );
       const riPlan = buildExecuteRiPlanFromPositioning(
         planConnectors,
         projectionPlan.positioning,
@@ -5367,16 +5481,15 @@
       .map((node) => ({ id: node.id, name: resolveNodeName(node) }))
       .filter((target) => target.name.trim()),
   );
-  const allStudioPlugins = $derived.by<StudioPluginDescriptor[]>(() => [
-    ...listStudioPlugins(),
-    ...listStudioWorldPlugins(studioBackendWorlds),
-  ]);
+  const allStudioPlugins = $derived.by<StudioPluginDescriptor[]>(() =>
+    listStudioPlugins(studioBackendWorlds),
+  );
   const pluginSourceInfoMessage = $derived.by(() => {
     if (!activePluginSourceRootConnectorName) {
-      return "No root connector selected in this tab.";
+      return "Add a World, then connect a connector to display its simulation or execution.";
     }
     if (!activePluginSourceRootConnector) {
-      return "Worlds are available only for deployed connectors. Deploy this connector first.";
+      return "You can add a World now. Save the connector locally before simulating its output.";
     }
     if (!activePluginSourceFormatHash) {
       return "This connector has no normalized format hash. Connector-set backend worlds can still attach by slot.";
@@ -5392,7 +5505,7 @@
     });
   const isStudioPluginAttachable = (
     compatibility: ReturnType<typeof getStudioPluginCompatibility>,
-  ): boolean => compatibility.kind !== "partial" && compatibility.kind !== "unavailable";
+  ): boolean => isStudioWorldPluginAutoAttachable(compatibility);
   const getStudioPluginConnectorSetSummary = (plugin: StudioPluginDescriptor) =>
     summarizeStudioWorldConnectorSets(plugin.acceptedConnectorSets);
   const resolvePluginAttachSourceNode = (): StudioNode | null => {
@@ -5599,7 +5712,11 @@
     pluginAttachStatus = null;
     pluginAttachError = null;
 
-    if (resolvePluginAttachSourceNode()) {
+    if (!isStudioWorldPluginAddable(plugin)) return;
+    if (
+      resolvePluginAttachSourceNode() &&
+      isStudioPluginAttachable(getStudioPluginCompatibility(plugin))
+    ) {
       attachStudioPluginToRoot(plugin, options);
       return;
     }
@@ -5722,9 +5839,23 @@
     }
   }
 
+  let activeRunRequestId = 0;
   const executeActiveGraph = async (mode: "execute" | "simulate" = "execute") => {
     if (!activeTab || chainRunBusy || chainDeployBusy) return;
     const runTabId = activeTabId;
+    const runRequestId = ++activeRunRequestId;
+    const runOwner = getCurrentStudioAuthorId();
+    const runRootId = activeRootNode?.id;
+    const runRootName = activeRootName;
+    let runSignature = "";
+    const isRunCurrent = () =>
+      runRequestId === activeRunRequestId &&
+      runTabId === activeTabId &&
+      runOwner === getCurrentStudioAuthorId() &&
+      runRootId === activeRootNode?.id &&
+      runRootName === activeRootName &&
+      (!runSignature ||
+        JSON.stringify(prepareExecuteRequest(nodes, edges).requestBody) === runSignature);
     const runStartedAt = performance.now();
     const timings = emptyStudioRunTimings();
     chainRunBusy = true;
@@ -5771,6 +5902,7 @@
         return;
       }
 
+      runSignature = JSON.stringify(requestPreview.requestBody);
       chainDeployStatus =
         mode === "simulate"
           ? "Simulating connector on the server (no chain transaction)..."
@@ -5780,6 +5912,10 @@
           ? postChainSimulateDetailed(requestPreview.requestBody)
           : postChainExecuteDetailed(requestPreview.requestBody),
       );
+      if (!isRunCurrent()) {
+        runStatus = "blocked";
+        return;
+      }
       runModeByTab = { ...runModeByTab, [runTabId]: mode };
       runProvenanceByTab = {
         ...runProvenanceByTab,
@@ -5812,6 +5948,10 @@
           ? "Simulation completed on the server (no chain transaction)."
           : `Chain execution completed at block ${!Array.isArray(result.body) ? result.body.block_number : ""}.`;
     } catch (error) {
+      if (!isRunCurrent()) {
+        runStatus = "blocked";
+        return;
+      }
       runStatus = "failed";
       const err = extractExecuteErrorDetail(error);
       let responseOnly = "";
@@ -5835,45 +5975,97 @@
       output = [];
       runProvenanceByTab = { ...runProvenanceByTab, [runTabId]: undefined };
     } finally {
-      measureStudioRunStep(timings, "store", () => {
-        runOutputByTab = { ...runOutputByTab, [runTabId]: output };
-        runWarningsByTab = { ...runWarningsByTab, [runTabId]: warnings };
-        runTimestampByTab = { ...runTimestampByTab, [runTabId]: Date.now() };
-      });
-      measureStudioRunStep(timings, "plugins", () => {
-        if (activeTabId === runTabId) refreshPluginOutputs(output);
-      });
+      if (isRunCurrent()) {
+        measureStudioRunStep(timings, "store", () => {
+          runOutputByTab = { ...runOutputByTab, [runTabId]: output };
+          runWarningsByTab = { ...runWarningsByTab, [runTabId]: warnings };
+          runTimestampByTab = { ...runTimestampByTab, [runTabId]: Date.now() };
+        });
+        measureStudioRunStep(timings, "plugins", () => {
+          if (activeTabId === runTabId) refreshPluginOutputs(output);
+        });
+      } else if (runRequestId === activeRunRequestId && runOwner === getCurrentStudioAuthorId()) {
+        chainDeployStatus = "Workspace changed; the previous run result was discarded.";
+      }
       logStudioRunTiming(runStatus, timings, performance.now() - runStartedAt);
-      chainRunBusy = false;
+      if (runRequestId === activeRunRequestId) chainRunBusy = false;
     }
   };
 
+  const workspaceDefinitionSignature = () =>
+    JSON.stringify({
+      root: activeRootNode?.id,
+      nodes: getWorkspaceRootGraph().nodes.map(({ id, data }) => ({
+        id,
+        kind: data.kind,
+        label: data.label,
+        networkId: data.networkId,
+        dimensions: data.dimensions,
+        parentFeatureId: data.parentFeatureId,
+        dimensionIndex: data.dimensionIndex,
+        transformations: data.transformations,
+        staticRi: data.staticRi,
+        riLocked: data.riLocked,
+        riStart: data.riStart,
+        riShift: data.riShift,
+        conditionArgs: data.conditionArgs,
+      })),
+      edges: getWorkspaceRootGraph().edges.map(
+        ({ id, source, target, sourceHandle, targetHandle, data }) => ({
+          id,
+          source,
+          target,
+          sourceHandle,
+          targetHandle,
+          data,
+        }),
+      ),
+    });
+
   const deployActiveGraph = async () => {
-    if (!activeTab || activeTabReadOnly || chainDeployBusy || chainRunBusy) return;
+    if (!activeTab || !activeRootCapabilities.canCreate || chainDeployBusy || chainRunBusy) return;
     chainDeployBusy = true;
     const creationTabId = activeTabId;
+    const creationRootId = activeRootNode?.id;
+    let creationOwner = getCurrentStudioAuthorId();
     try {
       chainDeployError = null;
       chainDeployStatus = "Creating on the simulation server...";
       await ensureChainAuthForStudio();
-      const creationOwner = getCurrentStudioAuthorId();
-      for (const node of nodes.filter(
+      creationOwner = getCurrentStudioAuthorId();
+      const initialGraph = getWorkspaceRootGraph();
+      for (const node of initialGraph.nodes.filter(
         (node) => isConnectorKind(node.data.kind) && node.data.fromNetwork,
       )) {
         await syncConnectorTreeFromChain(resolveNodeName(node));
       }
-      await hydrateMissingAttachedNetworkConditions(nodes, edges);
+      await hydrateMissingAttachedNetworkConditions(initialGraph.nodes, initialGraph.edges);
       if (creationOwner !== getCurrentStudioAuthorId())
         throw new Error("Account changed before local creation.");
-      if (activeTabId !== creationTabId) throw new Error("Studio tab changed before creation.");
+      if (activeTabId !== creationTabId || activeRootNode?.id !== creationRootId)
+        throw new Error("Workspace changed before creation.");
       nodes = materializeLockedReferencedRiAsRootStatic(
         applyComputedRiPositionsToGraphNodes(nodes, edges),
       );
-      const compiled = compileDraftTransformations(nodes);
+      const creationGraph = getWorkspaceRootGraph();
+      const compiled = compileDraftTransformations(creationGraph.nodes);
       if (compiled.warnings.length) throw new Error(compiled.warnings.join(" "));
-      const plan = buildDeployPlanForGraph(nodes, edges, compiled.registry);
+      const plan = buildDeployPlanForGraph(
+        creationGraph.nodes,
+        creationGraph.edges,
+        compiled.registry,
+      );
       if (!plan.ok) throw new Error(plan.errors.join(" "));
+      const creationSignature = workspaceDefinitionSignature();
       for (const step of plan.steps) {
+        if (
+          creationOwner !== getCurrentStudioAuthorId() ||
+          activeTabId !== creationTabId ||
+          workspaceDefinitionSignature() !== creationSignature
+        )
+          throw new Error(
+            "Workspace or account changed during creation. Completed drafts remain saved in LOCAL.",
+          );
         chainDeployStatus = `Creating local ${step.kind} '${step.name}'...`;
         await createEntityLocally(step.kind, step.name, step.body, (tracer) =>
           createDeployStepDraft(step, tracer),
@@ -5886,12 +6078,70 @@
       }
       if (creationOwner !== getCurrentStudioAuthorId())
         throw new Error("Account changed after local creation.");
-      if (activeTabId === creationTabId && plan.rootConnectorName) {
-        saveActiveGraph();
-        tabs = tabs.map((tab) =>
-          tab.id === creationTabId ? { ...tab, particleId: plan.rootConnectorName! } : tab,
+      const workspaceUnchanged =
+        activeTabId === creationTabId &&
+        activeRootNode?.id === creationRootId &&
+        workspaceDefinitionSignature() === creationSignature;
+      if (workspaceUnchanged && plan.rootConnectorName) {
+        // Saving a definition does not replace its workspace instances or links.
+        const createdNames = (kind: EntityKind) =>
+          new Set(plan.steps.filter((step) => step.kind === kind).map((step) => step.name));
+        const connectors = createdNames("connector");
+        const conditions = createdNames("condition");
+        const createdInstanceIds = new Set(creationGraph.nodes.map((node) => node.id));
+        const savedConnectorIds = new Set(
+          nodes
+            .filter(
+              (node) =>
+                createdInstanceIds.has(node.id) &&
+                isConnectorKind(node.data.kind) &&
+                connectors.has(resolveNodeName(node)),
+            )
+            .map((node) => node.id),
         );
-        await ensureConnectorTreeTabGraph(creationTabId, plan.rootConnectorName);
+        nodes = nodes.map((node) => {
+          const name = resolveNodeName(node);
+          if (
+            createdInstanceIds.has(node.id) &&
+            ((isConnectorKind(node.data.kind) && connectors.has(name)) ||
+              (node.data.kind === "condition" && conditions.has(name)))
+          )
+            return {
+              ...node,
+              data: {
+                ...node.data,
+                fromNetwork: true,
+                networkId: name,
+                sourceId: `${node.data.kind === "condition" ? "condition" : "feature"}-${name}`,
+              },
+            };
+          if (
+            node.data.kind === "dimension" &&
+            (savedConnectorIds.has(node.data.parentFeatureId ?? "") ||
+              edges.some((edge) => edge.target === node.id && savedConnectorIds.has(edge.source)))
+          )
+            return {
+              ...node,
+              data: {
+                ...node.data,
+                fromNetwork: true,
+                transformations: node.data.transformations?.map((transformation) =>
+                  typeof transformation === "string"
+                    ? transformation
+                    : { ...transformation, status: "network" as const },
+                ),
+              },
+            };
+          return node;
+        });
+        connectorTreeModelsByTab.delete(creationTabId);
+        tabs = tabs.map((tab) =>
+          tab.id === creationTabId
+            ? { ...tab, particleId: undefined, runRootId: creationRootId }
+            : tab,
+        );
+        syncAllConnectorRowPreviews({ schedule: false });
+        saveActiveGraph();
       }
       standaloneDraftTransformations = standaloneDraftTransformations.filter(
         (item) =>
@@ -5899,8 +6149,9 @@
       );
       deployTimestampByTab = { ...deployTimestampByTab, [creationTabId]: Date.now() };
       explorerSource = "local";
-      chainDeployStatus =
-        "Created locally. Simulate on the server, or publish to the network when ready.";
+      chainDeployStatus = workspaceUnchanged
+        ? "Created locally. Simulate on the server, or publish to the network when ready."
+        : "Created locally. The workspace changed, so its current contents were preserved.";
       persistStudioTabsSession();
     } catch (error) {
       chainDeployError = error instanceof Error ? error.message : "Local creation failed.";
@@ -6283,8 +6534,11 @@
   };
 
   const ensureEditableTabForInsertion = () => {
-    if (!activeTabReadOnly) return;
-    createEmptyTab();
+    if (!activeTab) {
+      createEmptyTab();
+      return;
+    }
+    if (connectorTreeModelsByTab.has(activeTabId)) detachWorkspaceTreeModel();
   };
 
   const closeTab = (tabId: string) => {
@@ -6323,10 +6577,7 @@
       const compiled = compileDraftTransformations(nodes);
       const runtime = buildStudioRuntime(
         { nodes, edges },
-        {
-          rootLabel: activeTab?.label ?? "Connector",
-          rootParticleId: activeTab?.particleId ?? trimmed,
-        },
+        getWorkspaceRuntimeOptions(),
         buildRuntimeOverrides(compiled.registry),
       );
       if (runtime.registry.connectors[trimmed]) {
@@ -6406,7 +6657,7 @@
       const result = await withChainAuthRetry(() => syncConnectorTreeFromChain(connectorName));
       if (result.missing.includes(connectorName)) {
         chainSyncStatus = null;
-        chainSyncError = `Connector ${connectorName} was not found in chain registry.`;
+        chainSyncError = `Connector ${connectorName} is unavailable. Open a published connector or a draft owned by the signed-in account.`;
         return false;
       }
       graph = buildConnectorTreeGraph(connectorName, { x: 360, y: 120 });
@@ -6522,6 +6773,7 @@
     if (trimmed === node.data.label) return;
 
     if (isConnectorKind(node.data.kind) && node.data.tabRoot) {
+      updateNodeData(node.id, { label: trimmed });
       tabs = tabs.map((tab) => (tab.id === activeTabId ? { ...tab, label: trimmed } : tab));
       ensureActiveDraftTabRootConnector();
       return;
@@ -6943,33 +7195,46 @@
 
   const ensureActiveDraftTabRootConnector = () => {
     const tab = tabs.find((candidate) => candidate.id === activeTabId) ?? null;
-    if (!tab || tab.particleId || isConnectorTreeTab(activeTabId)) return;
+    if (!tab) return;
 
     let nextNodes = [...nodes];
     let nextEdges = [...edges];
     let changed = false;
 
-    const connectorNodes = nextNodes.filter((node) => isConnectorKind(node.data.kind));
-    let rootNode =
-      connectorNodes.find((node) => Boolean(node.data.tabRoot)) ??
-      connectorNodes.find((node) => normalizeKey(node.data.label) === normalizeKey(tab.label)) ??
-      null;
-
-    if (!rootNode && tab.worldId) rootNode = connectorNodes[0] ?? null;
-    if (!rootNode && tab.worldId) return;
-    if (!rootNode) {
+    const selection = resolveStudioWorkspaceRoot({
+      nodes: nextNodes,
+      edges: nextEdges,
+      requestedRootId: tab.runRootId,
+    });
+    let rootNode = selection.root;
+    if (!rootNode && !initializedDraftTabs.has(tab.id) && !tab.worldId && !tab.particleId) {
       rootNode = createDraftTabRootConnectorNode(tab);
       nextNodes = [...nextNodes, rootNode];
       changed = true;
     }
+    initializedDraftTabs.add(tab.id);
+    if (!rootNode) return;
+    if (tab.particleId && resolveNodeName(rootNode) !== tab.particleId) {
+      connectorTreeModelsByTab.delete(tab.id);
+      tabs = tabs.map((item) => (item.id === tab.id ? { ...item, particleId: undefined } : item));
+    }
 
     const rootId = rootNode.id;
+    nextEdges = nextEdges.map((edge) => {
+      const source = nextNodes.find((node) => node.id === edge.source);
+      const target = nextNodes.find((node) => node.id === edge.target);
+      if (source?.data.kind !== "plugin" || !target || !isConnectorKind(target.data.kind))
+        return edge;
+      const handle = target.id === rootId ? "plugin-in" : "in";
+      if (edge.targetHandle === handle) return edge;
+      changed = true;
+      return { ...edge, targetHandle: handle };
+    });
     nextNodes = nextNodes.map((node) => {
       if (!isConnectorKind(node.data.kind)) return node;
       const shouldBeRoot = node.id === rootId;
       const keepDeployedRootIdentity = shouldBeRoot && Boolean(node.data.fromNetwork);
-      const nextLabel =
-        shouldBeRoot && !keepDeployedRootIdentity && !tab.worldId ? tab.label : node.data.label;
+      const nextLabel = node.data.label;
       const nextFromNetwork = shouldBeRoot
         ? keepDeployedRootIdentity
           ? node.data.fromNetwork
@@ -7013,6 +7278,13 @@
       return;
     }
 
+    if (refreshedRoot.data.fromNetwork) {
+      if (changed) {
+        nodes = nextNodes;
+        edges = nextEdges;
+      }
+      return;
+    }
     const rootDimensionCount = Math.max(1, Math.round(refreshedRoot.data.dimensions ?? 1));
     const existingDimensions = nextNodes.filter(
       (node) => node.data.kind === "dimension" && node.data.parentFeatureId === rootId,
@@ -7182,10 +7454,7 @@
     const source: LibraryItem[] = networkLibrary[kind] ?? [];
 
     if (explorerSource === "local") return localLibrary[kind];
-    const publishedSource = source.filter(
-      (item) =>
-        isPublishedChainAddress(item.chainAddress) || networkFeedLibraryIds[kind].includes(item.id),
-    );
+    const publishedSource = source.filter((item) => isPublishedChainAddress(item.chainAddress));
     if (explorerSource === "toolbox") {
       return listToolboxLibraryItemsForKind({
         kind,
@@ -7294,7 +7563,7 @@
     particle: ExploreParticle,
     position: { x: number; y: number } | null = null,
   ) => {
-    if (activeTabReadOnly) return;
+    ensureEditableTabForInsertion();
     const nodePosition = position ?? {
       x: 120 + Math.round(Math.random() * 200),
       y: 120 + Math.round(Math.random() * 200),
@@ -7463,7 +7732,7 @@
     item: LibraryItem,
     position: { x: number; y: number } | null = null,
   ) => {
-    if (activeTabReadOnly) return;
+    ensureEditableTabForInsertion();
     if (item.kind === "transformation") {
       addTransformationToSelectedDimension(getLibraryTransformationName(item), "network");
       return;
@@ -7552,7 +7821,7 @@
     label: string,
     position: { x: number; y: number } | null = null,
   ) => {
-    if (activeTabReadOnly) return;
+    ensureEditableTabForInsertion();
     if (kind === "transformation") {
       addTransformationToSelectedDimension(label);
       return;
@@ -7801,13 +8070,12 @@
     }
   };
 
-  const canDeleteNodeByPolicy = (node: StudioNode): boolean => {
-    if (node.data.kind === "plugin") return true;
-    if (activeTabReadOnly) return false;
-    return (
-      Boolean(activeTab?.worldId) ||
-      !(isConnectorKind(node.data.kind) && Boolean(node.data.tabRoot))
-    );
+  const canDeleteNodeByPolicy = (node: StudioNode): boolean =>
+    canRemoveStudioWorkspaceNode({ node, nodes, edges });
+
+  const detachWorkspaceTreeModel = () => {
+    connectorTreeModelsByTab.delete(activeTabId);
+    tabs = tabs.map((tab) => (tab.id === activeTabId ? { ...tab, particleId: undefined } : tab));
   };
 
   const canDeleteEdgeByPolicy = (edge: Edge): boolean => {
@@ -7815,7 +8083,8 @@
     const targetNode = edge.target ? nodesById[edge.target] : null;
     if (sourceNode?.data.kind === "plugin" || targetNode?.data.kind === "plugin") return true;
     if (activeTabReadOnly) return false;
-    return true;
+    if (sourceNode?.data.kind === "condition") return !targetNode?.data.fromNetwork;
+    return !sourceNode?.data.fromNetwork;
   };
 
   const removeEdgeById = (edgeId: string): boolean => {
@@ -7838,16 +8107,9 @@
     const node = nodesById[nodeId];
     if (!node || !canDeleteNodeByPolicy(node)) return false;
 
-    const removeIds = new SvelteSet<string>([nodeId]);
-    if (isConnectorKind(node.data.kind)) {
-      nodes
-        .filter((candidate) => candidate.data.kind === "dimension")
-        .forEach((dimensionNode) => {
-          if (dimensionNode.data.parentFeatureId === nodeId) {
-            removeIds.add(dimensionNode.id);
-          }
-        });
-    }
+    const removeIds = collectStudioWorkspaceRemovalIds({ nodeIds: [nodeId], nodes, edges });
+    if (connectorTreeModelsByTab.get(activeTabId)?.nodes.some((item) => removeIds.has(item.id)))
+      detachWorkspaceTreeModel();
 
     const edgesToRemove = edges.filter(
       (edge) => removeIds.has(edge.source) || removeIds.has(edge.target),
@@ -8026,37 +8288,23 @@
     nodes: StudioNode[];
     edges: Edge[];
   }) => {
-    if (!activeTabReadOnly) {
-      if (activeTab?.worldId) return { nodes: toDelete, edges: toDeleteEdges };
-      const rootConnectorId =
-        nodes.find((node) => isConnectorKind(node.data.kind) && Boolean(node.data.tabRoot))?.id ??
-        null;
-      if (!rootConnectorId) return { nodes: toDelete, edges: toDeleteEdges };
-
-      const blockedNodeIds = new SvelteSet<string>([rootConnectorId]);
-      const allowedNodes = toDelete.filter((node) => !blockedNodeIds.has(node.id));
-      const rootSelected = toDelete.some((node) => node.id === rootConnectorId);
-      const allowedEdges = rootSelected
-        ? toDeleteEdges.filter(
-            (edge) => !blockedNodeIds.has(edge.source) && !blockedNodeIds.has(edge.target),
-          )
-        : toDeleteEdges;
-      if (!allowedNodes.length && !allowedEdges.length) return false;
-      return { nodes: allowedNodes, edges: allowedEdges };
-    }
-    const pluginNodeIds = new SvelteSet(
-      toDelete.filter((node) => node.data.kind === "plugin").map((node) => node.id),
-    );
-    const pluginEdges = toDeleteEdges.filter((edge) => {
-      const sourceIsPlugin =
-        pluginNodeIds.has(edge.source) || nodesById[edge.source]?.data.kind === "plugin";
-      const targetIsPlugin =
-        pluginNodeIds.has(edge.target) || nodesById[edge.target]?.data.kind === "plugin";
-      return sourceIsPlugin || targetIsPlugin;
+    const removeIds = collectStudioWorkspaceRemovalIds({
+      nodeIds: toDelete.map((node) => node.id),
+      nodes,
+      edges,
     });
-    const pluginNodes = toDelete.filter((node) => node.data.kind === "plugin");
-    if (!pluginNodes.length && !pluginEdges.length) return false;
-    return { nodes: pluginNodes, edges: pluginEdges };
+    if (connectorTreeModelsByTab.get(activeTabId)?.nodes.some((node) => removeIds.has(node.id)))
+      detachWorkspaceTreeModel();
+    const allowedNodes = nodes.filter((node) => removeIds.has(node.id));
+    const requestedEdges = new SvelteSet(toDeleteEdges.map((edge) => edge.id));
+    const allowedEdges = edges.filter(
+      (edge) =>
+        removeIds.has(edge.source) ||
+        removeIds.has(edge.target) ||
+        (requestedEdges.has(edge.id) && canDeleteEdgeByPolicy(edge)),
+    );
+    if (!allowedNodes.length && !allowedEdges.length) return false;
+    return { nodes: allowedNodes, edges: allowedEdges };
   };
 
   const parseDimensionHandle = (handle?: string | null) => {
@@ -8132,20 +8380,21 @@
     }
 
     if (isConnectorKind(sourceNode.data.kind) && targetNode.data.kind === "particle") {
+      if (sourceNode.data.fromNetwork) return false;
       const dimensionIndex = parseDimensionHandle(connection.sourceHandle);
       if (dimensionIndex === null) return false;
       return connection.targetHandle === "in";
     }
 
     if (isConnectorKind(sourceNode.data.kind) && isConnectorKind(targetNode.data.kind)) {
-      if (sourceNode.id === targetNode.id) return false;
+      if (sourceNode.data.fromNetwork || sourceNode.id === targetNode.id) return false;
       const dimensionIndex = parseDimensionHandle(connection.sourceHandle);
       if (dimensionIndex === null) return false;
       return connection.targetHandle === "in";
     }
 
     if (sourceNode.data.kind === "condition" && isConnectorKind(targetNode.data.kind)) {
-      if (connection.sourceHandle !== "out") return false;
+      if (targetNode.data.fromNetwork || connection.sourceHandle !== "out") return false;
       const targetHandle = connection.targetHandle ?? "in";
       return targetHandle === "in" || targetHandle === "condition";
     }
@@ -8155,7 +8404,11 @@
         sourceNode.data.worldDescriptor?.acceptedConnectorSets?.length,
       );
       if (connection.sourceHandle !== "out") return false;
-      if (targetNode.data.tabRoot) return connection.targetHandle === "plugin-in";
+      const isWorkspaceRoot = resolveStudioWorkspaceRoot({ nodes, edges }).candidates.some(
+        (node) => node.id === targetNode.id,
+      );
+      if (isWorkspaceRoot)
+        return connection.targetHandle === "plugin-in" || connection.targetHandle === "in";
       return pluginAcceptsConnectorSetTargets && connection.targetHandle === "in";
     }
 
@@ -8390,10 +8643,11 @@
   };
 
   const buildChainDeployPlanPreview = () => {
-    const compiled = compileDraftTransformations(nodes);
     const positionedNodes = applyComputedRiPositionsToGraphNodes(nodes, edges);
     const previewNodes = materializeLockedReferencedRiAsRootStatic(positionedNodes);
-    return buildDeployPlanForGraph(previewNodes, edges, compiled.registry).preview;
+    const graph = getWorkspaceRootGraph(previewNodes, edges);
+    const compiled = compileDraftTransformations(graph.nodes);
+    return buildDeployPlanForGraph(graph.nodes, graph.edges, compiled.registry).preview;
   };
 
   const chainDeployPlanPreview = $derived.by(() => buildChainDeployPlanPreview());
@@ -9023,7 +9277,7 @@
               <div class="plugins-list">
                 {#each allStudioPlugins as plugin (plugin.id)}
                   {@const pluginCompatibility = getStudioPluginCompatibility(plugin)}
-                  {@const pluginCanAttach = isStudioPluginAttachable(pluginCompatibility)}
+                  {@const pluginCanAttach = isStudioWorldPluginAddable(plugin)}
                   {@const connectorSetSummary = getStudioPluginConnectorSetSummary(plugin)}
                   <article
                     class={`plugin-card is-${pluginCompatibility.kind}`}
@@ -9121,7 +9375,7 @@
         minZoom={STUDIO_FLOW_MIN_ZOOM}
         nodesDraggable
         nodesConnectable
-        deleteKey={activeTabReadOnly ? null : ["Backspace", "Delete"]}
+        deleteKey={["Backspace", "Delete"]}
         selectionKey={["Meta", "Control"]}
         multiSelectionKey={["Meta", "Control"]}
         selectionMode={SelectionMode.Partial}
@@ -9506,6 +9760,22 @@
         </div>
         <div class="runner-panel">
           <div class="runner-controls">
+            <label class="run-label" for="run-root-panel">Run connector</label>
+            <select
+              id="run-root-panel"
+              class="run-root-select"
+              aria-label="Run connector"
+              value={activeRootNode?.id ?? ""}
+              onchange={(event) => chooseWorkspaceRoot(event.currentTarget.value)}
+              disabled={chainRunBusy || chainDeployBusy || !workspaceRoot.candidates.length}
+            >
+              {#if !activeRootNode}<option value=""
+                  >{workspaceRoot.ambiguous ? "Choose a connector" : "No connector"}</option
+                >{/if}
+              {#each workspaceRoot.candidates as root (root.id)}<option value={root.id}
+                  >{resolveNodeName(root)}</option
+                >{/each}
+            </select>
             <div class="runner-settings">
               <label class="run-label" for="run-samples-panel">N</label>
               <input
@@ -9526,7 +9796,10 @@
               <button
                 type="button"
                 class="runner-action"
-                disabled={chainDeployBusy || chainSyncBusy || chainRunBusy || activeTabReadOnly}
+                disabled={chainDeployBusy ||
+                  chainSyncBusy ||
+                  chainRunBusy ||
+                  !activeRootCapabilities.canCreate}
                 data-tutorial="create"
                 onclick={deployActiveGraph}
               >
@@ -11834,6 +12107,10 @@
 
   .runner-controls {
     @apply flex flex-col gap-2 rounded-md border border-white/10 bg-black/70 p-2;
+  }
+
+  .run-root-select {
+    @apply w-full min-w-0 rounded-md border border-white/10 bg-black/60 px-2 py-1 text-[0.7rem] text-white/80 outline-none focus:border-emerald-400/60;
   }
 
   .runner-settings {

@@ -44,6 +44,7 @@ export type StudioNodeData = {
   conditionArgs?: number[];
   networkId?: string;
   fromNetwork?: boolean;
+  tabRoot?: boolean;
   riStart?: number;
   riShift?: number;
   riTargetPosition?: number;
@@ -443,8 +444,12 @@ const preserveNetworkConditionMetadata = (
   };
 };
 
-const findRootFeature = (graph: StudioGraph) => {
+const findRootFeature = (graph: StudioGraph, rootNodeId?: string) => {
   const features = graph.nodes.filter((node) => isConnectorKind(node.data.kind));
+  const explicitlySelected = features.find((node) => node.id === rootNodeId);
+  if (explicitlySelected) return explicitlySelected;
+  const markedRoots = features.filter((node) => node.data.tabRoot);
+  if (markedRoots.length === 1) return markedRoots[0];
   if (features.length <= 1) return features[0] ?? null;
 
   const connectorIds = new Set(features.map((feature) => feature.id));
@@ -645,7 +650,12 @@ const validateConnectorRegistry = (registry: RuntimeRegistry, warnings: string[]
 
 export const buildStudioRuntime = (
   graph: StudioGraph,
-  options: { rootLabel: string; rootParticleId?: string; rootConnectorId?: string },
+  options: {
+    rootLabel: string;
+    rootParticleId?: string;
+    rootConnectorId?: string;
+    rootNodeId?: string;
+  },
   overrides: Partial<RuntimeRegistry> = {},
 ): StudioRuntimeSnapshot => {
   const registry: RuntimeRegistry = {
@@ -681,7 +691,7 @@ export const buildStudioRuntime = (
     registry.connectors[def.name] = def;
   });
 
-  const rootFeature = findRootFeature(graph);
+  const rootFeature = findRootFeature(graph, options.rootNodeId);
   const rootName =
     options.rootConnectorId ??
     options.rootParticleId ??
@@ -912,7 +922,12 @@ export const runStudioParticle = (
 
 export const runStudioGraph = (
   graph: StudioGraph,
-  options: { rootLabel: string; rootParticleId?: string; rootConnectorId?: string },
+  options: {
+    rootLabel: string;
+    rootParticleId?: string;
+    rootConnectorId?: string;
+    rootNodeId?: string;
+  },
   config: RuntimeRunConfig = {},
   overrides: Partial<RuntimeRegistry> = {},
 ): PtOutputFeature[] => {

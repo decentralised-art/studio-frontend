@@ -4,10 +4,12 @@ import { orderConnectorDefsForDeploy } from "$lib/studio/connectorDeployOrder";
 import type { StudioConnectorDef } from "$lib/studio/domain/connectorModel";
 import { isConnectorKind, normalizeKey } from "$lib/studio/studioNaming";
 import { buildStudioRuntime, type StudioEdge, type StudioNode } from "$lib/studio/studioRuntime";
+import { collectStudioWorkspaceRootGraph } from "$lib/studio/workspaceState";
 
 export type StudioDeployPlanActiveTab = {
   label: string;
   particleId?: string;
+  runRootId?: string;
 } | null;
 
 export type StudioDeploySourceMap<T> = Map<string, T> | Record<string, T>;
@@ -16,6 +18,7 @@ export type StudioDeployPlanInput = {
   activeTab: StudioDeployPlanActiveTab;
   nodes: StudioNode[];
   edges: StudioEdge[];
+  requestedRootId?: string;
   runtimeOverrides?: Parameters<typeof buildStudioRuntime>[2];
   compiledTransformations?: Record<string, unknown>;
   draftTransformationSources?: StudioDeploySourceMap<{ code: string }>;
@@ -174,8 +177,9 @@ const buildPreview = (plan: Omit<StudioDeployPlan, "preview">): StudioDeployPlan
 
 export const buildStudioDeployPlan = ({
   activeTab,
-  nodes,
-  edges,
+  nodes: workspaceNodes,
+  edges: workspaceEdges,
+  requestedRootId,
   runtimeOverrides,
   compiledTransformations = {},
   draftTransformationSources,
@@ -186,6 +190,14 @@ export const buildStudioDeployPlan = ({
   const warnings: string[] = [];
   const errors: string[] = [];
   const steps: StudioDeployPlanStep[] = [];
+  const hasWorkspaceConnectors = workspaceNodes.some((node) => isConnectorKind(node.data.kind));
+  const selectedGraph = collectStudioWorkspaceRootGraph({
+    nodes: workspaceNodes,
+    edges: workspaceEdges,
+    requestedRootId: requestedRootId ?? activeTab?.runRootId,
+  });
+  const nodes = hasWorkspaceConnectors ? selectedGraph.nodes : workspaceNodes;
+  const edges = hasWorkspaceConnectors ? selectedGraph.edges : workspaceEdges;
 
   const localConditionNodes = nodes.filter(
     (node) => node.data.kind === "condition" && !node.data.fromNetwork,
@@ -194,7 +206,41 @@ export const buildStudioDeployPlan = ({
     (node) => isConnectorKind(node.data.kind) && !node.data.fromNetwork,
   );
   const hasLocalConnectors = localConnectorNodes.length > 0;
-  const compiledTransformationNames = Object.keys(compiledTransformations);
+  const selectedRoot = selectedGraph.root;
+  const rootName = selectedRoot ? resolvePlanNodeName(selectedRoot) : null;
+  const referencedTransformationKeys = new Set(
+    nodes.flatMap((node) =>
+      node.data.kind === "dimension"
+        ? (node.data.transformations ?? []).map((transformation) =>
+            normalizeKey(
+              typeof transformation === "string"
+                ? (transformation.match(/^\s*([^()]+)/)?.[1] ?? transformation).trim()
+                : transformation.name,
+            ),
+          )
+        : [],
+    ),
+  );
+  const compiledTransformationNames = Object.keys(compiledTransformations).filter(
+    (name) => !hasWorkspaceConnectors || referencedTransformationKeys.has(normalizeKey(name)),
+  );
+  const scopedConnectorOverrides: Record<string, StudioConnectorDef> = {};
+  const queuedNames = nodes
+    .filter((node) => isConnectorKind(node.data.kind))
+    .map(resolvePlanNodeName);
+  const visitedNames = new Set<string>();
+  while (queuedNames.length) {
+    const name = queuedNames.pop()!;
+    if (visitedNames.has(name)) continue;
+    visitedNames.add(name);
+    const connector = runtimeOverrides?.connectors?.[name];
+    if (!connector) continue;
+    scopedConnectorOverrides[name] = connector;
+    connector.dimensions.forEach((dimension) => {
+      if (dimension.composite) queuedNames.push(dimension.composite);
+      queuedNames.push(...Object.values(dimension.bindings ?? {}));
+    });
+  }
 
   if (!activeTab) {
     errors.push("No active Studio tab.");
@@ -202,20 +248,21 @@ export const buildStudioDeployPlan = ({
 
   const deployedConnectorKeys = new Set(deployedConnectorNames.map((name) => name.trim()));
   const discoveredNetworkConnectorKeys = new Set(networkConnectorNames.map((name) => name.trim()));
-  if (activeTab && hasLocalConnectors && !activeTab.particleId) {
-    const rootName = activeTab.particleId ?? (activeTab.label.trim() || activeTab.label);
+  if (activeTab && hasLocalConnectors && rootName && !selectedRoot?.data.fromNetwork) {
     if (deployedConnectorKeys.has(rootName) || discoveredNetworkConnectorKeys.has(rootName)) {
       warnings.push(`Connector already exists in network: ${rootName}.`);
     }
   }
 
   let runtime: ReturnType<typeof buildStudioRuntime> | null = null;
-  if (activeTab && hasLocalConnectors) {
+  if (activeTab && hasWorkspaceConnectors && !selectedRoot)
+    errors.push("Select a top-level connector before creating this workspace.");
+  if (activeTab && hasLocalConnectors && selectedRoot && rootName) {
     try {
       runtime = buildStudioRuntime(
         { nodes, edges },
-        { rootLabel: activeTab.label, rootParticleId: activeTab.particleId },
-        runtimeOverrides,
+        { rootLabel: rootName, rootConnectorId: rootName, rootNodeId: selectedRoot.id },
+        { ...runtimeOverrides, connectors: scopedConnectorOverrides },
       );
       errors.push(
         ...runtime.warnings.filter(

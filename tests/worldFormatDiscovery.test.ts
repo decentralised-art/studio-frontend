@@ -30,6 +30,7 @@ describe("world format connector discovery", () => {
       if (url.pathname === "/connector/melody_root") {
         return Response.json({
           name: "melody_root",
+          address: "0x1111111111111111111111111111111111111111",
           owner: "0xb530bf08d76015080c67d6b5f00cdee53b45bdda",
           format_hash: formatHash,
           dimensions: [
@@ -65,6 +66,7 @@ describe("world format connector discovery", () => {
       if (url.pathname === "/connector/pitch") {
         return Response.json({
           name: "pitch",
+          address: "0x1111111111111111111111111111111111111111",
           owner: "0xb530bf08d76015080c67d6b5f00cdee53b45bdda",
           format_hash: formatHash,
           dimensions: [{ transformations: [{ name: "add", args: [1] }], bindings: {} }],
@@ -115,6 +117,7 @@ describe("world format connector discovery", () => {
       if (url.pathname === "/connector/semantic_score") {
         return Response.json({
           name: "semantic_score",
+          address: "0x1111111111111111111111111111111111111111",
           owner: "b530bf08d76015080c67d6b5f00cdee53b45bdda",
           format_hash: compatibleHash,
           dimensions: [{ transformations: [{ name: "add", args: [1] }], bindings: {} }],
@@ -149,6 +152,7 @@ describe("world format connector discovery", () => {
         const name = url.pathname.split("/").at(-1) ?? "";
         return Response.json({
           name,
+          address: "0x1111111111111111111111111111111111111111",
           owner: "0xb530bf08d76015080c67d6b5f00cdee53b45bdda",
           format_hash: formatHash,
           dimensions: [{ transformations: [{ name: "add", args: [1] }], bindings: {} }],
@@ -180,6 +184,7 @@ describe("world format connector discovery", () => {
       if (url.pathname === "/connector/good_root") {
         return Response.json({
           name: "good_root",
+          address: "0x1111111111111111111111111111111111111111",
           owner: "0xb530bf08d76015080c67d6b5f00cdee53b45bdda",
           format_hash: formatHash,
           dimensions: [{ transformations: [{ name: "add", args: [1] }], bindings: {} }],
@@ -212,6 +217,7 @@ describe("world format connector discovery", () => {
         const name = url.pathname.split("/").at(-1) ?? "";
         return Response.json({
           name,
+          address: "0x1111111111111111111111111111111111111111",
           owner: "0xb530bf08d76015080c67d6b5f00cdee53b45bdda",
           format_hash: formatHash,
           dimensions: [{ transformations: [{ name: "add", args: [1] }], bindings: {} }],
@@ -229,6 +235,45 @@ describe("world format connector discovery", () => {
     expect(result.hasMore).toBe(true);
     expect(result.events.map((event) => event.particleId)).toEqual(["alpha_root", "beta_root"]);
   });
+
+  it.each([undefined, "0x0", `0x${"0".repeat(40)}`, "not-an-address"])(
+    "does not expose an unpublished connector with address %s through public World discovery",
+    async (address) => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input: RequestInfo | URL) => {
+          const url = new URL(String(input));
+          if (url.pathname === `/format/${formatHash}`) {
+            return Response.json({
+              format_hash: formatHash,
+              connectors: ["private_score"],
+              cursor: { has_more: false },
+            });
+          }
+          if (url.pathname === "/connector/private_score") {
+            return Response.json({
+              name: "private_score",
+              address,
+              owner: "0xb530bf08d76015080c67d6b5f00cdee53b45bdda",
+              format_hash: formatHash,
+              dimensions: [{ transformations: [{ name: "add", args: [1] }], bindings: {} }],
+            });
+          }
+          throw new Error(`Unexpected request: ${url.pathname}`);
+        }),
+      );
+      const fromFormats = await fetchWorldFormatConnectorEvents({
+        acceptedFormatHashes: [formatHash],
+      });
+      const fromManifest = await fetchWorldFormatConnectorEvents({
+        acceptedConnectorNames: ["private_score"],
+      });
+      expect(fromFormats.events).toEqual([]);
+      expect(fromManifest.events).toEqual([]);
+      expect(fromFormats.errors).toEqual([]);
+      expect(fromManifest.errors).toEqual([]);
+    },
+  );
 
   it("accepts only formats whose scalar names are required or accepted", () => {
     const options = {

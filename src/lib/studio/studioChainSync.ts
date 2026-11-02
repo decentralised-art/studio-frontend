@@ -211,12 +211,12 @@ export const mergeFetchedChainParticleIntoStudioState = (
             }
           : {}),
         transformations: {
-          ...state.registry.transformations,
           ...inferred.transformations,
+          ...state.registry.transformations,
         },
         conditions: {
-          ...state.registry.conditions,
           ...inferred.conditions,
+          ...state.registry.conditions,
         },
       },
       library: {

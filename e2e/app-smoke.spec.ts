@@ -63,6 +63,7 @@ const stubRemoteApis = async (
     authDisplayName?: string;
     missingProfileConnectorDetail?: boolean;
     publicDisplayName?: string;
+    standaloneWorld?: boolean;
   } = {},
 ) => {
   const observer: RemoteApiObserver = {
@@ -152,12 +153,14 @@ const stubRemoteApis = async (
     heroLabel: "Backend E2E",
     accentColor: "#6ee7b7",
     acceptedFormatHashes: [],
-    acceptedConnectorSets: [
-      {
-        connectors: ["melody_root", "duration"],
-        optionalConnectors: ["velocity"],
-      },
-    ],
+    acceptedConnectorSets: options.standaloneWorld
+      ? []
+      : [
+          {
+            connectors: ["melody_root", "duration"],
+            optionalConnectors: ["velocity"],
+          },
+        ],
     ownerId: fixtureUserId,
     bundleHash: "sha256:backend-e2e-bundle",
     manifestHash: "sha256:backend-e2e-manifest",
@@ -278,9 +281,10 @@ const stubRemoteApis = async (
     score_placement: terminalScoreConnector("score_placement", "0x0022"),
     score_slur_number: terminalScoreConnector("score_slur_number", "0x0023"),
     score_slur_type: terminalScoreConnector("score_slur_type", "0x0024"),
-    melody_root: terminalScoreConnector(
+    melody_root: collectorScoreConnector(
       "melody_root",
       "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      ["duration", "velocity"],
     ),
     duration: terminalScoreConnector(
       "duration",
@@ -1143,6 +1147,8 @@ const seedBackendWorldConnectorSetSession = async (page: Page) => {
       tabRoot: true,
       definitionRole: "root",
     });
+    rootNode.data.dimensions = 2;
+    rootNode.data.connectorRows.push({ dimension: 2, transformations: [] });
     const durationNode = makeConnector("connector-backend-world-duration", "duration", 520, 300, {
       definitionRole: "member",
     });
@@ -1162,10 +1168,10 @@ const seedBackendWorldConnectorSetSession = async (page: Page) => {
       {
         id: "edge-backend-world-root-velocity",
         source: rootNode.id,
-        sourceHandle: "dim-0",
+        sourceHandle: "dim-1",
         target: velocityNode.id,
         targetHandle: "in",
-        label: "composite · D1",
+        label: "composite · D2",
         data: { relation: "composite" },
       },
     ];
@@ -1522,7 +1528,7 @@ test("Studio simulates a draft, publishes with its wallet once, then preserves c
     .locator(".runner-controls")
     .getByRole("button", { name: "Publish to the Network", exact: true })
     .click();
-  await expect(page.getByRole("tab", { name: /publication_e2e/ })).toContainText("Network");
+  await expect(page.getByRole("tab", { name: /publication_e2e/ })).toContainText("in-progress");
   await page.getByRole("button", { name: "Execute on the Network", exact: true }).click();
   await expect(page.locator(".runner-output")).toContainText('"block_number": 77');
   await expect(page.locator(".runner-output")).toContainText('"block_hash"');
@@ -1576,31 +1582,28 @@ test("opens new connector tabs with a reset root-focused viewport", async ({ pag
   assertNoPageErrors();
 });
 
-test("attaches worlds to the draft root connector", async ({ page }) => {
+test("attaches active hosted worlds to the draft root connector", async ({ page }) => {
   const assertNoPageErrors = collectPageErrors(page);
-  await stubRemoteApis(page);
+  await stubRemoteApis(page, { standaloneWorld: true });
   await authenticateFixtureSession(page);
 
   await page.goto("/studio");
   await page.getByRole("button", { name: "Worlds", exact: true }).click();
 
-  const musicScorePlugin = page.locator(".plugin-card").filter({ hasText: "MusicXML Score World" });
-  await musicScorePlugin.getByRole("button", { name: "+" }).click();
+  const world = page.locator(".plugin-card").filter({ hasText: "Backend E2E World" });
+  await world.getByRole("button", { name: "+" }).click();
 
   await expect(page.locator(".plugins-feedback")).toContainText(
-    "Connected 'MusicXML Score World' to 'Untitled Connector'.",
+    "Connected 'Backend E2E World' to 'Untitled Connector'.",
+  );
+  const worldNode = page.locator(".plugin-node").filter({ hasText: "Backend E2E World" });
+  await expect(worldNode).toContainText("0 streams | 0 values | backend world");
+  await expect(worldNode.locator("iframe")).toHaveAttribute(
+    "src",
+    /\/world-assets\/world-backend-e2e\/index\.html.*worldChannel=/,
   );
   await expect(
-    page.locator(".plugin-node").filter({ hasText: "MusicXML Score World" }),
-  ).toContainText("connected to Untitled Connector");
-  await expect(
-    page
-      .locator(".plugin-node")
-      .filter({ hasText: "MusicXML Score World" })
-      .getByLabel("Empty music score preview"),
-  ).toBeVisible();
-  await expect(
-    page.locator('.svelte-flow__edge[data-id^="edge-plugin-music-score-v1"]'),
+    page.locator('.svelte-flow__edge[data-id^="edge-plugin-world:world-backend-e2e"]'),
   ).toHaveCount(1);
   assertNoPageErrors();
 });
@@ -1735,7 +1738,9 @@ test("loads deployed positional score connector trees with reusable shapers", as
   assertNoPageErrors();
 });
 
-test("keeps restored Studio connector trees when plugin overlays are present", async ({ page }) => {
+test("keeps restored Studio connector trees when their registry detail is unavailable", async ({
+  page,
+}) => {
   const assertNoPageErrors = collectPageErrors(page);
   await stubRemoteApis(page, { missingProfileConnectorDetail: true });
   await authenticateFixtureSession(page);
@@ -1751,7 +1756,7 @@ test("keeps restored Studio connector trees when plugin overlays are present", a
     .first();
 
   await page.goto("/studio");
-  await expect(networkConnectorCard).toBeVisible({ timeout: 15_000 });
+  await expect(networkConnectorCard).toHaveCount(0);
   await expect(restoredConnector).toBeVisible();
   await expect(restoredPlugin).toBeVisible();
 
@@ -1759,7 +1764,7 @@ test("keeps restored Studio connector trees when plugin overlays are present", a
   await expect(page.getByRole("region", { name: "Worlds", exact: true })).toBeVisible();
 
   await page.goto("/studio");
-  await expect(networkConnectorCard).toBeVisible({ timeout: 15_000 });
+  await expect(networkConnectorCard).toHaveCount(0);
   await expect(restoredConnector).toBeVisible();
   await expect(restoredPlugin).toBeVisible();
   assertNoPageErrors();

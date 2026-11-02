@@ -392,7 +392,7 @@ test("creates once, simulates without gas, then explicitly publishes and execute
   ).toBeDisabled();
   await page.getByRole("button", { name: "Create locally", exact: true }).click();
   await expect(card(page, "StudioRoot")).toBeVisible();
-  await expect(page.getByRole("tab", { name: /StudioRoot/ })).toContainText("Local");
+  await expect(page.getByRole("tab", { name: /StudioRoot/ })).toContainText("in-progress");
   await expect(page.locator(".connector-readonly-chip")).toHaveText("Created (read-only)");
   for (const [width, imageName] of [
     [1440, "local-wide.png"],

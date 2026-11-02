@@ -1,5 +1,6 @@
 import { fromProtocolConnectorPayload } from "$lib/chain/connectorContractAdapter";
 import type { ChainConnectorPayload } from "$lib/chain/registryApi";
+import { isPublishedChainAddress } from "./studioEntityOrigin";
 import type { PublicationRecord } from "./studioPublication";
 import type { DeployedLibrary } from "./studioRegistryState";
 
@@ -46,10 +47,20 @@ export const listStudioLocalEntities = (
 export const buildStudioLocalLibrary = (
   records: readonly PublicationRecord[],
   ownerId: string,
+  verifiedLibrary?: DeployedLibrary,
 ): DeployedLibrary => {
+  const published = new Set(
+    [
+      ...(verifiedLibrary?.features ?? []).map((item) => ["connector", item] as const),
+      ...(verifiedLibrary?.transformations ?? []).map((item) => ["transformation", item] as const),
+      ...(verifiedLibrary?.conditions ?? []).map((item) => ["condition", item] as const),
+    ]
+      .filter(([, item]) => isPublishedChainAddress(item.chainAddress))
+      .map(([kind, item]) => `${kind}:${item.name}`),
+  );
   const library: DeployedLibrary = { features: [], transformations: [], conditions: [] };
   for (const entity of listStudioLocalEntities(records)) {
-    if (entity.stage === "mined") continue;
+    if (entity.stage === "mined" || published.has(`${entity.kind}:${entity.name}`)) continue;
     const summary =
       entity.stage === "draft"
         ? "Created locally. Not published on chain."

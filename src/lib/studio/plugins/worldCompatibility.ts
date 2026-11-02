@@ -34,6 +34,17 @@ export type StudioWorldPluginCompatibility = {
   match: StudioWorldConnectorSetMatch | null;
 };
 
+/** A compatibility warning controls auto-connection, never inserting the World itself. */
+export const isStudioWorldPluginAutoAttachable = (
+  compatibility: StudioWorldPluginCompatibility,
+): boolean => compatibility.kind !== "partial" && compatibility.kind !== "unavailable";
+
+export const isStudioWorldPluginAddable = (plugin: StudioPluginDescriptor): boolean =>
+  plugin.source === "backend-world" &&
+  plugin.status === "active" &&
+  plugin.worldDescriptor?.source === "backend" &&
+  plugin.worldDescriptor.surfaces.includes("studio-plugin");
+
 const normalizeName = (value: unknown): string =>
   typeof value === "string" ? value.trim().toLowerCase() : "";
 

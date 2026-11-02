@@ -290,7 +290,7 @@ const buildWorldIndexes = (worlds: readonly WorldDescriptor[]): Map<string, numb
 export const mergeWorldDescriptors = ({
   backendWorlds = [],
   firstPartyWorlds = FIRST_PARTY_WORLDS,
-  includeFirstParty = true,
+  includeFirstParty = false,
 }: {
   backendWorlds?: readonly BackendWorldDescriptor[];
   firstPartyWorlds?: readonly WorldDescriptor[];
@@ -299,20 +299,22 @@ export const mergeWorldDescriptors = ({
   const merged: WorldDescriptor[] = includeFirstParty ? [...firstPartyWorlds] : [];
   let indexes = buildWorldIndexes(merged);
 
-  backendWorlds.forEach((backendWorld) => {
-    const world = backendWorldToFrontendDescriptor(backendWorld);
-    const existingIndex = findWorldIndex(indexes, world);
-    if (existingIndex !== undefined) {
-      merged[existingIndex] = world;
-      indexes = buildWorldIndexes(merged);
-      return;
-    }
+  backendWorlds
+    .filter((world) => world.status === "active")
+    .forEach((backendWorld) => {
+      const world = backendWorldToFrontendDescriptor(backendWorld);
+      const existingIndex = findWorldIndex(indexes, world);
+      if (existingIndex !== undefined) {
+        merged[existingIndex] = world;
+        indexes = buildWorldIndexes(merged);
+        return;
+      }
 
-    const index = merged.length;
-    merged.push(world);
-    registerWorldKey(indexes, "slug", world.slug, index);
-    registerWorldKey(indexes, "id", world.id, index);
-  });
+      const index = merged.length;
+      merged.push(world);
+      registerWorldKey(indexes, "slug", world.slug, index);
+      registerWorldKey(indexes, "id", world.id, index);
+    });
 
   return merged;
 };
@@ -333,14 +335,32 @@ export const resolveWorldBySlugOrId = (
 export const loadWorldRegistry = async ({
   fetchBackendWorlds = listWorlds,
   firstPartyWorlds = FIRST_PARTY_WORLDS,
-  includeFirstParty = true,
+  includeFirstParty = false,
   page,
   limit,
   surface,
   query,
 }: WorldRegistryLoadOptions = {}): Promise<WorldRegistryLoadResult> => {
   try {
-    const backendWorlds = await fetchBackendWorlds({ page, limit, surface, query });
+    // Catalog consumers need every active World, not just the API's first page.
+    // An explicit page retains the single-page behavior for paged consumers.
+    const pageLimit = Math.max(1, Math.min(100, Math.trunc(limit ?? 100)));
+    const backendWorlds: BackendWorldDescriptor[] = [];
+    const seen = new Set<string>();
+    let nextPage = page ?? 0;
+    while (true) {
+      const batch = await fetchBackendWorlds({ page: nextPage, limit: pageLimit, surface, query });
+      let added = 0;
+      for (const world of batch) {
+        if (seen.has(world.id)) continue;
+        seen.add(world.id);
+        added += 1;
+        if (world.status !== "active" || (surface && !world.surfaces.includes(surface))) continue;
+        backendWorlds.push(world);
+      }
+      if (page !== undefined || batch.length < pageLimit || added === 0) break;
+      nextPage += 1;
+    }
     return {
       worlds: mergeWorldDescriptors({ backendWorlds, firstPartyWorlds, includeFirstParty }),
       backendWorlds,

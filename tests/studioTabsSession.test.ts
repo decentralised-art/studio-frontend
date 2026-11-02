@@ -151,7 +151,15 @@ describe("Studio tabs session helpers", () => {
 
 it("preserves the World workspace identity without making it view-only", () => {
   const payload = buildStudioTabsSessionPayload({
-    tabs: [{ id: "world-draft", label: "Any World", worldId: "world-id" }],
+    tabs: [
+      {
+        id: "world-draft",
+        label: "Any World",
+        worldId: "world-id",
+        worldStarter: false,
+        runRootId: "selected-root",
+      },
+    ],
     activeTabId: "world-draft",
     tabGraphs: [],
     connectorTreeModels: [],
@@ -162,6 +170,8 @@ it("preserves the World workspace identity without making it view-only", () => {
     label: "Any World",
     particleId: undefined,
     worldId: "world-id",
+    worldStarter: false,
+    runRootId: "selected-root",
   });
   expect(restored?.connectorTreeModels).toEqual({});
 });

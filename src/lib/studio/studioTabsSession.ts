@@ -6,6 +6,8 @@ export type StudioTabSessionTab = {
   label: string;
   particleId?: string;
   worldId?: string;
+  worldStarter?: boolean;
+  runRootId?: string;
 };
 
 export type PersistedStudioGraph<TNode = unknown, TEdge = unknown> = {
@@ -76,7 +78,15 @@ export const sanitizePersistedTabs = (value: unknown): StudioTabSessionTab[] => 
         ? item.particleId.trim()
         : undefined;
     const worldId = typeof item.worldId === "string" ? item.worldId.trim() : "";
-    sanitized.push({ id, label, particleId, ...(worldId ? { worldId } : {}) });
+    const runRootId = typeof item.runRootId === "string" ? item.runRootId.trim() : "";
+    sanitized.push({
+      id,
+      label,
+      particleId,
+      ...(worldId ? { worldId } : {}),
+      ...(typeof item.worldStarter === "boolean" ? { worldStarter: item.worldStarter } : {}),
+      ...(runRootId ? { runRootId } : {}),
+    });
   });
   return sanitized;
 };
@@ -178,6 +188,8 @@ export const buildStudioTabsSessionPayload = <TTab extends StudioTabSessionTab, 
       label: tab.label,
       particleId: tab.particleId?.trim() || undefined,
       ...(tab.worldId?.trim() ? { worldId: tab.worldId.trim() } : {}),
+      ...(typeof tab.worldStarter === "boolean" ? { worldStarter: tab.worldStarter } : {}),
+      ...(tab.runRootId?.trim() ? { runRootId: tab.runRootId.trim() } : {}),
     })),
     activeTabId,
     tabGraphs: graphSnapshots,

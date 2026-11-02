@@ -46,14 +46,14 @@ export const createEmptyDeployedLibrary = (): DeployedLibrary => ({
 });
 
 export const upsertLibraryItem = (items: LibraryItem[], next: LibraryItem): LibraryItem[] => {
-  if (items.some((item) => item.id === next.id)) return items;
-  return [...items, next];
+  if (!items.some((item) => item.id === next.id)) return [...items, next];
+  return items.map((item) => (item.id === next.id ? { ...item, ...next } : item));
 };
 
 export const upsertParticleItem = (
   items: ExploreParticle[],
   next: ExploreParticle,
 ): ExploreParticle[] => {
-  if (items.some((item) => item.id === next.id)) return items;
-  return [...items, next];
+  if (!items.some((item) => item.id === next.id)) return [...items, next];
+  return items.map((item) => (item.id === next.id ? { ...item, ...next } : item));
 };

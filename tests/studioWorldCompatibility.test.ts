@@ -3,11 +3,14 @@ import { describe, expect, it } from "vitest";
 import type { StudioPluginDescriptor } from "../src/lib/studio/plugins/registry";
 import {
   describeStudioWorldPluginCompatibility,
+  isStudioWorldPluginAddable,
+  isStudioWorldPluginAutoAttachable,
   resolveStudioWorldConnectorSetMatch,
   studioWorldConnectorSetSelectionFromMatch,
   summarizeStudioWorldConnectorSets,
 } from "../src/lib/studio/plugins/worldCompatibility";
 import { connectorBindingValueKey } from "../src/lib/worlds/runtimeInput";
+import type { WorldDescriptor } from "../src/lib/worlds/types";
 
 const backendPlugin: StudioPluginDescriptor = {
   id: "world:backend-world-1",
@@ -116,6 +119,46 @@ describe("studio world compatibility", () => {
   it("summarizes declared connector sets for plugin cards", () => {
     expect(summarizeStudioWorldConnectorSets(backendPlugin.acceptedConnectorSets)).toBe(
       "Set 1: pitch, duration; optional velocity",
+    );
+  });
+
+  it("lets an active World be inserted even when the current draft has no compatible format", () => {
+    const plugin: StudioPluginDescriptor = {
+      ...backendPlugin,
+      acceptedConnectorSets: [],
+      supportedFormatHashes: ["0xabc"],
+      worldDescriptor: { source: "backend", surfaces: ["studio-plugin"] } as WorldDescriptor,
+    };
+    const compatibility = describeStudioWorldPluginCompatibility({
+      plugin,
+      rootConnectorName: "untitled_draft",
+      rootFormatHash: "",
+      availableTargets: [{ id: "draft", name: "untitled_draft" }],
+    });
+    expect(compatibility.kind).toBe("unavailable");
+    expect(isStudioWorldPluginAddable(plugin)).toBe(true);
+    expect(isStudioWorldPluginAutoAttachable(compatibility)).toBe(false);
+    expect(isStudioWorldPluginAddable({ ...plugin, status: "deleted" })).toBe(false);
+  });
+
+  it("auto-connects complete matches and leaves partial sets available for standalone insertion", () => {
+    const describe = (availableTargets: Array<{ id: string; name: string }>) =>
+      describeStudioWorldPluginCompatibility({
+        plugin: backendPlugin,
+        rootConnectorName: "lead_pitch",
+        rootFormatHash: "",
+        availableTargets,
+      });
+    expect(
+      isStudioWorldPluginAutoAttachable(
+        describe([
+          { id: "pitch", name: "lead_pitch" },
+          { id: "duration", name: "duration" },
+        ]),
+      ),
+    ).toBe(true);
+    expect(isStudioWorldPluginAutoAttachable(describe([{ id: "pitch", name: "lead_pitch" }]))).toBe(
+      false,
     );
   });
 });

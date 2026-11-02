@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { BackendWorldDescriptor } from "../src/lib/worlds/contract";
 import {
@@ -107,6 +107,7 @@ describe("world registry", () => {
 
   it("merges backend worlds after first-party fallback worlds", () => {
     const merged = mergeWorldDescriptors({
+      includeFirstParty: true,
       firstPartyWorlds: [MUSICXML_SCORE_WORLD],
       backendWorlds: [backendWorld()],
     });
@@ -118,6 +119,7 @@ describe("world registry", () => {
 
   it("prefers backend worlds when slugs collide with first-party worlds", () => {
     const merged = mergeWorldDescriptors({
+      includeFirstParty: true,
       firstPartyWorlds: [MUSICXML_SCORE_WORLD, MIDI_CLIP_WORLD],
       backendWorlds: [
         backendWorld({
@@ -138,6 +140,7 @@ describe("world registry", () => {
 
   it("does not keep stale first-party slug aliases after backend id replacements", () => {
     const merged = mergeWorldDescriptors({
+      includeFirstParty: true,
       firstPartyWorlds: [MUSICXML_SCORE_WORLD, MIDI_CLIP_WORLD],
       backendWorlds: [
         backendWorld({
@@ -169,6 +172,7 @@ describe("world registry", () => {
 
   it("resolves worlds by slug or id", () => {
     const merged = mergeWorldDescriptors({
+      includeFirstParty: true,
       firstPartyWorlds: [MUSICXML_SCORE_WORLD],
       backendWorlds: [backendWorld()],
     });
@@ -182,6 +186,7 @@ describe("world registry", () => {
     const fetchBackendWorlds = async () => [backendWorld()];
 
     const result = await loadWorldRegistry({
+      includeFirstParty: true,
       firstPartyWorlds: [MUSICXML_SCORE_WORLD],
       fetchBackendWorlds,
       surface: "world-page",
@@ -197,6 +202,7 @@ describe("world registry", () => {
     const error = new Error("backend offline");
 
     const result = await loadWorldRegistry({
+      includeFirstParty: true,
       firstPartyWorlds: [MUSICXML_SCORE_WORLD],
       fetchBackendWorlds: async () => {
         throw error;
@@ -207,5 +213,62 @@ describe("world registry", () => {
     expect(result.backendWorlds).toEqual([]);
     expect(result.backendError).toBe(error);
     expect(result.usedFirstPartyFallback).toBe(true);
+  });
+
+  it("uses only active API Worlds by default without reviving bundled worlds", async () => {
+    const active = backendWorld({ surfaces: ["studio-plugin"] });
+    const result = await loadWorldRegistry({
+      surface: "studio-plugin",
+      fetchBackendWorlds: async () => [
+        active,
+        backendWorld({ id: "deleted", status: "deleted", surfaces: ["studio-plugin"] }),
+        backendWorld({ id: "gallery-only", surfaces: ["world-page"] }),
+      ],
+    });
+    expect(result.worlds.map((world) => world.id)).toEqual([active.id]);
+    expect(result.backendWorlds).toEqual([active]);
+    expect(mergeWorldDescriptors({ backendWorlds: [] })).toEqual([]);
+  });
+
+  it("leaves the catalog empty on an API failure instead of advertising retired built-ins", async () => {
+    const error = new Error("offline");
+    const result = await loadWorldRegistry({
+      fetchBackendWorlds: async () => {
+        throw error;
+      },
+    });
+    expect(result.worlds).toEqual([]);
+    expect(result.backendError).toBe(error);
+    expect(result.usedFirstPartyFallback).toBe(false);
+  });
+
+  it("loads all catalog pages and deduplicates overlapping results", async () => {
+    const first = backendWorld({ id: "first", slug: "first" });
+    const second = backendWorld({ id: "second", slug: "second" });
+    const third = backendWorld({ id: "third", slug: "third" });
+    const fetchBackendWorlds = vi
+      .fn()
+      .mockResolvedValueOnce([first, second])
+      .mockResolvedValueOnce([second, third])
+      .mockResolvedValueOnce([]);
+    const result = await loadWorldRegistry({ fetchBackendWorlds, limit: 2 });
+    expect(result.worlds.map((world) => world.id)).toEqual(["first", "second", "third"]);
+    expect(fetchBackendWorlds.mock.calls.map(([options]) => options.page)).toEqual([0, 1, 2]);
+  });
+
+  it("honors explicit paging and terminates when a server repeats the same full page", async () => {
+    const fetchBackendWorlds = vi.fn().mockResolvedValue([backendWorld()]);
+    await loadWorldRegistry({ fetchBackendWorlds, page: 3, limit: 1 });
+    expect(fetchBackendWorlds).toHaveBeenCalledTimes(1);
+    expect(fetchBackendWorlds).toHaveBeenCalledWith({
+      page: 3,
+      limit: 1,
+      surface: undefined,
+      query: undefined,
+    });
+    fetchBackendWorlds.mockClear();
+    const result = await loadWorldRegistry({ fetchBackendWorlds, limit: 1 });
+    expect(fetchBackendWorlds).toHaveBeenCalledTimes(2);
+    expect(result.worlds).toHaveLength(1);
   });
 });
