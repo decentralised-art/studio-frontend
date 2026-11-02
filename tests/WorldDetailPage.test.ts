@@ -7,6 +7,7 @@ import type { WorldDescriptor } from "../src/lib/worlds/types";
 
 const appStateMock = vi.hoisted(() => ({
   page: {
+    url: new URL("https://decentralised.art/worlds/backend-world"),
     params: {
       slug: "backend-world",
       connector: undefined as string | undefined,
@@ -194,7 +195,9 @@ const openOwnerControls = async () => {
 
 describe("world detail page", () => {
   beforeEach(() => {
+    appStateMock.page.url = new URL("https://decentralised.art/worlds/backend-world");
     appStateMock.page.params.slug = "backend-world";
+    backendHostMock.createBackendWorldHost.mockClear();
     appStateMock.page.params.connector = undefined;
     authApiMock.getCurrentUserProfileState.mockReset();
     authApiMock.getCurrentUserProfileState.mockResolvedValue(anonymousProfileState());
@@ -216,6 +219,45 @@ describe("world detail page", () => {
 
   afterEach(() => {
     cleanup();
+  });
+
+  it.each([undefined, "lead_pitch"])(
+    "opens Studio-capable Worlds in Studio, forwarding connector %s",
+    async (connector) => {
+      appStateMock.page.params.connector = connector;
+      registryMock.loadWorldRegistry.mockResolvedValue(
+        registryResultWithWorld({
+          ...backendWorld,
+          surfaces: ["world-page", "studio-plugin"],
+        }),
+      );
+      const Page = await loadPage();
+      render(Page);
+      const expected = connector
+        ? "/studio?world=backend-world-1&network_kind=connector&network_id=lead_pitch"
+        : "/studio?world=backend-world-1";
+      await waitFor(() =>
+        expect(navigationMock.goto).toHaveBeenCalledWith(expected, { replaceState: true }),
+      );
+      expect(backendHostMock.createBackendWorldHost).not.toHaveBeenCalled();
+      expect(screen.queryByTitle("Backend World")).not.toBeInTheDocument();
+    },
+  );
+
+  it("keeps a Studio-capable World's owner management page accessible with manage=1", async () => {
+    appStateMock.page.url = new URL("https://decentralised.art/worlds/backend-world?manage=1");
+    authApiMock.getCurrentUserProfileState.mockResolvedValue(ownerProfileState());
+    registryMock.loadWorldRegistry.mockResolvedValue(
+      registryResultWithWorld({
+        ...backendWorld,
+        surfaces: ["world-page", "studio-plugin"],
+      }),
+    );
+    const Page = await loadPage();
+    render(Page);
+    expect(await screen.findByRole("heading", { name: "Backend World" })).toBeInTheDocument();
+    expect(await screen.findByText("Owner controls")).toBeInTheDocument();
+    expect(navigationMock.goto).not.toHaveBeenCalled();
   });
 
   it("resolves backend worlds and mounts their iframe through the SDK host", async () => {
