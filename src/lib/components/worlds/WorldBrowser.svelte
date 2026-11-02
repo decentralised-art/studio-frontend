@@ -1,5 +1,7 @@
 <script lang="ts">
   import { asset, resolve } from "$app/paths";
+  import { goto } from "$app/navigation";
+  import { buildStudioWorldUrl } from "$lib/worlds/studioLaunch";
   import { onMount, tick } from "svelte";
 
   import { getCurrentUserProfileState } from "$lib/auth/api";
@@ -69,6 +71,12 @@
   };
 
   const openWorld = async (world: BackendWorldDescriptor, pushHistory = true) => {
+    if (world.surfaces.includes("studio-plugin")) {
+      const url = resolve(buildStudioWorldUrl(world.id));
+      if (pushHistory) window.open(url, "_blank", "noopener,noreferrer");
+      else await goto(url, { replaceState: true });
+      return;
+    }
     if (selectedWorld?.id === world.id && dialogElement?.open) return;
     previouslyFocused =
       document.activeElement instanceof HTMLElement ? document.activeElement : null;

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { browser } from "$app/environment";
   import { goto } from "$app/navigation";
+  import { buildStudioWorldUrl } from "$lib/worlds/studioLaunch";
   import { resolve } from "$app/paths";
   import { page } from "$app/state";
   import { onMount, tick } from "svelte";
@@ -90,6 +91,7 @@
   let worldStateRevision = $state(0);
   let selectedWorld = $state<WorldDescriptor | null>(null);
   let worldRegistryLoading = $state(false);
+  let openingStudio = $state(false);
   let worldRegistryLoadWarning = $state(false);
   let worldRegistryRequestId = 0;
   let currentServicesUserId = $state<string | null>(null);
@@ -858,16 +860,30 @@
     slugOrId: string,
     requestId: number,
     bundledWorld: WorldDescriptor | null,
+    manage: boolean,
+    connector: string,
   ) => {
     try {
       const result = await loadWorldRegistry({ surface: "world-page" });
       if (requestId !== worldRegistryRequestId) return;
 
       const resolvedWorld = resolveWorldBySlugOrId(result.worlds, slugOrId) ?? null;
+      if (
+        resolvedWorld?.source === "backend" &&
+        resolvedWorld.surfaces.includes("studio-plugin") &&
+        !manage
+      ) {
+        openingStudio = true;
+        await goto(resolve(buildStudioWorldUrl(resolvedWorld.id, connector)), {
+          replaceState: true,
+        });
+        return;
+      }
       selectedWorld = resolvedWorld;
       worldRegistryLoadWarning = result.backendError !== null && bundledWorld === null;
     } catch {
       if (requestId !== worldRegistryRequestId) return;
+      openingStudio = false;
       selectedWorld = bundledWorld;
       worldRegistryLoadWarning = bundledWorld === null;
     } finally {
@@ -879,7 +895,10 @@
 
   $effect(() => {
     const slugOrId = routeWorldSlug;
+    const manage = page.url.searchParams.get("manage") === "1";
+    const connector = routeConnectorName;
     const requestId = ++worldRegistryRequestId;
+    openingStudio = false;
 
     if (!slugOrId) {
       selectedWorld = null;
@@ -892,7 +911,7 @@
     selectedWorld = bundledWorld;
     worldRegistryLoading = true;
     worldRegistryLoadWarning = false;
-    void loadRouteWorld(slugOrId, requestId, bundledWorld);
+    void loadRouteWorld(slugOrId, requestId, bundledWorld, manage, connector);
   });
 
   $effect(() => {
@@ -952,7 +971,11 @@
   <title>{hasResolvedWorld ? activeWorld.name : "World"} · Worlds</title>
 </svelte:head>
 
-{#if worldRegistryLoading && !hasResolvedWorld}
+{#if openingStudio}
+  <main class="world-page">
+    <div class="world-route-state" role="status">Opening Studio…</div>
+  </main>
+{:else if worldRegistryLoading && !hasResolvedWorld}
   <main class="world-page">
     <div class="world-route-state" role="status" aria-live="polite">Loading world...</div>
   </main>

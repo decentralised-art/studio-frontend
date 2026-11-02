@@ -1,7 +1,10 @@
 <script lang="ts">
   import { browser } from "$app/environment";
+  import { afterNavigate, replaceState } from "$app/navigation";
+  import { page } from "$app/state";
   import { resolve } from "$app/paths";
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
+  import { loadWorldStudioStarter } from "$lib/worlds/studioStarter";
   import { SvelteMap, SvelteSet } from "svelte/reactivity";
 
   import {
@@ -251,6 +254,7 @@
   import {
     listStudioPlugins,
     listStudioWorldPlugins,
+    studioPluginFromWorldDescriptor,
     type StudioPluginDescriptor,
   } from "$lib/studio/plugins/registry";
   import {
@@ -267,6 +271,8 @@
     writeStudioPluginDragData,
   } from "$lib/studio/studioPluginDragDrop";
   import { loadWorldRegistry } from "$lib/worlds/registry";
+  import { getWorld } from "$lib/worlds/api";
+  import { backendWorldToFrontendDescriptor } from "$lib/worlds/contract";
   import type { WorldDescriptor } from "$lib/worlds/types";
 
   type PanelMode = StudioPanelMode;
@@ -637,6 +643,10 @@
   let studioWorldRegistryBusy = $state(false);
   let studioWorldRegistryWarning = $state<string | null>(null);
   let studioWorldRegistryLoadRequestId = 0;
+  let worldLaunchError = $state("");
+  let studioLaunchReady = false;
+  let worldLaunchRequestId = 0;
+  let pendingWorldLaunch = "";
   let standaloneDraftTransformations = $state<StandaloneTransformationDraft[]>([]);
   const conditionCodeById = new SvelteMap<string, string>();
 
@@ -666,6 +676,7 @@
     id: string;
     label: string;
     particleId?: string;
+    worldId?: string;
   };
 
   type ConnectorTreeModel = {
@@ -798,8 +809,8 @@
 
   const studioSessionKey = () =>
     `${STUDIO_TABS_SESSION_STORAGE_KEY}:${buildChainApiUrl("")}:${currentStudioAuthorId}`;
-  const persistStudioTabsSession = () => {
-    if (!browser || !/^0x[0-9a-f]{40}$/i.test(currentStudioAuthorId)) return;
+  const persistStudioTabsSession = (): boolean => {
+    if (!browser || !/^0x[0-9a-f]{40}$/i.test(currentStudioAuthorId)) return false;
     try {
       saveActiveGraph();
       const payload = buildStudioTabsSessionPayload<StudioTab, StudioNode, Edge>({
@@ -810,8 +821,10 @@
         tabViewports: tabViewports.entries(),
       });
       window.sessionStorage.setItem(studioSessionKey(), JSON.stringify(payload));
+      return true;
     } catch (error) {
       console.warn("[Studio] Failed to persist tabs session.", error);
+      return false;
     }
   };
 
@@ -2271,6 +2284,153 @@
     }
   };
 
+  const loadWorldSelectionFromQuery = async (attachToConnector = false) => {
+    const id = new URL(window.location.href).searchParams.get("world")?.trim();
+    if (!id || pendingWorldLaunch === id) return;
+    const requestId = ++worldLaunchRequestId;
+    pendingWorldLaunch = id;
+    worldLaunchError = "";
+    try {
+      const descriptor = backendWorldToFrontendDescriptor(await getWorld(id));
+      if (
+        requestId !== worldLaunchRequestId ||
+        new URL(window.location.href).searchParams.get("world")?.trim() !== id
+      )
+        return;
+      if (!descriptor.surfaces.includes("studio-plugin")) {
+        throw new Error("This World is not available in Studio.");
+      }
+      const plugin = studioPluginFromWorldDescriptor(descriptor);
+      const starter = attachToConnector
+        ? null
+        : await loadWorldStudioStarter(descriptor, window.location.href);
+      const launchIsCurrent = () =>
+        requestId === worldLaunchRequestId &&
+        new URL(window.location.href).searchParams.get("world")?.trim() === id;
+      if (!launchIsCurrent()) return;
+      saveActiveGraph();
+      const existingTab = tabs.find(
+        (tab) =>
+          !tab.particleId &&
+          !isConnectorTreeTab(tab.id) &&
+          (starter
+            ? tab.worldId === id
+            : tabGraphs
+                .get(tab.id)
+                ?.nodes.some(
+                  (node) => node.data.kind === "plugin" && node.data.sourceId === plugin.id,
+                )),
+      );
+      if (attachToConnector && activePluginSourceRootConnectorName) {
+        attachStudioPluginToRoot(plugin);
+        if (pluginAttachError) throw new Error(pluginAttachError);
+      } else if (existingTab) {
+        switchTab(existingTab.id);
+        const connectorName = resolveActiveExecuteConnectorName();
+        if (
+          existingTab.worldId &&
+          starter?.simulate &&
+          !activeRunOutput &&
+          connectorName &&
+          nodes.some((node) => node.data.kind === "plugin" && node.data.sourceId === plugin.id)
+        ) {
+          await syncConnectorTreeFromChain(connectorName);
+          await tick();
+          if (launchIsCurrent() && activeTabId === existingTab.id)
+            await executeActiveGraph("simulate");
+        }
+      } else {
+        if (starter) {
+          // Resolve ordinary network definitions, including nested connectors, before changing tabs.
+          await ensureStudioNetworkLibraryLoaded();
+          const result = await syncConnectorTreeFromChain(starter.connector);
+          if (result.missing.length)
+            throw new Error(`World starter connectors unavailable: ${result.missing.join(", ")}.`);
+          if (
+            !isPublishedChainAddress(deployedRegistry.connectors[starter.connector]?.chainAddress)
+          )
+            throw new Error("The World starter must reference a published connector.");
+          if (!launchIsCurrent()) return;
+        }
+        const tab = {
+          ...createStudioTab(descriptor.name),
+          ...(starter ? { worldId: descriptor.id } : {}),
+        };
+        if (starter) {
+          const graph = buildConnectorTreeGraph(
+            starter.connector,
+            { x: 360, y: 120 },
+            {
+              hideReadOnlyLeafOutlets: false,
+              idFactoryScope: `world-${crypto.randomUUID()}`,
+            },
+          );
+          tabGraphs.set(tab.id, graph);
+        }
+        tabs = [...tabs, tab];
+        activeTabId = tab.id;
+        loadTabGraph(tab.id);
+        addStandaloneStudioPlugin(plugin, { position: { x: 360, y: -280 } });
+        if (starter) {
+          runSamplesCount = starter.particlesCount;
+          nodes = applyComputedRiPositionsToGraphNodes(nodes, edges).map((node) => {
+            if (!isConnectorKind(node.data.kind)) return node;
+            const coordinate =
+              starter.dynamicRi[String(node.data.riTargetPosition ?? node.data.riPosition)];
+            return coordinate && !node.data.riLocked
+              ? {
+                  ...node,
+                  data: {
+                    ...node.data,
+                    riStart: coordinate.start_point,
+                    riShift: coordinate.transformation_shift,
+                  },
+                }
+              : node;
+          });
+          await tick();
+          attachStudioPluginToRoot(plugin);
+          if (pluginAttachError) throw new Error(pluginAttachError);
+          await tick();
+          // The same anonymous simulation used by the existing Simulate button.
+          if (starter.simulate && activeTabId === tab.id) await executeActiveGraph("simulate");
+        }
+      }
+      const worldNode = nodes.find(
+        (node) => node.data.kind === "plugin" && node.data.sourceId === plugin.id,
+      );
+      if (worldNode) {
+        nodes = nodes.map((node) => ({ ...node, selected: node.id === worldNode.id }));
+        selectedNodeId = worldNode.id;
+        selectedEdgeId = null;
+      }
+      saveActiveGraph();
+      // World starters keep their URL so restored drafts can refresh their simulation.
+      // Their persisted graph is reused, including user deletions and RI edits.
+      if (persistStudioTabsSession() && !activeTab?.worldId) {
+        const url = new URL(window.location.href);
+        url.searchParams.delete("world");
+        // eslint-disable-next-line svelte/no-navigation-without-resolve -- This is the current Studio URL with only its launch parameter removed.
+        replaceState(url, page.state);
+      }
+      scheduleCanvasFitView(0.2, [], activeTabId);
+    } catch (error) {
+      if (requestId === worldLaunchRequestId)
+        worldLaunchError = error instanceof Error ? error.message : "Could not open this World.";
+    } finally {
+      if (requestId === worldLaunchRequestId) pendingWorldLaunch = "";
+    }
+  };
+
+  afterNavigate(() => {
+    if (studioLaunchReady)
+      void (async () => {
+        const withConnector = Boolean(new URL(window.location.href).searchParams.get("network_id"));
+        await loadNetworkSelectionFromQuery();
+        await loadWorldSelectionFromQuery(withConnector);
+      })();
+  });
+
   onMount(() => {
     const lesson = new URLSearchParams(window.location.search).get("lesson");
     if (
@@ -2428,13 +2588,18 @@
       await loadLocalLibrary();
       restoreStudioTabsSession();
       tabsSessionRestoreReady = true;
+      const withConnector = Boolean(new URL(window.location.href).searchParams.get("network_id"));
       await loadNetworkSelectionFromQuery();
+      await loadWorldSelectionFromQuery(withConnector);
+      studioLaunchReady = true;
       if (explorerSource === "network") {
         await ensureStudioNetworkLibraryLoaded();
       }
     })();
 
     return () => {
+      studioLaunchReady = false;
+      worldLaunchRequestId += 1;
       window.removeEventListener("keydown", handleKey);
       window.removeEventListener("resize", handleWindowResize);
       window.removeEventListener("studio-ri-update", handleStudioRiUpdate as EventListener);
@@ -6790,6 +6955,8 @@
       connectorNodes.find((node) => normalizeKey(node.data.label) === normalizeKey(tab.label)) ??
       null;
 
+    if (!rootNode && tab.worldId) rootNode = connectorNodes[0] ?? null;
+    if (!rootNode && tab.worldId) return;
     if (!rootNode) {
       rootNode = createDraftTabRootConnectorNode(tab);
       nextNodes = [...nextNodes, rootNode];
@@ -6801,7 +6968,8 @@
       if (!isConnectorKind(node.data.kind)) return node;
       const shouldBeRoot = node.id === rootId;
       const keepDeployedRootIdentity = shouldBeRoot && Boolean(node.data.fromNetwork);
-      const nextLabel = shouldBeRoot && !keepDeployedRootIdentity ? tab.label : node.data.label;
+      const nextLabel =
+        shouldBeRoot && !keepDeployedRootIdentity && !tab.worldId ? tab.label : node.data.label;
       const nextFromNetwork = shouldBeRoot
         ? keepDeployedRootIdentity
           ? node.data.fromNetwork
@@ -7636,7 +7804,10 @@
   const canDeleteNodeByPolicy = (node: StudioNode): boolean => {
     if (node.data.kind === "plugin") return true;
     if (activeTabReadOnly) return false;
-    return !(isConnectorKind(node.data.kind) && Boolean(node.data.tabRoot));
+    return (
+      Boolean(activeTab?.worldId) ||
+      !(isConnectorKind(node.data.kind) && Boolean(node.data.tabRoot))
+    );
   };
 
   const canDeleteEdgeByPolicy = (edge: Edge): boolean => {
@@ -7856,6 +8027,7 @@
     edges: Edge[];
   }) => {
     if (!activeTabReadOnly) {
+      if (activeTab?.worldId) return { nodes: toDelete, edges: toDeleteEdges };
       const rootConnectorId =
         nodes.find((node) => isConnectorKind(node.data.kind) && Boolean(node.data.tabRoot))?.id ??
         null;
@@ -8909,6 +9081,11 @@
   {/if}
 
   <div class="canvas" role="application" aria-label="Flow canvas" bind:this={canvasEl}>
+    {#if worldLaunchError}
+      <div class="world-launch-error" role="alert">
+        {worldLaunchError} <a href={resolve("/worlds")}>Browse Worlds</a>
+      </div>
+    {/if}
     {#if topMode === "hidden"}
       <button
         class="panel-tab panel-tab--top"
@@ -10709,6 +10886,17 @@
 </div>
 
 <style lang="postcss">
+  .world-launch-error {
+    position: absolute;
+    z-index: 20;
+    top: 1rem;
+    left: 1rem;
+    max-width: calc(100% - 2rem);
+    padding: 0.65rem 0.85rem;
+    background: var(--studio-flow-bg);
+    color: var(--text-primary, currentColor);
+  }
+
   @reference "$lib/styles/style.css";
 
   .studio {

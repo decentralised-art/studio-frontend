@@ -148,3 +148,20 @@ describe("Studio tabs session helpers", () => {
     });
   });
 });
+
+it("preserves the World workspace identity without making it view-only", () => {
+  const payload = buildStudioTabsSessionPayload({
+    tabs: [{ id: "world-draft", label: "Any World", worldId: "world-id" }],
+    activeTabId: "world-draft",
+    tabGraphs: [],
+    connectorTreeModels: [],
+  });
+  const restored = restoreStudioTabsSessionPayload(payload);
+  expect(restored?.tabs[0]).toEqual({
+    id: "world-draft",
+    label: "Any World",
+    particleId: undefined,
+    worldId: "world-id",
+  });
+  expect(restored?.connectorTreeModels).toEqual({});
+});

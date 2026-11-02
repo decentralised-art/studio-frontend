@@ -46,7 +46,9 @@
     </span>
   </button>
   {#if canManage}
-    <a class="tile-manage" href={resolve("/worlds/[slug]", { slug: world.slug })}> Manage world </a>
+    <a class="tile-manage" href={resolve("/worlds/[slug]?manage=1", { slug: world.slug })}>
+      Manage world
+    </a>
   {/if}
 </article>
 

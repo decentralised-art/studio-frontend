@@ -5,6 +5,7 @@ export type StudioTabSessionTab = {
   id: string;
   label: string;
   particleId?: string;
+  worldId?: string;
 };
 
 export type PersistedStudioGraph<TNode = unknown, TEdge = unknown> = {
@@ -74,7 +75,8 @@ export const sanitizePersistedTabs = (value: unknown): StudioTabSessionTab[] => 
       typeof item.particleId === "string" && item.particleId.trim().length > 0
         ? item.particleId.trim()
         : undefined;
-    sanitized.push({ id, label, particleId });
+    const worldId = typeof item.worldId === "string" ? item.worldId.trim() : "";
+    sanitized.push({ id, label, particleId, ...(worldId ? { worldId } : {}) });
   });
   return sanitized;
 };
@@ -175,6 +177,7 @@ export const buildStudioTabsSessionPayload = <TTab extends StudioTabSessionTab, 
       id: tab.id,
       label: tab.label,
       particleId: tab.particleId?.trim() || undefined,
+      ...(tab.worldId?.trim() ? { worldId: tab.worldId.trim() } : {}),
     })),
     activeTabId,
     tabGraphs: graphSnapshots,
