@@ -292,11 +292,13 @@ const stubRemoteApis = async (
     ),
   };
 
-  await page.route(/.*\/world-assets\/world-backend-e2e\/index\.html.*/, async (route) => {
-    await route.fulfill({
-      status: 200,
-      contentType: "text/html",
-      body: `<!doctype html>
+  await page
+    .context()
+    .route(/.*\/world-assets\/world-backend-e2e\/index\.html.*/, async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "text/html",
+        body: `<!doctype html>
         <html>
           <body>
             <div id="world-root">Backend E2E World Runtime</div>
@@ -315,10 +317,10 @@ const stubRemoteApis = async (
             </script>
           </body>
         </html>`,
+      });
     });
-  });
 
-  await page.route(/^https?:\/\/[^/]+\/(?:services|chain)\//, async (route) => {
+  await page.context().route(/^https?:\/\/[^/]+\/(?:services|chain)\//, async (route) => {
     const url = route.request().url();
 
     if (url.includes("/services/js/sdk/world-host.js")) {
@@ -392,11 +394,25 @@ const stubRemoteApis = async (
       return;
     }
 
+    if (url.includes("/world-assets/") && new URL(url).pathname.endsWith("/studio-starter.json")) {
+      await route.fulfill({ status: 404, body: "No starter for this fixture" });
+      return;
+    }
+
+    if (url.includes("/world-assets/")) {
+      await route.fallback();
+      return;
+    }
+
     if (url.includes("/services/worlds")) {
       await route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify([backendE2eWorld]),
+        body: JSON.stringify(
+          new URL(url).pathname.endsWith(`/worlds/${backendE2eWorld.id}`)
+            ? backendE2eWorld
+            : [backendE2eWorld],
+        ),
       });
       return;
     }
@@ -1313,7 +1329,7 @@ test("keeps old /app world links working through redirects", async ({ page }) =>
   assertNoPageErrors();
 });
 
-test("renders backend worlds in the public Worlds surface", async ({ page }) => {
+test("opens Studio-capable backend Worlds in a new editable Studio tab", async ({ page }) => {
   const assertNoPageErrors = collectPageErrors(page);
   await stubRemoteApis(page);
   await authenticateFixtureSession(page);
@@ -1323,16 +1339,26 @@ test("renders backend worlds in the public Worlds surface", async ({ page }) => 
   await expect(page.getByRole("button", { name: "Open Backend E2E World" })).toBeVisible({
     timeout: 15_000,
   });
+  const opened = page.context().waitForEvent("page");
   await page.getByRole("button", { name: "Open Backend E2E World" }).click();
-
-  await expect(page).toHaveURL(/\/worlds\?world=world-backend-e2e$/);
-  await expect(page.getByRole("dialog", { name: "Backend E2E World" })).toBeVisible();
-  await expect(page.locator(".world-dialog iframe")).toHaveAttribute(
+  const studio = await opened;
+  const assertNoStudioErrors = collectPageErrors(studio);
+  await expect(page).toHaveURL(/\/worlds$/);
+  await expect(studio).toHaveURL(/\/studio(?:\?world=world-backend-e2e)?$/);
+  await expect(studio.getByRole("application", { name: "Flow canvas" })).toBeVisible();
+  const world = studio.locator('.svelte-flow__node[data-id^="plugin-world:world-backend-e2e"]');
+  await expect(world).toHaveCount(1);
+  await expect(world.locator("iframe")).toHaveAttribute(
     "src",
     /\/world-assets\/world-backend-e2e\/index\.html.*worldChannel=/,
   );
-  await page.getByRole("button", { name: "Close World" }).click();
-  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(world.frameLocator("iframe").locator("#world-root")).toHaveText(
+    "Backend E2E World Runtime",
+  );
+  await expect(studio.getByRole("dialog")).toHaveCount(0);
+  await expect(studio.getByText("View-only tab")).toHaveCount(0);
+  assertNoStudioErrors();
+  await studio.close();
   assertNoPageErrors();
 });
 
