@@ -19,6 +19,12 @@ const registryMock = vi.hoisted(() => ({
   loadWorldRegistry: vi.fn(),
 }));
 
+const launchMock = vi.hoisted(() => ({ loadWorldOpeningView: vi.fn() }));
+vi.mock("$lib/worlds/studioLaunch", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/lib/worlds/studioLaunch")>()),
+  loadWorldOpeningView: launchMock.loadWorldOpeningView,
+}));
+
 const navigationMock = vi.hoisted(() => ({
   goto: vi.fn(),
 }));
@@ -204,6 +210,8 @@ describe("world detail page", () => {
     authApiMock.listServicesUsers.mockReset();
     authApiMock.listServicesUsers.mockResolvedValue([]);
     navigationMock.goto.mockReset();
+    launchMock.loadWorldOpeningView.mockReset();
+    launchMock.loadWorldOpeningView.mockResolvedValue("world");
     formatDiscoveryMock.fetchWorldFormatConnectorEvents.mockReset();
     formatDiscoveryMock.fetchWorldFormatConnectorEvents.mockResolvedValue({
       events: [],
@@ -222,9 +230,10 @@ describe("world detail page", () => {
   });
 
   it.each([undefined, "lead_pitch"])(
-    "opens Studio-capable Worlds in Studio, forwarding connector %s",
+    "opens a creator-opted World in Studio, forwarding connector %s",
     async (connector) => {
       appStateMock.page.params.connector = connector;
+      launchMock.loadWorldOpeningView.mockResolvedValue("studio");
       registryMock.loadWorldRegistry.mockResolvedValue(
         registryResultWithWorld({
           ...backendWorld,
@@ -244,12 +253,14 @@ describe("world detail page", () => {
     },
   );
 
-  it("keeps a Studio-capable World's owner management page accessible with manage=1", async () => {
+  it("keeps Score's owner management page accessible with manage=1", async () => {
     appStateMock.page.url = new URL("https://decentralised.art/worlds/backend-world?manage=1");
+    launchMock.loadWorldOpeningView.mockResolvedValue("studio");
     authApiMock.getCurrentUserProfileState.mockResolvedValue(ownerProfileState());
     registryMock.loadWorldRegistry.mockResolvedValue(
       registryResultWithWorld({
         ...backendWorld,
+        id: "cb881a1e-e385-48d7-b8ad-06d2ae3c05f6",
         surfaces: ["world-page", "studio-plugin"],
       }),
     );
@@ -257,6 +268,26 @@ describe("world detail page", () => {
     render(Page);
     expect(await screen.findByRole("heading", { name: "Backend World" })).toBeInTheDocument();
     expect(await screen.findByText("Owner controls")).toBeInTheDocument();
+    expect(navigationMock.goto).not.toHaveBeenCalled();
+  });
+
+  it("keeps Blue Line in its World viewer even though it supports Studio", async () => {
+    appStateMock.page.params.slug = "blue-line";
+    appStateMock.page.url = new URL("https://decentralised.art/worlds/blue-line");
+    registryMock.loadWorldRegistry.mockResolvedValue(
+      registryResultWithWorld({
+        ...backendWorld,
+        id: "ab64c998-d4e7-4e92-9baf-98d8e693d796",
+        slug: "blue-line",
+        name: "Blue Line",
+        surfaces: ["world-page", "studio-plugin"],
+      }),
+    );
+    const Page = await loadPage();
+    render(Page);
+    expect(await screen.findByRole("heading", { name: "Blue Line" })).toBeInTheDocument();
+    expect(await screen.findByTitle("Blue Line")).toBeInTheDocument();
+    await waitFor(() => expect(backendHostMock.createBackendWorldHost).toHaveBeenCalled());
     expect(navigationMock.goto).not.toHaveBeenCalled();
   });
 

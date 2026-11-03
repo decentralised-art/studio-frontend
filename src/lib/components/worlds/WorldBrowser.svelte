@@ -1,7 +1,12 @@
 <script lang="ts">
   import { asset, resolve } from "$app/paths";
   import { goto } from "$app/navigation";
-  import { buildStudioWorldUrl } from "$lib/worlds/studioLaunch";
+  import {
+    buildStudioWorldUrl,
+    opensWorldInStudioByDefault,
+    loadWorldOpeningView,
+    type WorldOpeningView,
+  } from "$lib/worlds/studioLaunch";
   import { onMount, tick } from "svelte";
 
   import { getCurrentUserProfileState } from "$lib/auth/api";
@@ -21,6 +26,7 @@
   const VIEW_STORAGE_KEY = "dcn-worlds-view";
 
   let worlds = $state<BackendWorldDescriptor[]>([]);
+  let openingViews = $state<Record<string, WorldOpeningView>>({});
   let mode = $state<BrowseMode>("gallery");
   let pageNumber = 0;
   let loading = $state(false);
@@ -49,6 +55,21 @@
     loadError = "";
     try {
       const next = await listWorlds({ page: pageNumber, limit: PAGE_SIZE, surface: "world-page" });
+      // Resolve before showing cards so a Studio popup opens directly in the
+      // click gesture, without a blocked popup or an intermediate blank tab.
+      const preferences = await Promise.all(
+        next.map(
+          async (world) =>
+            [
+              world.id,
+              await loadWorldOpeningView(
+                backendWorldToFrontendDescriptor(world),
+                window.location.href,
+              ),
+            ] as const,
+        ),
+      );
+      openingViews = { ...openingViews, ...Object.fromEntries(preferences) };
       const seen = new Set(worlds.map((world) => world.id));
       worlds = [...worlds, ...next.filter((world) => !seen.has(world.id))];
       pageNumber += 1;
@@ -71,7 +92,7 @@
   };
 
   const openWorld = async (world: BackendWorldDescriptor, pushHistory = true) => {
-    if (world.surfaces.includes("studio-plugin")) {
+    if (opensWorldInStudioByDefault(world, openingViews[world.id])) {
       const url = resolve(buildStudioWorldUrl(world.id));
       if (pushHistory) window.open(url, "_blank", "noopener,noreferrer");
       else await goto(url, { replaceState: true });
@@ -129,6 +150,15 @@
     try {
       const world = worlds.find((item) => item.id === id) ?? (await getWorld(id));
       if (!world.surfaces.includes("world-page")) return;
+      if (!(world.id in openingViews)) {
+        openingViews = {
+          ...openingViews,
+          [world.id]: await loadWorldOpeningView(
+            backendWorldToFrontendDescriptor(world),
+            window.location.href,
+          ),
+        };
+      }
       await openWorld(world, false);
     } catch {
       // A stale shared link leaves the gallery available.

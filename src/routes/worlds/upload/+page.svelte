@@ -223,6 +223,13 @@
             run independently; SDK permissions are only needed for the platform operations a World chooses
             to use.
           </p>
+          <p>
+            Worlds open in their World viewer by default. To open yours in Studio instead, include <code
+              >world-launch.json</code
+            >
+            at the ZIP root with <code>{'{"schemaVersion":1,"defaultView":"studio"}'}</code> and
+            declare the <code>studio-plugin</code> surface in its manifest.
+          </p>
         </div>
       {/if}
     </aside>

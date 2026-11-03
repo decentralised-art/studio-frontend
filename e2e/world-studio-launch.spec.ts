@@ -1,11 +1,11 @@
 import { expect, test, type Page } from "@playwright/test";
 
 const world = {
-  id: "score-world-id",
+  id: "cb881a1e-e385-48d7-b8ad-06d2ae3c05f6",
   slug: "score",
   name: "Score",
   version: "0.2.2",
-  entryUrn: "/world-assets/score-world-id/index.html",
+  entryUrn: "/world-assets/cb881a1e-e385-48d7-b8ad-06d2ae3c05f6/index.html",
   runtime: "iframe",
   surfaces: ["world-page", "studio-plugin"],
   permissions: ["browser.audio"],
@@ -13,7 +13,7 @@ const world = {
   acceptedFormatHashes: ["ab".repeat(32)],
   acceptedConnectorSets: [],
   preview: "assets/preview.png",
-  previewUrn: "/world-assets/score-world-id/assets/preview.png",
+  previewUrn: "/world-assets/cb881a1e-e385-48d7-b8ad-06d2ae3c05f6/assets/preview.png",
   ownerId: `0x${"12".repeat(20)}`,
   bundleHash: "score-bundle",
   manifestHash: "score-manifest",
@@ -48,6 +48,8 @@ async function setup(page: Page, authenticated = false, starterConnector: string
         return { worldUrl(url) { const u = new URL(url, location.href); u.searchParams.set('worldChannel', 'test'); return u.href; }, pushState(state) { options.iframe.contentWindow.postMessage({type: "test-state", payload: state.payload}, "*"); }, dispose() {} };
       }`,
       });
+    if (path.endsWith("/world-launch.json"))
+      return route.fulfill({ json: { schemaVersion: 1, defaultView: "studio" } });
     if (path.endsWith("/studio-starter.json"))
       return route.fulfill(
         starterConnector
@@ -98,7 +100,8 @@ async function setup(page: Page, authenticated = false, starterConnector: string
       writes.push(path);
       return route.fulfill({ status: 403, body: "No writes in launch tests" });
     }
-    if (path.endsWith("/worlds/score-world-id")) return route.fulfill({ json: world });
+    if (path.endsWith("/worlds/cb881a1e-e385-48d7-b8ad-06d2ae3c05f6"))
+      return route.fulfill({ json: world });
     if (path.endsWith("/worlds/missing"))
       return route.fulfill({ status: 404, body: "World not found" });
     if (path.endsWith("/worlds")) return route.fulfill({ json: [world] });
@@ -134,13 +137,13 @@ async function openRunPanel(page: Page) {
 
 const worldNodes = (page: Page) => page.locator('.svelte-flow__node[data-id^="plugin-world:"]');
 async function expectWorldInStudio(page: Page) {
-  await expect(page).toHaveURL(/\/studio(?:\?world=score-world-id)?$/);
+  await expect(page).toHaveURL(/\/studio(?:\?world=cb881a1e-e385-48d7-b8ad-06d2ae3c05f6)?$/);
   await expect(page.getByRole("application", { name: "Flow canvas" })).toBeVisible();
   await expect(worldNodes(page)).toHaveCount(1);
   await expect(worldNodes(page)).toContainText("Score");
   await expect(worldNodes(page).locator("iframe")).toHaveAttribute(
     "src",
-    /world-assets\/score-world-id\/index\.html/,
+    /world-assets\/cb881a1e-e385-48d7-b8ad-06d2ae3c05f6\/index\.html/,
   );
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await expect(page.locator(".world-renderer-panel")).toHaveCount(0);
@@ -148,20 +151,24 @@ async function expectWorldInStudio(page: Page) {
   await expect(page.getByText("View-only tab")).toHaveCount(0);
 }
 
-for (const mode of ["Gallery", "One by one"]) {
-  test(`opens Score from ${mode} directly on an editable Studio canvas`, async ({ page }) => {
-    const { writes, errors } = await setup(page);
-    await page.goto("/worlds");
-    await page.getByRole("button", { name: mode, exact: true }).click();
-    const opened = page.context().waitForEvent("page");
-    await page.getByRole("button", { name: "Open Score", exact: true }).click();
-    const studio = await opened;
-    await expectWorldInStudio(studio);
-    await expect(page).toHaveURL(/\/worlds$/);
-    await studio.close();
-    expect(writes).toEqual([]);
-    expect(errors).toEqual([]);
-  });
+for (const path of ["/", "/worlds"]) {
+  for (const mode of ["Gallery", "One by one"]) {
+    test(`opens Score from ${path} ${mode} directly on an editable Studio canvas`, async ({
+      page,
+    }) => {
+      const { writes, errors } = await setup(page);
+      await page.goto(path);
+      await page.getByRole("button", { name: mode, exact: true }).click();
+      const opened = page.context().waitForEvent("page");
+      await page.getByRole("button", { name: "Open Score", exact: true }).click();
+      const studio = await opened;
+      await expectWorldInStudio(studio);
+      await expect(page).toHaveURL(new RegExp(`${path}$`));
+      await studio.close();
+      expect(writes).toEqual([]);
+      expect(errors).toEqual([]);
+    });
+  }
 }
 
 test("direct World links redirect to Studio without loading the legacy renderer", async ({
@@ -187,14 +194,14 @@ test("preserves existing tabs and reuses the World after reload and reopening", 
       ),
     )
     .toBe(true);
-  await page.goto("/studio?world=score-world-id");
+  await page.goto("/studio?world=cb881a1e-e385-48d7-b8ad-06d2ae3c05f6");
   await expectWorldInStudio(page);
   await expect(page.getByRole("tab", { name: /Untitled Connector/ })).toBeVisible();
   const tabs = await page.getByRole("tab").count();
   await page.reload();
   await expectWorldInStudio(page);
   await expect(page.getByRole("tab")).toHaveCount(tabs);
-  await page.goto("/?world=score-world-id");
+  await page.goto("/?world=cb881a1e-e385-48d7-b8ad-06d2ae3c05f6");
   await expectWorldInStudio(page);
   await expect(page.getByRole("tab")).toHaveCount(tabs);
   expect(errors).toEqual([]);
@@ -214,7 +221,7 @@ test("anonymous refresh keeps the World launch without adding another World node
   page,
 }) => {
   const { errors } = await setup(page);
-  await page.goto("/studio?world=score-world-id");
+  await page.goto("/studio?world=cb881a1e-e385-48d7-b8ad-06d2ae3c05f6");
   await expectWorldInStudio(page);
   await page.reload();
   await expectWorldInStudio(page);
@@ -226,7 +233,7 @@ for (const connector of ["pitch", "other_world_material"]) {
     page,
   }) => {
     const { writes, errors } = await setup(page, false, connector);
-    await page.goto("/studio?world=score-world-id");
+    await page.goto("/studio?world=cb881a1e-e385-48d7-b8ad-06d2ae3c05f6");
     await expectWorldInStudio(page);
     const root = page.locator(`.svelte-flow__node[data-id^="connector-${connector}"]`);
     await expect(root).toHaveCount(1);
@@ -277,7 +284,7 @@ test("restores a World draft's edited values and preserves removal after reload"
   page,
 }) => {
   const { writes, errors } = await setup(page, true, "pitch");
-  await page.goto("/studio?world=score-world-id");
+  await page.goto("/studio?world=cb881a1e-e385-48d7-b8ad-06d2ae3c05f6");
   const root = page.locator('.svelte-flow__node[data-id^="connector-pitch-"]');
   await expect(root).toHaveCount(1);
   await root.locator('input[type="number"]').first().fill("67");
@@ -307,7 +314,7 @@ test("a new bundle starter preserves older World tabs and opens a fresh configur
   page,
 }) => {
   const { writes, errors } = await setup(page, true);
-  await page.goto("/studio?world=score-world-id");
+  await page.goto("/studio?world=cb881a1e-e385-48d7-b8ad-06d2ae3c05f6");
   await expectWorldInStudio(page);
   await expect(page).toHaveURL(/\/studio$/);
   await page.context().route("**/studio-starter.json", (route) =>
@@ -321,7 +328,7 @@ test("a new bundle starter preserves older World tabs and opens a fresh configur
       },
     }),
   );
-  await page.goto("/studio?world=score-world-id");
+  await page.goto("/studio?world=cb881a1e-e385-48d7-b8ad-06d2ae3c05f6");
   await expect(page.locator('.svelte-flow__node[data-id^="connector-pitch-"]')).toHaveCount(1);
   await expect(worldNodes(page)).toHaveCount(1);
   await expect(
@@ -335,7 +342,7 @@ test("enlarges and restores a World and evaluates it in full screen without rest
   page,
 }) => {
   const { writes, errors } = await setup(page, false, "pitch");
-  await page.goto("/studio?world=score-world-id");
+  await page.goto("/studio?world=cb881a1e-e385-48d7-b8ad-06d2ae3c05f6");
   await expectWorldInStudio(page);
   const node = worldNodes(page);
   const iframe = node.locator("iframe");

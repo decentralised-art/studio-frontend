@@ -1,7 +1,11 @@
 <script lang="ts">
   import { browser } from "$app/environment";
   import { goto } from "$app/navigation";
-  import { buildStudioWorldUrl } from "$lib/worlds/studioLaunch";
+  import {
+    buildStudioWorldUrl,
+    opensWorldInStudioByDefault,
+    loadWorldOpeningView,
+  } from "$lib/worlds/studioLaunch";
   import { resolve } from "$app/paths";
   import { page } from "$app/state";
   import { onMount, tick } from "svelte";
@@ -868,16 +872,16 @@
       if (requestId !== worldRegistryRequestId) return;
 
       const resolvedWorld = resolveWorldBySlugOrId(result.worlds, slugOrId) ?? null;
-      if (
-        resolvedWorld?.source === "backend" &&
-        resolvedWorld.surfaces.includes("studio-plugin") &&
-        !manage
-      ) {
-        openingStudio = true;
-        await goto(resolve(buildStudioWorldUrl(resolvedWorld.id, connector)), {
-          replaceState: true,
-        });
-        return;
+      if (resolvedWorld?.source === "backend" && !manage) {
+        const openingView = await loadWorldOpeningView(resolvedWorld, page.url.href);
+        if (requestId !== worldRegistryRequestId) return;
+        if (opensWorldInStudioByDefault(resolvedWorld, openingView)) {
+          openingStudio = true;
+          await goto(resolve(buildStudioWorldUrl(resolvedWorld.id, connector)), {
+            replaceState: true,
+          });
+          return;
+        }
       }
       selectedWorld = resolvedWorld;
       worldRegistryLoadWarning = result.backendError !== null && bundledWorld === null;

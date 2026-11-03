@@ -5,14 +5,14 @@ const image = Buffer.from(
   "base64",
 );
 
-const worlds = ["Autonomous World", "Another World"].map((name, index) => ({
-  id: `world-${index + 1}`,
-  slug: `world-${index + 1}`,
+const worlds = ["Blue Line", "Another World"].map((name, index) => ({
+  id: index === 0 ? "ab64c998-d4e7-4e92-9baf-98d8e693d796" : `world-${index + 1}`,
+  slug: index === 0 ? "blue-line" : `world-${index + 1}`,
   name,
   version: "1.0.0",
   entryUrn: `/world-assets/world-${index + 1}/index.html`,
   runtime: "iframe",
-  surfaces: ["world-page"],
+  surfaces: ["world-page", "studio-plugin"],
   permissions: [],
   description: `${name} runs without connectors.`,
   preview: "assets/preview.png",
@@ -28,7 +28,9 @@ const worlds = ["Autonomous World", "Another World"].map((name, index) => ({
   updatedAt: "2026-10-01T00:00:00Z",
 }));
 
-test("browses Worlds in both views and opens an independent iframe", async ({ page }) => {
+test("keeps Blue Line and other Studio-capable Worlds in their independent viewer", async ({
+  page,
+}) => {
   let connectorRequests = 0;
   await page.route("**/services/worlds**", async (route) => {
     const path = new URL(route.request().url()).pathname;
@@ -36,6 +38,10 @@ test("browses Worlds in both views and opens an independent iframe", async ({ pa
     await route.fulfill({ json: world ?? worlds });
   });
   await page.route("**/services/world-assets/**", async (route) => {
+    if (new URL(route.request().url()).pathname.endsWith("/world-launch.json")) {
+      await route.fulfill({ status: 404, body: "No launch preference" });
+      return;
+    }
     if (route.request().url().includes("preview.png")) {
       await route.fulfill({ status: 200, contentType: "image/png", body: image });
       return;
@@ -69,19 +75,26 @@ test("browses Worlds in both views and opens an independent iframe", async ({ pa
 
   await page.goto("/");
   await expect(page.getByRole("region", { name: "Worlds", exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Open Autonomous World" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Open Blue Line" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Gallery" })).toHaveAttribute(
     "aria-pressed",
     "true",
   );
+
+  // Gallery launch must keep the same browsing page and its existing viewer.
+  const pageCount = page.context().pages().length;
+  await page.getByRole("button", { name: "Open Blue Line" }).click();
+  await expect(page.getByRole("dialog", { name: "Blue Line" })).toBeVisible();
+  expect(page.context().pages()).toHaveLength(pageCount);
+  await page.getByRole("button", { name: "Close World" }).click();
 
   await page.getByRole("button", { name: "One by one" }).click();
   await expect(page.getByRole("button", { name: "One by one" })).toHaveAttribute(
     "aria-pressed",
     "true",
   );
-  await page.getByRole("button", { name: "Open Autonomous World" }).click();
-  await expect(page.getByRole("dialog", { name: "Autonomous World" })).toBeVisible();
+  await page.getByRole("button", { name: "Open Blue Line" }).click();
+  await expect(page.getByRole("dialog", { name: "Blue Line" })).toBeVisible();
   await expect(
     page.frameLocator(".world-dialog iframe").getByText("World running without connectors"),
   ).toBeVisible();
@@ -101,6 +114,13 @@ test("browses Worlds in both views and opens an independent iframe", async ({ pa
   );
   await page.goto("/worlds");
   await expect(page.getByRole("button", { name: "Open Another World" })).toBeVisible();
+  await page.getByRole("button", { name: "Gallery" }).click();
+  await page.getByRole("button", { name: "Open Blue Line" }).click();
+  await expect(page.getByRole("dialog", { name: "Blue Line" })).toBeVisible();
+  await page.getByRole("button", { name: "Close World" }).click();
+  await page.goto("/?world=ab64c998-d4e7-4e92-9baf-98d8e693d796");
+  await expect(page.getByRole("dialog", { name: "Blue Line" })).toBeVisible();
+  await page.getByRole("button", { name: "Close World" }).click();
   await page.goto("/?world=world-2");
   await expect(page.getByRole("dialog", { name: "Another World" })).toBeVisible();
   await page.getByRole("button", { name: "Close World" }).click();
