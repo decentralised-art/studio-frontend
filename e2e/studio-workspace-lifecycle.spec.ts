@@ -825,3 +825,45 @@ test("Create and simulation use only the selected root while an unrelated unfini
   expect(state.errors).toEqual([]);
   expect(state.writes).toEqual([]);
 });
+
+test("connector loading shows a cancellable scaffold and a cancelled worker cannot replace the workspace", async ({
+  page,
+}) => {
+  const state = await setup(page, true);
+  let release = () => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let workerRequests = 0;
+  await page.route(/connectorTreeWorker-[^/]+\.js$/, async (route) => {
+    workerRequests++;
+    if (workerRequests === 1) await gate;
+    try {
+      await route.continue();
+    } catch {
+      /* Termination may abort the pending worker fetch. */
+    }
+  });
+  try {
+    await page.goto("/studio?network_kind=connector&network_id=pitch");
+    const scaffold = page.locator(".graph-loading");
+    await expect(scaffold).toBeVisible();
+    await expect(scaffold).toContainText("Preparing connector graph");
+    await scaffold.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(scaffold).toHaveCount(0);
+    release();
+    await expect(connectorNodes(page)).toHaveCount(0);
+    const pitch = page
+      .getByRole("listitem")
+      .filter({ has: page.getByRole("link", { name: "pitch", exact: true }) });
+    await pitch.getByRole("button", { name: "Open in Studio", exact: true }).click();
+    await expect(connectorNodes(page)).toHaveCount(1);
+    await expect(connectorNodes(page).locator(".connector-title")).toHaveText("pitch");
+    await expect(scaffold).toHaveCount(0);
+    expect(workerRequests).toBeGreaterThan(1);
+    expect(state.errors).toEqual([]);
+    expect(state.writes).toEqual([]);
+  } finally {
+    release();
+  }
+});

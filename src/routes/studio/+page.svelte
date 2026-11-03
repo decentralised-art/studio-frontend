@@ -3,7 +3,7 @@
   import { afterNavigate, replaceState } from "$app/navigation";
   import { page } from "$app/state";
   import { resolve } from "$app/paths";
-  import { onMount, tick, untrack } from "svelte";
+  import { onDestroy, onMount, tick, untrack } from "svelte";
   import { loadWorldStudioStarter } from "$lib/worlds/studioStarter";
   import { SvelteMap, SvelteSet } from "svelte/reactivity";
 
@@ -33,6 +33,8 @@
   import StudioLibraryList from "$lib/components/studio/StudioLibraryList.svelte";
   import StudioParticleNode from "$lib/components/studio/StudioParticleNode.svelte";
   import StudioPluginNode from "$lib/components/studio/StudioPluginNode.svelte";
+  import StudioGraphLoading from "$lib/components/studio/StudioGraphLoading.svelte";
+  import { loadConnectorTreeInBackground } from "$lib/studio/connectorTreeLoader";
   import StudioTransformationNode from "$lib/components/studio/StudioTransformationNode.svelte";
   import SolidityEditorShell from "$lib/components/workspace-window/SolidityEditorShell.svelte";
   import {
@@ -115,7 +117,6 @@
   import {
     buildConnectorTreeGraph as buildConnectorTreeGraphFromRegistry,
     computeConnectorOpenSlotsInRegistry,
-    hasConnectorTreePlaceholderNodes,
     isCompleteConnectorTreeModel,
     shouldReplaceConnectorTreeModel,
   } from "$lib/studio/connectorTreeGraph";
@@ -3240,6 +3241,12 @@
     manualGraphDragSettleTimer = setTimeout(() => {
       manualGraphDragSettleTimer = null;
     }, 250);
+  };
+
+  // A node can disappear before d3 receives its original mouseup. End the
+  // gesture while its DOM still exists, so it cannot swallow the next UI click.
+  const finishFlowPointerGesture = () => {
+    if (browser) window.dispatchEvent(new MouseEvent("mouseup", { view: window, bubbles: true }));
   };
 
   const scheduleLayout = ({ connectorTrees = false }: { connectorTrees?: boolean } = {}) => {
@@ -6542,6 +6549,7 @@
   };
 
   const closeTab = (tabId: string) => {
+    cancelConnectorTreeLoad(tabId);
     if (tabs.length <= 1) {
       tabGraphs.delete(tabId);
       connectorTreeModelsByTab.delete(tabId);
@@ -6619,72 +6627,138 @@
     });
   };
 
-  const refreshConnectorTreeTab = (tabId: string) => {
+  let connectorTreeLoading = $state<Record<string, string>>({});
+  const connectorTreeLoads = new SvelteMap<string, AbortController>();
+  const cancelConnectorTreeLoad = (tabId: string) => {
+    connectorTreeLoads.get(tabId)?.abort();
+    connectorTreeLoads.delete(tabId);
+    delete connectorTreeLoading[tabId];
+  };
+  const beginConnectorTreeLoad = (tabId: string) => {
+    cancelConnectorTreeLoad(tabId);
+    const controller = new AbortController();
+    connectorTreeLoads.set(tabId, controller);
+    connectorTreeLoading[tabId] = "Preparing connector graph…";
+    return controller;
+  };
+  const finishConnectorTreeLoad = (tabId: string, controller: AbortController) => {
+    if (connectorTreeLoads.get(tabId) !== controller) return;
+    connectorTreeLoads.delete(tabId);
+    delete connectorTreeLoading[tabId];
+  };
+  const buildConnectorTreeInBackground = async (name: string, signal: AbortSignal) => {
+    await tick();
+    return loadConnectorTreeInBackground(
+      {
+        connectorRegistry: $state.snapshot(deployedRegistry.connectors),
+        rootConnectorName: name,
+        origin: { x: 360, y: 120 },
+        idPrefix: slugify(name) || "connector",
+        labels: Object.fromEntries(
+          networkLibrary.feature.map((item) => [getLibraryRegistryName(item), item.name]),
+        ),
+      },
+      signal,
+    );
+  };
+  const canApplyConnectorTreeLoad = (tabId: string, controller: AbortController, owner: string) =>
+    !controller.signal.aborted &&
+    connectorTreeLoads.get(tabId) === controller &&
+    owner === getCurrentStudioAuthorId() &&
+    tabs.some((tab) => tab.id === tabId);
+
+  const refreshConnectorTreeTab = async (tabId: string) => {
     const tab = tabs.find((candidate) => candidate.id === tabId);
     const rootConnectorName = tab?.particleId?.trim() ?? "";
-    if (!rootConnectorName || !connectorTreeModelsByTab.has(tabId)) return;
-    const currentGraph = connectorTreeModelsByTab.get(tabId) ?? null;
-    const graph = buildConnectorTreeGraph(rootConnectorName, { x: 360, y: 120 });
-    if (shouldReplaceConnectorTreeModel(currentGraph, graph)) {
-      connectorTreeModelsByTab.set(tabId, graph);
+    if (!rootConnectorName || !connectorTreeModelsByTab.has(tabId) || connectorTreeLoads.has(tabId))
+      return;
+    const controller = beginConnectorTreeLoad(tabId),
+      owner = getCurrentStudioAuthorId();
+    try {
+      const graph = await buildConnectorTreeInBackground(rootConnectorName, controller.signal);
+      if (
+        !canApplyConnectorTreeLoad(tabId, controller, owner) ||
+        !connectorTreeModelsByTab.has(tabId)
+      )
+        return;
+      if (shouldReplaceConnectorTreeModel(connectorTreeModelsByTab.get(tabId), graph))
+        connectorTreeModelsByTab.set(tabId, graph);
+      tabGraphs.set(tabId, tabGraphs.get(tabId) ?? { nodes: [], edges: [] });
+      if (activeTabId === tabId) loadTabGraph(tabId);
+    } catch (error) {
+      if (
+        !controller.signal.aborted &&
+        activeTabId === tabId &&
+        owner === getCurrentStudioAuthorId()
+      )
+        chainSyncError =
+          error instanceof Error ? error.message : "Could not prepare connector graph.";
+    } finally {
+      finishConnectorTreeLoad(tabId, controller);
     }
-    tabGraphs.set(tabId, tabGraphs.get(tabId) ?? { nodes: [], edges: [] });
-    if (activeTabId === tabId) loadTabGraph(tabId);
   };
 
   const refreshConnectorTreeTabs = () => {
     tabs.forEach((tab) => {
-      if (!tab.particleId) return;
-      if (!connectorTreeModelsByTab.has(tab.id)) return;
-      refreshConnectorTreeTab(tab.id);
+      if (tab.particleId && connectorTreeModelsByTab.has(tab.id))
+        void refreshConnectorTreeTab(tab.id);
     });
   };
 
   const ensureConnectorTreeTabGraph = async (tabId: string, connectorName: string) => {
-    const currentGraph = connectorTreeModelsByTab.get(tabId) ?? null;
-    let graph = buildConnectorTreeGraph(connectorName, { x: 360, y: 120 });
-    if (shouldReplaceConnectorTreeModel(currentGraph, graph)) {
-      connectorTreeModelsByTab.set(tabId, graph);
-    }
-    tabGraphs.set(tabId, tabGraphs.get(tabId) ?? { nodes: [], edges: [] });
-    if (activeTabId === tabId) loadTabGraph(tabId);
-    const hasPlaceholderNodes = hasConnectorTreePlaceholderNodes(graph);
-    if (graph.nodes.length && !hasPlaceholderNodes) return true;
-
+    const controller = beginConnectorTreeLoad(tabId),
+      owner = getCurrentStudioAuthorId();
+    const apply = (graph: ConnectorTreeModel) => {
+      if (!canApplyConnectorTreeLoad(tabId, controller, owner)) return false;
+      if (shouldReplaceConnectorTreeModel(connectorTreeModelsByTab.get(tabId), graph))
+        connectorTreeModelsByTab.set(tabId, graph);
+      tabGraphs.set(tabId, tabGraphs.get(tabId) ?? { nodes: [], edges: [] });
+      if (activeTabId === tabId) loadTabGraph(tabId);
+      return true;
+    };
     try {
+      let graph = await buildConnectorTreeInBackground(connectorName, controller.signal);
+      if (!apply(graph)) return false;
+      if (isCompleteConnectorTreeModel(graph)) return true;
       chainSyncError = null;
+      connectorTreeLoading[tabId] = `Fetching ${connectorName} and its dependencies…`;
       chainSyncStatus = `Fetching ${connectorName} from chain...`;
       const result = await withChainAuthRetry(() => syncConnectorTreeFromChain(connectorName));
+      if (!canApplyConnectorTreeLoad(tabId, controller, owner)) return false;
       if (result.missing.includes(connectorName)) {
         chainSyncStatus = null;
         chainSyncError = `Connector ${connectorName} is unavailable. Open a published connector or a draft owned by the signed-in account.`;
         return false;
       }
-      graph = buildConnectorTreeGraph(connectorName, { x: 360, y: 120 });
-      const graphBeforeFetchReload = connectorTreeModelsByTab.get(tabId) ?? null;
-      if (shouldReplaceConnectorTreeModel(graphBeforeFetchReload, graph)) {
-        connectorTreeModelsByTab.set(tabId, graph);
-      }
-      tabGraphs.set(tabId, tabGraphs.get(tabId) ?? { nodes: [], edges: [] });
-      if (activeTabId === tabId) loadTabGraph(tabId);
-      const hasRenderableTree = isCompleteConnectorTreeModel(graph);
-      if (hasRenderableTree) {
-        chainSyncStatus =
-          result.loaded.length > 1
-            ? `Loaded ${connectorName} and ${result.loaded.length - 1} composite connector(s).`
-            : `Loaded ${connectorName} from chain.`;
-      } else {
-        const missing = result.missing.length ? ` Missing: ${result.missing.join(", ")}.` : "";
+      connectorTreeLoading[tabId] = "Preparing connector graph…";
+      graph = await buildConnectorTreeInBackground(connectorName, controller.signal);
+      if (!apply(graph)) return false;
+      const complete = isCompleteConnectorTreeModel(graph);
+      if (complete)
+        chainSyncStatus = `Loaded ${connectorName} and ${Math.max(0, result.loaded.length - 1)} dependencies.`;
+      else {
         chainSyncStatus = null;
-        chainSyncError = `Fetched ${connectorName}, but no complete tree could be rendered yet.${missing}`;
+        chainSyncError = `Fetched ${connectorName}, but its graph still has missing dependencies.${result.missing.length ? ` Missing: ${result.missing.join(", ")}.` : ""}`;
       }
-      return hasRenderableTree;
+      return complete;
     } catch (error) {
+      if (controller.signal.aborted || owner !== getCurrentStudioAuthorId()) return false;
       chainSyncStatus = null;
       chainSyncError = error instanceof Error ? error.message : `Failed to fetch ${connectorName}.`;
       return false;
+    } finally {
+      finishConnectorTreeLoad(tabId, controller);
     }
   };
+  $effect(() => {
+    touchDeps(currentStudioAuthorId);
+    return () => {
+      for (const id of [...connectorTreeLoads.keys()]) cancelConnectorTreeLoad(id);
+    };
+  });
+  onDestroy(() => {
+    for (const id of [...connectorTreeLoads.keys()]) cancelConnectorTreeLoad(id);
+  });
 
   const openConnectorTab = async (connectorId: string) => {
     const resolvedId = connectorId.replace(/^feature-/, "").trim();
@@ -8141,6 +8215,7 @@
   };
 
   const removeSelectedGraphEntity = (): boolean => {
+    finishFlowPointerGesture();
     const selectedNodeIdsForRemoval = nodes.filter((node) => node.selected).map((node) => node.id);
     const selectedEdgeIdsForRemoval = edges.filter((edge) => edge.selected).map((edge) => edge.id);
 
@@ -8288,6 +8363,7 @@
     nodes: StudioNode[];
     edges: Edge[];
   }) => {
+    finishFlowPointerGesture();
     const removeIds = collectStudioWorkspaceRemovalIds({
       nodeIds: toDelete.map((node) => node.id),
       nodes,
@@ -8752,7 +8828,10 @@
   };
 
   $effect(() => {
-    if (apiEditorApplying) return;
+    // Resolving a large protocol tree is expensive. Keep small previews eager,
+    // and defer large hidden previews until their editor is opened.
+    if (apiEditorApplying || (nodes.length > 100 && (!inspectorVisible || inspectorTab !== "api")))
+      return;
     const nextGenerated = chainApiResolvedJson;
     const userHasUnsavedJsonDraft =
       apiEditorFocused &&
@@ -9354,6 +9433,12 @@
       </button>
     {/if}
     <div class="flow-area" role="presentation" onpointerdowncapture={handleFlowAreaPointerDown}>
+      {#if connectorTreeLoading[activeTabId]}
+        <StudioGraphLoading
+          message={connectorTreeLoading[activeTabId]}
+          onCancel={() => cancelConnectorTreeLoad(activeTabId)}
+        />
+      {/if}
       <SvelteFlow
         bind:nodes
         bind:edges
