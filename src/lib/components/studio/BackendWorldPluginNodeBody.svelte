@@ -220,7 +220,7 @@
   {#if viewError}<p class="backend-world-view-error" role="status">{viewError}</p>{/if}
 
   <div class="backend-world-frame">
-    <WorldFrame {world} input={worldInput} title={`${label} preview`} showStatus={true} />
+    <WorldFrame {world} input={worldInput} title={`${label} preview`} />
   </div>
 </div>
 
