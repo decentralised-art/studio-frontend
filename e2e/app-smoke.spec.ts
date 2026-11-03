@@ -398,6 +398,10 @@ const stubRemoteApis = async (
       return;
     }
 
+    if (url.includes("/world-assets/") && new URL(url).pathname.endsWith("/world-launch.json")) {
+      await route.fulfill({ json: { schemaVersion: 1, defaultView: "studio" } });
+      return;
+    }
     if (url.includes("/world-assets/") && new URL(url).pathname.endsWith("/studio-starter.json")) {
       await route.fulfill({ status: 404, body: "No starter for this fixture" });
       return;
@@ -1335,7 +1339,7 @@ test("keeps old /app world links working through redirects", async ({ page }) =>
   assertNoPageErrors();
 });
 
-test("opens Studio-capable backend Worlds in a new editable Studio tab", async ({ page }) => {
+test("opens creator-opted backend Worlds in a new editable Studio tab", async ({ page }) => {
   const assertNoPageErrors = collectPageErrors(page);
   await stubRemoteApis(page);
   await authenticateFixtureSession(page);
