@@ -330,3 +330,68 @@ test("a new bundle starter preserves older World tabs and opens a fresh configur
   expect(writes).toEqual([]);
   expect(errors).toEqual([]);
 });
+
+test("enlarges and restores a World and evaluates it in full screen without restarting its iframe", async ({
+  page,
+}) => {
+  const { writes, errors } = await setup(page, false, "pitch");
+  await page.goto("/studio?world=score-world-id");
+  await expectWorldInStudio(page);
+  const node = worldNodes(page);
+  const iframe = node.locator("iframe");
+  const frame = iframe.contentFrame();
+  await expect(frame.locator("main")).toContainText("60");
+  await frame.locator("main").evaluate((main) => {
+    Object.assign(window, { retainedWorldDocument: main });
+  });
+  const state = await frame.locator("main").innerText();
+  const original = await node.evaluate((element) => ({
+    width: element.offsetWidth,
+    height: element.offsetHeight,
+  }));
+  const edges = await page.locator(".svelte-flow__edge").count();
+  await node.getByRole("button", { name: "Enlarge World", exact: true }).click();
+  await expect
+    .poll(() => node.evaluate((element) => element.offsetWidth))
+    .toBeGreaterThanOrEqual(960);
+  await expect
+    .poll(() => node.evaluate((element) => element.offsetHeight))
+    .toBeGreaterThanOrEqual(720);
+  await expect(frame.locator("main")).toHaveText(state);
+  expect(
+    await frame
+      .locator("main")
+      .evaluate((main) => main === Reflect.get(window, "retainedWorldDocument")),
+  ).toBe(true);
+  expect(await page.locator(".svelte-flow__edge").count()).toBe(edges);
+  await node.getByRole("button", { name: "Restore World size", exact: true }).click();
+  await expect
+    .poll(() =>
+      node.evaluate((element) => ({ width: element.offsetWidth, height: element.offsetHeight })),
+    )
+    .toEqual(original);
+  await node.getByRole("button", { name: "Full screen World", exact: true }).click();
+  await expect
+    .poll(() =>
+      page.evaluate(() => document.fullscreenElement?.classList.contains("backend-world-shell")),
+    )
+    .toBe(true);
+  const fullscreenBounds = await node.locator(".backend-world-shell").boundingBox();
+  expect(Math.abs(fullscreenBounds!.width - page.viewportSize()!.width)).toBeLessThan(2);
+  expect(Math.abs(fullscreenBounds!.height - page.viewportSize()!.height)).toBeLessThan(2);
+  await expect(frame.locator("main")).toHaveText(state);
+  await node.getByRole("button", { name: "Exit full screen World", exact: true }).click();
+  await expect.poll(() => page.evaluate(() => document.fullscreenElement === null)).toBe(true);
+  expect(
+    await frame
+      .locator("main")
+      .evaluate((main) => main === Reflect.get(window, "retainedWorldDocument")),
+  ).toBe(true);
+  await expect
+    .poll(() =>
+      node.evaluate((element) => ({ width: element.offsetWidth, height: element.offsetHeight })),
+    )
+    .toEqual(original);
+  expect(writes).toEqual([]);
+  expect(errors).toEqual([]);
+});

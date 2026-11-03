@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount } from "svelte";
   import { resolve } from "$app/paths";
 
   import WorldFrame from "$lib/components/worlds/WorldFrame.svelte";
@@ -17,6 +18,8 @@
 
   type Props = {
     label: string;
+    enlarged?: boolean;
+    onToggleSize?: () => void;
     world: WorldDescriptor;
     runtimeData: StudioPluginRuntimeData | null;
     connectorSetSelection?: StudioWorldConnectorSetSelection;
@@ -27,11 +30,33 @@
   let {
     label,
     world,
+    enlarged = false,
+    onToggleSize,
     runtimeData,
     connectorSetSelection,
     selectedConnectorContextNames = [],
     selectedConnectorContextPathPrefixes = [],
   }: Props = $props();
+
+  let worldShell: HTMLDivElement | null = $state(null);
+  let isFullscreen = $state(false);
+  let canFullscreen = $state(false);
+  let viewError = $state("");
+  onMount(() => {
+    canFullscreen = document.fullscreenEnabled;
+  });
+  const syncFullscreen = () => {
+    isFullscreen = document.fullscreenElement === worldShell;
+    viewError = "";
+  };
+  const toggleFullscreen = async () => {
+    try {
+      if (document.fullscreenElement === worldShell) await document.exitFullscreen();
+      else await worldShell?.requestFullscreen();
+    } catch {
+      viewError = "Full screen is unavailable in this browser. Use Enlarge instead.";
+    }
+  };
 
   const normalizeConnectorName = (value: unknown): string =>
     typeof value === "string" ? value.trim() : "";
@@ -149,18 +174,50 @@
   );
 </script>
 
-<div class="backend-world-shell">
+<svelte:document onfullscreenchange={syncFullscreen} />
+
+<div class="backend-world-shell" bind:this={worldShell}>
   <div class="backend-world-toolbar">
     <div class="backend-world-meta">{statsText}</div>
-    <a
-      class="backend-world-open"
-      href={resolve("/worlds/[slug]", { slug: world.slug })}
-      target="_blank"
-      rel="noopener noreferrer"
-    >
-      Open
-    </a>
+    <div class="backend-world-actions nodrag nopan nowheel">
+      {#if onToggleSize && !isFullscreen}
+        <button
+          class="backend-world-open"
+          type="button"
+          onclick={onToggleSize}
+          aria-label={enlarged ? "Restore World size" : "Enlarge World"}
+          title={enlarged
+            ? "Restore previous size and flow view"
+            : "Enlarge and frame this World in the flow"}
+        >
+          {enlarged ? "Restore" : "Enlarge"}
+        </button>
+      {/if}
+      <button
+        class="backend-world-open"
+        type="button"
+        onclick={toggleFullscreen}
+        disabled={!canFullscreen}
+        aria-label={isFullscreen ? "Exit full screen World" : "Full screen World"}
+        title={!canFullscreen
+          ? "Full screen is unavailable in this browser. Use Enlarge instead."
+          : isFullscreen
+            ? "Return to the flow (Escape)"
+            : "Evaluate this live World in full screen"}
+      >
+        {isFullscreen ? "Exit full screen" : "Full screen"}
+      </button>
+      <a
+        class="backend-world-open"
+        href={resolve("/worlds/[slug]", { slug: world.slug })}
+        target="_blank"
+        rel="noopener noreferrer"
+      >
+        Open
+      </a>
+    </div>
   </div>
+  {#if viewError}<p class="backend-world-view-error" role="status">{viewError}</p>{/if}
 
   <div class="backend-world-frame">
     <WorldFrame {world} input={worldInput} title={`${label} preview`} showStatus={true} />
@@ -175,7 +232,28 @@
   }
 
   .backend-world-toolbar {
-    @apply flex items-center justify-between gap-2;
+    @apply flex flex-wrap items-center justify-between gap-2;
+  }
+
+  .backend-world-shell:fullscreen {
+    margin: 0;
+    padding: 12px;
+    width: 100%;
+    height: 100%;
+    background: var(--surface-page, #111);
+    color: var(--text-primary, #eee);
+  }
+
+  .backend-world-shell:fullscreen .backend-world-frame {
+    min-height: 0;
+  }
+
+  .backend-world-actions {
+    @apply flex flex-wrap items-center gap-1;
+  }
+
+  .backend-world-view-error {
+    @apply mt-2 text-xs;
   }
 
   .backend-world-meta {
@@ -184,6 +262,16 @@
 
   .backend-world-open {
     @apply rounded-md border border-white/15 px-2 py-1 text-[0.52rem] uppercase tracking-[0.16em] text-white/60 no-underline;
+  }
+
+  .backend-world-open:disabled {
+    opacity: 0.4;
+    cursor: default;
+  }
+
+  .backend-world-open:focus-visible {
+    outline: 2px solid currentColor;
+    outline-offset: 2px;
   }
 
   .backend-world-open:hover {

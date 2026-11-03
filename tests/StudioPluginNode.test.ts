@@ -140,6 +140,13 @@ vi.mock("@xyflow/svelte", async () => {
   return {
     Handle,
     NodeResizer,
+    useSvelteFlow: () => ({
+      getNode: vi.fn(),
+      updateNode: vi.fn(),
+      getViewport: () => ({ x: 0, y: 0, zoom: 1 }),
+      setViewport: vi.fn(),
+      fitView: vi.fn(),
+    }),
     Position: {
       Bottom: "bottom",
     },

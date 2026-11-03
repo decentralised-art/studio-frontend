@@ -1,7 +1,14 @@
 <script lang="ts">
-  import { onDestroy, untrack } from "svelte";
+  import { onDestroy, tick, untrack } from "svelte";
   import { browser } from "$app/environment";
-  import { Handle, NodeResizer, Position, type Node, type NodeProps } from "@xyflow/svelte";
+  import {
+    Handle,
+    NodeResizer,
+    Position,
+    useSvelteFlow,
+    type Node,
+    type NodeProps,
+  } from "@xyflow/svelte";
   import BackendWorldPluginNodeBody from "$lib/components/studio/BackendWorldPluginNodeBody.svelte";
   import ScorePluginNodeBody from "$lib/components/studio/ScorePluginNodeBody.svelte";
   import ToneWorldPluginNodeBody from "$lib/components/studio/ToneWorldPluginNodeBody.svelte";
@@ -42,7 +49,41 @@
   type PlaybackInstrumentMode = "analog-synth" | "grand-piano";
   type PlaybackInstrument = import("tone").PolySynth | import("tone").Sampler;
 
-  const { data, selected }: NodeProps<PluginNode> = $props();
+  const { id, data, selected }: NodeProps<PluginNode> = $props();
+  const flow = useSvelteFlow();
+  let previousWorldView = $state<{
+    width: number | undefined;
+    height: number | undefined;
+    viewport: ReturnType<typeof flow.getViewport>;
+  } | null>(null);
+  const toggleWorldSize = async () => {
+    const node = flow.getNode(id);
+    if (!node) return;
+    if (previousWorldView) {
+      const previous = previousWorldView;
+      previousWorldView = null;
+      flow.updateNode(id, { width: previous.width, height: previous.height });
+      await flow.setViewport(previous.viewport);
+    } else {
+      previousWorldView = {
+        width: node.width,
+        height: node.height,
+        viewport: flow.getViewport(),
+      };
+      flow.updateNode(id, {
+        width: Math.max(960, node.measured?.width ?? 0),
+        height: Math.max(720, node.measured?.height ?? 0),
+      });
+      await tick();
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      );
+      // Frame the larger node without altering its position or its connections.
+      if (flow.getNode(id) && previousWorldView) {
+        await flow.fitView({ nodes: [{ id }], padding: 0.08, maxZoom: 1 });
+      }
+    }
+  };
   const selectedClass = $derived(selected ? "is-selected" : "");
   const runtimeData = $derived<StudioPluginRuntimeData | null>(data.pluginData ?? null);
   let tempoSetting = $state(120);
@@ -433,6 +474,8 @@
     <BackendWorldPluginNodeBody
       label={data.label}
       world={worldDescriptor}
+      enlarged={previousWorldView !== null}
+      onToggleSize={toggleWorldSize}
       {runtimeData}
       connectorSetSelection={data.worldConnectorSetSelection}
       {selectedConnectorContextNames}
