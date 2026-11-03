@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onDestroy, tick, untrack } from "svelte";
+  import { getContext, onDestroy, tick, untrack } from "svelte";
   import { browser } from "$app/environment";
   import {
     Handle,
@@ -9,6 +9,11 @@
     type Node,
     type NodeProps,
   } from "@xyflow/svelte";
+  import {
+    WORLD_SELECTION_HANDLER,
+    type WorldInteractionContext,
+    type WorldSelectionHandler,
+  } from "$lib/worlds/interaction";
   import BackendWorldPluginNodeBody from "$lib/components/studio/BackendWorldPluginNodeBody.svelte";
   import ScorePluginNodeBody from "$lib/components/studio/ScorePluginNodeBody.svelte";
   import ToneWorldPluginNodeBody from "$lib/components/studio/ToneWorldPluginNodeBody.svelte";
@@ -41,6 +46,7 @@
     pluginData?: StudioPluginRuntimeData;
     pluginTargets?: string[];
     worldConnectorSetSelection?: StudioWorldConnectorSetSelection;
+    worldInteraction?: WorldInteractionContext;
     selectedConnectorContextNames?: string[];
     selectedConnectorContextPathPrefixes?: string[];
   };
@@ -51,6 +57,7 @@
 
   const { id, data, selected }: NodeProps<PluginNode> = $props();
   const flow = useSvelteFlow();
+  const selectWorldSources = getContext<WorldSelectionHandler | undefined>(WORLD_SELECTION_HANDLER);
   let previousWorldView = $state<{
     width: number | undefined;
     height: number | undefined;
@@ -477,6 +484,8 @@
       enlarged={previousWorldView !== null}
       onToggleSize={toggleWorldSize}
       {runtimeData}
+      interaction={data.worldInteraction}
+      onSourceSelection={(selection) => selectWorldSources?.({ ...selection, worldNodeId: id })}
       connectorSetSelection={data.worldConnectorSetSelection}
       {selectedConnectorContextNames}
       {selectedConnectorContextPathPrefixes}

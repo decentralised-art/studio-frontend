@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   computeConnectorContextPathPrefixes,
+  computeConnectorSourceOccurrences,
   computeSelectedConnectorContextHighlightRoles,
   isConnectorContextEdge,
   type ConnectorContextHighlightNode,
@@ -119,5 +120,62 @@ describe("connector context highlight", () => {
         (item) => item.id,
       ),
     ).toEqual(["/root:*"]);
+  });
+});
+
+describe("source occurrence mapping", () => {
+  it("distinguishes reused connector instances, their nested scalar children and disconnected graphs", () => {
+    const nodes = [
+      node("root"),
+      node("left"),
+      node("right"),
+      node("pitch-left"),
+      node("pitch-right"),
+      node("unrelated"),
+    ];
+    const edges = [
+      edge("root", "left", "composite", "dim-0"),
+      edge("root", "right", "composite", "dim-1"),
+      edge("left", "pitch-left", "binding", "dim-2"),
+      edge("right", "pitch-right", "binding", "dim-2"),
+    ];
+    const result = computeConnectorSourceOccurrences(nodes, edges, "root", (n) =>
+      n.id === "left" || n.id === "right" ? "reused" : n.id.startsWith("pitch") ? "pitch" : n.id,
+    );
+    expect(result.map((s) => [s.nodeId, s.pathPrefix])).toEqual([
+      ["root", "/root:*"],
+      ["left", "/root:0/reused:*"],
+      ["right", "/root:1/reused:*"],
+      ["pitch-left", "/root:0/reused:2/pitch:*"],
+      ["pitch-right", "/root:1/reused:2/pitch:*"],
+    ]);
+    expect(new Set(result.map((s) => s.occurrenceId)).size).toBe(result.length);
+    expect(
+      Object.fromEntries(computeSelectedConnectorContextHighlightRoles(nodes, edges, ["right"])),
+    ).toEqual({ right: "selected", "pitch-right": "member" });
+    expect(
+      Object.fromEntries(
+        computeSelectedConnectorContextHighlightRoles(nodes, edges, ["left", "right"]),
+      ),
+    ).toEqual({
+      left: "selected",
+      right: "selected",
+      "pitch-left": "member",
+      "pitch-right": "member",
+    });
+  });
+  it("follows the existing dimension-out representation and stops cycles", () => {
+    const nodes = [node("root"), node("dimension", "dimension"), node("child")];
+    const edges = [
+      edge("root", "dimension", undefined, "dim-3"),
+      { ...edge("dimension", "child"), sourceHandle: "out" },
+      edge("child", "root", "binding"),
+    ];
+    expect(
+      Object.fromEntries(computeSelectedConnectorContextHighlightRoles(nodes, edges, "root")),
+    ).toEqual({ root: "selected", child: "member" });
+    expect(
+      computeConnectorSourceOccurrences(nodes, edges, "root", (n) => n.id).map((s) => s.pathPrefix),
+    ).toEqual(["/root:*", "/root:3/child:*"]);
   });
 });

@@ -1,4 +1,5 @@
 import type { ChainExecutionProvenance } from "$lib/chain/registryApi";
+import type { WorldInteractionContext } from "./interaction";
 
 export const WORLD_PROTOCOL_VERSION = 1;
 
@@ -52,6 +53,7 @@ export type WorldRuntimeInput = {
   selectedConnectorContextNames?: string[];
   selectedConnectorContextPathPrefixes?: string[];
   connectorGraph?: unknown;
+  interaction?: WorldInteractionContext;
   executionProvenance?: ChainExecutionProvenance;
   executionMode?: "execute" | "simulate";
   executeOutput?: Array<{

@@ -22,6 +22,7 @@ export type BackendWorldRuntimeInputOptions = {
   executionProvenance?: WorldRuntimeInput["executionProvenance"];
   executionMode?: WorldRuntimeInput["executionMode"];
   particlesCount?: number;
+  interaction?: WorldRuntimeInput["interaction"];
   selectedConnectorContextNames?: string[];
   selectedConnectorContextPathPrefixes?: string[];
 };
@@ -141,6 +142,7 @@ export const buildBackendWorldRuntimeInput = (
           },
         }
       : {}),
+    ...(options.interaction ? { interaction: options.interaction } : {}),
     ...(options.particlesCount !== undefined ? { particlesCount: options.particlesCount } : {}),
     ...(options.executionProvenance ? { executionProvenance: options.executionProvenance } : {}),
     ...(options.executionMode ? { executionMode: options.executionMode } : {}),

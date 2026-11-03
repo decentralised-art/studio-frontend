@@ -2,6 +2,7 @@
   import { browser } from "$app/environment";
   import { base } from "$app/paths";
   import { onDestroy, onMount } from "svelte";
+  import { readWorldSourceSelection, type WorldSourceSelection } from "$lib/worlds/interaction";
   import { buildWorldAssetUrl } from "$lib/worlds/api";
   import { createBackendWorldHost, type BackendWorldHost } from "$lib/worlds/backendHost";
   import {
@@ -23,6 +24,7 @@
     title?: string;
     showStatus?: boolean;
     sandboxPermissions?: string;
+    onSourceSelection?: (selection: WorldSourceSelection) => void;
   };
 
   let {
@@ -32,6 +34,7 @@
     title = world.name,
     showStatus = false,
     sandboxPermissions,
+    onSourceSelection,
   }: Props = $props();
 
   let iframeElement: HTMLIFrameElement | null = $state(null);
@@ -179,7 +182,17 @@
 
   onMount(() => {
     const handleMessage = (event: MessageEvent) => {
-      if (!isWorldRuntimeMessage(event.data)) return;
+      const selection = worldReady
+        ? readWorldSourceSelection(event, {
+            source: iframeElement?.contentWindow ?? null,
+            worldId: worldHost?.worldId,
+            channelToken: worldHost?.channelToken,
+            context: input?.interaction,
+          })
+        : null;
+      if (selection) onSourceSelection?.(selection);
+      if (event.source !== iframeElement?.contentWindow || !isWorldRuntimeMessage(event.data))
+        return;
       handleRuntimeMessage(event.data);
     };
     window.addEventListener("message", handleMessage);

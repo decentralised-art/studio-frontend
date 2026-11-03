@@ -347,23 +347,27 @@
     @apply border-sky-300/18 bg-sky-500/[0.04];
   }
 
-  .connector-node.is-context-selected:not(.is-selected) {
-    @apply border-emerald-400/45 bg-emerald-500/[0.05] text-emerald-100;
-    box-shadow:
-      0 0 0 1px rgba(52, 211, 153, 0.2),
-      0 12px 24px rgba(0, 0, 0, 0.4);
+  .connector-node.is-context-selected {
+    border-color: #ef4444;
+    background: #381d23;
+    color: #fff;
+    box-shadow: 0 0 0 2px #ef4444;
   }
-
   .connector-node.is-context-member:not(.is-selected) {
-    @apply border-emerald-300/32 bg-emerald-500/[0.04] text-emerald-50/90;
-    box-shadow:
-      0 0 0 1px rgba(52, 211, 153, 0.12),
-      0 10px 20px rgba(0, 0, 0, 0.38);
+    border-color: #f87171;
+    background: #2c1b20;
+    color: #fff;
+    box-shadow: 0 0 0 1px #f87171;
   }
-
-  .connector-node.is-context-member .connector-row,
-  .connector-node.is-context-member .connector-condition-slot {
-    @apply border-emerald-300/18 bg-emerald-500/[0.035];
+  .connector-node:is(.is-context-selected, .is-context-member)
+    :is(.connector-row, .connector-condition-slot) {
+    border-color: #f8717166;
+  }
+  :global(:root[data-theme="light"]) .connector-node:is(.is-context-selected, .is-context-member) {
+    border-color: #c21818 !important;
+    background: #fff0f0 !important;
+    color: #7f1515 !important;
+    box-shadow: 0 0 0 1px #c21818 !important;
   }
 
   .connector-node.has-static-ri:not(.is-selected):not(.is-definition-root):not(

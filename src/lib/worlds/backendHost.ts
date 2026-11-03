@@ -5,6 +5,8 @@ import { buildWorldSdkAssetUrl } from "./api";
 import type { WorldBackendValueLimits, WorldPermission, WorldRuntimeInput } from "./types";
 
 export type BackendWorldHost = {
+  readonly worldId?: string;
+  readonly channelToken?: string;
   worldUrl: (url: string) => string;
   pushState: (state: { payload?: WorldRuntimeInput }) => void;
   dispose: () => void;

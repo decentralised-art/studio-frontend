@@ -1,4 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
+import { build } from "esbuild";
+import { resolve } from "node:path";
 
 const owner = `0x${"12".repeat(20)}`;
 const otherOwner = `0x${"34".repeat(20)}`;
@@ -58,9 +60,45 @@ async function setup(
   page: Page,
   authenticated = false,
   withStarter = false,
-  delayed: { run?: boolean; create?: "delayed" | "immediate" } = {},
+  delayed: { run?: boolean; create?: "delayed" | "immediate"; interactive?: boolean } = {},
 ) {
   const fixtureEntities: Record<string, Record<string, unknown>> = structuredClone(entities);
+  let canonicalHost: string | undefined, canonicalRuntime: string | undefined;
+  if (delayed.interactive) {
+    const bundle = async (entry: string) =>
+      (
+        await build({
+          entryPoints: [resolve(`submodules/sdk/js/src/worlds/${entry}.ts`)],
+          bundle: true,
+          write: false,
+          format: "esm",
+          target: "es2022",
+          logLevel: "silent",
+        })
+      ).outputFiles[0].text;
+    [canonicalHost, canonicalRuntime] = await Promise.all([bundle("host"), bundle("runtime")]);
+    for (const [name, dimensions] of Object.entries({
+      selection_piece: [
+        { composite: "shared_phrase", transformations: [] },
+        { composite: "shared_phrase", transformations: [] },
+      ],
+      shared_phrase: [
+        { composite: "pitch", transformations: [] },
+        { composite: "time", transformations: [] },
+        { composite: "duration", transformations: [] },
+      ],
+      time: [{ transformations: [] }],
+      duration: [{ transformations: [] }],
+    }))
+      fixtureEntities[name] = {
+        name,
+        owner: otherOwner,
+        address,
+        format_hash: formatHash,
+        dimensions,
+        static_ri: {},
+      };
+  }
   const creates: string[] = [];
   const connectorReads: string[] = [];
   let releaseRun = () => {};
@@ -108,6 +146,32 @@ async function setup(
   await page.route(/^https?:\/\/[^/]+\/(?:services|chain)\/.*/, async (route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
+    if (
+      canonicalHost &&
+      (path.endsWith("/js/sdk/world-host.js") || path.endsWith("/js/sdk/world-runtime.js"))
+    )
+      return route.fulfill({
+        contentType: "text/javascript",
+        headers: { "Access-Control-Allow-Origin": "*" },
+        body: path.endsWith("world-host.js") ? canonicalHost : canonicalRuntime!,
+      });
+    if (delayed.interactive && path.includes("/world-assets/") && path.endsWith("/selection.js"))
+      return route.fulfill({
+        contentType: "text/javascript",
+        headers: { "Access-Control-Allow-Origin": "*" },
+        body: `
+        import { createWorldSdk } from '../../js/sdk/world-runtime.js';
+        const worldId='interactive-world'; const sdk=createWorldSdk({worldId});
+        let input;
+        window.reportSelection=(patch={})=>parent.postMessage({type:'decentralised.art:world-source-selection',protocolVersion:1,worldId,channelToken:new URLSearchParams(location.search).get('worldChannel'),revision:input.interaction.revision,occurrenceIds:[],...patch},'*');
+        sdk.onState(state=>{input=state.payload;document.querySelector('output').textContent=JSON.stringify(input.interaction); const sources=input.interaction?.sources??[];document.querySelector('nav').replaceChildren(...sources.filter(s=>s.connectorName==='shared_phrase').map(s=>{const b=document.createElement('button');b.textContent=s.pathPrefix;b.onclick=()=>window.reportSelection({occurrenceIds:[s.occurrenceId]});return b;}));}); sdk.ready();`,
+      });
+    if (delayed.interactive && path.includes("/world-assets/") && path.endsWith("/index.html"))
+      return route.fulfill({
+        contentType: "text/html",
+        headers: { "Access-Control-Allow-Origin": "*" },
+        body: '<!doctype html><main><output hidden></output><nav></nav><button onclick="reportSelection()">Clear source selection</button></main><script type="module" src="selection.js"></script>',
+      });
     if (path.endsWith("/js/sdk/world-host.js"))
       return route.fulfill({
         contentType: "text/javascript",
@@ -224,7 +288,17 @@ async function setup(
         runStarted();
         await runGate;
       }
-      const particles = [{ path: `/${input.connector_name}:0`, data: [60, 61, 62] }];
+      const particles =
+        delayed.interactive && input.connector_name === "selection_piece"
+          ? [0, 1].flatMap((index) => [
+              {
+                path: `/selection_piece:${index}/shared_phrase:0/pitch:0`,
+                data: [60 + 12 * index, 62 + 12 * index],
+              },
+              { path: `/selection_piece:${index}/shared_phrase:1/time:0`, data: [0, 1] },
+              { path: `/selection_piece:${index}/shared_phrase:2/duration:0`, data: [1, 1] },
+            ])
+          : [{ path: `/${input.connector_name}:0`, data: [60, 61, 62] }];
       return route.fulfill({
         json: path.endsWith("/simulate")
           ? particles
@@ -1004,5 +1078,74 @@ test("adding the same published connector twice creates independent flow instanc
     "pitch",
     "pitch",
   ]);
+  expect(state.errors).toEqual([]);
+});
+
+test("a World can select exact graph sources and receive descendant selection without another run", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1600, height: 1000 });
+  const state = await setup(page, false, false, { interactive: true });
+  await page.goto("/studio?network_kind=connector&network_id=selection_piece");
+  await expect(page.locator(".graph-loading")).toHaveCount(0);
+  await page.getByRole("button", { name: "Worlds", exact: true }).click();
+  await pluginCard(page, "Score").getByRole("button").click();
+  await expect(worldNodes(page)).toHaveCount(1);
+  await openRunPanel(page);
+  await page.getByRole("button", { name: "Simulate", exact: true }).click();
+  await worldNodes(page).getByRole("button", { name: "Enlarge World", exact: true }).click();
+  const world = worldNodes(page).frameLocator("iframe");
+  const rightPath = "/selection_piece:1/shared_phrase:*";
+  await expect(world.getByRole("button", { name: rightPath, exact: true })).toBeVisible();
+  const context = () =>
+    world.locator("output").evaluate((output) => JSON.parse(output.textContent!));
+  const initial = await context();
+  const right = initial.sources.find(
+    (source: { pathPrefix: string }) => source.pathPrefix === rightPath,
+  );
+  const left = initial.sources.find(
+    (source: { pathPrefix: string }) => source.pathPrefix === "/selection_piece:0/shared_phrase:*",
+  );
+  expect(right.nodeId).not.toBe(left.nodeId);
+  await world.getByRole("button", { name: rightPath, exact: true }).click();
+  await expect(
+    page.locator(`.svelte-flow__node[data-id="${right.nodeId}"] .connector-node`),
+  ).toHaveClass(/is-context-selected/);
+  await expect(
+    page.locator(`.svelte-flow__node[data-id="${left.nodeId}"] .connector-node`),
+  ).not.toHaveClass(/is-context/);
+  await expect(page.locator(".connector-node.is-context-member")).toHaveCount(3);
+  await expect(
+    page.locator('.svelte-flow__edge[data-connector-context="highlighted"]'),
+  ).toHaveCount(3);
+  expect((await context()).revision).toBe(initial.revision);
+  expect(state.runs).toHaveLength(1);
+  // An unrelated instance, stale result and another mount must never select nodes.
+  for (const patch of [
+    { revision: "older-result", occurrenceIds: [left.occurrenceId] },
+    { channelToken: "other-mount", occurrenceIds: [left.occurrenceId] },
+    { occurrenceIds: [left.nodeId] },
+  ]) {
+    await world
+      .locator("body")
+      .evaluate((_body, patch) => Reflect.get(window, "reportSelection")(patch), patch);
+  }
+  await expect(
+    page.locator(`.svelte-flow__node[data-id="${right.nodeId}"] .connector-node`),
+  ).toHaveClass(/is-context-selected/);
+  await world.getByRole("button", { name: "Clear source selection" }).click();
+  await expect(
+    page.locator(".connector-node.is-context-selected, .connector-node.is-context-member"),
+  ).toHaveCount(0);
+  await worldNodes(page).getByRole("button", { name: "Restore World size", exact: true }).click();
+  await page.getByRole("button", { name: "Zoom to fit", exact: true }).click();
+  await page.locator(`.svelte-flow__node[data-id="${left.nodeId}"] .connector-title`).click();
+  await expect
+    .poll(async () => (await context()).selectedOccurrenceIds)
+    .toContain(left.occurrenceId);
+  expect((await context()).selectedOccurrenceIds).not.toContain(right.occurrenceId);
+  await expect(page.locator(".connector-node.is-context-member")).toHaveCount(3);
+  expect(state.runs).toHaveLength(1);
+  expect(state.writes).toEqual([]);
   expect(state.errors).toEqual([]);
 });

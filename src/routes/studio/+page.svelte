@@ -3,7 +3,7 @@
   import { afterNavigate, replaceState } from "$app/navigation";
   import { page } from "$app/state";
   import { resolve } from "$app/paths";
-  import { onDestroy, onMount, tick, untrack } from "svelte";
+  import { onDestroy, onMount, setContext, tick, untrack } from "svelte";
   import { loadWorldStudioStarter } from "$lib/worlds/studioStarter";
   import { SvelteMap, SvelteSet } from "svelte/reactivity";
 
@@ -35,6 +35,13 @@
   import StudioPluginNode from "$lib/components/studio/StudioPluginNode.svelte";
   import StudioGraphLoading from "$lib/components/studio/StudioGraphLoading.svelte";
   import { loadConnectorTreeInBackground } from "$lib/studio/connectorTreeLoader";
+  import {
+    createWorldInteractionRegistry,
+    scopeWorldSourceOccurrences,
+    WORLD_SELECTION_HANDLER,
+    type WorldInteractionContext,
+    type StudioWorldSourceSelection,
+  } from "$lib/worlds/interaction";
   import { nextFlowFrame, waitForFlowReady } from "$lib/studio/flowLoading";
   import StudioTransformationNode from "$lib/components/studio/StudioTransformationNode.svelte";
   import SolidityEditorShell from "$lib/components/workspace-window/SolidityEditorShell.svelte";
@@ -110,9 +117,9 @@
     toInt,
   } from "$lib/studio/connectorGraph";
   import {
-    computeConnectorContextPathPrefixes,
+    computeConnectorSourceOccurrences,
+    connectorDependencies,
     computeSelectedConnectorContextHighlightRoles,
-    isConnectorContextEdge,
     type ConnectorContextHighlightRole,
   } from "$lib/studio/connectorContextHighlight";
   import {
@@ -461,6 +468,7 @@
     pluginData?: StudioPluginRuntimeData;
     pluginTargets?: string[];
     worldConnectorSetSelection?: StudioWorldConnectorSetSelection;
+    worldInteraction?: WorldInteractionContext;
     selectedConnectorContextNames?: string[];
     selectedConnectorContextPathPrefixes?: string[];
     riStart?: number;
@@ -2629,6 +2637,7 @@
         clearTimeout(persistStudioTabsSessionTimer);
         persistStudioTabsSessionTimer = null;
       }
+      worldInteractionRegistry.clear();
       tabGraphs.clear();
       connectorTreeModelsByTab.clear();
       tabViewports.clear();
@@ -4027,90 +4036,135 @@
     }
   });
 
+  const worldInteractionRegistry = createWorldInteractionRegistry();
+  setContext(WORLD_SELECTION_HANDLER, (selection: StudioWorldSourceSelection) => {
+    if (connectorTreeLoading[activeTabId]) return;
+    const world = nodes.find(
+      (node) => node.id === selection.worldNodeId && node.data.kind === "plugin",
+    );
+    const context = world?.data.worldInteraction;
+    if (!context || context.revision !== selection.revision) return;
+    const offered = new Map(context.sources.map((source) => [source.occurrenceId, source]));
+    if (!selection.occurrenceIds.every((id) => offered.has(id))) return;
+    const ids = new SvelteSet(selection.occurrenceIds.map((id) => offered.get(id)!.nodeId));
+    nodes = nodes.map((node) => ({ ...node, selected: ids.has(node.id) }));
+    edges = edges.map((edge) => (edge.selected ? { ...edge, selected: false } : edge));
+    selectedNodeIds = [...ids];
+    selectedNodeId = selectedNodeIds[0] ?? null;
+    selectedEdgeIds = [];
+    selectedEdgeId = null;
+  });
   const selectedConnectorContextFingerprint = $derived.by(() =>
     [
       selectedNodeId ?? "",
-      nodes.map((node) => `${node.id}:${node.data.kind ?? ""}`).join("|"),
+      nodes
+        .map(
+          (node) =>
+            `${node.id}:${node.data.kind ?? ""}:${resolveNodeName(node)}:${Boolean(node.selected)}`,
+        )
+        .join("|"),
       edges
-        .filter(isConnectorContextEdge)
-        .map((edge) => `${edge.source}>${edge.target}:${parseConnectorEdgeRelation(edge)}`)
+        .map(
+          (edge) =>
+            `${edge.id}:${edge.source}:${edge.sourceHandle ?? ""}>${edge.target}:${edge.targetHandle ?? ""}:${parseConnectorEdgeRelation(edge)}`,
+        )
         .join("|"),
     ].join("::"),
   );
-
   $effect(() => {
     touchDeps(selectedConnectorContextFingerprint);
-
-    const roles = computeSelectedConnectorContextHighlightRoles(nodes, edges, selectedNodeId);
+    const selectedConnectors = nodes
+      .filter((node) => node.selected && isConnectorKind(node.data.kind))
+      .map((node) => node.id);
+    if (!selectedConnectors.length && selectedNodeId) selectedConnectors.push(selectedNodeId);
+    const roles = computeSelectedConnectorContextHighlightRoles(nodes, edges, selectedConnectors);
     const contextNodeIds = new SvelteSet(roles.keys());
-    const contextRootConnector =
-      nodes.find(
-        (node) => isConnectorKind(node.data.kind) && node.data.definitionRole === "root",
-      ) ??
-      nodes.find((node) => isConnectorKind(node.data.kind) && Boolean(node.data.tabRoot)) ??
-      null;
-    const contextConnectorNames = Array.from(
-      new SvelteSet(
-        Array.from(roles.keys())
-          .map((nodeId) => nodes.find((item) => item.id === nodeId))
-          .filter(
-            (node): node is StudioNode => node !== undefined && isConnectorKind(node.data.kind),
-          )
-          .map((node) => resolveNodeName(node))
-          .filter(Boolean),
-      ),
-    );
-    const contextConnectorPathPrefixes = computeConnectorContextPathPrefixes(
+    const occurrences = computeConnectorSourceOccurrences(
       nodes,
       edges,
-      contextRootConnector?.id ?? null,
-      contextNodeIds,
+      activeRootNode?.id,
       resolveNodeName,
+    );
+    const contextConnectorNames = [
+      ...new SvelteSet(nodes.filter((node) => roles.has(node.id)).map(resolveNodeName)),
+    ];
+    const contextConnectorPathPrefixes = [
+      ...new SvelteSet(
+        occurrences.filter((source) => roles.has(source.nodeId)).map((source) => source.pathPrefix),
+      ),
+    ];
+    const sourceEdges = new SvelteSet(
+      connectorDependencies(nodes, edges)
+        .filter((dependency) => roles.has(dependency.source) && roles.has(dependency.target))
+        .flatMap((dependency) => dependency.edgeIds),
+    );
+    const lookup = Object.fromEntries(nodes.map((node) => [node.id, node]));
+    worldInteractionRegistry.prune(
+      new SvelteSet(nodes.filter((node) => node.data.kind === "plugin").map((node) => node.id)),
     );
     let changed = false;
     const nextNodes = nodes.map((node) => {
       const nextRole = roles.get(node.id) ?? null;
       const currentRole = node.data.contextHighlightRole ?? null;
-      const nextContextNames = node.data.kind === "plugin" ? contextConnectorNames : undefined;
-      const nextContextPathPrefixes =
-        node.data.kind === "plugin" ? contextConnectorPathPrefixes : undefined;
-      const currentContextNames =
-        node.data.kind === "plugin" ? (node.data.selectedConnectorContextNames ?? []) : undefined;
-      const currentContextPathPrefixes =
-        node.data.kind === "plugin"
-          ? (node.data.selectedConnectorContextPathPrefixes ?? [])
-          : undefined;
-      const contextNamesChanged =
-        node.data.kind === "plugin" &&
-        (currentContextNames?.length !== nextContextNames?.length ||
-          (currentContextNames ?? []).some((name, index) => name !== nextContextNames?.[index]));
-      const contextPathPrefixesChanged =
-        node.data.kind === "plugin" &&
-        (currentContextPathPrefixes?.length !== nextContextPathPrefixes?.length ||
-          (currentContextPathPrefixes ?? []).some(
-            (prefix, index) => prefix !== nextContextPathPrefixes?.[index],
-          ));
-      if (currentRole === nextRole && !contextNamesChanged && !contextPathPrefixesChanged) {
-        return node;
+      if (node.data.kind !== "plugin") {
+        if (nextRole === currentRole) return node;
+        changed = true;
+        return { ...node, data: { ...node.data, contextHighlightRole: nextRole } };
       }
+      const streams = node.data.pluginData?.streams;
+      const targets = new SvelteSet(
+        getPluginTargetNodes(node.id, lookup, edges).map((target) => target.id),
+      );
+      const sources = scopeWorldSourceOccurrences(
+        occurrences,
+        (streams ?? []).map((stream) => stream.feature_path),
+        targets,
+      );
+      const interaction = worldInteractionRegistry.contextFor(
+        node.id,
+        sources,
+        streams,
+        contextNodeIds,
+      );
+      const sameNames =
+        JSON.stringify(node.data.selectedConnectorContextNames ?? []) ===
+        JSON.stringify(contextConnectorNames);
+      const samePrefixes =
+        JSON.stringify(node.data.selectedConnectorContextPathPrefixes ?? []) ===
+        JSON.stringify(contextConnectorPathPrefixes);
+      if (
+        currentRole === nextRole &&
+        sameNames &&
+        samePrefixes &&
+        node.data.worldInteraction?.revision === interaction.revision &&
+        JSON.stringify(node.data.worldInteraction.selectedOccurrenceIds) ===
+          JSON.stringify(interaction.selectedOccurrenceIds)
+      )
+        return node;
       changed = true;
       return {
         ...node,
         data: {
           ...node.data,
           contextHighlightRole: nextRole,
-          ...(node.data.kind === "plugin"
-            ? {
-                selectedConnectorContextNames: nextContextNames,
-                selectedConnectorContextPathPrefixes: nextContextPathPrefixes,
-              }
-            : {}),
+          selectedConnectorContextNames: contextConnectorNames,
+          selectedConnectorContextPathPrefixes: contextConnectorPathPrefixes,
+          worldInteraction: interaction,
         },
       };
     });
-
+    const nextEdges = edges.map((edge) => {
+      const highlight = sourceEdges.has(edge.id) ? "highlighted" : undefined;
+      if (edge.domAttributes?.["data-connector-context"] === highlight) return edge;
+      changed = true;
+      return {
+        ...edge,
+        domAttributes: { ...edge.domAttributes, "data-connector-context": highlight },
+      };
+    });
     if (changed) {
       nodes = nextNodes;
+      edges = nextEdges;
     }
   });
 
@@ -11510,6 +11564,12 @@
 
   .flow-area {
     @apply relative min-h-0 flex-1;
+  }
+
+  .studio
+    :global(.svelte-flow__edge[data-connector-context="highlighted"] .svelte-flow__edge-path) {
+    stroke: #ef4444 !important;
+    stroke-width: 2.5;
   }
 
   .flow-content {

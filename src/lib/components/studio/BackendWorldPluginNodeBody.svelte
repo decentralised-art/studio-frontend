@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { resolve } from "$app/paths";
 
+  import type { WorldInteractionContext, WorldSourceSelection } from "$lib/worlds/interaction";
   import WorldFrame from "$lib/components/worlds/WorldFrame.svelte";
   import type { StudioPluginRuntimeData } from "$lib/studio/plugins/runtime";
   import type { StudioWorldConnectorSetSelection } from "$lib/studio/plugins/worldCompatibility";
@@ -23,6 +24,8 @@
     world: WorldDescriptor;
     runtimeData: StudioPluginRuntimeData | null;
     connectorSetSelection?: StudioWorldConnectorSetSelection;
+    interaction?: WorldInteractionContext;
+    onSourceSelection?: (selection: WorldSourceSelection) => void;
     selectedConnectorContextNames?: string[];
     selectedConnectorContextPathPrefixes?: string[];
   };
@@ -34,6 +37,8 @@
     onToggleSize,
     runtimeData,
     connectorSetSelection,
+    interaction,
+    onSourceSelection,
     selectedConnectorContextNames = [],
     selectedConnectorContextPathPrefixes = [],
   }: Props = $props();
@@ -165,6 +170,7 @@
       connectorSetIndex: selectedConnectorSetIndex,
       connectorBindingValues,
       particlesCount,
+      interaction,
       selectedConnectorContextNames,
       selectedConnectorContextPathPrefixes,
       executeOutput: streams,
@@ -220,7 +226,7 @@
   {#if viewError}<p class="backend-world-view-error" role="status">{viewError}</p>{/if}
 
   <div class="backend-world-frame">
-    <WorldFrame {world} input={worldInput} title={`${label} preview`} />
+    <WorldFrame {world} input={worldInput} {onSourceSelection} title={`${label} preview`} />
   </div>
 </div>
 
