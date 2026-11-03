@@ -35,6 +35,7 @@
   import StudioPluginNode from "$lib/components/studio/StudioPluginNode.svelte";
   import StudioGraphLoading from "$lib/components/studio/StudioGraphLoading.svelte";
   import { loadConnectorTreeInBackground } from "$lib/studio/connectorTreeLoader";
+  import { nextFlowFrame, waitForFlowReady } from "$lib/studio/flowLoading";
   import StudioTransformationNode from "$lib/components/studio/StudioTransformationNode.svelte";
   import SolidityEditorShell from "$lib/components/workspace-window/SolidityEditorShell.svelte";
   import {
@@ -115,7 +116,6 @@
     type ConnectorContextHighlightRole,
   } from "$lib/studio/connectorContextHighlight";
   import {
-    buildConnectorTreeGraph as buildConnectorTreeGraphFromRegistry,
     computeConnectorOpenSlotsInRegistry,
     isCompleteConnectorTreeModel,
     shouldReplaceConnectorTreeModel,
@@ -208,7 +208,7 @@
     toggleToolboxLibraryItem,
     type ToolboxLibrary,
   } from "$lib/toolbox/toolboxLibrary";
-  import { buildStudioRuntime } from "$lib/studio/studioRuntime";
+  import { buildStudioConnectorFromGraph, buildStudioRuntime } from "$lib/studio/studioRuntime";
   import {
     fetchChainParticleForStudio,
     fetchChainOwnedStudioSnapshot,
@@ -520,6 +520,8 @@
       }) => Promise<boolean>)
     | null = null;
   let clearFlowSelection: (() => void) | null = null;
+  let getFlowNodeMeasurements: ((ids: string[]) => { measured: number; signature: string }) | null =
+    null;
   let clearConfirmOpen = $state(false);
   let runOutputByTab = $state<Record<string, PtOutputFeature[]>>({});
   let runWarningsByTab = $state<Record<string, string[]>>({});
@@ -2304,6 +2306,18 @@
     const requestId = ++worldLaunchRequestId;
     pendingWorldLaunch = id;
     worldLaunchError = "";
+    let worldFlowLoad: { tabId: string; controller: AbortController; owner: string } | undefined;
+    const moveWorldFlowLoad = (tabId: string) => {
+      if (!worldFlowLoad || worldFlowLoad.tabId === tabId) return;
+      const previous = worldFlowLoad.tabId;
+      const state = connectorTreeLoading[previous];
+      connectorTreeLoads.delete(previous);
+      delete connectorTreeLoading[previous];
+      cancelConnectorTreeLoad(tabId);
+      connectorTreeLoads.set(tabId, worldFlowLoad.controller);
+      if (state) connectorTreeLoading[tabId] = state;
+      worldFlowLoad.tabId = tabId;
+    };
     try {
       const descriptor = backendWorldToFrontendDescriptor(await getWorld(id));
       if (
@@ -2338,10 +2352,40 @@
                   (node) => node.data.kind === "plugin" && node.data.sourceId === plugin.id,
                 )),
       );
+      worldFlowLoad = {
+        tabId: activeTabId,
+        controller: beginConnectorTreeLoad(activeTabId, "world"),
+        owner: getCurrentStudioAuthorId(),
+      };
+      const worldFlowIsCurrent = () =>
+        Boolean(
+          worldFlowLoad &&
+          launchIsCurrent() &&
+          activeTabId === worldFlowLoad.tabId &&
+          canApplyConnectorTreeLoad(
+            worldFlowLoad.tabId,
+            worldFlowLoad.controller,
+            worldFlowLoad.owner,
+          ),
+        );
+      setConnectorLoadPhase(worldFlowLoad.tabId, worldFlowLoad.controller, "Preparing World flow…");
+      await paintConnectorLoad(worldFlowLoad.controller.signal);
+      if (!worldFlowIsCurrent()) return;
+      if ((attachToConnector && activePluginSourceRootConnectorName) || existingTab) {
+        setConnectorLoadPhase(
+          worldFlowLoad.tabId,
+          worldFlowLoad.controller,
+          "Drawing flow…",
+          false,
+        );
+        await paintConnectorLoad(worldFlowLoad.controller.signal);
+        if (!worldFlowIsCurrent()) return;
+      }
       if (attachToConnector && activePluginSourceRootConnectorName) {
         attachStudioPluginToRoot(plugin);
         if (pluginAttachError) throw new Error(pluginAttachError);
       } else if (existingTab) {
+        moveWorldFlowLoad(existingTab.id);
         switchTab(existingTab.id);
         const connectorName = resolveActiveExecuteConnectorName();
         if (
@@ -2357,7 +2401,14 @@
             await executeActiveGraph("simulate");
         }
       } else {
+        let starterGraph: ConnectorTreeModel | undefined;
         if (starter) {
+          setConnectorLoadPhase(
+            worldFlowLoad.tabId,
+            worldFlowLoad.controller,
+            `Fetching ${starter.connector} and its dependencies…`,
+          );
+          await paintConnectorLoad(worldFlowLoad.controller.signal);
           // Resolve ordinary network definitions, including nested connectors, before changing tabs.
           await ensureStudioNetworkLibraryLoaded();
           const result = await syncConnectorTreeFromChain(starter.connector);
@@ -2367,25 +2418,35 @@
             !isPublishedChainAddress(deployedRegistry.connectors[starter.connector]?.chainAddress)
           )
             throw new Error("The World starter must reference a published connector.");
-          if (!launchIsCurrent()) return;
+          if (!worldFlowIsCurrent()) return;
+          setConnectorLoadPhase(
+            worldFlowLoad.tabId,
+            worldFlowLoad.controller,
+            "Preparing connector graph…",
+          );
+          starterGraph = await buildConnectorTreeInBackground(
+            starter.connector,
+            worldFlowLoad.controller.signal,
+            { hideReadOnlyLeafOutlets: false, idFactoryScope: `world-${crypto.randomUUID()}` },
+          );
+          if (!worldFlowIsCurrent()) return;
         }
+        setConnectorLoadPhase(
+          worldFlowLoad.tabId,
+          worldFlowLoad.controller,
+          "Drawing flow…",
+          false,
+        );
+        await paintConnectorLoad(worldFlowLoad.controller.signal);
+        if (!worldFlowIsCurrent()) return;
         const tab = {
           ...createStudioTab(descriptor.name),
           worldId: descriptor.id,
           worldStarter: Boolean(starter),
         };
         initializedDraftTabs.add(tab.id);
-        if (starter) {
-          const graph = buildConnectorTreeGraph(
-            starter.connector,
-            { x: 360, y: 120 },
-            {
-              hideReadOnlyLeafOutlets: false,
-              idFactoryScope: `world-${crypto.randomUUID()}`,
-            },
-          );
-          tabGraphs.set(tab.id, graph);
-        }
+        if (starterGraph) tabGraphs.set(tab.id, starterGraph);
+        moveWorldFlowLoad(tab.id);
         tabs = [...tabs, tab];
         activeTabId = tab.id;
         loadTabGraph(tab.id);
@@ -2415,6 +2476,7 @@
           if (starter.simulate && activeTabId === tab.id) await executeActiveGraph("simulate");
         }
       }
+      if (!worldFlowIsCurrent()) return;
       const worldNode = nodes.find(
         (node) => node.data.kind === "plugin" && node.data.sourceId === plugin.id,
       );
@@ -2423,6 +2485,20 @@
         selectedNodeId = worldNode.id;
         selectedEdgeId = null;
       }
+      if (worldFlowIsCurrent()) {
+        setConnectorLoadPhase(
+          worldFlowLoad.tabId,
+          worldFlowLoad.controller,
+          "Arranging flow…",
+          false,
+        );
+        await waitForConnectorFlow(
+          worldFlowLoad.tabId,
+          worldFlowLoad.controller,
+          worldFlowLoad.owner,
+        );
+      }
+      if (!worldFlowIsCurrent()) return;
       saveActiveGraph();
       // World starters keep their URL so restored drafts can refresh their simulation.
       // Their persisted graph is reused, including user deletions and RI edits.
@@ -2434,9 +2510,10 @@
       }
       scheduleCanvasFitView(0.2, [], activeTabId);
     } catch (error) {
-      if (requestId === worldLaunchRequestId)
+      if (requestId === worldLaunchRequestId && !worldFlowLoad?.controller.signal.aborted)
         worldLaunchError = error instanceof Error ? error.message : "Could not open this World.";
     } finally {
+      if (worldFlowLoad) finishConnectorTreeLoad(worldFlowLoad.tabId, worldFlowLoad.controller);
       if (requestId === worldLaunchRequestId) pendingWorldLaunch = "";
     }
   };
@@ -2475,6 +2552,14 @@
     }
 
     const handleKey = (event: KeyboardEvent) => {
+      const loading = connectorTreeLoading[activeTabId];
+      if (loading) {
+        if (event.key === "Escape" && loading.cancellable) {
+          event.preventDefault();
+          cancelConnectorTreeLoad(activeTabId);
+        }
+        return;
+      }
       if (transformationEditorOpen || conditionEditorOpen) return;
       if (isEditableTarget(event.target)) return;
       const key = event.key.toLowerCase();
@@ -3840,28 +3925,17 @@
     return null;
   };
 
-  const getConnectorDefinitionForName = (connectorName: string): StudioConnectorDef | null => {
-    const trimmed = connectorName.trim();
-    if (!trimmed) return null;
-    if (deployedRegistry.connectors[trimmed]) return deployedRegistry.connectors[trimmed];
-    try {
-      const compiled = compileDraftTransformations(nodes);
-      const runtime = buildStudioRuntime(
-        { nodes, edges },
-        getWorkspaceRuntimeOptions(),
-        buildRuntimeOverrides(compiled.registry),
-      );
-      return runtime.registry.connectors[trimmed] ?? null;
-    } catch {
-      return null;
-    }
-  };
-
-  const collectDirectDefinitionConnectorReferences = (connectorName: string) => {
+  const collectDirectDefinitionConnectorReferences = (connectorNode: StudioNode) => {
     const compositeNames = new SvelteSet<string>();
     const bindingTargetNames = new SvelteSet<string>();
-    const connector = getConnectorDefinitionForName(connectorName);
-    if (!connector) {
+    const connectorName = resolveNodeName(connectorNode);
+    // Only direct references are needed here, not a runtime for the entire composition.
+    let connector: StudioConnectorDef;
+    try {
+      connector =
+        deployedRegistry.connectors[connectorName] ??
+        buildStudioConnectorFromGraph(connectorNode, { nodes, edges });
+    } catch {
       return { compositeNames, bindingTargetNames };
     }
 
@@ -3889,42 +3963,39 @@
         : null);
     const rootConnectorId = tabRootConnector?.id ?? null;
     const rootConnectorName = tabRootConnector ? resolveNodeName(tabRootConnector) : "";
-    const directlyReferenced = rootConnectorName
-      ? collectDirectDefinitionConnectorReferences(rootConnectorName)
+    const directlyReferenced = tabRootConnector
+      ? collectDirectDefinitionConnectorReferences(tabRootConnector)
       : {
           compositeNames: new SvelteSet<string>(),
           bindingTargetNames: new SvelteSet<string>(),
         };
 
-    let changed = false;
-    const nextNodes = nodes.map((node) => {
-      if (!isConnectorKind(node.data.kind)) return node;
-      const nodeName = resolveNodeName(node);
-      const hasDirectCompositeEdgeFromRoot =
-        rootConnectorId !== null &&
-        edges.some(
-          (edge) =>
-            edge.source === rootConnectorId &&
-            edge.target === node.id &&
-            `${edge.label ?? ""}`.toLowerCase().startsWith("composite"),
-        );
-      const hasDirectBindingEdgeFromRoot =
-        rootConnectorId !== null &&
-        edges.some(
-          (edge) =>
-            edge.source === rootConnectorId &&
-            edge.target === node.id &&
-            `${edge.label ?? ""}`.toLowerCase().startsWith("binding"),
-        );
-      const hasBindingOwnedByRoot = edges.some((edge) => {
-        if (edge.target !== node.id) return false;
-        if (!`${edge.label ?? ""}`.toLowerCase().startsWith("binding")) return false;
+    // Index relationships once; scanning all edges for every node blocks large insertions.
+    const directComposites = new SvelteSet<string>();
+    const directBindings = new SvelteSet<string>();
+    const ownedBindings = new SvelteSet<string>();
+    for (const edge of edges) {
+      const label = `${edge.label ?? ""}`.toLowerCase();
+      if (rootConnectorId !== null && edge.source === rootConnectorId) {
+        if (label.startsWith("composite")) directComposites.add(edge.target);
+        if (label.startsWith("binding")) directBindings.add(edge.target);
+      }
+      if (label.startsWith("binding")) {
         const bindingOwnerName =
           typeof edge.data === "object" && edge.data
             ? `${(edge.data as { bindingOwnerName?: unknown }).bindingOwnerName ?? ""}`.trim()
             : "";
-        return bindingOwnerName === rootConnectorName;
-      });
+        if (bindingOwnerName === rootConnectorName) ownedBindings.add(edge.target);
+      }
+    }
+
+    let changed = false;
+    const nextNodes = nodes.map((node) => {
+      if (!isConnectorKind(node.data.kind)) return node;
+      const nodeName = resolveNodeName(node);
+      const hasDirectCompositeEdgeFromRoot = directComposites.has(node.id);
+      const hasDirectBindingEdgeFromRoot = directBindings.has(node.id);
+      const hasBindingOwnedByRoot = ownedBindings.has(node.id);
       const isCompositeMember =
         directlyReferenced.compositeNames.has(nodeName) && hasDirectCompositeEdgeFromRoot;
       const isBindingMember =
@@ -4153,6 +4224,7 @@
       clearConfirmOpen = false;
       return;
     }
+    cancelConnectorTreeLoad(activeTabId);
     detachWorkspaceTreeModel();
     initializedDraftTabs.add(activeTabId);
     nodes = [];
@@ -6526,6 +6598,7 @@
 
   const switchTab = (tabId: string) => {
     if (tabId === activeTabId) return;
+    if (connectorTreeLoading[activeTabId]?.kind === "insert") cancelConnectorTreeLoad(activeTabId);
     saveActiveGraph();
     activeTabId = tabId;
     loadTabGraph(tabId);
@@ -6598,62 +6671,71 @@
     return computeConnectorOpenSlotsInRegistry(deployedRegistry.connectors, trimmed);
   };
 
-  const buildConnectorTreeGraph = (
-    rootConnectorName: string,
-    origin: { x: number; y: number },
-    options: {
-      connectorRegistry?: Record<string, StudioConnectorDef>;
-      hideReadOnlyLeafOutlets?: boolean;
-      markRootAsTabRoot?: boolean;
-      idFactoryScope?: string;
-    } = {},
-  ): ConnectorTreeModel => {
-    let idIndex = 0;
-    const baseIdPrefix = slugify(rootConnectorName) || "connector";
-    const idPrefix = options.idFactoryScope
-      ? `${baseIdPrefix}-${options.idFactoryScope}`
-      : baseIdPrefix;
-    const connectorRegistry = options.connectorRegistry ?? deployedRegistry.connectors;
-    return buildConnectorTreeGraphFromRegistry({
-      connectorRegistry,
-      rootConnectorName,
-      origin,
-      options: {
-        hideReadOnlyLeafOutlets: options.hideReadOnlyLeafOutlets,
-        markRootAsTabRoot: options.markRootAsTabRoot,
-        idFactory: () => `${idPrefix}-${idIndex++}`,
-        labelForConnector: getConnectorLibraryLabel,
-      },
-    });
+  type ConnectorFlowLoad = {
+    message: string;
+    cancellable: boolean;
+    kind: "open" | "insert" | "world";
   };
-
-  let connectorTreeLoading = $state<Record<string, string>>({});
+  let connectorTreeLoading = $state<Record<string, ConnectorFlowLoad>>({});
   const connectorTreeLoads = new SvelteMap<string, AbortController>();
   const cancelConnectorTreeLoad = (tabId: string) => {
     connectorTreeLoads.get(tabId)?.abort();
     connectorTreeLoads.delete(tabId);
     delete connectorTreeLoading[tabId];
   };
-  const beginConnectorTreeLoad = (tabId: string) => {
+  const beginConnectorTreeLoad = (tabId: string, kind: ConnectorFlowLoad["kind"] = "open") => {
     cancelConnectorTreeLoad(tabId);
     const controller = new AbortController();
     connectorTreeLoads.set(tabId, controller);
-    connectorTreeLoading[tabId] = "Preparing connector graph…";
+    connectorTreeLoading[tabId] = {
+      message: "Preparing connector graph…",
+      cancellable: true,
+      kind,
+    };
     return controller;
+  };
+  const setConnectorLoadPhase = (
+    tabId: string,
+    controller: AbortController,
+    message: string,
+    cancellable = true,
+  ) => {
+    if (connectorTreeLoads.get(tabId) !== controller) return;
+    const state = connectorTreeLoading[tabId];
+    if (state && (state.message !== message || state.cancellable !== cancellable))
+      connectorTreeLoading[tabId] = { ...state, message, cancellable };
+  };
+  const paintConnectorLoad = async (signal: AbortSignal) => {
+    await tick();
+    await nextFlowFrame(signal);
+    await nextFlowFrame(signal);
   };
   const finishConnectorTreeLoad = (tabId: string, controller: AbortController) => {
     if (connectorTreeLoads.get(tabId) !== controller) return;
     connectorTreeLoads.delete(tabId);
     delete connectorTreeLoading[tabId];
   };
-  const buildConnectorTreeInBackground = async (name: string, signal: AbortSignal) => {
-    await tick();
+  type ConnectorLoadOptions = {
+    origin?: { x: number; y: number };
+    idFactoryScope?: string;
+    hideReadOnlyLeafOutlets?: boolean;
+    markRootAsTabRoot?: boolean;
+  };
+  const buildConnectorTreeInBackground = async (
+    name: string,
+    signal: AbortSignal,
+    options: ConnectorLoadOptions = {},
+  ) => {
+    await paintConnectorLoad(signal);
+    const prefix = slugify(name) || "connector";
     return loadConnectorTreeInBackground(
       {
         connectorRegistry: $state.snapshot(deployedRegistry.connectors),
         rootConnectorName: name,
-        origin: { x: 360, y: 120 },
-        idPrefix: slugify(name) || "connector",
+        origin: options.origin ?? { x: 360, y: 120 },
+        idPrefix: options.idFactoryScope ? `${prefix}-${options.idFactoryScope}` : prefix,
+        hideReadOnlyLeafOutlets: options.hideReadOnlyLeafOutlets,
+        markRootAsTabRoot: options.markRootAsTabRoot,
         labels: Object.fromEntries(
           networkLibrary.feature.map((item) => [getLibraryRegistryName(item), item.name]),
         ),
@@ -6666,6 +6748,41 @@
     connectorTreeLoads.get(tabId) === controller &&
     owner === getCurrentStudioAuthorId() &&
     tabs.some((tab) => tab.id === tabId);
+
+  const waitForConnectorFlow = async (
+    tabId: string,
+    controller: AbortController,
+    owner: string,
+  ) => {
+    if (activeTabId !== tabId) return;
+    await waitForFlowReady({
+      signal: controller.signal,
+      isCurrent: () => activeTabId === tabId && canApplyConnectorTreeLoad(tabId, controller, owner),
+      nextFrame: async () => {
+        await nextFlowFrame(controller.signal);
+        await tick();
+      },
+      read: () => {
+        const ids = nodes.filter((node) => !node.hidden).map((node) => node.id);
+        const sizes = getFlowNodeMeasurements?.(ids) ?? { measured: 0, signature: "" };
+        return {
+          measured: sizes.measured,
+          total: ids.length,
+          layoutPending: layoutFrame !== null || spacingFrame !== null,
+          signature: `${nodePositionSignature}|${sizes.signature}`,
+        };
+      },
+      onProgress: (state) =>
+        setConnectorLoadPhase(
+          tabId,
+          controller,
+          state.measured < state.total
+            ? `Drawing flow… ${state.measured} of ${state.total} nodes`
+            : "Arranging flow…",
+          false,
+        ),
+    });
+  };
 
   const refreshConnectorTreeTab = async (tabId: string) => {
     const tab = tabs.find((candidate) => candidate.id === tabId);
@@ -6681,10 +6798,14 @@
         !connectorTreeModelsByTab.has(tabId)
       )
         return;
+      setConnectorLoadPhase(tabId, controller, "Drawing flow…", false);
+      await paintConnectorLoad(controller.signal);
+      if (!canApplyConnectorTreeLoad(tabId, controller, owner)) return;
       if (shouldReplaceConnectorTreeModel(connectorTreeModelsByTab.get(tabId), graph))
         connectorTreeModelsByTab.set(tabId, graph);
       tabGraphs.set(tabId, tabGraphs.get(tabId) ?? { nodes: [], edges: [] });
       if (activeTabId === tabId) loadTabGraph(tabId);
+      await waitForConnectorFlow(tabId, controller, owner);
     } catch (error) {
       if (
         !controller.signal.aborted &&
@@ -6718,10 +6839,16 @@
     };
     try {
       let graph = await buildConnectorTreeInBackground(connectorName, controller.signal);
+      setConnectorLoadPhase(tabId, controller, "Drawing flow…", false);
+      await paintConnectorLoad(controller.signal);
       if (!apply(graph)) return false;
-      if (isCompleteConnectorTreeModel(graph)) return true;
+      if (isCompleteConnectorTreeModel(graph)) {
+        await waitForConnectorFlow(tabId, controller, owner);
+        return true;
+      }
       chainSyncError = null;
-      connectorTreeLoading[tabId] = `Fetching ${connectorName} and its dependencies…`;
+      setConnectorLoadPhase(tabId, controller, `Fetching ${connectorName} and its dependencies…`);
+      await paintConnectorLoad(controller.signal);
       chainSyncStatus = `Fetching ${connectorName} from chain...`;
       const result = await withChainAuthRetry(() => syncConnectorTreeFromChain(connectorName));
       if (!canApplyConnectorTreeLoad(tabId, controller, owner)) return false;
@@ -6730,8 +6857,10 @@
         chainSyncError = `Connector ${connectorName} is unavailable. Open a published connector or a draft owned by the signed-in account.`;
         return false;
       }
-      connectorTreeLoading[tabId] = "Preparing connector graph…";
+      setConnectorLoadPhase(tabId, controller, "Preparing connector graph…");
       graph = await buildConnectorTreeInBackground(connectorName, controller.signal);
+      setConnectorLoadPhase(tabId, controller, "Drawing flow…", false);
+      await paintConnectorLoad(controller.signal);
       if (!apply(graph)) return false;
       const complete = isCompleteConnectorTreeModel(graph);
       if (complete)
@@ -6740,6 +6869,7 @@
         chainSyncStatus = null;
         chainSyncError = `Fetched ${connectorName}, but its graph still has missing dependencies.${result.missing.length ? ` Missing: ${result.missing.join(", ")}.` : ""}`;
       }
+      await waitForConnectorFlow(tabId, controller, owner);
       return complete;
     } catch (error) {
       if (controller.signal.aborted || owner !== getCurrentStudioAuthorId()) return false;
@@ -7294,9 +7424,10 @@
     }
 
     const rootId = rootNode.id;
+    const nodeLookup = new Map(nextNodes.map((node) => [node.id, node]));
     nextEdges = nextEdges.map((edge) => {
-      const source = nextNodes.find((node) => node.id === edge.source);
-      const target = nextNodes.find((node) => node.id === edge.target);
+      const source = nodeLookup.get(edge.source);
+      const target = nodeLookup.get(edge.target);
       if (source?.data.kind !== "plugin" || !target || !isConnectorKind(target.data.kind))
         return edge;
       const handle = target.id === rootId ? "plugin-in" : "in";
@@ -7761,47 +7892,6 @@
     return true;
   };
 
-  const ensureLibraryConnectorDetailLoaded = async (connectorName: string): Promise<boolean> => {
-    const name = connectorName.trim();
-    if (!name) return false;
-
-    const existingGraph = buildConnectorTreeGraph(name, { x: 0, y: 0 });
-    const existingGraphComplete =
-      existingGraph.nodes.length > 0 &&
-      !existingGraph.nodes.some((node) => Boolean(node.data.placeholder));
-    if (existingGraphComplete) return true;
-
-    chainSyncError = null;
-    chainSyncStatus = `Fetching ${name} from chain...`;
-    let result: Awaited<ReturnType<typeof syncConnectorTreeFromChain>>;
-    try {
-      result = await withChainAuthRetry(() => syncConnectorTreeFromChain(name));
-    } catch (error) {
-      chainSyncStatus = null;
-      chainSyncError =
-        error instanceof Error
-          ? `Could not load connector ${name} from chain: ${error.message}`
-          : `Could not load connector ${name} from chain.`;
-      return false;
-    }
-    const nextGraph = buildConnectorTreeGraph(name, { x: 0, y: 0 });
-    const loaded =
-      nextGraph.nodes.length > 0 && !nextGraph.nodes.some((node) => Boolean(node.data.placeholder));
-
-    if (loaded) {
-      chainSyncStatus =
-        result.loaded.length > 1
-          ? `Loaded ${name} and ${result.loaded.length - 1} composite connector(s).`
-          : `Loaded ${name} from chain.`;
-      return true;
-    }
-
-    const missing = result.missing.length ? ` Missing: ${result.missing.join(", ")}.` : "";
-    chainSyncStatus = null;
-    chainSyncError = `Connector ${name} was discovered in the feed but could not be loaded from chain.${missing}`;
-    return false;
-  };
-
   const addHydratedLibraryNode = (
     item: LibraryItem,
     position: { x: number; y: number } | null = null,
@@ -7839,22 +7929,6 @@
       x: 160 + Math.round(Math.random() * 200),
       y: 160 + Math.round(Math.random() * 200),
     };
-    if (item.kind === "feature") {
-      const graph = buildConnectorTreeGraph(registryName, nodePosition, {
-        hideReadOnlyLeafOutlets: false,
-        markRootAsTabRoot: false,
-        idFactoryScope: `flow-${crypto.randomUUID()}`,
-      });
-      if (graph.nodes.length) {
-        nodes = [...nodes, ...graph.nodes];
-        edges = [...edges, ...graph.edges];
-        scheduleLayout();
-        return;
-      }
-
-      chainSyncError = `Connector ${registryName} is not loaded from chain yet.`;
-      return;
-    }
     const node: StudioNode = {
       id: `${item.kind}-${item.id}-${crypto.randomUUID()}`,
       position: nodePosition,
@@ -7876,11 +7950,67 @@
     position: { x: number; y: number } | null = null,
   ) => {
     if (activeTabReadOnly) return;
-    if (item.kind === "feature") {
-      const loaded = await ensureLibraryConnectorDetailLoaded(getLibraryRegistryName(item));
-      if (!loaded) return;
+    if (item.kind !== "feature") {
+      addHydratedLibraryNode(item, position);
+      return;
     }
-    addHydratedLibraryNode(item, position);
+    const tabId = activeTabId,
+      owner = getCurrentStudioAuthorId();
+    const controller = beginConnectorTreeLoad(tabId, "insert");
+    const name = getLibraryRegistryName(item);
+    const current = () =>
+      activeTabId === tabId &&
+      !activeTabReadOnly &&
+      canApplyConnectorTreeLoad(tabId, controller, owner);
+    const options = {
+      origin: position ?? {
+        x: 160 + Math.round(Math.random() * 200),
+        y: 160 + Math.round(Math.random() * 200),
+      },
+      hideReadOnlyLeafOutlets: false,
+      markRootAsTabRoot: false,
+      idFactoryScope: `flow-${crypto.randomUUID()}`,
+    };
+    try {
+      let graph = await buildConnectorTreeInBackground(name, controller.signal, options);
+      if (!current()) return;
+      if (!isCompleteConnectorTreeModel(graph)) {
+        chainSyncError = null;
+        chainSyncStatus = `Fetching ${name} from chain...`;
+        setConnectorLoadPhase(tabId, controller, `Fetching ${name} and its dependencies…`);
+        await paintConnectorLoad(controller.signal);
+        const result = await withChainAuthRetry(() => syncConnectorTreeFromChain(name));
+        if (!current()) return;
+        if (result.missing.includes(name)) throw new Error(`Connector ${name} is unavailable.`);
+        setConnectorLoadPhase(tabId, controller, "Preparing connector graph…");
+        graph = await buildConnectorTreeInBackground(name, controller.signal, options);
+        if (!current()) return;
+        if (!isCompleteConnectorTreeModel(graph))
+          throw new Error(
+            `Connector ${name} has missing dependencies.${result.missing.length ? ` Missing: ${result.missing.join(", ")}.` : ""}`,
+          );
+        chainSyncStatus = `Loaded ${name} from chain.`;
+      }
+      setConnectorLoadPhase(tabId, controller, "Drawing flow…", false);
+      await paintConnectorLoad(controller.signal);
+      if (!current()) return;
+      ensureEditableTabForInsertion();
+      nodes = [...nodes, ...graph.nodes];
+      edges = [...edges, ...graph.edges];
+      scheduleLayout();
+      await waitForConnectorFlow(tabId, controller, owner);
+    } catch (error) {
+      if (
+        !controller.signal.aborted &&
+        activeTabId === tabId &&
+        owner === getCurrentStudioAuthorId()
+      ) {
+        chainSyncStatus = null;
+        chainSyncError = error instanceof Error ? error.message : `Could not load ${name}.`;
+      }
+    } finally {
+      finishConnectorTreeLoad(tabId, controller);
+    }
   };
 
   const getCanvasCenter = () => {
@@ -8967,7 +9097,7 @@
         inline
         onHide={() => hidePanel((mode) => (topMode = mode))}
       >
-        <div class="top-action-group">
+        <div class="top-action-group" inert={Boolean(connectorTreeLoading[activeTabId])}>
           <Button
             variant="ghost"
             ariaLabel="New Connector"
@@ -9019,7 +9149,7 @@
           </Button>
         </div>
         <div class="top-action-divider" aria-hidden="true"></div>
-        <div class="top-deploy-group">
+        <div class="top-deploy-group" inert={Boolean(connectorTreeLoading[activeTabId])}>
           <Button
             variant="ghost"
             ariaLabel="Refresh network library"
@@ -9068,7 +9198,7 @@
       onResize={handleLeftPanelResize}
       onHide={() => hidePanel((mode) => (leftMode = mode))}
     >
-      <div class="left-panel">
+      <div class="left-panel" inert={Boolean(connectorTreeLoading[activeTabId])}>
         <div class="source-tabs">
           <button
             type="button"
@@ -9435,58 +9565,67 @@
     <div class="flow-area" role="presentation" onpointerdowncapture={handleFlowAreaPointerDown}>
       {#if connectorTreeLoading[activeTabId]}
         <StudioGraphLoading
-          message={connectorTreeLoading[activeTabId]}
+          message={connectorTreeLoading[activeTabId].message}
+          cancellable={connectorTreeLoading[activeTabId].cancellable}
           onCancel={() => cancelConnectorTreeLoad(activeTabId)}
         />
       {/if}
-      <SvelteFlow
-        bind:nodes
-        bind:edges
-        bind:viewport={flowViewport}
-        {nodeTypes}
-        onconnect={handleConnect}
-        onselectionchange={handleSelectionChange}
-        onbeforedelete={handleBeforeDelete}
-        onnodedragstart={handleNodeDragStart}
-        onnodedrag={handleNodeDrag}
-        onnodedragstop={handleNodeDragStop}
-        onselectiondrag={handleSelectionDrag}
-        onselectiondragstop={handleSelectionDragStop}
-        {isValidConnection}
-        onnodeclick={handleNodeClick}
-        onedgeclick={handleEdgeClick}
-        onpaneclick={handlePaneClick}
-        fitView
-        minZoom={STUDIO_FLOW_MIN_ZOOM}
-        nodesDraggable
-        nodesConnectable
-        deleteKey={["Backspace", "Delete"]}
-        selectionKey={["Meta", "Control"]}
-        multiSelectionKey={["Meta", "Control"]}
-        selectionMode={SelectionMode.Partial}
-        zoomOnScroll
-        zoomOnDoubleClick={false}
-        zoomOnPinch
-        panOnDrag
-        proOptions={{ hideAttribution: true }}
+      <div
+        class="flow-content"
+        inert={Boolean(connectorTreeLoading[activeTabId])}
+        aria-busy={Boolean(connectorTreeLoading[activeTabId])}
       >
-        <Background bgColor="var(--studio-flow-bg)" patternColor="var(--studio-flow-pattern)" />
-        <FlowInstanceBridge
-          onReady={({
-            screenToFlowPosition: toFlow,
-            getZoom: zoomFn,
-            setCenter: setCenterFn,
-            fitView: fitViewFn,
-            clearSelection,
-          }) => {
-            screenToFlowPosition = toFlow;
-            getZoom = zoomFn;
-            setCenter = setCenterFn;
-            fitView = fitViewFn;
-            clearFlowSelection = clearSelection;
-          }}
-        />
-      </SvelteFlow>
+        <SvelteFlow
+          bind:nodes
+          bind:edges
+          bind:viewport={flowViewport}
+          {nodeTypes}
+          onconnect={handleConnect}
+          onselectionchange={handleSelectionChange}
+          onbeforedelete={handleBeforeDelete}
+          onnodedragstart={handleNodeDragStart}
+          onnodedrag={handleNodeDrag}
+          onnodedragstop={handleNodeDragStop}
+          onselectiondrag={handleSelectionDrag}
+          onselectiondragstop={handleSelectionDragStop}
+          {isValidConnection}
+          onnodeclick={handleNodeClick}
+          onedgeclick={handleEdgeClick}
+          onpaneclick={handlePaneClick}
+          fitView
+          minZoom={STUDIO_FLOW_MIN_ZOOM}
+          nodesDraggable
+          nodesConnectable
+          deleteKey={["Backspace", "Delete"]}
+          selectionKey={["Meta", "Control"]}
+          multiSelectionKey={["Meta", "Control"]}
+          selectionMode={SelectionMode.Partial}
+          zoomOnScroll
+          zoomOnDoubleClick={false}
+          zoomOnPinch
+          panOnDrag
+          proOptions={{ hideAttribution: true }}
+        >
+          <Background bgColor="var(--studio-flow-bg)" patternColor="var(--studio-flow-pattern)" />
+          <FlowInstanceBridge
+            onReady={({
+              screenToFlowPosition: toFlow,
+              getZoom: zoomFn,
+              setCenter: setCenterFn,
+              fitView: fitViewFn,
+              clearSelection,
+              getNodeMeasurements,
+            }) => {
+              screenToFlowPosition = toFlow;
+              getZoom = zoomFn;
+              setCenter = setCenterFn;
+              fitView = fitViewFn;
+              clearFlowSelection = clearSelection;
+              getFlowNodeMeasurements = getNodeMeasurements;
+            }}
+          />
+        </SvelteFlow>
+      </div>
     </div>
   </div>
 
@@ -9502,7 +9641,7 @@
       onResize={handleRightPanelResize}
       onHide={hideRightPanel}
     >
-      <div class="right-panel-content">
+      <div class="right-panel-content" inert={Boolean(connectorTreeLoading[activeTabId])}>
         <div class="right-panel-controls">
           <button
             type="button"
@@ -9807,7 +9946,7 @@
       onResize={handleRightPanelResize}
       onHide={hideRightPanel}
     >
-      <div class="right-panel-content">
+      <div class="right-panel-content" inert={Boolean(connectorTreeLoading[activeTabId])}>
         <div class="right-panel-controls">
           <button
             type="button"
@@ -10007,7 +10146,7 @@
       onResize={handleRightPanelResize}
       onHide={hideRightPanel}
     >
-      <div class="right-panel-content">
+      <div class="right-panel-content" inert={Boolean(connectorTreeLoading[activeTabId])}>
         <div class="right-panel-controls">
           <button
             type="button"
@@ -11370,7 +11509,12 @@
   }
 
   .flow-area {
-    @apply min-h-0 flex-1;
+    @apply relative min-h-0 flex-1;
+  }
+
+  .flow-content {
+    height: 100%;
+    width: 100%;
   }
 
   .studio :global(.svelte-flow) {

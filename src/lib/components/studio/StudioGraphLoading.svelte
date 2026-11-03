@@ -1,5 +1,9 @@
 <script lang="ts">
-  let { message, onCancel }: { message: string; onCancel: () => void } = $props();
+  let {
+    message,
+    onCancel,
+    cancellable = true,
+  }: { message: string; onCancel: () => void; cancellable?: boolean } = $props();
 </script>
 
 <div class="graph-loading" role="status" aria-live="polite">
@@ -8,7 +12,7 @@
     <div class="graph-scaffold" aria-hidden="true">
       <i></i><span></span><i></i><span></span><i></i>
     </div>
-    <button type="button" onclick={onCancel}>Cancel</button>
+    {#if cancellable}<button type="button" onclick={onCancel}>Cancel</button>{/if}
   </div>
 </div>
 
@@ -35,6 +39,7 @@
     margin-bottom: 24px;
     opacity: 0.45;
     animation: loading 1.8s ease-in-out infinite;
+    will-change: opacity;
   }
   i {
     width: 62px;

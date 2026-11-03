@@ -324,6 +324,7 @@ async function build(page: Page, guide: ReturnType<Page["getByRole"]>, stride: n
   await page.getByRole("button", { name: "Published", exact: true }).click();
   await page.getByRole("button", { name: "Connectors", exact: true }).click();
   await card(page, "pitch").getByRole("button", { name: "Add to flow" }).click();
+  await expect(page.locator(".graph-loading")).toHaveCount(0);
   await expect(node(page, "pitch")).toBeVisible();
   const source = node(page, "tutorial_step" + stride).locator('[data-handleid="dim-0"]');
   const target = node(page, "pitch").locator('[data-handleid="in"]');
@@ -459,6 +460,7 @@ async function startCustomElements(page: Page, guide: ReturnType<Page["getByRole
   await page.getByRole("button", { name: "Published", exact: true }).click();
   await page.getByRole("button", { name: "Connectors", exact: true }).click();
   await card(page, "pitch").getByRole("button", { name: "Add to flow" }).click();
+  await expect(page.locator(".graph-loading")).toHaveCount(0);
   await expect(node(page, "pitch")).toBeVisible();
   await node(page, "tutorial_custom_cycle")
     .locator('[data-handleid="dim-0"]')
@@ -541,6 +543,7 @@ test("the dimensions guide saves one two-dimensional definition and checks both 
   await page.getByRole("button", { name: "Published", exact: true }).click();
   await page.getByRole("button", { name: "Connectors", exact: true }).click();
   await card(page, "pitch").getByRole("button", { name: "Add to flow" }).click();
+  await expect(page.locator(".graph-loading")).toHaveCount(0);
   await node(page, "tutorial_pair")
     .locator('[data-handleid="dim-0"]')
     .dragTo(node(page, "pitch").locator('[data-handleid="in"]'));
@@ -835,6 +838,7 @@ test("custom-elements guide follows both Solidity editors, fixed arguments and t
   await page.getByRole("button", { name: "Published", exact: true }).click();
   await page.getByRole("button", { name: "Connectors", exact: true }).click();
   await card(page, "pitch").getByRole("button", { name: "Add to flow" }).click();
+  await expect(page.locator(".graph-loading")).toHaveCount(0);
   await node(page, "tutorial_custom_blocked")
     .locator('[data-handleid="dim-0"]')
     .dragTo(node(page, "pitch").locator('[data-handleid="in"]'));

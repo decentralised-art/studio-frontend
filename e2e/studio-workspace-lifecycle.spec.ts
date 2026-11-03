@@ -493,6 +493,7 @@ test("reconnecting the World to another top-level connector retargets the runner
   const localId = await connectorNamed(page, "score_study_v2").getAttribute("data-id");
   const edge = page.locator(".svelte-flow__edge");
   await expect(edge).toHaveCount(1);
+  await expect(page.locator(".graph-loading")).toHaveCount(0);
   await edge.focus();
   await edge.press("Enter");
   await expect(edge).toHaveClass(/selected/);
@@ -866,4 +867,142 @@ test("connector loading shows a cancellable scaffold and a cancelled worker cann
   } finally {
     release();
   }
+});
+
+test("adding to a flow keeps its scaffold until SvelteFlow measures and lays out the inserted nodes", async ({
+  page,
+}) => {
+  const state = await setup(page, true);
+  await page.addInitScript(() => {
+    const NativeObserver = window.ResizeObserver;
+    let hold = false;
+    const pending: Array<() => void> = [];
+    // Connector nodes also ask SvelteFlow to measure directly. Gate those reads
+    // as well as ResizeObserver, so the framework really has no usable sizes.
+    for (const property of ["offsetWidth", "offsetHeight"]) {
+      const descriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, property)!;
+      Object.defineProperty(HTMLElement.prototype, property, {
+        ...descriptor,
+        get(this: HTMLElement) {
+          if (
+            hold &&
+            this.classList.contains("svelte-flow__node") &&
+            !this.dataset.measuredBeforeHold
+          )
+            return 0;
+          return descriptor.get!.call(this);
+        },
+      });
+    }
+    Object.assign(window, {
+      holdFlowMeasurements: () => {
+        document.querySelectorAll<HTMLElement>(".svelte-flow__node").forEach((node) => {
+          node.dataset.measuredBeforeHold = "true";
+        });
+        hold = true;
+      },
+      releaseFlowMeasurements: () => {
+        hold = false;
+        pending.splice(0).forEach((callback) => callback());
+      },
+    });
+    window.ResizeObserver = class extends NativeObserver {
+      constructor(callback: ResizeObserverCallback) {
+        super((entries, observer) => {
+          if (hold && entries.some((entry) => entry.target.classList.contains("svelte-flow__node")))
+            pending.push(() => callback(entries, observer));
+          else callback(entries, observer);
+        });
+      }
+    };
+  });
+  await page.goto("/studio");
+  await expect(connectorNodes(page)).toHaveCount(1);
+  const rootId = await connectorNodes(page).first().getAttribute("data-id");
+  await expect(libraryCard(page, "pitch")).toBeVisible();
+  await page.evaluate(() => Reflect.get(window, "holdFlowMeasurements")());
+  await libraryCard(page, "pitch").getByTitle("Add to flow").click();
+  const scaffold = page.locator(".graph-loading");
+  await expect(scaffold).toBeVisible();
+  await expect(connectorNodes(page)).toHaveCount(2);
+  await expect(scaffold).toContainText("Drawing flow");
+  await expect(page.locator(".flow-content")).toHaveAttribute("aria-busy", "true");
+  await expect(page.locator(".flow-content")).toHaveAttribute("inert", "");
+  await expect(page.locator(".left-panel")).toHaveAttribute("inert", "");
+  await expect(page.locator(".top-action-group")).toHaveAttribute("inert", "");
+  await expect(page.getByRole("button", { name: "Create new connector tab" })).toBeEnabled();
+  await expect(scaffold.getByRole("button", { name: "Cancel", exact: true })).toHaveCount(0);
+  await page.evaluate(() => Reflect.get(window, "releaseFlowMeasurements")());
+  await expect(scaffold).toHaveCount(0);
+  await expect(page.locator(".flow-content")).toHaveAttribute("aria-busy", "false");
+  await expect(page.locator(".left-panel")).not.toHaveAttribute("inert", "");
+  await expect(
+    connectorNodes(page).filter({ has: page.locator(".connector-title", { hasText: "pitch" }) }),
+  ).toHaveCount(1);
+  expect(await connectorNodes(page).first().getAttribute("data-id")).toBe(rootId);
+  expect(state.errors).toEqual([]);
+  expect(state.writes).toEqual([]);
+});
+
+test("cancelling an added connector leaves the existing flow unchanged and ignores late work", async ({
+  page,
+}) => {
+  const state = await setup(page, true);
+  let release = () => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route(/connectorTreeWorker-[^/]+\.js$/, async (route) => {
+    await gate;
+    try {
+      await route.continue();
+    } catch {
+      /* Cancel terminates the worker fetch. */
+    }
+  });
+  try {
+    await page.goto("/studio");
+    await expect(connectorNodes(page)).toHaveCount(1);
+    const originalIds = await page
+      .locator(".svelte-flow__node")
+      .evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-id")));
+    await libraryCard(page, "pitch").getByTitle("Add to flow").click();
+    const scaffold = page.locator(".graph-loading");
+    await expect(scaffold).toBeVisible();
+    await scaffold.getByRole("button", { name: "Cancel", exact: true }).click();
+    release();
+    await expect(scaffold).toHaveCount(0);
+    expect(
+      await page
+        .locator(".svelte-flow__node")
+        .evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-id"))),
+    ).toEqual(originalIds);
+    expect(state.errors).toEqual([]);
+    expect(state.writes).toEqual([]);
+  } finally {
+    release();
+  }
+});
+
+test("adding the same published connector twice creates independent flow instances", async ({
+  page,
+}) => {
+  const state = await setup(page, true);
+  await page.goto("/studio");
+  await expect(connectorNodes(page)).toHaveCount(1);
+  for (let count = 2; count <= 3; count++) {
+    await libraryCard(page, "pitch").getByTitle("Add to flow").click();
+    await expect(connectorNodes(page)).toHaveCount(count);
+    await expect(page.locator(".graph-loading")).toHaveCount(0);
+  }
+  const ids = await connectorNodes(page).evaluateAll((nodes) =>
+    nodes.map((node) => node.getAttribute("data-id")),
+  );
+  expect(new Set(ids).size).toBe(3);
+  await expect(connectorNodes(page).locator(".connector-title")).toHaveText([
+    "Untitled Connector",
+    "pitch",
+    "pitch",
+  ]);
+  expect(state.errors).toEqual([]);
 });

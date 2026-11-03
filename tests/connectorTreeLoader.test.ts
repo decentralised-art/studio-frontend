@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { buildConnectorTreeGraph } from "../src/lib/studio/connectorTreeGraph";
 import { loadConnectorTreeInBackground } from "../src/lib/studio/connectorTreeLoader";
 import { runConnectorTreeTask, type ConnectorTreeTask } from "../src/lib/studio/connectorTreeTask";
 
@@ -40,6 +41,35 @@ describe("background connector loading", () => {
     expect(loaded.edges.length).toBeGreaterThan(0);
     expect(worker.postMessage).toHaveBeenCalledWith(task);
     expect(worker.terminate).toHaveBeenCalledOnce();
+  });
+  it("keeps the existing insertion options and RI rules when preparing an added connector", () => {
+    const insertion = {
+      ...task,
+      origin: { x: 19, y: 43 },
+      idPrefix: "phrase-flow-unique",
+      hideReadOnlyLeafOutlets: false,
+      markRootAsTabRoot: false,
+    };
+    let index = 0;
+    const expected = buildConnectorTreeGraph({
+      connectorRegistry: task.connectorRegistry,
+      rootConnectorName: task.rootConnectorName,
+      origin: insertion.origin,
+      options: {
+        hideReadOnlyLeafOutlets: false,
+        markRootAsTabRoot: false,
+        idFactory: () => `${insertion.idPrefix}-${index++}`,
+        labelForConnector: (name) => task.labels[name] ?? name,
+      },
+    });
+    const actual = runConnectorTreeTask(insertion);
+    expect(actual).toEqual(expected);
+    expect(
+      actual.nodes
+        .filter((node) => node.data.kind === "connector")
+        .every((node) => !node.data.tabRoot && !node.data.hideOutlets),
+    ).toBe(true);
+    expect(actual.nodes.some((node) => node.data.riLocked && node.data.riStart === 60)).toBe(true);
   });
   it("terminates cancelled work and ignores its late reply", async () => {
     const worker = new FakeWorker(),

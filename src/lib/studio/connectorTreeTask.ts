@@ -7,6 +7,8 @@ export type ConnectorTreeTask = {
   origin: { x: number; y: number };
   idPrefix: string;
   labels: Record<string, string>;
+  hideReadOnlyLeafOutlets?: boolean;
+  markRootAsTabRoot?: boolean;
 };
 
 /** The normal graph/RI rules, with serializable options for a dedicated thread. */
@@ -17,6 +19,8 @@ export function runConnectorTreeTask(task: ConnectorTreeTask): ConnectorTreeMode
     rootConnectorName: task.rootConnectorName,
     origin: task.origin,
     options: {
+      hideReadOnlyLeafOutlets: task.hideReadOnlyLeafOutlets,
+      markRootAsTabRoot: task.markRootAsTabRoot,
       idFactory: () => `${task.idPrefix}-${idIndex++}`,
       labelForConnector: (name) => task.labels[name] ?? name,
     },

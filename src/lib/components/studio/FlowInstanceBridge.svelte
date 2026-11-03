@@ -22,6 +22,7 @@
         nodes?: { id: string }[];
       }) => Promise<boolean>;
       clearSelection: () => void;
+      getNodeMeasurements: (ids: string[]) => { measured: number; signature: string };
     }) => void;
   } = $props();
 
@@ -34,7 +35,24 @@
     store.selectionRect = null;
   };
 
+  const getNodeMeasurements = (ids: string[]) => {
+    let measured = 0;
+    const sizes = ids.map((id) => {
+      const size = store.nodeLookup.get(id)?.measured;
+      if (size?.width && size?.height) measured++;
+      return `${id}:${size?.width ?? 0}:${size?.height ?? 0}`;
+    });
+    return { measured, signature: sizes.join("|") };
+  };
+
   onMount(() => {
-    onReady?.({ screenToFlowPosition, getZoom, setCenter, fitView, clearSelection });
+    onReady?.({
+      screenToFlowPosition,
+      getZoom,
+      setCenter,
+      fitView,
+      clearSelection,
+      getNodeMeasurements,
+    });
   });
 </script>

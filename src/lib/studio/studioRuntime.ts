@@ -300,10 +300,11 @@ const resolveConnectorDimensionLinks = (
   return { composite: null, bindings: {} as Record<string, string> };
 };
 
-const buildConnectorFromGraph = (
+/** Read one definition without compiling or validating unrelated graph branches. */
+export const buildStudioConnectorFromGraph = (
   featureNode: StudioNode,
   graph: StudioGraph,
-  nameMap: Map<string, string>,
+  nameMap: Map<string, string> = new Map(),
 ): StudioConnectorDef => {
   const connectorName = resolveNodeName(featureNode);
   const dimensionNodes = getDimensionNodesForFeature(featureNode.id, graph);
@@ -491,7 +492,7 @@ const buildRootConnector = (
   rootName: string,
   nameMap: Map<string, string>,
 ): StudioConnectorDef => {
-  const connector = buildConnectorFromGraph(featureNode, graph, nameMap);
+  const connector = buildStudioConnectorFromGraph(featureNode, graph, nameMap);
   return { ...connector, name: rootName };
 };
 
@@ -670,7 +671,7 @@ export const buildStudioRuntime = (
 
   const featureNodes = graph.nodes.filter((node) => isConnectorKind(node.data.kind));
   featureNodes.forEach((featureNode) => {
-    const def = buildConnectorFromGraph(featureNode, graph, transformationNameMap);
+    const def = buildStudioConnectorFromGraph(featureNode, graph, transformationNameMap);
     const exists = registry.connectors[def.name];
     if (exists) {
       if (featureNode.data.fromNetwork) {
