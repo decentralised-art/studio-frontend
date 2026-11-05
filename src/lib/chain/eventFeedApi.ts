@@ -1,4 +1,4 @@
-import { createDcnClient, isDcnApiError } from "$lib/chain/dcnClient";
+import { createDcnClient, isDcnApiError, type DcnClientFactoryOptions } from "$lib/chain/dcnClient";
 import { ChainApiRequestError } from "$lib/chain/registryApi";
 
 export const CHAIN_FEED_EVENT_TYPES = [
@@ -382,13 +382,14 @@ export const parseChainFeedStreamMetaData = (data: string): ChainFeedStreamMeta 
 
 export const getChainFeedPage = async (
   options: GetChainFeedPageOptions,
+  clientOptions?: DcnClientFactoryOptions,
 ): Promise<ChainFeedPage> => {
   const limit = normalizeRequestLimit(options.limit, "limit");
   const before = normalizeOptionalToken(options.before);
   const type = normalizeOptionalToken(options.type);
 
   try {
-    const payload = await createDcnClient().feed({
+    const payload = await createDcnClient(clientOptions).feed({
       limit,
       before: before ?? undefined,
       type: type ? (type.toLowerCase() as ChainFeedEventType) : undefined,

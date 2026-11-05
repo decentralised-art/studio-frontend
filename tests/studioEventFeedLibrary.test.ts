@@ -202,6 +202,67 @@ describe("studioEventFeedLibrary", () => {
     expect(discovery.library.features.map((item) => item.name)).toEqual(["pitch"]);
   });
 
+  it("finds published operations beyond 256 local drafts using literal cursor separators", async () => {
+    const cursor = "c1793652669854:1308:0:local:11155111:connector_added:draft_255";
+    const drafts = Array.from({ length: 256 }, (_, index) =>
+      rawFeedItem(`draft_${index}`, "connector_added", {
+        feed_id: `local:11155111:connector_added:draft_${index}`,
+        status: "finalized",
+      }),
+    );
+    registry.connector.mockImplementation(async (name: string) => ({
+      name,
+      address: name.includes("draft") ? "0x0" : CHAIN_ADDRESS,
+      owner: name === "pitch" || name === "foreign_draft" ? OTHER_OWNER : OWNER,
+    }));
+    registry.transformation.mockResolvedValue({ address: CHAIN_ADDRESS, owner: OTHER_OWNER });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const raw = input instanceof Request ? input.url : String(input);
+      const url = new URL(raw);
+      if (!url.searchParams.has("before")) return feedPage(drafts, cursor);
+      if (raw.includes(`before=${encodeURIComponent(cursor)}`)) return feedPage([]);
+      if (raw.includes(`before=${cursor}`)) {
+        return feedPage([
+          rawFeedItem("pitch", "connector_added", {
+            payload: { name: "pitch", owner: OTHER_OWNER },
+          }),
+          rawFeedItem("add", "transformation_added", {
+            payload: { name: "add", owner: OTHER_OWNER },
+          }),
+          rawFeedItem("foreign_draft", "connector_added", {
+            status: "finalized",
+            payload: { name: "foreign_draft", owner: OTHER_OWNER },
+          }),
+        ]);
+      }
+      throw new Error("Unexpected feed request");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const discovery = await loadStudioNetworkLibraryFromEventFeed({
+      sourceAddresses: [],
+      includeAllOwners: true,
+      pageLimit: 256,
+      maxPages: 8,
+      targetItems: 240,
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      `https://api.example.invalid/feed?limit=256&before=${cursor}&include_unfinalized=1`,
+      expect.objectContaining({ method: "GET", cache: "no-store" }),
+    );
+    expect(discovery.pageCount).toBe(2);
+    expect(discovery.rawItemCount).toBe(259);
+    expect(discovery.library.features.map((item) => item.name)).toEqual(["pitch"]);
+    expect(discovery.library.transformations.map((item) => item.name)).toEqual(["add"]);
+    expect(discovery.discoveredItemCount).toBe(2);
+    expect(discovery.library.features[0].ownerAddress).toBe(OTHER_OWNER);
+    expect(registry.connector).toHaveBeenCalledTimes(258);
+    expect(discovery.library.features.every((item) => item.chainAddress !== "0x0")).toBe(true);
+  });
+
   it("lets the newest feed state win for duplicate or removed entries", async () => {
     vi.stubGlobal(
       "fetch",

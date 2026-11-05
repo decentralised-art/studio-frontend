@@ -11,6 +11,7 @@ import {
 import type { LibraryItem } from "$lib/data/studioLibrary";
 import { normalizeFeedSourceAddress } from "$lib/feed/feedSources";
 import { isPublishedChainAddress } from "$lib/studio/studioEntityOrigin";
+import { fetchStudioFeed } from "$lib/studio/studioFeedTransport";
 import type { DeployedLibrary } from "$lib/studio/studioRegistryState";
 
 export type StudioEventFeedLibraryOptions = {
@@ -195,11 +196,14 @@ export const loadStudioNetworkLibraryFromEventFeed = async (
   }
 
   for (let index = 0; index < maxPages; index += 1) {
-    const page = await getChainFeedPage({
-      limit: pageLimit,
-      before,
-      includeUnfinalized: options.includeUnfinalized ?? true,
-    });
+    const page = await getChainFeedPage(
+      {
+        limit: pageLimit,
+        before,
+        includeUnfinalized: options.includeUnfinalized ?? true,
+      },
+      { fetch: fetchStudioFeed },
+    );
     pageCount += 1;
     rawItemCount += page.items.length;
 
