@@ -216,6 +216,7 @@
     type ToolboxLibrary,
   } from "$lib/toolbox/toolboxLibrary";
   import { buildStudioConnectorFromGraph, buildStudioRuntime } from "$lib/studio/studioRuntime";
+  import { loadConnectorDependencies } from "$lib/studio/connectorDependencyLoader";
   import {
     fetchChainParticleForStudio,
     fetchChainOwnedStudioSnapshot,
@@ -4660,50 +4661,33 @@
 
   const syncConnectorTreeFromChain = async (
     connectorName: string,
+    options: {
+      signal?: AbortSignal;
+      fallbackConnectors?: Record<string, StudioConnectorDef>;
+      isCurrent?: () => boolean;
+    } = {},
   ): Promise<{ loaded: string[]; missing: string[] }> => {
-    const root = connectorName.trim();
-    if (!root) return { loaded: [], missing: [] };
-
-    const queued = [root];
-    const visited = new SvelteSet<string>();
-    const loaded: string[] = [];
-    const missing: string[] = [];
-    const maxFetches = 64;
-
-    while (queued.length > 0 && visited.size < maxFetches) {
-      const name = queued.shift()?.trim() ?? "";
-      if (!name || visited.has(name)) continue;
-      visited.add(name);
-
-      let connector = deployedRegistry.connectors[name];
-      if (!connector) {
-        const merged = await syncSingleChainParticle(name);
-        if (!merged) {
-          missing.push(name);
-          continue;
-        }
-        loaded.push(name);
-        connector = deployedRegistry.connectors[name];
-      }
-
-      if (!connector) {
-        missing.push(name);
-        continue;
-      }
-
-      collectConnectorReferenceNames(connector).forEach((childName) => {
-        if (!visited.has(childName)) queued.push(childName);
-      });
-    }
-
-    if (queued.length > 0) {
-      missing.push(...queued.filter((name) => name.trim().length > 0));
-    }
-
-    return {
-      loaded,
-      missing: Array.from(new SvelteSet(missing)),
+    const owner = getCurrentStudioAuthorId();
+    const checkCurrent = () => {
+      options.signal?.throwIfAborted();
+      if (owner !== getCurrentStudioAuthorId() || options.isCurrent?.() === false)
+        throw new DOMException("Connector loading cancelled.", "AbortError");
     };
+    checkCurrent();
+    const result = await loadConnectorDependencies({
+      rootName: connectorName,
+      getConnector: (name) =>
+        deployedRegistry.connectors[name] ?? options.fallbackConnectors?.[name],
+      loadConnector: async (name) => {
+        checkCurrent();
+        await syncSingleChainParticle(name);
+        checkCurrent();
+      },
+      referenceNames: collectConnectorReferenceNames,
+      signal: options.signal,
+    });
+    checkCurrent();
+    return result;
   };
 
   const hydrateDeployedConnectorFromChain = async (connectorName: string) => {
@@ -5980,6 +5964,9 @@
     const runOwner = getCurrentStudioAuthorId();
     const runRootId = activeRootNode?.id;
     const runRootName = activeRootName;
+    const initialWorkspaceSignature = workspaceDefinitionSignature();
+    const dependencyController = new AbortController();
+    let preparingDependencies = true;
     let runSignature = "";
     const isRunCurrent = () =>
       runRequestId === activeRunRequestId &&
@@ -5987,6 +5974,7 @@
       runOwner === getCurrentStudioAuthorId() &&
       runRootId === activeRootNode?.id &&
       runRootName === activeRootName &&
+      (!preparingDependencies || workspaceDefinitionSignature() === initialWorkspaceSignature) &&
       (!runSignature ||
         JSON.stringify(prepareExecuteRequest(nodes, edges).requestBody) === runSignature);
     const runStartedAt = performance.now();
@@ -6006,6 +5994,28 @@
         );
       if (mode === "execute" && !activeRootIsPublished)
         throw new Error("Publish this connector on the network before executing it.");
+      chainDeployStatus = "Loading connector dependencies…";
+      const scopedGraph = getWorkspaceRootGraph();
+      const runtime = buildStudioRuntime(
+        scopedGraph,
+        getWorkspaceRuntimeOptions(scopedGraph.nodes, scopedGraph.edges),
+        buildRuntimeOverrides({}, scopedGraph.nodes),
+      );
+      const dependencies = await measureAsyncStudioRunStep(timings, "prepare", () =>
+        withChainAuthRetry(() =>
+          syncConnectorTreeFromChain(runRootName, {
+            signal: dependencyController.signal,
+            fallbackConnectors: runtime.registry.connectors,
+            isCurrent: isRunCurrent,
+          }),
+        ),
+      );
+      if (!isRunCurrent()) {
+        runStatus = "blocked";
+        return;
+      }
+      if (dependencies.missing.length)
+        throw new Error(`Connector dependencies unavailable: ${dependencies.missing.join(", ")}.`);
       const requestPreview = measureStudioRunStep(timings, "prepare", () =>
         prepareExecuteRequest(nodes, edges),
       );
@@ -6036,6 +6046,7 @@
       }
 
       runSignature = JSON.stringify(requestPreview.requestBody);
+      preparingDependencies = false;
       chainDeployStatus =
         mode === "simulate"
           ? "Simulating connector on the server (no chain transaction)..."
@@ -6108,6 +6119,7 @@
       output = [];
       runProvenanceByTab = { ...runProvenanceByTab, [runTabId]: undefined };
     } finally {
+      dependencyController.abort();
       if (isRunCurrent()) {
         measureStudioRunStep(timings, "store", () => {
           runOutputByTab = { ...runOutputByTab, [runTabId]: output };
@@ -6781,8 +6793,16 @@
     options: ConnectorLoadOptions = {},
   ) => {
     await paintConnectorLoad(signal);
+    const dependencies = await withChainAuthRetry(() =>
+      syncConnectorTreeFromChain(name, { signal }),
+    );
+    if (dependencies.missing.length)
+      throw new Error(
+        `Connector ${name} has missing dependencies: ${dependencies.missing.join(", ")}.`,
+      );
+    signal.throwIfAborted();
     const prefix = slugify(name) || "connector";
-    return loadConnectorTreeInBackground(
+    const graph = await loadConnectorTreeInBackground(
       {
         connectorRegistry: $state.snapshot(deployedRegistry.connectors),
         rootConnectorName: name,
@@ -6796,6 +6816,9 @@
       },
       signal,
     );
+    if (!isCompleteConnectorTreeModel(graph))
+      throw new Error(`Connector ${name} could not be loaded as a complete graph.`);
+    return graph;
   };
   const canApplyConnectorTreeLoad = (tabId: string, controller: AbortController, owner: string) =>
     !controller.signal.aborted &&
