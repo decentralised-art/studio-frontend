@@ -44,10 +44,15 @@ type WindowWithEthereum = Window & {
   ethereum?: BrowserEthereumProvider;
 };
 
-type ChainAuthPayload = {
+type ChainSignInChallenge = {
+  nonce: string;
+  message: string;
+  protocol: "siwe" | "legacy";
+};
+
+type ChainAuthPayload = ChainSignInChallenge & {
   address: string;
   signature: string;
-  nonce: string;
 };
 
 type SiweChallengeResponse = {
@@ -203,18 +208,30 @@ export const chainTokenIdentityForWalletAddress = (address: string): string => {
   return normalized ? `wallet:${normalized}` : "";
 };
 
-const requestChainNonce = async (address: string): Promise<{ nonce: string; message: string }> => {
+const requestChainNonce = async (address: string): Promise<ChainSignInChallenge> => {
   try {
     const response = await createDcnClient({ accessToken: null }).getNonce(address, {
       ...(browser ? { origin: window.location.origin } : {}),
     });
-    if (typeof response.nonce !== "string" || !/^[0-9a-f]{66}$/.test(response.nonce)) {
+    if (!response || typeof response.nonce !== "string") {
       throw new Error("Chain nonce response did not include a valid nonce.");
     }
-    if (typeof response.message !== "string" || !response.message.trim()) {
-      throw new Error("Chain nonce response did not include a sign-in message.");
+    if (/^[0-9a-f]{66}$/.test(response.nonce)) {
+      if (typeof response.message !== "string" || !response.message.trim()) {
+        throw new Error("Chain nonce response did not include a sign-in message.");
+      }
+      return { nonce: response.nonce, message: response.message, protocol: "siwe" };
     }
-    return { nonce: response.nonce, message: response.message };
+    // The deployed legacy API issues a short decimal nonce without a message.
+    // Select its protocol only from this challenge, never after a failed SIWE login.
+    if (/^[0-9]{1,6}$/.test(response.nonce) && response.message === undefined) {
+      return {
+        nonce: response.nonce,
+        message: `Login nonce: ${response.nonce}`,
+        protocol: "legacy",
+      };
+    }
+    throw new Error("Chain nonce response did not include a valid nonce.");
   } catch (error) {
     if (isDcnApiError(error)) {
       throw new Error(extractErrorMessage(error.body));
@@ -225,12 +242,28 @@ const requestChainNonce = async (address: string): Promise<{ nonce: string; mess
 
 const requestChainAuthToken = async (authRequest: ChainAuthPayload): Promise<string> => {
   try {
-    const response = await createDcnClient({ accessToken: null }).loginWithSignature(
-      authRequest.address,
-      authRequest.nonce,
-      authRequest.signature,
-    );
-    const token = parseTokenFromPayload(response);
+    let payload: unknown;
+    if (authRequest.protocol === "legacy") {
+      // The pinned SDK sends the newer { nonce } body; the legacy API requires { message }.
+      const response = await fetch(buildChainApiUrl("/auth"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          address: authRequest.address,
+          message: authRequest.message,
+          signature: authRequest.signature,
+        }),
+      });
+      payload = await parseResponseBody(response);
+      if (!response.ok) throw new Error(extractErrorMessage(payload));
+    } else {
+      payload = await createDcnClient({ accessToken: null }).loginWithSignature(
+        authRequest.address,
+        authRequest.nonce,
+        authRequest.signature,
+      );
+    }
+    const token = parseTokenFromPayload(payload);
     if (!token) {
       throw new Error("No token returned from chain auth.");
     }
@@ -307,7 +340,7 @@ export const authenticateBrowserWalletInChain = async (options?: {
   provider?: BrowserEthereumProvider;
 }): Promise<BrowserWalletChainAuthResult> => {
   const address = await requestBrowserWalletAddress(options?.provider);
-  const { nonce, message } = await requestChainNonce(address);
+  const { nonce, message, protocol } = await requestChainNonce(address);
   const signature = await signChainAuthMessage({
     provider: options?.provider,
     address,
@@ -317,6 +350,8 @@ export const authenticateBrowserWalletInChain = async (options?: {
     address,
     signature: stripHexPrefix(signature),
     nonce,
+    message,
+    protocol,
   });
 
   return {

@@ -82,7 +82,7 @@ async function setup(
     let body: unknown = [];
     if (path.includes("/chain/nonce/") || path.endsWith("/chain/auth")) {
       chainAuthRequests.push(path);
-      // Public runs must work even when the auth service returns an incompatible challenge.
+      // Public runs must not request authentication.
       body = { nonce: "393930" };
     } else if (path.endsWith("/auth/me")) body = { user: user() };
     else if (path.includes("/services/users/")) body = { user: user() };
@@ -278,6 +278,7 @@ async function setup(
   await expect(
     page.getByRole("tab", { name: openPublished ? /pitch/ : /StudioRoot/ }),
   ).toBeVisible();
+  await expect(page.locator(".graph-loading")).toHaveCount(0);
   return {
     creates,
     runs,
@@ -529,6 +530,102 @@ for (const kind of ["transformation", "condition"] as const) {
     await expect(dialog).toHaveCount(0);
     await expect(card(page, name)).toBeVisible();
     expect(state.creates.map((item) => item.name)).toEqual([name]);
+    expect(state.publications).toEqual([]);
+    expect(
+      await page.evaluate(() => (window as unknown as { walletSends: number }).walletSends),
+    ).toBe(0);
+    expect(state.errors).toEqual([]);
+  });
+}
+
+for (const protocol of ["legacy", "siwe"] as const) {
+  test(`the transformation editor signs in with ${protocol} auth and creates the parameterized counter`, async ({
+    page,
+  }) => {
+    const state = await setup(page, false, "services-only");
+    const nonce = protocol === "legacy" ? "695417" : "ab".repeat(33);
+    const message =
+      protocol === "legacy"
+        ? `Login nonce: ${nonce}`
+        : `https://decentralised.art wants you to sign in with your Ethereum account:\n${ownerA}\n\nNonce: ${nonce}\n`;
+    const signature = `0x${"56".repeat(65)}`;
+    const authBodies: unknown[] = [];
+    const savedBodies: Array<{ name: string; sol_src: string }> = [];
+    await page.route(/.*\/chain\/nonce\/[^/?]+(?:\?.*)?$/, async (route) => {
+      await route.fulfill({ json: protocol === "legacy" ? { nonce } : { nonce, message } });
+    });
+    await page.route(/.*\/chain\/auth$/, async (route) => {
+      const request = route.request();
+      expect(request.headers().authorization).toBeUndefined();
+      authBodies.push(request.postDataJSON());
+      await route.fulfill({ json: { access_token: "new-chain-session" } });
+    });
+    await page.route(/.*\/chain\/transformation$/, async (route) => {
+      const request = route.request();
+      expect(request.headers().authorization).toBe("Bearer new-chain-session");
+      const input = request.postDataJSON();
+      savedBodies.push(input);
+      state.entities[input.name] = {
+        name: input.name,
+        owner: ownerA,
+        address: "0x0",
+        args_count: 2,
+      };
+      await route.fulfill({ json: state.entities[input.name] });
+    });
+    await page.evaluate((signature) => {
+      const target = window as unknown as {
+        ethereum: { request: (args: { method: string; params?: unknown[] }) => Promise<unknown> };
+        walletCalls: string[];
+        signedMessages: unknown[];
+      };
+      target.signedMessages = [];
+      const request = target.ethereum.request.bind(target.ethereum);
+      target.ethereum.request = async (args) => {
+        if (args.method === "personal_sign") {
+          target.walletCalls.push(args.method);
+          target.signedMessages.push(args.params);
+          return signature;
+        }
+        return request(args);
+      };
+    }, signature);
+    await page.getByRole("button", { name: "Local", exact: true }).click();
+    await page.getByRole("button", { name: "Transformations", exact: true }).click();
+    await page.getByRole("button", { name: "New transformation", exact: true }).click();
+    const dialog = page.getByRole("dialog");
+    await dialog.locator("#tx-name").fill("shepard_time_test17");
+    const source =
+      "uint256 next = uint256(x) + args[1];\nreturn next > args[0] ? 0 : uint32(next);";
+    const editor = dialog.locator(".monaco-editor").last();
+    const input = editor.getByRole("textbox", { name: "Editor content", exact: true });
+    await input.focus();
+    await input.press("Home");
+    await input.press("Shift+End");
+    await page.keyboard.insertText(source);
+    await dialog.getByRole("button", { name: "Create locally", exact: true }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(card(page, "shepard_time_test17")).toBeVisible();
+    expect(savedBodies).toHaveLength(1);
+    expect(savedBodies[0].name).toBe("shepard_time_test17");
+    expect(savedBodies[0].sol_src.replace(/\s+/g, " ").trim()).toBe(
+      source.replace(/\s+/g, " ").trim(),
+    );
+    expect(authBodies).toEqual([
+      {
+        address: ownerA,
+        signature: signature.slice(2),
+        ...(protocol === "legacy" ? { message } : { nonce }),
+      },
+    ]);
+    expect(
+      await page.evaluate(
+        () => (window as unknown as { signedMessages: unknown[] }).signedMessages,
+      ),
+    ).toEqual([[message, ownerA]]);
+    expect(await page.evaluate(() => localStorage.getItem("hypermusic_chain_token_user_id"))).toBe(
+      `wallet:${ownerA}`,
+    );
     expect(state.publications).toEqual([]);
     expect(
       await page.evaluate(() => (window as unknown as { walletSends: number }).walletSends),

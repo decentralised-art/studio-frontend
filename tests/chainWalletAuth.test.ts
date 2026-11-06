@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { BrowserEthereumProvider } from "../src/lib/auth/api";
 
 const { createDcnClientMock, getNonceMock, loginWithSignatureMock } = vi.hoisted(() => ({
   createDcnClientMock: vi.fn(),
@@ -82,6 +83,15 @@ describe("browser wallet chain auth", () => {
   });
 
   it.each([
+    null,
+    {},
+    { nonce: 695417 },
+    { nonce: "" },
+    { nonce: " 695417 " },
+    { nonce: "69541x" },
+    { nonce: "1234567" },
+    { nonce: "695417", message: null },
+    { nonce: "695417", message: "" },
     { nonce: "ab".repeat(33) },
     { nonce: "ab".repeat(33), message: "   " },
     { nonce: "42", message: "Sign in" },
@@ -97,6 +107,95 @@ describe("browser wallet chain auth", () => {
     ).rejects.toThrow(/Chain nonce response/);
     expect(provider.request).toHaveBeenCalledOnce();
     expect(loginWithSignatureMock).not.toHaveBeenCalled();
+    expect(window.localStorage.getItem("hypermusic_chain_token")).toBeNull();
+  });
+
+  it.each(["0", "000001", "695417"])(
+    "authenticates a legacy decimal challenge %s with the exact legacy message and body",
+    async (nonce) => {
+      const address = `0x${"12".repeat(20)}`;
+      const message = `Login nonce: ${nonce}`;
+      getNonceMock.mockResolvedValue({ nonce });
+      const fetchMock = vi
+        .spyOn(globalThis, "fetch")
+        .mockResolvedValue(jsonResponse({ token: "legacy-chain-session" }));
+      const provider = {
+        request: vi.fn(async ({ method }: { method: string }) => {
+          if (method === "eth_requestAccounts") return [address];
+          if (method === "personal_sign") return "0xabc123";
+          throw new Error(`Unexpected wallet method ${method}`);
+        }),
+      };
+      const { loginWithBrowserWalletChainAccount } = await import("../src/lib/auth/api");
+      await expect(
+        loginWithBrowserWalletChainAccount({ provider: provider as BrowserEthereumProvider }),
+      ).resolves.toMatchObject({
+        address,
+        nonce,
+        message,
+        token: "legacy-chain-session",
+      });
+      expect(provider.request).toHaveBeenCalledWith({
+        method: "personal_sign",
+        params: [message, address],
+      });
+      expect(fetchMock).toHaveBeenCalledExactlyOnceWith(
+        expect.stringMatching(/\/auth$/),
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify({ address, message, signature: "abc123" }),
+        }),
+      );
+      expect(new Headers(fetchMock.mock.calls[0][1]?.headers).get("Authorization")).toBeNull();
+      expect(loginWithSignatureMock).not.toHaveBeenCalled();
+      expect(window.localStorage.getItem("hypermusic_chain_token")).toBe("legacy-chain-session");
+      expect(window.localStorage.getItem("hypermusic_chain_token_user_id")).toBe(
+        `wallet:${address}`,
+      );
+    },
+  );
+
+  it("surfaces a legacy authentication failure without retrying or storing a token", async () => {
+    getNonceMock.mockResolvedValue({ nonce: "695417" });
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(jsonResponse({ message: "Expired nonce" }, 401));
+    const provider = {
+      request: vi.fn(async ({ method }: { method: string }) =>
+        method === "personal_sign" ? "0xabc123" : [`0x${"12".repeat(20)}`],
+      ),
+    };
+    const { loginWithBrowserWalletChainAccount } = await import("../src/lib/auth/api");
+    await expect(
+      loginWithBrowserWalletChainAccount({ provider: provider as BrowserEthereumProvider }),
+    ).rejects.toThrow("Expired nonce");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(getNonceMock).toHaveBeenCalledTimes(1);
+    expect(loginWithSignatureMock).not.toHaveBeenCalled();
+    expect(window.localStorage.getItem("hypermusic_chain_token")).toBeNull();
+  });
+
+  it("does not downgrade a rejected SIWE login to the legacy protocol", async () => {
+    const nonce = "ab".repeat(33);
+    getNonceMock.mockResolvedValue({ nonce, message: "Exact API-issued sign-in message" });
+    loginWithSignatureMock.mockRejectedValue({
+      name: "DecentralisedArtApiError",
+      status: 401,
+      body: { message: "Invalid signature" },
+    });
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+    const provider = {
+      request: vi.fn(async ({ method }: { method: string }) =>
+        method === "personal_sign" ? "0xabc123" : [`0x${"12".repeat(20)}`],
+      ),
+    };
+    const { loginWithBrowserWalletChainAccount } = await import("../src/lib/auth/api");
+    await expect(
+      loginWithBrowserWalletChainAccount({ provider: provider as BrowserEthereumProvider }),
+    ).rejects.toThrow("Invalid signature");
+    expect(getNonceMock).toHaveBeenCalledTimes(1);
+    expect(loginWithSignatureMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).not.toHaveBeenCalled();
     expect(window.localStorage.getItem("hypermusic_chain_token")).toBeNull();
   });
 });

@@ -20,39 +20,43 @@ describe("chain wallet sign-in through the pinned SDK", () => {
   beforeEach(clearChainToken);
   afterEach(() => vi.restoreAllMocks());
 
-  it("signs the exact issued message and sends the current authentication body", async () => {
-    const provider = {
-      request: vi.fn(async ({ method }: { method: string }) => {
-        if (method === "eth_requestAccounts") return [address];
-        if (method === "personal_sign") return signature;
-        throw new Error(`Unexpected wallet method ${method}`);
-      }),
-    };
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
-      const url = new URL(String(input));
-      expect(new Headers(init?.headers).get("Authorization")).toBeNull();
-      if (url.pathname.endsWith(`/nonce/${address}`)) {
-        expect(url.searchParams.get("origin")).toBe(window.location.origin);
-        return jsonResponse({ nonce, message });
-      }
-      expect(url.pathname).toMatch(/\/auth$/);
-      expect(JSON.parse(String(init?.body))).toEqual({
-        address,
-        nonce,
-        signature: signature.slice(2),
+  it.each(["siwe", "legacy"] as const)(
+    "signs the exact %s challenge and sends its matching authentication body",
+    async (protocol) => {
+      const signInMessage = protocol === "siwe" ? message : "Login nonce: 695417";
+      const provider = {
+        request: vi.fn(async ({ method }: { method: string }) => {
+          if (method === "eth_requestAccounts") return [address];
+          if (method === "personal_sign") return signature;
+          throw new Error(`Unexpected wallet method ${method}`);
+        }),
+      };
+      const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+        const url = new URL(String(input), window.location.origin);
+        expect(new Headers(init?.headers).get("Authorization")).toBeNull();
+        if (url.pathname.endsWith(`/nonce/${address}`)) {
+          expect(url.searchParams.get("origin")).toBe(window.location.origin);
+          return jsonResponse(protocol === "siwe" ? { nonce, message } : { nonce: "695417" });
+        }
+        expect(url.pathname).toMatch(/\/auth$/);
+        expect(JSON.parse(String(init?.body))).toEqual({
+          address,
+          ...(protocol === "siwe" ? { nonce } : { message: signInMessage }),
+          signature: signature.slice(2),
+        });
+        return jsonResponse({ access_token: "chain-session" });
       });
-      return jsonResponse({ access_token: "chain-session" });
-    });
 
-    await loginWithBrowserWalletChainAccount({ provider: provider as BrowserEthereumProvider });
+      await loginWithBrowserWalletChainAccount({ provider: provider as BrowserEthereumProvider });
 
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(provider.request).toHaveBeenCalledWith({
-      method: "personal_sign",
-      params: [message, address],
-    });
-    expect(getChainToken()).toBe("chain-session");
-  });
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(provider.request).toHaveBeenCalledWith({
+        method: "personal_sign",
+        params: [signInMessage, address],
+      });
+      expect(getChainToken()).toBe("chain-session");
+    },
+  );
 
   it("surfaces challenge errors from the renamed SDK without prompting for a signature", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
