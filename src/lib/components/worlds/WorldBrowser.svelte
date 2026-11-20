@@ -1,12 +1,8 @@
 <script lang="ts">
   import { asset, resolve } from "$app/paths";
-  import { goto } from "$app/navigation";
-  import {
-    buildStudioWorldUrl,
-    opensWorldInStudioByDefault,
-    loadWorldOpeningView,
-    type WorldOpeningView,
-  } from "$lib/worlds/studioLaunch";
+  import { pushState, replaceState } from "$app/navigation";
+  import { page } from "$app/state";
+  import { buildStudioWorldUrl } from "$lib/worlds/studioLaunch";
   import { onMount, tick } from "svelte";
 
   import { getCurrentUserProfileState } from "$lib/auth/api";
@@ -26,7 +22,6 @@
   const VIEW_STORAGE_KEY = "dcn-worlds-view";
 
   let worlds = $state<BackendWorldDescriptor[]>([]);
-  let openingViews = $state<Record<string, WorldOpeningView>>({});
   let mode = $state<BrowseMode>("gallery");
   let pageNumber = 0;
   let loading = $state(false);
@@ -37,7 +32,9 @@
   let selectedWorld = $state<BackendWorldDescriptor | null>(null);
   let currentUserId = $state<string | null>(null);
   let isAdmin = $state(false);
-  let fullscreen = $state(false);
+  let nativeFullscreen = $state(false);
+  let expanded = $state(false);
+  const fullscreen = $derived(nativeFullscreen || expanded);
   let dialogElement = $state<HTMLDialogElement | null>(null);
   let stageElement = $state<HTMLDivElement | null>(null);
   let loadSentinel: HTMLDivElement;
@@ -55,21 +52,6 @@
     loadError = "";
     try {
       const next = await listWorlds({ page: pageNumber, limit: PAGE_SIZE, surface: "world-page" });
-      // Resolve before showing cards so a Studio popup opens directly in the
-      // click gesture, without a blocked popup or an intermediate blank tab.
-      const preferences = await Promise.all(
-        next.map(
-          async (world) =>
-            [
-              world.id,
-              await loadWorldOpeningView(
-                backendWorldToFrontendDescriptor(world),
-                window.location.href,
-              ),
-            ] as const,
-        ),
-      );
-      openingViews = { ...openingViews, ...Object.fromEntries(preferences) };
       const seen = new Set(worlds.map((world) => world.id));
       worlds = [...worlds, ...next.filter((world) => !seen.has(world.id))];
       pageNumber += 1;
@@ -92,12 +74,6 @@
   };
 
   const openWorld = async (world: BackendWorldDescriptor, pushHistory = true) => {
-    if (opensWorldInStudioByDefault(world, openingViews[world.id])) {
-      const url = resolve(buildStudioWorldUrl(world.id));
-      if (pushHistory) window.open(url, "_blank", "noopener,noreferrer");
-      else await goto(url, { replaceState: true });
-      return;
-    }
     if (selectedWorld?.id === world.id && dialogElement?.open) return;
     previouslyFocused =
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -106,20 +82,26 @@
     if (pushHistory) {
       const url = new URL(window.location.href);
       url.searchParams.set("world", world.id);
-      history.pushState({ worldModal: world.id }, "", url);
+      // eslint-disable-next-line svelte/no-navigation-without-resolve -- The current URL already includes the deployment base.
+      pushState(url, page.state);
     }
     await tick();
     if (selectedWorld?.id !== world.id || !dialogElement) return;
-    previousBodyOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    if (!dialogElement.open) dialogElement.showModal();
+    if (!dialogElement.open) {
+      previousBodyOverflow = document.body.style.overflow;
+      document.body.style.overflow = "hidden";
+      dialogElement.showModal();
+    }
   };
 
   const closeModalNow = async () => {
-    if (document.fullscreenElement) await document.exitFullscreen().catch(() => undefined);
+    if (document.fullscreenElement === stageElement && stageElement) {
+      await document.exitFullscreen().catch(() => undefined);
+    }
     dialogElement?.close();
     selectedWorld = null;
-    fullscreen = false;
+    nativeFullscreen = false;
+    expanded = false;
     document.body.style.overflow = previousBodyOverflow;
     await tick();
     previouslyFocused?.focus();
@@ -136,7 +118,8 @@
     }
     const url = new URL(window.location.href);
     url.searchParams.delete("world");
-    history.replaceState(history.state, "", url);
+    // eslint-disable-next-line svelte/no-navigation-without-resolve -- Only the current URL query changes.
+    replaceState(url, page.state);
     void closeModalNow();
   };
 
@@ -149,16 +132,11 @@
     if (selectedWorld?.id === id) return;
     try {
       const world = worlds.find((item) => item.id === id) ?? (await getWorld(id));
-      if (!world.surfaces.includes("world-page")) return;
-      if (!(world.id in openingViews)) {
-        openingViews = {
-          ...openingViews,
-          [world.id]: await loadWorldOpeningView(
-            backendWorldToFrontendDescriptor(world),
-            window.location.href,
-          ),
-        };
-      }
+      if (
+        !world.surfaces.includes("world-page") ||
+        new URL(window.location.href).searchParams.get("world") !== id
+      )
+        return;
       await openWorld(world, false);
     } catch {
       // A stale shared link leaves the gallery available.
@@ -166,15 +144,25 @@
   };
 
   const toggleFullscreen = async () => {
+    if (expanded) {
+      expanded = false;
+      return;
+    }
+    const stage = stageElement;
+    if (!stage) return;
+    if (document.fullscreenElement === stage) {
+      await document.exitFullscreen().catch(() => undefined);
+      return;
+    }
     try {
-      if (document.fullscreenElement) {
-        await document.exitFullscreen();
-      } else {
-        await stageElement?.requestFullscreen();
+      if (document.fullscreenEnabled) {
+        await stage.requestFullscreen();
+        return;
       }
     } catch {
-      // The popup remains usable when a browser denies fullscreen.
+      // Some browser contexts only permit filling the viewport.
     }
+    if (stageElement === stage && dialogElement?.open) expanded = true;
   };
 
   const refreshCurrentUser = async () => {
@@ -215,7 +203,7 @@
 
     const onPopState = () => void syncWorldFromUrl();
     const onFullscreenChange = () => {
-      fullscreen = Boolean(document.fullscreenElement);
+      nativeFullscreen = Boolean(stageElement && document.fullscreenElement === stageElement);
     };
     window.addEventListener("popstate", onPopState);
     window.addEventListener("auth:change", refreshCurrentUser);
@@ -311,6 +299,7 @@
   <dialog
     bind:this={dialogElement}
     class="world-dialog"
+    class:expanded
     aria-label={selectedWorld.name}
     oncancel={(event) => {
       event.preventDefault();
@@ -324,6 +313,12 @@
       <div class="stage-bar">
         <h2>{selectedWorld.name}</h2>
         <div class="stage-actions">
+          <a
+            class="stage-studio"
+            href={resolve(buildStudioWorldUrl(selectedWorld.id))}
+            target="_blank"
+            rel="noopener noreferrer">Open in Studio</a
+          >
           <button
             type="button"
             aria-label={fullscreen ? "Exit fullscreen" : "Enter fullscreen"}
@@ -498,6 +493,13 @@
     box-shadow: 0 30px 100px rgba(0, 0, 0, 0.7);
   }
 
+  .world-dialog.expanded {
+    width: 100vw;
+    height: 100dvh;
+    border: 0;
+    border-radius: 0;
+  }
+
   .world-dialog::backdrop {
     background: rgba(1, 5, 8, 0.82);
     backdrop-filter: blur(7px);
@@ -539,12 +541,13 @@
 
   .stage-actions {
     display: flex;
+    flex: none;
     gap: 0.35rem;
   }
 
-  .stage-actions button {
+  .stage-actions button,
+  .stage-studio {
     display: grid;
-    width: 2.35rem;
     height: 2.35rem;
     place-items: center;
     border: 1px solid rgba(255, 255, 255, 0.25);
@@ -552,15 +555,28 @@
     background: rgba(255, 255, 255, 0.06);
     color: #fff;
     cursor: pointer;
-    font-size: 1.35rem;
     line-height: 1;
   }
 
-  .stage-actions button:hover {
+  .stage-actions button {
+    width: 2.35rem;
+    font-size: 1.35rem;
+  }
+
+  .stage-studio {
+    padding-inline: 0.75rem;
+    font-size: 0.82rem;
+    text-decoration: none;
+    white-space: nowrap;
+  }
+
+  .stage-actions button:hover,
+  .stage-studio:hover {
     background: rgba(255, 255, 255, 0.18);
   }
 
-  .stage-actions button:focus-visible {
+  .stage-actions button:focus-visible,
+  .stage-studio:focus-visible {
     outline: 2px solid #8de5fa;
   }
 

@@ -1,6 +1,8 @@
 import { expect, test, type Page } from "@playwright/test";
 
-const world = {
+import type { BackendWorldDescriptor } from "../src/lib/worlds/contract";
+
+const world: BackendWorldDescriptor = {
   id: "cb881a1e-e385-48d7-b8ad-06d2ae3c05f6",
   slug: "score",
   name: "Score",
@@ -23,10 +25,19 @@ const world = {
   updatedAt: "2026-11-01T00:00:00Z",
 };
 
-async function setup(page: Page, authenticated = false, starterConnector: string | null = null) {
+async function setup(
+  page: Page,
+  authenticated = false,
+  starterConnector: string | null = null,
+  fixture: BackendWorldDescriptor = world,
+  formatConnectors: string[] = [],
+) {
   const writes: string[] = [],
     errors: string[] = [];
-  page.on("pageerror", (error) => errors.push(error.message));
+  const collectErrors = (opened: Page) =>
+    opened.on("pageerror", (error) => errors.push(error.message));
+  collectErrors(page);
+  page.context().on("page", collectErrors);
   await page.context().addInitScript(
     ({ authenticated }) => {
       if (window.top !== window) return;
@@ -64,27 +75,37 @@ async function setup(page: Page, authenticated = false, starterConnector: string
             }
           : { status: 404, body: "No starter" },
       );
+    if (path.includes("/chain/format/"))
+      return route.fulfill({
+        json: {
+          format_hash: path.split("/").at(-1),
+          scalars: formatConnectors.map((connector) => `${connector}:0`),
+          connectors: formatConnectors,
+          total_connectors: formatConnectors.length,
+          cursor: { has_more: false, next_after: null },
+        },
+      });
     if (/\/chain\/connector\//.test(path))
       return route.fulfill({
         json: {
           name: decodeURIComponent(path.split("/").at(-1)!),
-          owner: world.ownerId,
+          owner: fixture.ownerId,
           address: `0x${"ab".repeat(20)}`,
-          format_hash: world.acceptedFormatHashes[0],
+          format_hash: fixture.acceptedFormatHashes[0] ?? "cd".repeat(32),
           dimensions: [{ transformations: [{ name: "add", args: [1] }] }],
           static_ri: {},
         },
       });
     if (path.endsWith("/chain/simulate")) {
       const input = request.postDataJSON();
-      const ri = input.dynamic_ri["0"];
+      const ri = input.dynamic_ri?.["0"];
       return route.fulfill({
         json: [
           {
             path: `/${input.connector_name}:0`,
             data: Array.from(
               { length: Number(input.particles_count) },
-              (_, i) => Number(ri.start_point) + i + Number(ri.transformation_shift),
+              (_, i) => Number(ri?.start_point ?? 0) + i + Number(ri?.transformation_shift ?? 0),
             ),
           },
         ],
@@ -100,16 +121,15 @@ async function setup(page: Page, authenticated = false, starterConnector: string
       writes.push(path);
       return route.fulfill({ status: 403, body: "No writes in launch tests" });
     }
-    if (path.endsWith("/worlds/cb881a1e-e385-48d7-b8ad-06d2ae3c05f6"))
-      return route.fulfill({ json: world });
+    if (path.endsWith(`/worlds/${fixture.id}`)) return route.fulfill({ json: fixture });
     if (path.endsWith("/worlds/missing"))
       return route.fulfill({ status: 404, body: "World not found" });
-    if (path.endsWith("/worlds")) return route.fulfill({ json: [world] });
+    if (path.endsWith("/worlds")) return route.fulfill({ json: [fixture] });
     const user = {
-      id: world.ownerId,
-      ethereum_address: world.ownerId,
+      id: fixture.ownerId,
+      ethereum_address: fixture.ownerId,
       display_name: "Test owner",
-      profile_json: { public: { ethereum_address: world.ownerId } },
+      profile_json: { public: { ethereum_address: fixture.ownerId } },
     };
     if (path.endsWith("/auth/me"))
       return route.fulfill(
@@ -136,40 +156,132 @@ async function openRunPanel(page: Page) {
 }
 
 const worldNodes = (page: Page) => page.locator('.svelte-flow__node[data-id^="plugin-world:"]');
-async function expectWorldInStudio(page: Page) {
-  await expect(page).toHaveURL(/\/studio(?:\?world=cb881a1e-e385-48d7-b8ad-06d2ae3c05f6)?$/);
+async function expectWorldInStudio(page: Page, fixture: BackendWorldDescriptor = world) {
+  await expect(page).toHaveURL(new RegExp(`/studio(?:\\?world=${fixture.id})?$`));
   await expect(page.getByRole("application", { name: "Flow canvas" })).toBeVisible();
   await expect(worldNodes(page)).toHaveCount(1);
-  await expect(worldNodes(page)).toContainText("Score");
+  await expect(worldNodes(page)).toContainText(fixture.name);
   await expect(worldNodes(page).locator("iframe")).toHaveAttribute(
     "src",
-    /world-assets\/cb881a1e-e385-48d7-b8ad-06d2ae3c05f6\/index\.html/,
+    new RegExp(`world-assets/${fixture.id}/index\\.html`),
   );
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await expect(page.locator(".world-renderer-panel")).toHaveCount(0);
-  await expect(page.getByRole("tab", { name: /Score/ })).toBeVisible();
+  await expect(page.getByRole("tab", { name: fixture.name })).toBeVisible();
   await expect(page.getByText("View-only tab")).toHaveCount(0);
+}
+
+async function openWorldPopup(page: Page, fixture: BackendWorldDescriptor = world) {
+  const pageCount = page.context().pages().length;
+  await page.getByRole("button", { name: `Open ${fixture.name}`, exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: fixture.name });
+  await expect(dialog).toBeVisible();
+  expect(page.context().pages()).toHaveLength(pageCount);
+  await expect(dialog.getByRole("button", { name: "Enter fullscreen" })).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "Close World" })).toBeVisible();
+  return dialog;
+}
+
+async function openPopupInStudio(page: Page, fixture: BackendWorldDescriptor = world) {
+  const dialog = await openWorldPopup(page, fixture);
+  const action = dialog.getByRole("link", { name: "Open in Studio" });
+  await expect(action).toHaveAttribute("href", `/studio?world=${fixture.id}`);
+  const opened = page.context().waitForEvent("page");
+  await action.click();
+  const studio = await opened;
+  await expectWorldInStudio(studio, fixture);
+  await expect(dialog).toBeVisible();
+  return studio;
 }
 
 for (const path of ["/", "/worlds"]) {
   for (const mode of ["Gallery", "One by one"]) {
-    test(`opens Score from ${path} ${mode} directly on an editable Studio canvas`, async ({
+    test(`opens Score from ${path} ${mode} in the popup before launching Studio`, async ({
       page,
     }) => {
-      const { writes, errors } = await setup(page);
+      const { writes, errors } = await setup(page, false, "pitch");
       await page.goto(path);
       await page.getByRole("button", { name: mode, exact: true }).click();
-      const opened = page.context().waitForEvent("page");
-      await page.getByRole("button", { name: "Open Score", exact: true }).click();
-      const studio = await opened;
-      await expectWorldInStudio(studio);
-      await expect(page).toHaveURL(new RegExp(`${path}$`));
+      const studio = await openPopupInStudio(page);
+      await expect(page).toHaveURL(new RegExp(`${path}\\?world=${world.id}$`));
+      await expect(studio.locator('.svelte-flow__node[data-id^="connector-pitch-"]')).toHaveCount(
+        1,
+      );
+      await expect(studio.locator(".svelte-flow__edge")).toHaveCount(1);
+      const preview = worldNodes(studio).frameLocator("iframe").locator("main");
+      await expect(preview).toContainText('"executionMode":"simulate"');
+      await expect(preview).toContainText("60,61,62");
       await studio.close();
       expect(writes).toEqual([]);
       expect(errors).toEqual([]);
     });
   }
 }
+
+const worldWith = (slug: string, name: string): BackendWorldDescriptor => ({
+  ...world,
+  id: slug,
+  slug,
+  name,
+  entryUrn: `/world-assets/${slug}/index.html`,
+  previewUrn: `/world-assets/${slug}/assets/preview.png`,
+  bundleHash: `${slug}-bundle`,
+  manifestHash: `${slug}-manifest`,
+});
+
+test("uses the declared connector when an uploaded World has no starter file", async ({ page }) => {
+  const fixture = {
+    ...worldWith("blue-line", "Blue Line"),
+    acceptedConnectorSets: [{ connectors: ["plain_hunt_major"], optionalConnectors: [] }],
+  };
+  const { writes, errors } = await setup(page, false, null, fixture);
+  await page.goto("/");
+  const studio = await openPopupInStudio(page, fixture);
+  await expect(
+    studio.locator('.svelte-flow__node[data-id^="connector-plain_hunt_major-"]'),
+  ).toHaveCount(1);
+  await expect(studio.locator(".svelte-flow__edge")).toHaveCount(1);
+  await expect(worldNodes(studio).frameLocator("iframe").locator("main")).toContainText(
+    '"executionMode":"simulate"',
+  );
+  expect(writes).toEqual([]);
+  expect(errors).toEqual([]);
+});
+
+test("finds a published member of an accepted format when only a format is declared", async ({
+  page,
+}) => {
+  const fixture = worldWith("format-world", "Format World");
+  const { writes, errors } = await setup(page, false, null, fixture, ["compatible_example"]);
+  await page.goto("/");
+  const studio = await openPopupInStudio(page, fixture);
+  await expect(
+    studio.locator('.svelte-flow__node[data-id^="connector-compatible_example-"]'),
+  ).toHaveCount(1);
+  await expect(studio.locator(".svelte-flow__edge")).toHaveCount(1);
+  await expect(worldNodes(studio).frameLocator("iframe").locator("main")).toContainText(
+    '"executionMode":"simulate"',
+  );
+  expect(writes).toEqual([]);
+  expect(errors).toEqual([]);
+});
+
+test("embeds a viewer-only World in Studio using its declared surface", async ({ page }) => {
+  const fixture: BackendWorldDescriptor = {
+    ...worldWith("viewer-only", "Viewer Only"),
+    surfaces: ["world-page"],
+    acceptedFormatHashes: [],
+  };
+  const { writes, errors } = await setup(page, false, null, fixture);
+  await page.goto("/");
+  const studio = await openPopupInStudio(page, fixture);
+  await expect(worldNodes(studio).frameLocator("iframe").locator("main")).toContainText(
+    '"surface":"world-page"',
+  );
+  await expect(studio.locator(".svelte-flow__edge")).toHaveCount(0);
+  expect(writes).toEqual([]);
+  expect(errors).toEqual([]);
+});
 
 test("direct World links redirect to Studio without loading the legacy renderer", async ({
   page,
@@ -201,9 +313,23 @@ test("preserves existing tabs and reuses the World after reload and reopening", 
   await page.reload();
   await expectWorldInStudio(page);
   await expect(page.getByRole("tab")).toHaveCount(tabs);
-  await page.goto("/?world=cb881a1e-e385-48d7-b8ad-06d2ae3c05f6");
+  await page.goto(`/studio?world=${world.id}`);
   await expectWorldInStudio(page);
   await expect(page.getByRole("tab")).toHaveCount(tabs);
+  expect(errors).toEqual([]);
+});
+
+test("a shared gallery URL opens the World popup even with the Studio preference", async ({
+  page,
+}) => {
+  const { errors } = await setup(page);
+  await page.goto(`/?world=${world.id}`);
+  const dialog = page.getByRole("dialog", { name: "Score" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole("link", { name: "Open in Studio" })).toBeVisible();
+  await dialog.getByRole("button", { name: "Close World" }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(page).toHaveURL(/\/$/);
   expect(errors).toEqual([]);
 });
 

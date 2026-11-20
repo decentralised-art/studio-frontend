@@ -1339,7 +1339,7 @@ test("keeps old /app world links working through redirects", async ({ page }) =>
   assertNoPageErrors();
 });
 
-test("opens creator-opted backend Worlds in a new editable Studio tab", async ({ page }) => {
+test("opens a backend World in Studio from its gallery popup", async ({ page }) => {
   const assertNoPageErrors = collectPageErrors(page);
   await stubRemoteApis(page);
   await authenticateFixtureSession(page);
@@ -1349,11 +1349,14 @@ test("opens creator-opted backend Worlds in a new editable Studio tab", async ({
   await expect(page.getByRole("button", { name: "Open Backend E2E World" })).toBeVisible({
     timeout: 15_000,
   });
-  const opened = page.context().waitForEvent("page");
   await page.getByRole("button", { name: "Open Backend E2E World" }).click();
+  const dialog = page.getByRole("dialog", { name: "Backend E2E World" });
+  await expect(dialog).toBeVisible();
+  const opened = page.context().waitForEvent("page");
+  await dialog.getByRole("link", { name: "Open in Studio" }).click();
   const studio = await opened;
   const assertNoStudioErrors = collectPageErrors(studio);
-  await expect(page).toHaveURL(/\/worlds$/);
+  await expect(page).toHaveURL(/\/worlds\?world=world-backend-e2e$/);
   await expect(studio).toHaveURL(/\/studio(?:\?world=world-backend-e2e)?$/);
   await expect(studio.getByRole("application", { name: "Flow canvas" })).toBeVisible();
   const world = studio.locator('.svelte-flow__node[data-id^="plugin-world:world-backend-e2e"]');

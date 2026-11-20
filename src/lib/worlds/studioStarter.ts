@@ -1,3 +1,4 @@
+import { getChainFormat, resolveChainFormatCursor } from "$lib/chain/registryApi";
 import { buildWorldAssetUrl } from "./api";
 import type { WorldDescriptor, WorldRiCoordinate } from "./types";
 
@@ -86,4 +87,53 @@ export const loadWorldStudioStarter = async (
     throw new Error("Invalid World studio-starter.json.");
   }
   return parseWorldStudioStarter(value);
+};
+
+/** Start with named examples, then read only the World’s declared format memberships. */
+export async function* manifestWorldStarterCandidates(
+  world: WorldDescriptor,
+  signal: AbortSignal,
+): AsyncGenerator<string> {
+  const seen = new Set<string>();
+  function* uniqueNames(names: readonly string[]): Generator<string> {
+    for (const name of names) {
+      const connector = name.trim();
+      if (!/^[a-zA-Z_][a-zA-Z0-9_]{0,127}$/.test(connector) || seen.has(connector)) continue;
+      seen.add(connector);
+      yield connector;
+    }
+  }
+
+  for (const set of world.acceptedConnectorSets ?? []) yield* uniqueNames(set.connectors);
+  for (const hash of new Set(world.acceptedFormatHashes)) {
+    let after: string | null = null;
+    const cursors = new Set<string>();
+    while (true) {
+      signal.throwIfAborted();
+      const membership = await getChainFormat(hash, { limit: 16, after }).catch(() => null);
+      signal.throwIfAborted();
+      if (!membership) break;
+      yield* uniqueNames(membership.connectors ?? []);
+      const { hasMore, nextAfter } = resolveChainFormatCursor(membership);
+      if (!hasMore || !nextAfter || cursors.has(nextAfter)) break;
+      cursors.add(nextAfter);
+      after = nextAfter;
+    }
+  }
+}
+
+export const createManifestWorldStarter = (
+  world: WorldDescriptor,
+  connector: string,
+): WorldStudioStarter => {
+  const limits = world.backend?.valueLimits?.particlesCount;
+  const min = Math.max(1, Math.ceil(limits?.min ?? 1));
+  const max = Math.min(10000, Math.floor(limits?.max ?? 10000));
+  return {
+    schemaVersion: 1,
+    connector,
+    particlesCount: Math.max(min, Math.min(max, 12)),
+    dynamicRi: {},
+    simulate: true,
+  };
 };

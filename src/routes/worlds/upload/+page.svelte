@@ -224,11 +224,9 @@
             to use.
           </p>
           <p>
-            Worlds open in their World viewer by default. To open yours in Studio instead, include <code
-              >world-launch.json</code
-            >
-            at the ZIP root with <code>{'{"schemaVersion":1,"defaultView":"studio"}'}</code> and
-            declare the <code>studio-plugin</code> surface in its manifest.
+            The gallery opens each World in a popup with an Open in Studio option. Add a
+            <code>studio-starter.json</code> at the ZIP root to set the Studio example connector, its
+            starting values, and whether to simulate it on launch.
           </p>
         </div>
       {/if}

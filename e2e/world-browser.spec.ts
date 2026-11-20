@@ -28,10 +28,9 @@ const worlds = ["Blue Line", "Another World"].map((name, index) => ({
   updatedAt: "2026-10-01T00:00:00Z",
 }));
 
-test("keeps Blue Line and other Studio-capable Worlds in their independent viewer", async ({
-  page,
-}) => {
+test("opens Worlds in a popup with Studio, fullscreen and close actions", async ({ page }) => {
   let connectorRequests = 0;
+  let launchPreferenceRequests = 0;
   await page.route("**/services/worlds**", async (route) => {
     const path = new URL(route.request().url()).pathname;
     const world = worlds.find((item) => path.endsWith(`/worlds/${item.id}`));
@@ -39,7 +38,8 @@ test("keeps Blue Line and other Studio-capable Worlds in their independent viewe
   });
   await page.route("**/services/world-assets/**", async (route) => {
     if (new URL(route.request().url()).pathname.endsWith("/world-launch.json")) {
-      await route.fulfill({ status: 404, body: "No launch preference" });
+      launchPreferenceRequests += 1;
+      await route.fulfill({ json: { schemaVersion: 1, defaultView: "studio" } });
       return;
     }
     if (route.request().url().includes("preview.png")) {
@@ -98,8 +98,16 @@ test("keeps Blue Line and other Studio-capable Worlds in their independent viewe
   await expect(
     page.frameLocator(".world-dialog iframe").getByText("World running without connectors"),
   ).toBeVisible();
+  const studioAction = page.getByRole("link", { name: "Open in Studio" });
+  await expect(studioAction).toHaveAttribute("href", `/studio?world=${worlds[0].id}`);
   await page.getByRole("button", { name: "Enter fullscreen" }).click();
-  await expect.poll(() => page.evaluate(() => Boolean(document.fullscreenElement))).toBe(true);
+  await expect(page.getByRole("button", { name: "Exit fullscreen" })).toBeVisible();
+  const stage = page.locator(".world-stage");
+  const bounds = await stage.boundingBox();
+  expect(bounds?.width).toBeCloseTo(page.viewportSize()!.width, 0);
+  expect(bounds?.height).toBeCloseTo(page.viewportSize()!.height, 0);
+  await expect(studioAction).toBeVisible();
+  await expect(page.getByRole("button", { name: "Close World" })).toBeVisible();
   await page.getByRole("button", { name: "Exit fullscreen" }).click();
   await expect.poll(() => page.evaluate(() => Boolean(document.fullscreenElement))).toBe(false);
   await page.getByRole("button", { name: "Close World" }).click();
@@ -123,6 +131,12 @@ test("keeps Blue Line and other Studio-capable Worlds in their independent viewe
   await page.getByRole("button", { name: "Close World" }).click();
   await page.goto("/?world=world-2");
   await expect(page.getByRole("dialog", { name: "Another World" })).toBeVisible();
+  await page.getByRole("button", { name: "Enter fullscreen" }).click();
+  await expect(page.getByRole("button", { name: "Exit fullscreen" })).toBeVisible();
   await page.getByRole("button", { name: "Close World" }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect.poll(() => page.evaluate(() => document.fullscreenElement)).toBeNull();
   await expect(page).toHaveURL(/\/$/);
+  expect(launchPreferenceRequests).toBe(0);
+  expect(connectorRequests).toBe(0);
 });

@@ -164,7 +164,7 @@
   const worldInput = $derived<WorldRuntimeInput>(
     buildBackendWorldRuntimeInput({
       world,
-      surface: "studio-plugin",
+      surface: world.surfaces.includes("studio-plugin") ? "studio-plugin" : "world-page",
       label,
       connectorName,
       connectorSetIndex: selectedConnectorSetIndex,

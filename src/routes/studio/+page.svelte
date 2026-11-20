@@ -4,7 +4,11 @@
   import { page } from "$app/state";
   import { resolve } from "$app/paths";
   import { onDestroy, onMount, setContext, tick, untrack } from "svelte";
-  import { loadWorldStudioStarter } from "$lib/worlds/studioStarter";
+  import {
+    createManifestWorldStarter,
+    loadWorldStudioStarter,
+    manifestWorldStarterCandidates,
+  } from "$lib/worlds/studioStarter";
   import { SvelteMap, SvelteSet } from "svelte/reactivity";
 
   import {
@@ -2336,14 +2340,21 @@
         return;
       if (
         descriptor.backend?.status !== "active" ||
-        !descriptor.surfaces.includes("studio-plugin")
+        !descriptor.surfaces.some(
+          (surface) => surface === "studio-plugin" || surface === "world-page",
+        )
       ) {
         throw new Error("This World is not available in Studio.");
       }
       const plugin = studioPluginFromWorldDescriptor(descriptor);
-      const starter = attachToConnector
+      let starterUnavailable = false;
+      const configuredStarter = attachToConnector
         ? null
-        : await loadWorldStudioStarter(descriptor, window.location.href);
+        : await loadWorldStudioStarter(descriptor, window.location.href).catch(() => {
+            starterUnavailable = true;
+            return null;
+          });
+      let starter = configuredStarter;
       const launchIsCurrent = () =>
         requestId === worldLaunchRequestId &&
         new URL(window.location.href).searchParams.get("world")?.trim() === id;
@@ -2353,9 +2364,10 @@
         (tab) =>
           !tab.particleId &&
           !isConnectorTreeTab(tab.id) &&
-          (starter
+          (configuredStarter
             ? tab.worldId === id && tab.worldStarter !== false
-            : tabGraphs
+            : (!attachToConnector && tab.worldId === id) ||
+              tabGraphs
                 .get(tab.id)
                 ?.nodes.some(
                   (node) => node.data.kind === "plugin" && node.data.sourceId === plugin.id,
@@ -2399,7 +2411,7 @@
         const connectorName = resolveActiveExecuteConnectorName();
         if (
           existingTab.worldId &&
-          starter?.simulate &&
+          (configuredStarter?.simulate ?? existingTab.worldStarter) &&
           !activeRunOutput &&
           connectorName &&
           nodes.some((node) => node.data.kind === "plugin" && node.data.sourceId === plugin.id)
@@ -2410,36 +2422,76 @@
             await executeActiveGraph("simulate");
         }
       } else {
-        let starterGraph: ConnectorTreeModel | undefined;
-        if (starter) {
-          setConnectorLoadPhase(
-            worldFlowLoad.tabId,
-            worldFlowLoad.controller,
-            `Fetching ${starter.connector} and its dependencies…`,
-          );
-          await paintConnectorLoad(worldFlowLoad.controller.signal);
-          // Resolve ordinary network definitions, including nested connectors, before changing tabs.
+        const { tabId, controller } = worldFlowLoad;
+        const prepareStarterGraph = async (connector: string) => {
+          setConnectorLoadPhase(tabId, controller, `Fetching ${connector} and its dependencies…`);
+          await paintConnectorLoad(controller.signal);
           await ensureStudioNetworkLibraryLoaded();
-          const result = await syncConnectorTreeFromChain(starter.connector);
+          const result = await syncConnectorTreeFromChain(connector, {
+            signal: controller.signal,
+            isCurrent: worldFlowIsCurrent,
+          });
           if (result.missing.length)
             throw new Error(`World starter connectors unavailable: ${result.missing.join(", ")}.`);
-          if (
-            !isPublishedChainAddress(deployedRegistry.connectors[starter.connector]?.chainAddress)
-          )
+          const definition = deployedRegistry.connectors[connector];
+          if (!isPublishedChainAddress(definition?.chainAddress))
             throw new Error("The World starter must reference a published connector.");
-          if (!worldFlowIsCurrent()) return;
-          setConnectorLoadPhase(
-            worldFlowLoad.tabId,
-            worldFlowLoad.controller,
-            "Preparing connector graph…",
-          );
-          starterGraph = await buildConnectorTreeInBackground(
-            starter.connector,
-            worldFlowLoad.controller.signal,
-            { hideReadOnlyLeafOutlets: false, idFactoryScope: `world-${crypto.randomUUID()}` },
-          );
-          if (!worldFlowIsCurrent()) return;
+
+          setConnectorLoadPhase(tabId, controller, "Preparing connector graph…");
+          const graph = await buildConnectorTreeInBackground(connector, controller.signal, {
+            hideReadOnlyLeafOutlets: false,
+            idFactoryScope: `world-${crypto.randomUUID()}`,
+          });
+          const compatibility = describeStudioWorldPluginCompatibility({
+            plugin,
+            rootConnectorName: connector,
+            rootFormatHash: definition.formatHash ? normalizeFormatHash(definition.formatHash) : "",
+            availableTargets: graph.nodes
+              .filter((node) => isConnectorKind(node.data.kind))
+              .map((node) => ({ id: node.id, name: resolveNodeName(node) })),
+          });
+          if (!isStudioPluginAttachable(compatibility))
+            throw new Error(
+              compatibility.detail || "The starter connector is incompatible with this World.",
+            );
+          return graph;
+        };
+        let starterGraph: ConnectorTreeModel | undefined;
+        if (configuredStarter) {
+          try {
+            starterGraph = await prepareStarterGraph(configuredStarter.connector);
+          } catch {
+            if (!worldFlowIsCurrent()) return;
+            starter = null;
+            starterUnavailable = true;
+          }
         }
+        if (!starter && !attachToConnector) {
+          for await (const connector of manifestWorldStarterCandidates(
+            descriptor,
+            controller.signal,
+          )) {
+            if (!worldFlowIsCurrent()) return;
+            if (connector === configuredStarter?.connector) continue;
+            try {
+              starterGraph = await prepareStarterGraph(connector);
+              starter = createManifestWorldStarter(descriptor, connector);
+              break;
+            } catch {
+              if (!worldFlowIsCurrent()) return;
+            }
+          }
+          if (
+            !starter &&
+            (starterUnavailable ||
+              descriptor.acceptedConnectorSets?.length ||
+              descriptor.acceptedFormatHashes?.length)
+          ) {
+            worldLaunchError =
+              "Studio could not load a compatible example. You can connect one in the flow.";
+          }
+        }
+        if (!worldFlowIsCurrent()) return;
         setConnectorLoadPhase(
           worldFlowLoad.tabId,
           worldFlowLoad.controller,
@@ -2461,11 +2513,12 @@
         loadTabGraph(tab.id);
         addStandaloneStudioPlugin(plugin, { position: { x: 360, y: -280 } });
         if (starter) {
-          runSamplesCount = starter.particlesCount;
+          const { particlesCount, dynamicRi, simulate } = starter;
+          runSamplesCount = particlesCount;
           nodes = applyComputedRiPositionsToGraphNodes(nodes, edges).map((node) => {
             if (!isConnectorKind(node.data.kind)) return node;
             const coordinate =
-              starter.dynamicRi[String(node.data.riTargetPosition ?? node.data.riPosition)];
+              dynamicRi[String(node.data.riTargetPosition ?? node.data.riPosition)];
             return coordinate && !node.data.riLocked
               ? {
                   ...node,
@@ -2482,7 +2535,7 @@
           if (pluginAttachError) throw new Error(pluginAttachError);
           await tick();
           // The same anonymous simulation used by the existing Simulate button.
-          if (starter.simulate && activeTabId === tab.id) await executeActiveGraph("simulate");
+          if (simulate && activeTabId === tab.id) await executeActiveGraph("simulate");
         }
       }
       if (!worldFlowIsCurrent()) return;
@@ -2511,7 +2564,7 @@
       saveActiveGraph();
       // World starters keep their URL so restored drafts can refresh their simulation.
       // Their persisted graph is reused, including user deletions and RI edits.
-      if (persistStudioTabsSession() && !starter) {
+      if (persistStudioTabsSession() && !starter && !existingTab?.worldStarter) {
         const url = new URL(window.location.href);
         url.searchParams.delete("world");
         // eslint-disable-next-line svelte/no-navigation-without-resolve -- This is the current Studio URL with only its launch parameter removed.
