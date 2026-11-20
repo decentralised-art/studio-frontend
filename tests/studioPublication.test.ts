@@ -1,6 +1,7 @@
 import type { PreparedPublication } from "decentralised-art";
 import { describe, expect, it, vi } from "vitest";
 import type { BrowserEthereumProvider } from "../src/lib/auth/api";
+import { ChainApiRequestError } from "../src/lib/chain/registryApi";
 import {
   createPublicationDraft,
   createPublicationStore,
@@ -282,6 +283,124 @@ describe("Studio publication lifecycle", () => {
     ).toHaveLength(1);
   });
 
+  it("reconciles an existing hash independently of the current draft or registry projection", async () => {
+    const input = fixture();
+    const onProgress = vi.fn();
+    input.store.put({
+      kind: "connector",
+      name: "demo",
+      fingerprint: JSON.stringify(input.body),
+      owner,
+      chainId: "0xaa36a7",
+      stage: "pending",
+      content_hash: contentHash,
+      tx_hash: txHash,
+    });
+    await publishStudioEntity({
+      ...input,
+      mode: "recover",
+      body: { address: owner },
+      onProgress,
+    });
+    expect(input.api.createDraft).not.toHaveBeenCalled();
+    expect(input.api.prepare).not.toHaveBeenCalled();
+    expect(input.request.mock.calls.some(([call]) => call.method === "eth_sendTransaction")).toBe(
+      false,
+    );
+    expect(onProgress).toHaveBeenLastCalledWith(
+      expect.objectContaining({ kind: "connector", name: "demo", phase: "mined", txHash }),
+    );
+    expect(input.store.get("connector", "demo")).toMatchObject({
+      stage: "mined",
+      block_number: 42,
+      tx_hash: txHash,
+    });
+  });
+
+  it("verifies a hashless wallet submission through the already-published response", async () => {
+    const input = fixture();
+    input.store.put({
+      kind: "connector",
+      name: "demo",
+      fingerprint: JSON.stringify(input.body),
+      owner,
+      chainId: "0xaa36a7",
+      stage: "sending",
+      content_hash: contentHash,
+      tx_history: [txHash],
+    });
+    await expect(publishStudioEntity({ ...input, mode: "recover" })).rejects.toThrow(
+      /recover its transaction hash/,
+    );
+    expect(input.store.get("connector", "demo")?.stage).toBe("sending");
+    input.api.prepare.mockResolvedValueOnce({
+      ...prepared,
+      status: "published",
+      owner,
+      content_hash: `0x${"ee".repeat(32)}`,
+    } as never);
+    await expect(publishStudioEntity({ ...input, mode: "recover" })).rejects.toThrow(
+      /artifact changed/,
+    );
+    expect(input.store.get("connector", "demo")?.stage).toBe("sending");
+    input.api.prepare.mockResolvedValueOnce({ ...prepared, status: "published", owner } as never);
+    await publishStudioEntity({ ...input, mode: "recover" });
+    expect(input.store.get("connector", "demo")).toMatchObject({
+      stage: "mined",
+      address: owner,
+      tx_history: [txHash],
+    });
+    expect(input.api.confirm).not.toHaveBeenCalled();
+    expect(input.request.mock.calls.some(([call]) => call.method === "eth_sendTransaction")).toBe(
+      false,
+    );
+  });
+
+  it("allows receipt inspection for one entity while another wallet entry is unresolved", async () => {
+    const input = fixture();
+    for (const name of ["demo", "other"]) {
+      input.store.put({
+        kind: "connector",
+        name,
+        fingerprint: JSON.stringify({ name }),
+        owner,
+        chainId: "0xaa36a7",
+        stage: "pending",
+        content_hash: contentHash,
+        tx_hash: txHash,
+      });
+    }
+    await publishStudioEntity({ ...input, mode: "recover" });
+    expect(input.store.get("connector", "demo")?.stage).toBe("mined");
+    await expect(
+      publishStudioEntity({ ...input, name: "new", body: { name: "new" } }),
+    ).rejects.toThrow(/pending publication 'other'/);
+    expect(input.api.prepare).not.toHaveBeenCalled();
+  });
+
+  it("rechecks a mined journal receipt when the caller explicitly requests proof", async () => {
+    const input = fixture();
+    await publishStudioEntity(input);
+    await publishStudioEntity({ ...input, mode: "recover" });
+    expect(input.api.prepare).toHaveBeenCalledOnce();
+    expect(input.api.confirm).toHaveBeenCalledTimes(2);
+    expect(
+      input.request.mock.calls.filter(([call]) => call.method === "eth_sendTransaction"),
+    ).toHaveLength(1);
+  });
+
+  it("stops before opening the wallet when the fresh preparation is outside the review", async () => {
+    const input = fixture();
+    const onPrepared = vi.fn(async () => {
+      throw new Error("New fee estimate needs review.");
+    });
+    await expect(publishStudioEntity({ ...input, onPrepared })).rejects.toThrow(/needs review/);
+    expect(onPrepared).toHaveBeenCalledWith(prepared);
+    expect(input.store.get("connector", "demo")?.stage).toBe("draft");
+    expect(input.request).not.toHaveBeenCalled();
+    expect(input.api.confirm).not.toHaveBeenCalled();
+  });
+
   it("does not republish mined entities while the safe block/indexer catches up", async () => {
     const input = fixture();
     await publishStudioEntity(input);
@@ -300,6 +419,80 @@ describe("Studio publication lifecycle", () => {
       input.request.mock.calls.filter(([call]) => call.method === "eth_sendTransaction"),
     ).toHaveLength(1);
   });
+
+  it("requires a fresh review after a confirmed wallet transaction reverts", async () => {
+    const input = fixture();
+    input.api.confirm.mockRejectedValueOnce(
+      new ChainApiRequestError("transaction reverted", 400, {
+        message: "transaction reverted",
+        tx_hash: txHash,
+      }),
+    );
+    await expect(publishStudioEntity(input)).rejects.toThrow(/reverted on-chain.*review/i);
+    expect(input.store.get("connector", "demo")).toMatchObject({
+      stage: "draft",
+      tx_history: [txHash],
+    });
+    expect(input.store.get("connector", "demo")?.tx_hash).toBeUndefined();
+    expect(
+      input.request.mock.calls.filter(([call]) => call.method === "eth_sendTransaction"),
+    ).toHaveLength(1);
+    expect(input.api.prepare).toHaveBeenCalledOnce();
+    await publishStudioEntity(input);
+    expect(input.api.prepare).toHaveBeenCalledTimes(2);
+    expect(input.store.get("connector", "demo")?.stage).toBe("mined");
+  });
+
+  it.each([
+    { label: "legacy wallet hash", history: undefined, source: undefined, releases: true },
+    { label: "legacy recovered hash", history: [], source: undefined, releases: false },
+    { label: "recovered hash", history: [txHash], source: "recovered" as const, releases: false },
+  ])("uses the recorded provenance of a $label", async ({ history, source, releases }) => {
+    const input = fixture();
+    input.store.put({
+      kind: "connector",
+      name: "demo",
+      fingerprint: JSON.stringify(input.body),
+      owner,
+      chainId: "0xaa36a7",
+      stage: "pending",
+      content_hash: contentHash,
+      tx_hash: txHash,
+      tx_source: source,
+      tx_history: history,
+    });
+    const error = new ChainApiRequestError("transaction reverted", 400, {
+      message: "transaction reverted",
+      tx_hash: txHash,
+    });
+    input.api.confirm.mockRejectedValueOnce(error);
+    const result = publishStudioEntity({ ...input, mode: "recover" });
+    if (releases) await expect(result).rejects.toThrow(/reverted on-chain/);
+    else await expect(result).rejects.toBe(error);
+    expect(input.store.get("connector", "demo")?.stage).toBe(releases ? "draft" : "pending");
+    expect(input.request.mock.calls.some(([call]) => call.method === "eth_sendTransaction")).toBe(
+      false,
+    );
+  });
+
+  it.each([
+    { status: 503, message: "transaction reverted", hash: txHash },
+    { status: 400, message: "transaction reverted on estimate", hash: txHash },
+    { status: 400, message: "transaction reverted", hash: `0x${"ef".repeat(32)}` },
+  ])(
+    "keeps the wallet hash pending for non-verifying confirmation errors",
+    async ({ status, message, hash }) => {
+      const input = fixture();
+      const error = new ChainApiRequestError(message, status, { message, tx_hash: hash });
+      input.api.confirm.mockRejectedValueOnce(error);
+      await expect(publishStudioEntity(input)).rejects.toBe(error);
+      expect(input.store.get("connector", "demo")).toMatchObject({
+        stage: "pending",
+        tx_hash: txHash,
+        tx_source: "wallet",
+      });
+    },
+  );
 
   it.each(["account", "network"])("blocks %s mismatches before sending", async (mismatch) => {
     const input = fixture();
@@ -342,6 +535,26 @@ describe("Studio publication lifecycle", () => {
     ).toHaveLength(1);
   });
 
+  it("surfaces the wallet hash when the browser cannot save it", async () => {
+    const input = fixture();
+    const store = createPublicationStore("server:owner", {
+      ...input.backing,
+      setItem: (key, value) => {
+        if (value.includes('"stage":"pending"')) throw new Error("Storage unavailable");
+        input.backing.setItem(key, value);
+      },
+    });
+    await expect(publishStudioEntity({ ...input, store })).rejects.toThrow(txHash);
+    expect(store.get("connector", "demo")?.stage).toBe("sending");
+    await expect(publishStudioEntity({ ...input, store })).rejects.toThrow(
+      /recover its transaction/,
+    );
+    expect(input.api.confirm).not.toHaveBeenCalled();
+    expect(
+      input.request.mock.calls.filter(([call]) => call.method === "eth_sendTransaction"),
+    ).toHaveLength(1);
+  });
+
   it("rejects content edits under a saved publication name", async () => {
     const input = fixture();
     await publishStudioEntity(input);
@@ -356,6 +569,12 @@ describe("Studio publication lifecycle", () => {
     await publishStudioEntity(input);
     expect(input.request).not.toHaveBeenCalled();
     expect(input.api.confirm).not.toHaveBeenCalled();
+    expect(input.store.get("connector", "demo")).toMatchObject({
+      stage: "mined",
+      owner,
+      content_hash: contentHash,
+      address: owner,
+    });
   });
 
   it("does not accept a confirmation for a different artifact", async () => {

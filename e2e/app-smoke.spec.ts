@@ -1446,6 +1446,7 @@ test("Studio simulates a draft, publishes with its wallet once, then preserves c
           request: async ({ method }: { method: string }) => {
             if (method === "eth_accounts" || method === "eth_requestAccounts") return [owner];
             if (method === "eth_chainId") return "0xaa36a7";
+            if (method === "eth_gasPrice") return "0x3b9aca00";
             if (method === "eth_sendTransaction") {
               const state = window as unknown as { publicationSends: number };
               state.publicationSends += 1;
@@ -1535,6 +1536,15 @@ test("Studio simulates a draft, publishes with its wallet once, then preserves c
     .locator(".runner-controls")
     .getByRole("button", { name: "Publish to the Network", exact: true })
     .click();
+  const review = page.getByRole("dialog", { name: "Review publication" });
+  const publish = review.getByRole("button", { name: "Publish 1 item", exact: true });
+  await expect(publish).toBeEnabled();
+  expect(
+    await page.evaluate(() => (window as unknown as { publicationSends: number }).publicationSends),
+  ).toBe(0);
+  expect(requests).not.toContain("/chain/publish/connector");
+  await publish.click();
+  await review.getByRole("button", { name: "Close", exact: true }).click();
   await expect(page.getByRole("tab", { name: /publication_e2e/ })).toContainText("in-progress");
   await page.getByRole("button", { name: "Execute on the Network", exact: true }).click();
   await expect(page.locator(".runner-output")).toContainText('"block_number": 77');

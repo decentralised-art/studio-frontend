@@ -218,6 +218,7 @@ async function setup(
                   if (method === "eth_accounts" || method === "eth_requestAccounts")
                     return [ownerA];
                   if (method === "eth_chainId") return "0xaa36a7";
+                  if (method === "eth_gasPrice") return "0x3b9aca00";
                   if (method === "eth_sendTransaction") {
                     (window as unknown as { walletSends: number }).walletSends++;
                     return `0x${"ab".repeat(32)}`;
@@ -422,6 +423,16 @@ test("creates once, simulates without gas, then explicitly publishes and execute
     .locator(".runner-controls")
     .getByRole("button", { name: "Publish to the Network", exact: true })
     .click();
+  const review = page.getByRole("dialog", { name: "Review publication" });
+  const publish = review.getByRole("button", { name: "Publish 1 item", exact: true });
+  await expect(publish).toBeEnabled();
+  expect(
+    await page.evaluate(() => (window as unknown as { walletSends: number }).walletSends),
+  ).toBe(0);
+  expect(state.publishedNames).toEqual([]);
+  await publish.click();
+  await expect.poll(() => state.publishedNames).toEqual(["StudioRoot"]);
+  await review.getByRole("button", { name: "Close", exact: true }).click();
   await expect(page.getByRole("link", { name: "View transaction" })).toHaveAttribute(
     "href",
     `https://sepolia.etherscan.io/tx/0x${"ab".repeat(32)}`,
@@ -485,7 +496,7 @@ test("account switching hides the previous owner's Local entries and open graph"
   expect(state.errors).toEqual([]);
 });
 
-test("mixed trees reuse existing Local and Network children without recreating or publishing them", async ({
+test("reviews mixed trees before publishing local dependencies and reusing network children", async ({
   page,
 }) => {
   const state = await setup(page, true);
@@ -504,11 +515,153 @@ test("mixed trees reuse existing Local and Network children without recreating o
     .locator(".runner-controls")
     .getByRole("button", { name: "Publish to the Network", exact: true })
     .click();
+  const review = page.getByRole("dialog", { name: "Review publication" });
+  const publish = review.getByRole("button", { name: "Publish 2 items", exact: true });
+  await expect(publish).toBeEnabled();
+  expect(
+    await page.evaluate(() => (window as unknown as { walletSends: number }).walletSends),
+  ).toBe(0);
+  expect(state.publishedNames).toEqual([]);
+  await publish.click();
+  await expect.poll(() => state.publishedNames).toEqual(["LocalChild", "StudioRoot"]);
+  await review.getByRole("button", { name: "Close", exact: true }).click();
   await expect(
     page.getByRole("button", { name: "Execute on the Network", exact: true }),
   ).toBeEnabled();
-  expect(state.publishedNames).toEqual(["LocalChild", "StudioRoot"]);
   expect(state.creates).toHaveLength(1);
+  expect(state.errors).toEqual([]);
+});
+
+test("resumes a partially mined tree by confirming its saved hash without resending", async ({
+  page,
+}) => {
+  const state = await setup(page, true);
+  const calls: { name: string; tx_hash: string }[] = [];
+  await page.route("**/chain/publish/connector", async (route) => {
+    const request = route.request().postDataJSON();
+    calls.push(request);
+    if (calls.length === 1) {
+      // The transaction landed and the lookup caught up, but the browser lost
+      // the confirm response before marking its saved receipt as mined.
+      state.entities.LocalChild.address = chainAddress;
+      await route.abort("failed");
+    } else {
+      await route.fallback();
+    }
+  });
+  const walletSends = () =>
+    page.evaluate(() => (window as unknown as { walletSends: number }).walletSends);
+  await page.getByRole("button", { name: "Toggle run panel", exact: true }).click();
+  await page.getByRole("button", { name: "Create locally", exact: true }).click();
+  await page.getByRole("button", { name: "Publish to the Network", exact: true }).click();
+  const review = page.getByRole("dialog", { name: "Review publication" });
+  const order = review.getByRole("list", { name: "Publication order" });
+  const child = order.getByRole("listitem").filter({ hasText: "LocalChild" });
+  const network = order.getByRole("listitem").filter({ hasText: "NetworkChild" });
+  const root = order.getByRole("listitem").filter({ hasText: "StudioRoot" });
+  await expect(child).toContainText("Ready to publish");
+  await expect(network).toContainText("Already public");
+  await expect(root).toContainText("Waiting for dependencies");
+  await expect(review).toContainText("Estimated gas cost for 1 of 2 remaining");
+  await expect(review).toContainText("0.00006553 Sepolia ETH");
+  expect(await walletSends()).toBe(0);
+
+  await review.getByRole("button", { name: "Publish 2 items" }).click();
+  await expect(review).toContainText("Stopped during confirming for connector 'LocalChild'.");
+  await expect(child).toContainText("Saved transaction");
+  await expect(
+    review.getByRole("link", { name: "View transaction for LocalChild" }),
+  ).toHaveAttribute("href", "https://sepolia.etherscan.io/tx/" + calls[0].tx_hash);
+  expect(await walletSends()).toBe(1);
+
+  await review.getByRole("button", { name: "Refresh review" }).click();
+  await review.getByRole("button", { name: "Check saved transaction" }).click();
+  await expect(child).toContainText("Confirmed on-chain");
+  await expect(review).toContainText("Estimated gas cost for all 1 remaining");
+  expect(await walletSends()).toBe(1);
+  expect(calls[1]).toEqual(calls[0]);
+
+  await review.getByRole("button", { name: "Publish 1 item" }).click();
+  await expect(review).toContainText("Publication complete");
+  expect(await walletSends()).toBe(2);
+  expect(calls.map(({ name }) => name)).toEqual(["LocalChild", "LocalChild", "StudioRoot"]);
+  await review.getByRole("button", { name: "Close" }).click();
+  await expect(
+    page.getByRole("button", { name: "Execute on the Network", exact: true }),
+  ).toBeEnabled();
+  expect(state.errors).toEqual([]);
+});
+
+test("publication preflight reconciles an on-chain dependency with a stale by-name record", async ({
+  page,
+}) => {
+  const state = await setup(page, true);
+  const preparation: string[] = [];
+  await page.route("**/chain/publish/connector/prepare", async (route) => {
+    const { name } = route.request().postDataJSON();
+    preparation.push(name);
+    if (name !== "LocalChild") return route.fallback();
+    await route.fulfill({
+      json: {
+        status: "published",
+        kind: "connector",
+        name,
+        owner: ownerA,
+        address: chainAddress,
+        content_hash: `0x${"cd".repeat(32)}`,
+      },
+    });
+  });
+  await page.getByRole("button", { name: "Toggle run panel", exact: true }).click();
+  await page.getByRole("button", { name: "Create locally", exact: true }).click();
+  await page.getByRole("button", { name: "Publish to the Network", exact: true }).click();
+  const review = page.getByRole("dialog", { name: "Review publication" });
+  await expect(review.getByRole("listitem").filter({ hasText: "LocalChild" })).toContainText(
+    "Already public",
+  );
+  await expect(review).toContainText("Estimated gas cost for all 1 remaining");
+  expect(state.entities.LocalChild.address).toBe("0x0");
+  expect(preparation).toEqual(["LocalChild", "StudioRoot"]);
+  expect(
+    await page.evaluate(() => (window as unknown as { walletSends: number }).walletSends),
+  ).toBe(0);
+  await review.getByRole("button", { name: "Publish 1 item" }).click();
+  await expect(review).toContainText("Publication complete");
+  expect(state.publishedNames).toEqual(["StudioRoot"]);
+  expect(preparation).toEqual(["LocalChild", "StudioRoot", "StudioRoot"]);
+  expect(state.errors).toEqual([]);
+});
+
+test("pauses a reviewed publication after confirming the current transaction", async ({ page }) => {
+  const state = await setup(page, true);
+  let releaseReceipt: () => void = () => undefined;
+  let confirming = false;
+  const pending = new Promise<void>((resolve) => {
+    releaseReceipt = resolve;
+  });
+  await page.route("**/chain/publish/connector", async (route) => {
+    confirming = true;
+    await pending;
+    await route.fallback();
+  });
+  await page.getByRole("button", { name: "Toggle run panel", exact: true }).click();
+  await page.getByRole("button", { name: "Create locally", exact: true }).click();
+  await page.getByRole("button", { name: "Publish to the Network", exact: true }).click();
+  const review = page.getByRole("dialog", { name: "Review publication" });
+  await review.getByRole("button", { name: "Publish 2 items" }).click();
+  await expect.poll(() => confirming).toBe(true);
+  try {
+    await review.getByRole("button", { name: "Pause after current" }).click();
+    await page.keyboard.press("Escape");
+    await expect(review).toBeVisible();
+  } finally {
+    releaseReceipt();
+  }
+  await expect(review).toContainText("Paused between publications");
+  expect(state.publishedNames).toEqual(["LocalChild"]);
+  expect(
+    await page.evaluate(() => (window as unknown as { walletSends: number }).walletSends),
+  ).toBe(1);
   expect(state.errors).toEqual([]);
 });
 

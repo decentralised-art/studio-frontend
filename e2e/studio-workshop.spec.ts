@@ -78,6 +78,7 @@ async function setup(page: Page, lesson: string, signedIn = false, saved = false
               request: async ({ method }: { method: string }) => {
                 if (method === "eth_accounts" || method === "eth_requestAccounts") return [owner];
                 if (method === "eth_chainId") return "0xaa36a7";
+                if (method === "eth_gasPrice") return "0x3b9aca00";
                 if (method === "eth_sendTransaction") {
                   (window as unknown as { walletSends: number }).walletSends++;
                   return hash;
@@ -740,6 +741,15 @@ test("publication guide waits for simulation and explicit wallet publication bef
   expect(state.publications).toEqual([]);
   await expect(next).toBeDisabled();
   await page.locator('[data-tutorial="publish"]').click();
+  const review = page.getByRole("dialog", { name: "Review publication" });
+  const publish = review.getByRole("button", { name: "Publish 1 item", exact: true });
+  await expect(publish).toBeEnabled();
+  expect(
+    await page.evaluate(() => (window as unknown as { walletSends: number }).walletSends),
+  ).toBe(0);
+  await publish.click();
+  await expect(review).toContainText("Publication complete");
+  await review.getByRole("button", { name: "Close", exact: true }).click();
   await next.click();
   await expect(
     state.guide.getByRole("heading", { name: "Read it from the network" }),

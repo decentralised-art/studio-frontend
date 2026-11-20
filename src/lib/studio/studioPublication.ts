@@ -1,8 +1,10 @@
 import type { BrowserEthereumProvider } from "$lib/auth/api";
+import { ChainApiRequestError } from "$lib/chain/registryApi";
 import type {
   ConfirmRequest,
   ConfirmResponse,
   EntityKind,
+  PreparedPublication,
   PrepareResponse,
   PublishError,
 } from "decentralised-art";
@@ -14,6 +16,8 @@ export type PublicationRecord = {
   stage: "draft" | "sending" | "pending" | "mined";
   content_hash?: string;
   tx_hash?: string;
+  tx_source?: "wallet" | "recovered";
+  block_number?: number;
   address?: string;
   owner?: string;
   chainId?: string;
@@ -83,6 +87,14 @@ export type PublicationApi = {
   createDraft(): Promise<unknown>;
   prepare(): Promise<PrepareResponse>;
   confirm(request: ConfirmRequest): Promise<ConfirmResponse | PublishError>;
+};
+
+export type PublicationProgress = {
+  kind: EntityKind;
+  name: string;
+  phase: "creating" | "preparing" | "reconciling" | "wallet" | "confirming" | "mined";
+  message: string;
+  txHash?: string;
 };
 
 export const createPublicationDraft = async (input: {
@@ -162,6 +174,7 @@ export const recoverPublicationHash = (
   store.put({
     ...record,
     tx_hash: hash.trim(),
+    tx_source: "recovered",
     tx_history: [
       ...new Set([...(record.tx_history ?? []), ...(record.tx_hash ? [record.tx_hash] : [])]),
     ],
@@ -170,7 +183,7 @@ export const recoverPublicationHash = (
 };
 
 /** Only API callbacks may retry auth. Never wrap this whole operation in auth retry. */
-type PublicationInput = {
+export type PublicationInput = {
   expectedOwner: string;
   kind: EntityKind;
   name: string;
@@ -178,7 +191,11 @@ type PublicationInput = {
   api: PublicationApi;
   provider: BrowserEthereumProvider;
   store: PublicationStore;
+  /** Recover through reads and receipt checks without a wallet submission. */
+  mode?: "publish" | "recover";
+  onPrepared?: (prepared: PreparedPublication) => void | Promise<void>;
   onStatus?: (message: string) => void;
+  onProgress?: (progress: PublicationProgress) => void;
   maxConfirmAttempts?: number;
   wait?: () => Promise<void>;
   /** Test hook for a lock manager. Browsers use owner/API-scoped Web Locks. */
@@ -193,7 +210,7 @@ export const publishStudioEntity = (input: PublicationInput): Promise<void> => {
     publications = new Map();
     inFlightPublications.set(input.store, publications);
   }
-  const key = `${input.kind}:${input.name}`;
+  const key = `${input.kind}:${input.name}:${input.mode ?? "publish"}`;
   const active = publications.get(key);
   if (active) return active;
   const withLock =
@@ -214,80 +231,152 @@ export const publishStudioEntity = (input: PublicationInput): Promise<void> => {
   return operation;
 };
 
+const isAddress = (address: unknown): address is string =>
+  typeof address === "string" && /^0x[0-9a-f]{40}$/i.test(address) && !/^0x0{40}$/i.test(address);
+
+const isHash = (hash: unknown): hash is string =>
+  typeof hash === "string" && /^0x[0-9a-f]{64}$/i.test(hash);
+
+const hasConfirmedWalletRevert = (record: PublicationRecord, txHash: string, error: unknown) => {
+  // Older automatic sends had no provenance field. Earlier recovery always filled tx_history,
+  // even when replacing a hashless attempt, so an existing array is not proof of a wallet send.
+  const fromWallet =
+    record.tx_source === "wallet" ||
+    (record.tx_source === undefined && record.tx_history === undefined);
+  if (
+    record.stage !== "pending" ||
+    !fromWallet ||
+    !(error instanceof ChainApiRequestError) ||
+    error.status !== 400 ||
+    !error.responseBody ||
+    typeof error.responseBody !== "object"
+  )
+    return false;
+  const { message, tx_hash: rejectedHash } = error.responseBody as Record<string, unknown>;
+  return (
+    message === "transaction reverted" &&
+    isHash(rejectedHash) &&
+    rejectedHash.toLowerCase() === txHash.toLowerCase()
+  );
+};
+
+const validatePreparation = (
+  input: PublicationInput,
+  record: PublicationRecord,
+  prepared: PrepareResponse,
+) => {
+  if (prepared.kind !== input.kind || prepared.name !== input.name)
+    throw new Error("Publication preparation returned a different entity.");
+  if (!isHash(prepared.content_hash) || !isAddress(prepared.address))
+    throw new Error("Publication preparation returned invalid artifact details.");
+  if (
+    record.content_hash &&
+    record.content_hash.toLowerCase() !== prepared.content_hash.toLowerCase()
+  )
+    throw new Error(
+      "Prepared artifact changed since the previous publication attempt. Use a new name.",
+    );
+  const preparedOwner =
+    prepared.status === "published" ? prepared.owner : prepared.transaction.from;
+  if (
+    !isAddress(preparedOwner) ||
+    preparedOwner.toLowerCase() !== input.expectedOwner.toLowerCase()
+  )
+    throw new Error(
+      "Publication owner changed during authentication. Retry from the correct wallet account.",
+    );
+};
+
+const assertValidDeadline = (deadline: number) => {
+  if (!Number.isSafeInteger(deadline) || deadline <= 0 || deadline * 1000 <= Date.now())
+    throw new Error(
+      "Publication preparation has an invalid or expired deadline. Retry Publish to prepare again.",
+    );
+};
+
 const runPublication = async (input: PublicationInput): Promise<void> => {
-  const { api, store, provider, onStatus = () => {} } = input;
-  onStatus(`Creating local ${input.kind} draft '${input.name}'...`);
-  let record = await createPublicationDraft({ ...input, createDraft: api.createDraft });
+  const { api, store, provider } = input;
+  const recover = input.mode === "recover";
+  const report = (phase: PublicationProgress["phase"], message: string, txHash?: string) => {
+    input.onStatus?.(message);
+    input.onProgress?.({ kind: input.kind, name: input.name, phase, message, txHash });
+  };
+  report(
+    recover ? "reconciling" : "creating",
+    recover
+      ? `Checking saved publication for '${input.name}'…`
+      : `Checking local ${input.kind} draft '${input.name}'…`,
+  );
+  let record = recover
+    ? store.get(input.kind, input.name)
+    : await createPublicationDraft({ ...input, createDraft: api.createDraft });
+  if (!record || (recover && record.stage === "draft"))
+    throw new Error(`'${input.name}' has no saved transaction to recover.`);
   if (record.owner && record.owner.toLowerCase() !== input.expectedOwner.toLowerCase())
     throw new Error("Saved publication belongs to a different wallet owner.");
-  if (record.owner && record.chainId) await assertWallet(provider, record.owner, record.chainId);
-  if (record.stage === "mined") {
-    onStatus(
+  if (record.stage === "mined" && !recover) {
+    report(
+      "mined",
       `'${input.name}' is already mined. Safe-block execution and indexing may still be catching up.`,
+      record.tx_hash,
     );
     return;
   }
-  const unresolved = store
-    .list()
-    .find(
-      (record) =>
-        ["sending", "pending"].includes(record.stage) &&
-        (record.kind !== input.kind || record.name !== input.name),
-    );
-  if (unresolved)
-    throw new Error(
-      `Complete or recover pending publication '${unresolved.name}' before publishing another entity from this wallet.`,
-    );
-  if (record.stage === "sending") {
-    throw new Error(
-      `The wallet may have sent '${record.name}'. Check wallet activity and recover its transaction hash below before retrying. No second transaction was sent.`,
-    );
+  if (record.owner && record.chainId) await assertWallet(provider, record.owner, record.chainId);
+  if (record.stage === "sending" || (record.stage === "mined" && !isHash(record.tx_hash))) {
+    if (recover && isHash(record.content_hash)) {
+      // The prepare endpoint checks the exact artifact directly against the chain registry.
+      // A by-name lookup can lag. A prepared transaction is insufficient proof of publication.
+      const prepared = await api.prepare();
+      validatePreparation(input, record, prepared);
+      if (prepared.status === "published") {
+        store.put({ ...record, owner: prepared.owner, address: prepared.address, stage: "mined" });
+        report("mined", `Verified '${input.name}' on the network.`, record.tx_hash);
+        return;
+      }
+    }
+    if (record.stage === "sending")
+      throw new Error(
+        `The wallet may have sent '${record.name}'. Check wallet activity and recover its transaction hash below before retrying. No second transaction was sent.`,
+      );
+    throw new Error(`The registry could not verify the saved publication '${record.name}'.`);
   }
-  if (record.stage !== "pending") {
-    onStatus(`Preparing ${input.kind} '${input.name}' for publication...`);
+  if (record.stage === "draft") {
+    const unresolved = store
+      .list()
+      .find((saved) => saved.stage === "sending" || saved.stage === "pending");
+    if (unresolved)
+      throw new Error(
+        `Complete or recover pending publication '${unresolved.name}' before publishing another entity from this wallet.`,
+      );
+    report("preparing", `Preparing ${input.kind} '${input.name}' for publication…`);
     const prepared = await api.prepare();
-    if (prepared.kind !== input.kind || prepared.name !== input.name)
-      throw new Error("Publication preparation returned a different entity.");
-    if (record.content_hash && record.content_hash !== prepared.content_hash)
-      throw new Error(
-        "Prepared artifact changed since the previous publication attempt. Use a new name.",
-      );
-    const preparedOwner =
-      prepared.status === "published" ? prepared.owner : prepared.transaction.from;
-    if (preparedOwner.toLowerCase() !== input.expectedOwner.toLowerCase())
-      throw new Error(
-        "Publication owner changed during authentication. Retry from the correct wallet account.",
-      );
+    validatePreparation(input, record, prepared);
     if (prepared.status === "published") {
       store.put({
         ...record,
         content_hash: prepared.content_hash,
+        owner: prepared.owner,
         address: prepared.address,
         stage: "mined",
       });
-      onStatus(`'${input.name}' is already published.`);
+      report("mined", `'${input.name}' is already published.`, record.tx_hash);
       return;
     }
     const transaction = prepared.transaction;
     if (
-      !/^0x[0-9a-f]{40}$/i.test(transaction.from) ||
-      !/^0x[0-9a-f]{40}$/i.test(transaction.to) ||
+      !isAddress(transaction.to) ||
       !/^0x[0-9a-f]+$/i.test(transaction.chainId) ||
       !/^0x[0-9a-f]+$/i.test(transaction.gas) ||
-      !/^0x(?:[0-9a-f]{2})+$/i.test(transaction.data) ||
-      !/^0x[0-9a-f]{64}$/i.test(prepared.content_hash)
+      BigInt(transaction.gas) <= 0n ||
+      !/^0x(?:[0-9a-f]{2})+$/i.test(transaction.data)
     ) {
       throw new Error("The server returned an invalid publication transaction.");
     }
-    if (
-      !Number.isSafeInteger(prepared.deadline) ||
-      prepared.deadline <= 0 ||
-      prepared.deadline * 1000 <= Date.now()
-    )
-      throw new Error(
-        "Publication preparation has an invalid or expired deadline. Retry Publish to prepare again.",
-      );
+    assertValidDeadline(prepared.deadline);
+    await input.onPrepared?.(prepared);
     await assertWallet(provider, transaction.from, transaction.chainId);
+    assertValidDeadline(prepared.deadline);
     record = {
       ...record,
       content_hash: prepared.content_hash,
@@ -296,7 +385,8 @@ const runPublication = async (input: PublicationInput): Promise<void> => {
       stage: "sending",
     };
     store.put(record);
-    onStatus(
+    report(
+      "wallet",
       `Approve publication of '${input.name}' in your wallet (${BigInt(transaction.chainId) === 11155111n ? "Sepolia" : `chain ${BigInt(transaction.chainId)}`}). Your wallet pays gas.`,
     );
     let hash: unknown;
@@ -326,33 +416,72 @@ const runPublication = async (input: PublicationInput): Promise<void> => {
         `Wallet submission could not be verified for '${input.name}'. Check wallet activity and recover the transaction hash before retrying. ${error instanceof Error ? error.message : ""}`,
       );
     }
-    if (typeof hash !== "string" || !/^0x[0-9a-f]{64}$/i.test(hash))
+    if (!isHash(hash))
       throw new Error(
         "Wallet returned an invalid transaction hash. Check wallet activity and recover it below.",
       );
-    record = { ...record, tx_hash: hash, stage: "pending" };
-    store.put(record);
+    record = { ...record, tx_hash: hash, tx_source: "wallet", stage: "pending" };
+    try {
+      store.put(record);
+    } catch (error) {
+      throw new Error(
+        `Studio could not save the transaction for '${input.name}'. Keep ${hash} for recovery.`,
+        { cause: error },
+      );
+    }
   }
-  if (!record.tx_hash || !record.content_hash)
+  if (!isHash(record.tx_hash) || !isHash(record.content_hash))
     throw new Error("Saved publication lacks its transaction or content hash.");
+  const txHash = record.tx_hash;
   for (let attempt = 0; attempt < (input.maxConfirmAttempts ?? 12); attempt += 1) {
-    onStatus(`Confirming '${input.name}' — ${record.tx_hash} (check ${attempt + 1})...`);
-    const result = await api.confirm({
-      name: input.name,
-      content_hash: record.content_hash,
-      tx_hash: record.tx_hash,
-    });
+    report(
+      "confirming",
+      `Confirming '${input.name}' — ${record.tx_hash} (check ${attempt + 1})…`,
+      record.tx_hash,
+    );
+    const result = await api
+      .confirm({
+        name: input.name,
+        content_hash: record.content_hash,
+        tx_hash: txHash,
+      })
+      .catch((error: unknown) => {
+        if (!hasConfirmedWalletRevert(record, txHash, error)) throw error;
+        store.put({
+          ...record,
+          stage: "draft",
+          tx_hash: undefined,
+          tx_source: undefined,
+          tx_history: [...new Set([...(record.tx_history ?? []), txHash])],
+        });
+        throw new Error(
+          `Publication '${input.name}' reverted on-chain. Review the publication before retrying.`,
+          { cause: error },
+        );
+      });
     if (result.status === "mined") {
       if (
         result.name !== input.name ||
         result.kind !== input.kind ||
+        !isHash(result.tx_hash) ||
         result.tx_hash.toLowerCase() !== record.tx_hash.toLowerCase() ||
-        result.content_hash !== record.content_hash ||
-        result.owner.toLowerCase() !== input.expectedOwner.toLowerCase()
+        !isHash(result.content_hash) ||
+        result.content_hash.toLowerCase() !== record.content_hash.toLowerCase() ||
+        !isAddress(result.owner) ||
+        result.owner.toLowerCase() !== input.expectedOwner.toLowerCase() ||
+        !isAddress(result.address) ||
+        !Number.isSafeInteger(result.block_number) ||
+        result.block_number < 0
       )
         throw new Error("Confirmation does not match the saved publication.");
-      store.put({ ...record, address: result.address, stage: "mined" });
-      onStatus(`Published '${input.name}' in block ${result.block_number}.`);
+      store.put({
+        ...record,
+        owner: result.owner,
+        address: result.address,
+        block_number: result.block_number,
+        stage: "mined",
+      });
+      report("mined", `Published '${input.name}' in block ${result.block_number}.`, record.tx_hash);
       return;
     }
     if (result.status !== "pending")

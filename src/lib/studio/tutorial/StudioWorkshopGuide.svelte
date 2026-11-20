@@ -544,7 +544,7 @@
               },
               {
                 title: "Publish when you choose",
-                text: "Switch MetaMask to Sepolia and use this draft’s owner account with test ETH for gas. Click Publish to the Network, review the wallet’s transaction and fee, then approve only if you want to publish. Wait for the published address. If a transaction is pending, keep its hash and wait; don’t send a second one.",
+                text: "Switch MetaMask to Sepolia and use this draft’s owner account with test ETH for gas. Click Publish to the Network, check the dependency order and available gas estimate, then click Publish in the review. MetaMask shows the fee for each transaction. Wait for the published address. If Studio loses the confirmation, check the saved transaction from the publication review.",
                 target: '[data-tutorial="publish"]',
                 done: snapshot.published && !snapshot.busy,
               },

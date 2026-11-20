@@ -38,6 +38,7 @@
   import StudioParticleNode from "$lib/components/studio/StudioParticleNode.svelte";
   import StudioPluginNode from "$lib/components/studio/StudioPluginNode.svelte";
   import StudioGraphLoading from "$lib/components/studio/StudioGraphLoading.svelte";
+  import StudioPublicationReview from "$lib/components/studio/StudioPublicationReview.svelte";
   import { loadConnectorTreeInBackground } from "$lib/studio/connectorTreeLoader";
   import {
     createWorldInteractionRegistry,
@@ -190,6 +191,7 @@
     createPublicationStore,
     publishStudioEntity,
     recoverPublicationHash,
+    type PublicationInput,
     type PublicationRecord,
     type PublicationStore,
   } from "$lib/studio/studioPublication";
@@ -198,6 +200,20 @@
     publicationTransactionUrl,
   } from "$lib/studio/publicationExplorer";
   import type { EntityKind } from "decentralised-art";
+  import {
+    buildStudioPublicationPlan,
+    type PublicationEntity,
+    type PublicationPlanEntry,
+  } from "$lib/studio/studioPublicationPlan";
+  import {
+    describePublicationReview,
+    isPublicationComplete,
+    quotePublication,
+    readPublicationQuantity,
+    readyPublicationEntries,
+    type PublicationPricing,
+    type PublicationReview,
+  } from "$lib/studio/studioPublicationReview";
   import { buildStudioDeployPlan, type StudioDeployPlan } from "$lib/studio/studioDeployPlan";
   import {
     clampPanelWidth,
@@ -234,7 +250,6 @@
     collectStudioWorkspaceRemovalIds,
     collectStudioWorkspaceRootGraph,
   } from "$lib/studio/workspaceState";
-  import { fromProtocolConnectorPayload } from "$lib/chain/connectorContractAdapter";
   import {
     getCachedCurrentUserToolboxLibrary,
     getCurrentUserToolboxLibrary,
@@ -569,7 +584,7 @@
     }
     return store;
   };
-  const recoverWalletTransaction = (record: PublicationRecord) => {
+  const recoverWalletTransaction = (record: PublicationRecord, hash = recoveryTxHash) => {
     try {
       const store = getPublicationStore();
       const current = store.get(record.kind, record.name);
@@ -583,15 +598,23 @@
           "This recovery belongs to another wallet session. Select the original account and retry Publish.",
         );
       }
-      recoverPublicationHash(store, current, recoveryTxHash);
+      recoverPublicationHash(store, current, hash);
       publicationRecords = store.list();
       recoveryTxHash = "";
       chainDeployError = null;
-      chainDeployStatus = "Transaction recovered. Retry Publish to confirm and continue.";
+      chainDeployStatus = "Transaction recovered. Review publication to confirm and continue.";
+      return true;
     } catch (error) {
       chainDeployError = error instanceof Error ? error.message : "Could not recover transaction.";
+      return false;
     }
   };
+  let publicationReview = $state<PublicationReview | null>(null);
+  const publicationReviewView = $derived(
+    publicationReview ? describePublicationReview(publicationReview) : null,
+  );
+  let publicationReviewController: AbortController | undefined;
+  let publicationReviewSession: string | null = null;
   let chainDeployBusy = $state(false);
   let chainDeployStatus = $state<string | null>(null);
   let chainDeployError = $state<string | null>(null);
@@ -2028,7 +2051,7 @@
     publishConnector: async (_args) => {
       await publishActiveGraph();
       if (chainDeployError) throw new Error(chainDeployError);
-      return { message: chainDeployStatus || "Publication completed." };
+      return { message: "Publication review opened. Review the queue and gas estimate in Studio." };
     },
   };
 
@@ -2052,12 +2075,6 @@
 
       if (call.tool_name === "run_connector") {
         emitAssistantTelemetry(result.ok ? "run_succeeded" : "run_failed", {
-          source,
-          ok: result.ok,
-        });
-      }
-      if (call.tool_name === "publish_connector") {
-        emitAssistantTelemetry(result.ok ? "deploy_succeeded" : "deploy_failed", {
           source,
           ok: result.ok,
         });
@@ -2683,6 +2700,10 @@
       const nextServicesToken = getToken() ?? "";
       if (nextServicesToken === lastToolboxServicesToken) return;
       lastToolboxServicesToken = nextServicesToken;
+      if (publicationReview) publicationReview.stopRequested = true;
+      publicationReviewController?.abort();
+      publicationReviewSession = null;
+      publicationReview = null;
       studioNetworkLibraryLoaded = false;
       networkFeedLibraryIds = createEmptyNetworkFeedLibraryIds();
       persistStudioTabsSession();
@@ -5156,12 +5177,15 @@
     return publishConnectorWithTrace(tracer, step.body);
   };
 
-  const createPublicationTracer = (expectedOwner: string) =>
+  const createPublicationTracer = (expectedOwner: string, expectedSession = getToken()) =>
     createStudioChainPostTracer({
       appendEntry: appendDeployTraceEntry,
       withAuthRetry: (operation) =>
         withChainAuthRetry(() => {
-          if (getCurrentStudioAuthorId().toLowerCase() !== expectedOwner.toLowerCase()) {
+          if (
+            expectedSession !== getToken() ||
+            getCurrentStudioAuthorId().toLowerCase() !== expectedOwner.toLowerCase()
+          ) {
             throw new Error(
               "Wallet account changed during authentication. Retry Publish from the selected account.",
             );
@@ -5171,13 +5195,14 @@
     });
 
   const publishEntityToChain = async (
-    kind: EntityKind,
-    name: string,
+    entity: PublicationEntity,
     body: unknown,
-    createDraft: (tracer: StudioChainPostTracer) => Promise<unknown>,
+    expectedOwner: string,
+    options: Pick<PublicationInput, "mode" | "onPrepared" | "onProgress"> = {},
   ) => {
-    const expectedOwner = getCurrentStudioAuthorId();
-    const tracer = createPublicationTracer(expectedOwner);
+    const { kind, name } = entity;
+    const expectedSession = getToken();
+    const tracer = createPublicationTracer(expectedOwner, expectedSession);
     const store = getPublicationStore();
     try {
       await publishStudioEntity({
@@ -5187,12 +5212,15 @@
         store,
         expectedOwner,
         provider: getBrowserEthereumProvider(),
+        ...options,
         onStatus: (message) => {
+          if (expectedSession !== getToken() || expectedOwner !== getCurrentStudioAuthorId())
+            return;
           chainDeployStatus = message;
           publicationRecords = store.list();
         },
         api: {
-          createDraft: () => createDraft(tracer),
+          createDraft: async () => undefined,
           prepare: () =>
             tracer(`/chain/publish/${kind}/prepare`, { name }, () =>
               postChainPublishPrepareDetailed(kind, name),
@@ -5204,7 +5232,8 @@
         },
       });
     } finally {
-      publicationRecords = getPublicationStore().list();
+      if (expectedSession === getToken() && expectedOwner === getCurrentStudioAuthorId())
+        publicationRecords = store.list();
     }
   };
 
@@ -5226,62 +5255,326 @@
     if (owner === getCurrentStudioAuthorId()) publicationRecords = store.list();
   };
 
-  const publishLocalEntity = async (kind: EntityKind, name: string) => {
-    if (chainDeployBusy || chainRunBusy) return;
+  const lookupPublicationEntity = ({ kind, name }: PublicationEntity) =>
+    kind === "connector"
+      ? getChainConnector(name)
+      : kind === "transformation"
+        ? getChainTransformation(name)
+        : getChainCondition(name);
+
+  const publicationReviewIsCurrent = (review: PublicationReview) =>
+    publicationReview === review &&
+    publicationReviewSession === getToken() &&
+    (!review.owner || review.owner === getCurrentStudioAuthorId());
+
+  const assertPublicationReview = (review: PublicationReview) => {
+    if (!publicationReviewIsCurrent(review)) {
+      throw new Error(
+        "The publishing account changed. Close this review and reopen it from the current account.",
+      );
+    }
+  };
+
+  const updatePublicationReviewEntry = (
+    entry: PublicationPlanEntry,
+    record: PublicationRecord | undefined,
+  ) => {
+    if (!record || record.stage === "draft") return;
+    entry.state = record.stage;
+    entry.address = record.address ?? entry.address;
+    entry.txHash = record.tx_hash;
+    entry.chainId = record.chainId;
+  };
+
+  const readPublicationPricing = async (): Promise<PublicationPricing | null> => {
+    try {
+      const provider = getBrowserEthereumProvider();
+      const [network, price] = await Promise.all([
+        provider.request({ method: "eth_chainId" }),
+        provider.request({ method: "eth_gasPrice" }),
+      ]);
+      const chainId = readPublicationQuantity(network);
+      const gasPrice = readPublicationQuantity(price);
+      return chainId && gasPrice !== null ? { chainId, gasPrice } : null;
+    } catch {
+      return null;
+    }
+  };
+
+  const checkPublicationReview = async (review: PublicationReview) => {
+    publicationReviewController?.abort();
+    const controller = new AbortController();
+    publicationReviewController = controller;
     chainDeployBusy = true;
     chainDeployError = null;
+    chainDeployStatus = null;
+    review.stage = "planning";
+    review.problem = undefined;
+    review.progress = undefined;
+    review.plan = undefined;
+    review.activity = "Reading the saved connector and its dependencies…";
+    review.quotes = {};
+    review.quoteProblems = {};
+    review.unresolved = undefined;
+    review.stopRequested = false;
+    const check = () => {
+      controller.signal.throwIfAborted();
+      assertPublicationReview(review);
+    };
     try {
+      check();
       await ensureChainAuthForStudio();
-      const owner = getCurrentStudioAuthorId();
-      const visited = new SvelteSet<string>();
-      const visiting = new SvelteSet<string>();
-      const publish = async (entityKind: EntityKind, entityName: string): Promise<void> => {
-        if (owner !== getCurrentStudioAuthorId())
-          throw new Error("Account changed during publication.");
-        const key = `${entityKind}:${entityName}`;
-        if (visited.has(key)) return;
-        if (visiting.has(key)) throw new Error(`Cyclic connector reference: ${entityName}.`);
-        visiting.add(key);
-        const payload = await (entityKind === "connector"
-          ? getChainConnector(entityName)
-          : entityKind === "transformation"
-            ? getChainTransformation(entityName)
-            : getChainCondition(entityName));
-        if (isPublishedChainAddress(payload.address)) {
-          visited.add(key);
-          visiting.delete(key);
-          return;
-        }
-        if (!isOwnedLocalEntity(payload, owner))
-          throw new Error(`'${entityName}' is not a local ${entityKind} owned by your account.`);
-        if (entityKind === "connector") {
-          const connector = fromProtocolConnectorPayload(payload);
-          if (connector.conditionName) await publish("condition", connector.conditionName);
-          for (const dimension of connector.dimensions) {
-            for (const transformation of dimension.transformations)
-              await publish("transformation", transformation.name);
-            if (dimension.composite) await publish("connector", dimension.composite);
-            for (const binding of Object.values(dimension.bindings))
-              await publish("connector", binding);
+      check();
+      review.owner = getCurrentStudioAuthorId();
+      const store = getPublicationStore();
+      const plan = await buildStudioPublicationPlan({
+        root: review.root,
+        owner: review.owner,
+        lookup: async (entity) => {
+          check();
+          return lookupPublicationEntity(entity);
+        },
+        getRecord: (kind, name) => store.get(kind, name),
+        signal: controller.signal,
+        onProgress: (count) => {
+          review.activity = `Checked ${count} ${count === 1 ? "item" : "items"}…`;
+        },
+      });
+      check();
+      review.plan = plan;
+      review.unresolved = store
+        .list()
+        .find(({ stage }) => stage === "sending" || stage === "pending");
+      if (review.unresolved) {
+        review.activity = `Check the saved publication of '${review.unresolved.name}' before making another submission.`;
+        review.stage = "review";
+        return;
+      }
+
+      for (const entry of review.plan.entries.filter(({ verifyReceipt }) => verifyReceipt)) {
+        check();
+        review.activity = `Verifying the saved publication of '${entry.name}'…`;
+        await publishEntityToChain(entry, undefined, review.owner, { mode: "recover" });
+        check();
+        updatePublicationReviewEntry(entry, store.get(entry.kind, entry.name));
+      }
+
+      review.activity = "Estimating gas for transactions the Chain API can prepare…";
+      const pricing = await readPublicationPricing();
+      check();
+      const prepared = new SvelteSet<string>();
+      // If a stale lookup called an already-mined item a draft, proof from
+      // prepare may unlock another group of estimates without using the wallet.
+      for (;;) {
+        const ready = readyPublicationEntries(review.plan.entries).filter(
+          ({ key }) => !prepared.has(key),
+        );
+        if (!ready.length) break;
+        for (const entry of ready) {
+          check();
+          prepared.add(entry.key);
+          try {
+            const { body } = await withChainAuthRetry(() => {
+              check();
+              return postChainPublishPrepareDetailed(entry.kind, entry.name);
+            });
+            check();
+            if (body.kind !== entry.kind || body.name !== entry.name) {
+              throw new Error("Preparation returned a different entity.");
+            }
+            if (body.status === "published") {
+              if (
+                body.owner.toLowerCase() !== review.owner.toLowerCase() ||
+                !isPublishedChainAddress(body.address)
+              ) {
+                throw new Error("Preparation returned an unexpected publication owner or address.");
+              }
+              entry.address = body.address;
+              entry.state = "published";
+            } else {
+              if (body.transaction.from.toLowerCase() !== review.owner.toLowerCase()) {
+                throw new Error("Preparation returned a transaction for another account.");
+              }
+              const quote = quotePublication(body, pricing);
+              if (!quote) throw new Error("Preparation returned an invalid gas estimate.");
+              review.quotes[entry.key] = quote;
+            }
+          } catch (error) {
+            if (!controller.signal.aborted && publicationReviewIsCurrent(review)) {
+              review.quoteProblems[entry.key] =
+                error instanceof Error ? error.message : "Preparation failed.";
+            }
           }
         }
-        const saved = getPublicationStore().get(entityKind, entityName);
-        const body: unknown = saved ? JSON.parse(saved.fingerprint) : payload;
-        await publishEntityToChain(entityKind, entityName, body, async () => undefined);
-        visited.add(key);
-        visiting.delete(key);
-        if (entityKind === "connector") await hydrateDeployedConnectorFromChain(entityName);
-        else await hydrateDeployedRuntimeFromChain(entityKind, entityName);
-      };
-      await publish(kind, name);
-      chainDeployStatus = `Published '${name}' on the network. Execution may wait for the safe block; retry Execute without republishing.`;
-      await loadLocalLibrary();
+      }
+      check();
+      review.activity = undefined;
+      if (Object.keys(review.quoteProblems).length) {
+        review.problem =
+          "At least one ready item could not be prepared. Review the error below and refresh before publishing.";
+        review.stage = "paused";
+      } else {
+        review.stage = review.plan.entries.every(isPublicationComplete) ? "complete" : "review";
+        if (review.stage === "complete")
+          review.activity = "All reviewed items are already registered.";
+      }
     } catch (error) {
-      chainDeployError = error instanceof Error ? error.message : "Publication failed.";
-      chainDeployStatus = null;
+      if (controller.signal.aborted || publicationReview !== review) return;
+      review.stage = "paused";
+      review.activity = undefined;
+      review.problem =
+        error instanceof Error ? error.message : "Could not review this publication.";
+      chainDeployError = review.problem;
+    } finally {
+      if (publicationReviewController === controller) {
+        publicationReviewController = undefined;
+        chainDeployBusy = false;
+      }
+    }
+  };
+
+  const publishLocalEntity = async (kind: EntityKind, name: string) => {
+    if (chainDeployBusy || chainRunBusy || publicationReview || !name.trim()) return;
+    publicationReviewSession = getToken();
+    publicationReview = {
+      root: { kind, name },
+      owner: "",
+      stage: "planning",
+      quotes: {},
+      quoteProblems: {},
+      stopRequested: false,
+    };
+    await checkPublicationReview(publicationReview);
+  };
+
+  const closePublicationReview = () => {
+    if (publicationReview?.stage === "running") return;
+    publicationReviewController?.abort();
+    publicationReview = null;
+    publicationReviewSession = null;
+  };
+
+  const runPublicationReview = async (review: PublicationReview) => {
+    if (review.stage === "paused") return checkPublicationReview(review);
+    if (review.stage !== "review" || chainRunBusy || chainDeployBusy || !review.plan) return;
+    review.stage = "running";
+    review.activity = undefined;
+    review.problem = undefined;
+    chainDeployBusy = true;
+    let active: PublicationEntity | undefined;
+    const onProgress = (progress: NonNullable<PublicationReview["progress"]>) => {
+      review.progress = progress;
+      review.activity = progress.message;
+    };
+    try {
+      assertPublicationReview(review);
+      const store = getPublicationStore();
+      const unresolved = store
+        .list()
+        .find(({ stage }) => stage === "sending" || stage === "pending");
+      if (unresolved) {
+        active = unresolved;
+        await publishEntityToChain(active, undefined, review.owner, {
+          mode: "recover",
+          onProgress,
+        });
+        assertPublicationReview(review);
+        await checkPublicationReview(review);
+        return;
+      }
+      if (review.unresolved) {
+        // A different tab resolved the receipt while this review was open.
+        await checkPublicationReview(review);
+        return;
+      }
+      for (const entry of review.plan.entries) {
+        if (review.stopRequested) break;
+        if (isPublicationComplete(entry)) continue;
+        assertPublicationReview(review);
+        active = entry;
+        const record = store.get(entry.kind, entry.name);
+        const before = review.quotes[entry.key];
+        try {
+          await publishEntityToChain(
+            entry,
+            record ? JSON.parse(record.fingerprint) : entry.payload,
+            review.owner,
+            {
+              onProgress,
+              onPrepared: async (prepared) => {
+                assertPublicationReview(review);
+                if (review.stopRequested)
+                  throw new DOMException("Publication paused.", "AbortError");
+                const pricing = await readPublicationPricing();
+                assertPublicationReview(review);
+                if (review.stopRequested)
+                  throw new DOMException("Publication paused.", "AbortError");
+                const fresh = quotePublication(prepared, pricing);
+                if (!fresh) throw new Error("Preparation returned an invalid gas estimate.");
+                review.quotes[entry.key] = fresh;
+                if (
+                  before &&
+                  (fresh.contentHash !== before.contentHash || fresh.chainId !== before.chainId)
+                ) {
+                  throw new Error(
+                    "The prepared content or network changed. Review the publication again.",
+                  );
+                }
+              },
+            },
+          );
+        } finally {
+          if (publicationReviewIsCurrent(review)) {
+            updatePublicationReviewEntry(entry, store.get(entry.kind, entry.name));
+          }
+        }
+      }
+      assertPublicationReview(review);
+      if (review.plan.entries.every(isPublicationComplete)) {
+        review.stage = "complete";
+        review.activity = `Publication complete. '${review.root.name}' is registered on-chain. Execution and the library may need time to catch up.`;
+        chainDeployStatus = review.activity;
+        if (review.root.kind === "connector") {
+          await hydrateDeployedConnectorFromChain(review.root.name);
+        } else {
+          await hydrateDeployedRuntimeFromChain(review.root.kind, review.root.name);
+        }
+        if (publicationReviewIsCurrent(review)) await loadLocalLibrary();
+      } else {
+        review.stage = "paused";
+        review.activity = "Paused between publications. Refresh the review to continue.";
+        chainDeployStatus = review.activity;
+      }
+    } catch (error) {
+      review.stage = "paused";
+      if (publicationReviewIsCurrent(review)) {
+        review.unresolved = getPublicationStore()
+          .list()
+          .find(({ stage }) => stage === "sending" || stage === "pending");
+      }
+      if (review.stopRequested && error instanceof DOMException && error.name === "AbortError") {
+        review.activity = "Paused before opening the wallet. Refresh the review to continue.";
+        chainDeployStatus = review.activity;
+      } else {
+        const phase = review.progress?.phase ?? "review";
+        const reason = error instanceof Error ? error.message : "The request failed.";
+        const subject = active ? `${active.kind} '${active.name}'` : "publication";
+        review.problem = `Stopped during ${phase} for ${subject}. ${reason}`;
+        if (publicationReviewIsCurrent(review)) {
+          chainDeployError = review.problem;
+          chainDeployStatus = null;
+        }
+      }
     } finally {
       chainDeployBusy = false;
     }
+  };
+
+  const recoverPublicationInReview = (hash: string) => {
+    const review = publicationReview;
+    if (!review?.unresolved || !publicationReviewIsCurrent(review) || chainDeployBusy) return;
+    if (recoverWalletTransaction(review.unresolved, hash)) void checkPublicationReview(review);
+    else review.problem = chainDeployError ?? undefined;
   };
 
   const publishLocalLibraryItem = (item: LibraryItem) =>
@@ -7017,6 +7310,10 @@
     };
   });
   onDestroy(() => {
+    if (publicationReview) publicationReview.stopRequested = true;
+    publicationReviewController?.abort();
+    publicationReview = null;
+    publicationReviewSession = null;
     for (const id of [...connectorTreeLoads.keys()]) cancelConnectorTreeLoad(id);
   });
 
@@ -9106,6 +9403,27 @@
 </script>
 
 <Seo title="Studio" description={STUDIO_DESCRIPTION} path="/studio" />
+
+{#if publicationReview && publicationReviewView}
+  <StudioPublicationReview
+    title={publicationReview.root.name}
+    stage={publicationReview.stage}
+    {...publicationReviewView}
+    note="Estimates use the prepared gas limit and the wallet’s current gas price. Parents are priced after their dependencies register. MetaMask reviews each transaction."
+    problem={publicationReview.problem}
+    activity={publicationReview.activity}
+    stopRequested={publicationReview.stopRequested}
+    recoveryName={publicationReview.unresolved?.name}
+    onRecover={recoverPublicationInReview}
+    onAction={() => {
+      if (publicationReview) void runPublicationReview(publicationReview);
+    }}
+    onClose={closePublicationReview}
+    onPause={() => {
+      if (publicationReview) publicationReview.stopRequested = true;
+    }}
+  />
+{/if}
 
 {#if tutorialLesson === "first-run" || tutorialLesson === "starting-value"}
   <StudioTutorialGuide

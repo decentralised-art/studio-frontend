@@ -47,9 +47,23 @@ Successful creation preserves existing instance IDs, World connections and unrel
 
 ## Publication and provenance
 
-Publication uses the existing persistent publication records and owner/API-scoped locks. Conditions, transformations, composite connectors and bound connectors are published before their parent, serially for one owner. An unpublished dependency owned by another account blocks publication with an explanation; it cannot be published using the current account. Cycles are rejected.
+Studio opens a publication review for the selected saved entity. It resolves the full draft dependency graph through the Chain API before opening a transaction confirmation. Conditions, transformations, composites and bindings are part of the graph. Shared references are counted once by kind and registry name, and parents follow their dependencies. A verified published entity is a boundary. Its existing on-chain definition is reused, including when it belongs to someone else. Missing definitions, cycles, and unpublished dependencies owned by another wallet stop preflight before it sends any transaction.
 
-A sending or pending transaction is resumed or confirmed using its recorded hash. Retrying does not authorize broadcasting another transaction. A mined transaction may precede safe-block execution or indexer readiness. Keep simulation distinct from chain execution and retain the latter's block number, block hash, runner and registry envelope. Retry a temporarily unavailable execution rather than republishing.
+### Pricing and running the queue
+
+The review separates registered dependencies, recorded receipts, and remaining writes. It asks the existing prepare endpoint for items whose dependencies can already be used on-chain. A priced item shows the prepared gas limit multiplied by the wallet's current gas price on the target chain. The displayed sum covers the named subset. An ancestor whose prerequisites are still drafts is listed as unpriced. Fee estimates change with the market, and MetaMask shows the fee for the actual transaction it submits. If a ready item cannot be prepared, Studio shows the reason and asks for a fresh review.
+
+During publication Studio prepares each write again inside the owner-and-API scoped lock, checks the selected wallet and chain, and waits for the receipt before advancing. Pause stops at the next safe boundary. During an open wallet prompt or receipt check the current item can finish, and no later item is sent. Switching accounts stops the queue. A review for a different wallet uses a different publication journal.
+
+### Resuming after interruption
+
+Studio saves the transaction hash before requesting confirmation. If the API call is interrupted, a fresh review checks the existing hash even when the by-name lookup has already caught up. If the wallet response was interrupted before providing a hash, Studio asks the API whether the exact artifact is registered, and uses the existing hash recovery control if the result is still ambiguous. The owner-wide nonce also blocks a different queue while an unresolved send is recorded. A mined result can precede index or safe-block readiness. Keep the receipt and retry the read when the chain is ready. The library and Execute continue to use their normal published-state checks.
+
+### Wallet batching
+
+The current prepare endpoint requires dependencies to be registered, derives the address using the current owner publication nonce, and returns one transaction. Giving independently prepared calls to a wallet batch would reuse that nonce. The current receipt verifier expects one matching registration, so it also needs to understand multiple registrations before Studio can use an atomic batch.
+
+A batch-capable Chain API would need to plan exact content hashes and ordered nonces, estimate each batch against the state built by its prerequisites, split large trees into viable groups, and verify the registration events individually. Studio could then check the selected wallet and chain for EIP-5792 capabilities and request approval for a prepared batch. A plan should keep confirmed items and unmined or rejected batches visible so a large job can still resume. The frontend review uses the current per-entity wallet path and estimates the remaining writes it can prepare.
 
 ## Verification scenarios
 
